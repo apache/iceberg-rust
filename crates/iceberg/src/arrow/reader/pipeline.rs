@@ -193,10 +193,10 @@ impl FileScanTaskReader {
         let need_row_number = project_pos || (project_row_id && task.first_row_id().is_some());
 
         let field_ids = task.project_field_ids();
-        let metadata_only_projection = !field_ids.is_empty()
-            && field_ids
-                .iter()
-                .all(|id| PRUNABLE_METADATA_FIELDS.contains(id));
+        // An empty projection (e.g. `COUNT(*)`) is vacuously metadata-only.
+        let metadata_only_projection = field_ids
+            .iter()
+            .all(|id| PRUNABLE_METADATA_FIELDS.contains(id));
 
         let install_row_number = need_row_number || metadata_only_projection;
 
@@ -297,13 +297,11 @@ impl FileScanTaskReader {
             use_position_fallback, // Whether to use position-based (true) or field-ID-based (false) projection
         )?;
 
-        // A metadata-only projection leaves `project_field_ids_without_metadata` empty,
-        // which `get_arrow_projection_mask` maps to "read all columns" (so `COUNT(*)` still
-        // gets a row count). Downgrade that to "read no data columns": `install_row_number`
-        // put the RowNumber virtual column on every metadata-only projection as a row-count
-        // source independent of the data columns, so the count survives with zero data
-        // columns read. `COUNT(*)` (an empty projection) has no RowNumber and keeps reading
-        // all columns to preserve the row count.
+        // A metadata-only or empty projection leaves `project_field_ids_without_metadata`
+        // empty, which `get_arrow_projection_mask` maps to "read all columns". Downgrade that
+        // to "read no data columns": `install_row_number` put the RowNumber virtual column on
+        // every such projection as a row-count source independent of the data columns, so the
+        // count survives with zero data columns read.
         //
         // This runs BEFORE the union so any physical metadata leaf is added onto a `none`
         // base, pruning the read to just that leaf (`union` with an `all` base stays `all`).
@@ -3373,6 +3371,32 @@ mod tests {
             pos_only_bytes < with_data_bytes,
             "_pos-only scan should read fewer bytes than a scan of the wide column: \
              {pos_only_bytes} vs {with_data_bytes}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_empty_projection_reads_no_data_columns() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+
+        let empty = metadata_projection_task(
+            write_parquet_with_wide_column(dir, "empty.parquet", vec![], vec![]),
+            id_and_wide_schema(),
+            vec![],
+        );
+        let (_, empty_bytes) = scan_task(empty).await;
+
+        let with_data = metadata_projection_task(
+            write_parquet_with_wide_column(dir, "empty_ref.parquet", vec![], vec![]),
+            id_and_wide_schema(),
+            vec![2],
+        );
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            empty_bytes < with_data_bytes,
+            "empty projection should read fewer bytes than the wide column: \
+             {empty_bytes} vs {with_data_bytes}"
         );
     }
 
