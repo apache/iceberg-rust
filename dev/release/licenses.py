@@ -325,8 +325,8 @@ def clarification_file_hash(path: Path) -> str:
 
     XxHash32 with seed 0, over the file with every line terminated by exactly one LF.
 
-    cargo-deny appears to offer no way to compute this value,
-    so this command is added to make it easy (based on the cargo-deny source code).
+    cargo-deny appears to offer no way to compute this value, so this command is added for convenience.
+    The logic in this fn is based on review of the cargo-deny source - no src was directly copied.
     """
     try:
         # Import here, so other commands of the script can still work if missing.

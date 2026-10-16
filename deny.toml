@@ -51,12 +51,12 @@ exceptions = [
 # Clarifications use a hash to verify if the license file bytes changed.
 # To recompute: uv run dev/release/licenses.py dependencies clarification-hash <file>
 
-# TODO: zstd-sys 2.1 relicensed the wrapper and bindings to BSD-3-Clause.
-# Transient dependency, drop when we upgrade (likely when we upgrade to Arrow 60).
+# TODO: zstd-sys 2.1 relicensed the wrapper and bindings to BSD-3-Clause, so the
+# (MIT OR Apache-2.0) clause and its two files can be removed on upgrade (likely w/ Arrow 60).
 # https://github.com/apache/iceberg-rust/issues/3307
 [[licenses.clarify]]
 crate = "zstd-sys"
-expression = "(MIT OR Apache-2.0) AND BSD-3-Clause AND (GPL-2.0-only OR BSD-3-Clause)"
+expression = "(MIT OR Apache-2.0) AND BSD-3-Clause AND BSD-2-Clause AND (GPL-2.0-only OR BSD-3-Clause)"
 license-files = [
   { path = "LICENSE.Apache-2.0", hash = 0x7b466be4 },
   { path = "LICENSE.Mit", hash = 0xa237d234 },
@@ -66,6 +66,11 @@ license-files = [
   { path = "zstd/LICENSE", hash = 0x3bfe1fb1 },
   # GPL-2.0-only of the vendored zstd sources.
   { path = "zstd/COPYING", hash = 0xeaa66bfd },
+  # Legacy decoders include src licensed under inline BSD-2-Clause blocks.
+  # zstd-sys/legacy is enabled by default, so this code will be enabled and compiled.
+  # There's no separate license file, so we're hashing the entire C file.
+  # This will change from time to time when updating zstd - just verify license is still present and replace hash.
+  { path = "zstd/lib/legacy/zstd_v05.c", hash = 0xccb4895a },
 ]
 
 # https://github.com/dropbox/rust-brotli-decompressor/pull/32 fixes this upstream.
