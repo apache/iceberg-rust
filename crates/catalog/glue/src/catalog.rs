@@ -118,6 +118,7 @@ impl CatalogBuilder for GlueCatalogBuilder {
     }
 }
 
+/// Glue catalog properties parsed from the `load` property map.
 #[derive(Debug, Properties)]
 pub(crate) struct GlueCatalogProperties {
     #[property(key = GLUE_CATALOG_PROP_URI, default = None)]
@@ -928,6 +929,8 @@ impl Catalog for GlueCatalog {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
 
     #[test]
@@ -964,17 +967,72 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_rejects_missing_or_empty_warehouse() {
-        for props in [
-            HashMap::new(),
-            HashMap::from([(GLUE_CATALOG_PROP_WAREHOUSE.to_string(), String::new())]),
+        for (case, props) in [
+            ("missing", HashMap::new()),
+            (
+                "empty",
+                HashMap::from([(GLUE_CATALOG_PROP_WAREHOUSE.to_string(), String::new())]),
+            ),
         ] {
             let error = GlueCatalogBuilder::default()
                 .load("glue", props)
                 .await
                 .unwrap_err();
 
-            assert_eq!(error.kind(), ErrorKind::DataInvalid);
-            assert_eq!(error.message(), "Catalog warehouse is required");
+            assert_eq!(
+                (error.kind(), error.message()),
+                (ErrorKind::DataInvalid, "Catalog warehouse is required"),
+                "{case}"
+            );
         }
+    }
+
+    #[tokio::test]
+    async fn test_load_forwards_all_properties_to_kms_factory() {
+        #[derive(Debug, Default)]
+        struct RecordingKmsClientFactory(Mutex<HashMap<String, String>>);
+
+        #[async_trait]
+        impl KmsClientFactory for RecordingKmsClientFactory {
+            async fn create_kms_client(
+                &self,
+                properties: &HashMap<String, String>,
+            ) -> Result<Arc<dyn KeyManagementClient>> {
+                *self.0.lock().unwrap() = properties.clone();
+                Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "KMS initialization failed",
+                ))
+            }
+        }
+
+        let properties = HashMap::from([
+            (
+                GLUE_CATALOG_PROP_URI.to_string(),
+                "http://localhost".to_string(),
+            ),
+            (
+                GLUE_CATALOG_PROP_CATALOG_ID.to_string(),
+                "catalog".to_string(),
+            ),
+            (
+                GLUE_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://warehouse".to_string(),
+            ),
+            (AWS_REGION_NAME.to_string(), "us-east-1".to_string()),
+            ("custom.property".to_string(), "value".to_string()),
+        ]);
+        let factory = Arc::new(RecordingKmsClientFactory::default());
+        let error = GlueCatalogBuilder::default()
+            .with_kms_client_factory(factory.clone())
+            .load("glue", properties.clone())
+            .await
+            .unwrap_err();
+
+        assert_eq!(*factory.0.lock().unwrap(), properties);
+        assert_eq!(
+            (error.kind(), error.message()),
+            (ErrorKind::Unexpected, "KMS initialization failed")
+        );
     }
 }
