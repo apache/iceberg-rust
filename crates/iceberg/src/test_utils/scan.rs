@@ -45,7 +45,8 @@ use crate::scan::FileScanTaskColumnStats;
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, ManifestEntry,
     ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
-    PrimitiveType, Schema, Struct, StructType, TableMetadata, TableMetadataBuilder, Type,
+    PrimitiveType, Schema, SchemaRef, Struct, StructType, TableMetadata, TableMetadataBuilder,
+    Type,
 };
 use crate::table::Table;
 use crate::test_utils::test_runtime;
@@ -1103,13 +1104,18 @@ impl TableTestFixture {
 
     /// Writes a manifest with one live "Added" data-file entry per element of
     /// `column_stats` (`1.parquet`, `2.parquet`, ..., partitioned on `x` = 100, 200, ...),
-    /// each carrying that element's column sizes, value, null and NaN counts and bounds.
+    /// each carrying that element's column sizes, value, null and NaN counts and bounds. The
+    /// manifest is written with `manifest_schema`, or the current snapshot's schema if `None`.
     pub(crate) async fn setup_manifest_files_with_column_stats(
         &mut self,
         column_stats: &[FileScanTaskColumnStats],
+        manifest_schema: Option<SchemaRef>,
     ) {
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
-        let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+        let current_schema = match manifest_schema {
+            Some(schema) => schema,
+            None => current_snapshot.schema(self.table.metadata()).unwrap(),
+        };
         let current_partition_spec = self.table.metadata().default_partition_spec();
         let parquet_file_size = self.write_parquet_data_files();
 

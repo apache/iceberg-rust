@@ -116,7 +116,23 @@ fn collect_column_stats_field_ids(
         .map(|column_names| {
             column_names
                 .iter()
-                .map(|column_name| require_field_id(schema, column_name, case_sensitive))
+                .map(|column_name| {
+                    if is_metadata_column_name(column_name) {
+                        return Err(invalid_data!(
+                            "Metadata column {column_name} has no column statistics"
+                        ));
+                    }
+                    let field_id = require_field_id(schema, column_name, case_sensitive)?;
+                    if !schema
+                        .field_by_id(field_id)
+                        .is_some_and(|field| field.field_type.is_primitive())
+                    {
+                        return Err(invalid_data!(
+                            "Column {column_name} is not a primitive field and has no column statistics"
+                        ));
+                    }
+                    Ok(field_id)
+                })
                 .collect()
         })
         .transpose()
@@ -235,11 +251,11 @@ impl<'a> TableScanBuilder<'a> {
     /// Retains the data file's column statistics for the named columns on each planned
     /// [`FileScanTask`], exposed as [`FileScanTask::column_stats`].
     ///
-    /// Names resolve against the scan's schema with the scan's case sensitivity and may name
-    /// nested fields. By default, tasks carry no statistics.
+    /// Names resolve against the scan's schema with the scan's case sensitivity and must name
+    /// primitive fields, which may be nested. By default, tasks carry no statistics.
     ///
-    /// [`build`](Self::build) fails if a name matches no field, or more than one field when the
-    /// scan is case-insensitive.
+    /// [`build`](Self::build) fails if a name matches no field, matches more than one field when
+    /// the scan is case-insensitive, or names a struct, list, map or metadata column.
     pub fn with_column_stats(
         mut self,
         column_names: impl IntoIterator<Item = impl ToString>,
@@ -820,9 +836,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_collect_column_stats_field_ids_resolves_nested_field() {
-        let schema = Schema::builder()
+    /// A schema with a struct `s` (field id 1) whose only child is `f` (field id 2).
+    fn struct_schema() -> Schema {
+        Schema::builder()
             .with_fields(vec![
                 NestedField::required(
                     1,
@@ -834,11 +850,27 @@ mod tests {
                 .into(),
             ])
             .build()
-            .unwrap();
+            .unwrap()
+    }
 
+    #[test]
+    fn test_collect_column_stats_field_ids_resolves_nested_field() {
         assert_eq!(
-            collect_column_stats_field_ids(&schema, Some(&["s.f".to_string()]), true).unwrap(),
+            collect_column_stats_field_ids(&struct_schema(), Some(&["s.f".to_string()]), true)
+                .unwrap(),
             Some(Arc::<[i32]>::from([2]))
+        );
+    }
+
+    #[test]
+    fn test_collect_column_stats_field_ids_rejects_struct_field() {
+        let err = collect_column_stats_field_ids(&struct_schema(), Some(&["s".to_string()]), true)
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            "Column s is not a primitive field and has no column statistics"
         );
     }
 
@@ -1264,10 +1296,13 @@ mod tests {
 
         // The second file has no statistics for `x`.
         fixture
-            .setup_manifest_files_with_column_stats(&[
-                column_stats(&[x.clone(), a.clone(), dbl.clone()]),
-                column_stats(&[a.clone(), dbl.clone()]),
-            ])
+            .setup_manifest_files_with_column_stats(
+                &[
+                    column_stats(&[x.clone(), a.clone(), dbl.clone()]),
+                    column_stats(&[a.clone(), dbl.clone()]),
+                ],
+                None,
+            )
             .await;
         let table = &fixture.table;
 
@@ -1329,6 +1364,59 @@ mod tests {
                 "unexpected error: {err}"
             );
         }
+
+        let err = table
+            .scan()
+            .with_column_stats([RESERVED_COL_NAME_FILE])
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            format!("Metadata column {RESERVED_COL_NAME_FILE} has no column statistics")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_keeps_bounds_typed_with_manifest_schema() {
+        let mut fixture = TableTestFixture::new();
+
+        // `y` is a `long` in the table schema but was an `int` when the manifest was written.
+        let manifest_schema = Arc::new(
+            Schema::builder()
+                .with_fields(
+                    fixture
+                        .table
+                        .metadata()
+                        .current_schema()
+                        .as_struct()
+                        .fields()
+                        .iter()
+                        .map(|field| match field.id {
+                            2 => NestedField::required(2, "y", PrimitiveType::Int.into()).into(),
+                            _ => field.clone(),
+                        }),
+                )
+                .build()
+                .unwrap(),
+        );
+        let y = column_stats(&[(2, 4, 1, 0, None, Datum::int(5), Datum::int(7))]);
+        fixture
+            .setup_manifest_files_with_column_stats(std::slice::from_ref(&y), Some(manifest_schema))
+            .await;
+
+        assert_eq!(
+            column_stats_by_file(
+                fixture
+                    .table
+                    .scan()
+                    .with_column_stats(["y"])
+                    .build()
+                    .unwrap()
+            )
+            .await,
+            vec![Some(y)]
+        );
     }
 
     #[tokio::test]
