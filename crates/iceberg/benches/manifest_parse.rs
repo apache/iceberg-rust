@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
 use std::hint::black_box;
 use std::sync::Arc;
 
@@ -44,8 +43,8 @@ const COLUMN_TYPES: [PrimitiveType; 12] = [
     PrimitiveType::Long,
 ];
 
-fn columns() -> impl Iterator<Item = (i32, &'static PrimitiveType)> {
-    (1..).zip(COLUMN_TYPES.iter())
+fn columns(num_columns: i32) -> impl Iterator<Item = (i32, &'static PrimitiveType)> {
+    (1..=num_columns).map(|id| (id, &COLUMN_TYPES[(id as usize - 1) % COLUMN_TYPES.len()]))
 }
 
 fn bound(ty: &PrimitiveType, v: i64) -> Datum {
@@ -63,8 +62,9 @@ fn bound(ty: &PrimitiveType, v: i64) -> Datum {
 }
 
 /// Returns a V2 data manifest with `num_entries` files, each with stats for
-/// every column and an identity partition on a string column.
-fn write_manifest(num_entries: u64) -> Vec<u8> {
+/// all `num_columns` columns and an identity partition on a string column.
+fn write_manifest(num_entries: u64, num_columns: i32) -> Vec<u8> {
+    let columns = || columns(num_columns);
     let schema = Arc::new(
         Schema::builder()
             .with_fields(columns().map(|(id, ty)| {
@@ -108,7 +108,12 @@ fn write_manifest(num_entries: u64) -> Vec<u8> {
             .column_sizes(columns().map(|(id, _)| (id, 1000 + id as u64 + i)).collect())
             .value_counts(columns().map(|(id, _)| (id, 10_000 + i)).collect())
             .null_value_counts(columns().map(|(id, _)| (id, i % 7)).collect())
-            .nan_value_counts(HashMap::from([(5, 0), (6, 0)]))
+            .nan_value_counts(
+                columns()
+                    .filter(|(_, ty)| matches!(ty, PrimitiveType::Float | PrimitiveType::Double))
+                    .map(|(id, _)| (id, 0))
+                    .collect(),
+            )
             .lower_bounds(
                 columns()
                     .map(|(id, ty)| (id, bound(ty, n * 13 + id as i64)))
@@ -177,7 +182,7 @@ fn bench_parse_avro(c: &mut Criterion) {
     let mut group = c.benchmark_group("manifest_parse_avro");
     group.sample_size(10);
     for num_entries in [1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000] {
-        let bytes = write_manifest(num_entries);
+        let bytes = write_manifest(num_entries, 12);
         let java_like = rewrite_like_java(&bytes);
         assert_eq!(
             Manifest::parse_avro(&java_like).unwrap(),
@@ -193,5 +198,22 @@ fn bench_parse_avro(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_parse_avro);
+/// Parses 10,000-entry manifests from about 1 MB to 100 MB, made larger by
+/// adding columns with stats.
+fn bench_parse_avro_by_size(c: &mut Criterion) {
+    let mut group = c.benchmark_group("manifest_parse_avro_by_columns");
+    group.sample_size(10);
+    for num_columns in [9, 17, 44, 82, 145, 330, 610] {
+        let java_like = rewrite_like_java(&write_manifest(10_000, num_columns));
+        group.throughput(Throughput::Bytes(java_like.len() as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(num_columns),
+            &java_like,
+            |b, bytes| b.iter(|| Manifest::parse_avro(black_box(bytes)).unwrap()),
+        );
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench_parse_avro, bench_parse_avro_by_size);
 criterion_main!(benches);
