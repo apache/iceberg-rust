@@ -21,19 +21,17 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
+use crate::spec::DataFile;
 use crate::table::Table;
 use crate::transaction::action::CommitStatus;
-use crate::transaction::snapshot::{
-    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
-};
+use crate::transaction::simple_snapshot_producer::SimpleSnapshotProducer;
 use crate::transaction::{ActionCommit, TransactionAction};
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
 #[derive(Clone)]
 pub struct FastAppendAction {
     check_duplicate: bool,
-    // below are properties used to create SnapshotProducer when commit
+    /// Overrides the commit UUID of the producer created in `new_state`.
     commit_uuid: Option<Uuid>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
@@ -88,79 +86,28 @@ impl FastAppendAction {
 
 #[async_trait]
 impl TransactionAction for FastAppendAction {
-    // TODO: replace with a persistent `SimpleSnapshotProducer` once snapshot
-    // production is migrated (stateful transaction RFC, milestone 2).
-    type State = ();
+    type State = SimpleSnapshotProducer;
 
-    fn new_state(&self) -> Self::State {}
+    fn new_state(&self) -> Self::State {
+        SimpleSnapshotProducer::new(self.commit_uuid)
+    }
 
-    async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
-        let snapshot_producer = SnapshotProducer::new(
-            table,
-            self.commit_uuid.unwrap_or_else(Uuid::now_v7),
-            self.snapshot_properties.clone(),
-            self.dedupe_added_files(),
-            vec![],
-        );
+    async fn commit(&self, state: &mut Self::State, table: &Table) -> Result<ActionCommit> {
+        let data_files = self.dedupe_added_files();
 
-        // validate added files
-        snapshot_producer.validate_added_data_files()?;
-
-        // Checks duplicate files
+        state.validate_added_data_files(table, &data_files)?;
         if self.check_duplicate {
-            snapshot_producer.validate_duplicate_files().await?;
+            state.validate_duplicate_files(table, &data_files).await?;
         }
 
-        snapshot_producer
-            .commit(FastAppendOperation, DefaultManifestProcess)
+        state
+            .apply(table, self.snapshot_properties.clone(), &data_files)
             .await
     }
 
-    async fn cleanup(self, _state: (), _table: &Table, _status: CommitStatus) {
-        // Stateless for now: generated manifests are not yet tracked for
-        // terminal cleanup (stateful transaction RFC, milestone 2/3).
-    }
-}
-
-struct FastAppendOperation;
-
-impl SnapshotProduceOperation for FastAppendOperation {
-    fn operation(&self) -> Operation {
-        Operation::Append
-    }
-
-    async fn delete_entries(
-        &self,
-        _snapshot_produce: &SnapshotProducer<'_>,
-    ) -> Result<Vec<ManifestEntry>> {
-        Ok(vec![])
-    }
-
-    async fn existing_manifest(
-        &self,
-        snapshot_produce: &SnapshotProducer<'_>,
-    ) -> Result<Vec<ManifestFile>> {
-        let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
-            return Ok(vec![]);
-        };
-
-        let manifest_list = snapshot_produce
-            .table
-            .manifest_list_reader(snapshot)
-            .load()
-            .await?;
-
-        Ok(manifest_list
-            .entries()
-            .iter()
-            .filter(|entry| {
-                // Keep delete-only manifests too: they record which files were removed and
-                // must persist across snapshots until `expire_snapshots` cleans them up.
-                // Dropping them lets the removed files reappear as live data (see #2148).
-                entry.has_added_files() || entry.has_existing_files() || entry.has_deleted_files()
-            })
-            .cloned()
-            .collect())
+    async fn cleanup(self, _state: SimpleSnapshotProducer, _table: &Table, _status: CommitStatus) {
+        // TODO: remove the producer's uncommitted artifacts once terminal cleanup
+        // is wired up (stateful transaction RFC, milestone 3).
     }
 }
 
@@ -169,11 +116,13 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     use minijinja::{AutoEscape, Environment, Value, context};
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    use crate::catalog::MockCatalog;
     use crate::encryption::kms::MemoryKeyManagementClient;
     use crate::encryption::{SensitiveBytes, StandardKeyMetadata};
     use crate::io::FileIO;
@@ -184,9 +133,9 @@ mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::{commit_with_fresh_state, make_encrypted_table, test_runtime};
-    use crate::transaction::Transaction;
-    use crate::transaction::tests::make_v2_minimal_table;
-    use crate::{TableIdent, TableRequirement, TableUpdate};
+    use crate::transaction::tests::{make_v2_minimal_table, with_retry_properties};
+    use crate::transaction::{ApplyTransactionAction, Transaction};
+    use crate::{Error, ErrorKind, TableIdent, TableRequirement, TableUpdate};
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
@@ -963,5 +912,93 @@ mod tests {
             manifest.entries()[0].snapshot_id().unwrap()
         );
         assert_eq!(data_file, *manifest.entries()[0].data_file());
+    }
+
+    /// A fast append that hits a retryable conflict must not leave the committed
+    /// snapshot pointing at a second copy of its manifest: the producer state
+    /// survives the retry, so the manifest is reused and only the manifest list
+    /// is rewritten (see #3418).
+    #[tokio::test]
+    async fn test_fast_append_retry_reuses_manifest() {
+        // `TableCommit::apply` derives the next metadata location from the
+        // current one, so it needs a well-formed name.
+        let table = with_retry_properties(make_v2_minimal_table(), "3").with_metadata_location(
+            "memory:///table/metadata/00000-9c12d441-03fe-4693-9a96-a0705ddf69c1.metadata.json"
+                .to_string(),
+        );
+        let commit_uuid = Uuid::now_v7();
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/1.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+
+        // Base never changes; the first update_table fails with a retryable
+        // conflict, the second applies the commit.
+        let mut mock_catalog = MockCatalog::new();
+        let base = table.clone();
+        mock_catalog.expect_load_table().returning_st(move |_| {
+            let base = base.clone();
+            Box::pin(async move { Ok(base) })
+        });
+        let attempts = AtomicU32::new(0);
+        let base = table.clone();
+        mock_catalog
+            .expect_update_table()
+            .times(2)
+            .returning_st(move |commit| {
+                let base = base.clone();
+                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Box::pin(async move {
+                        Err(
+                            Error::new(ErrorKind::CatalogCommitConflicts, "Commit conflict")
+                                .with_retryable(true),
+                        )
+                    })
+                } else {
+                    Box::pin(async move { commit.apply(base) })
+                }
+            });
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .set_commit_uuid(commit_uuid)
+            .add_data_files(vec![data_file])
+            .apply(tx)
+            .unwrap();
+        let committed = tx.commit(&mock_catalog).await.unwrap();
+
+        let snapshot = committed.metadata().current_snapshot().unwrap();
+        // The committed manifest list is the second attempt's.
+        assert!(
+            snapshot
+                .manifest_list()
+                .ends_with(&format!("-1-{commit_uuid}.avro")),
+            "unexpected manifest list path {}",
+            snapshot.manifest_list()
+        );
+
+        // It references exactly one manifest, written under the requested UUID
+        // during the first attempt (counter 0) and reused by the second.
+        let manifest_list = committed
+            .manifest_list_reader(snapshot)
+            .load()
+            .await
+            .unwrap();
+        assert_eq!(manifest_list.entries().len(), 1);
+        assert!(
+            manifest_list.entries()[0]
+                .manifest_path
+                .ends_with(&format!("{commit_uuid}-m0.avro")),
+            "unexpected manifest path {}",
+            manifest_list.entries()[0].manifest_path
+        );
     }
 }
