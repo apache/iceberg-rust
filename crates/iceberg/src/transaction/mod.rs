@@ -171,6 +171,9 @@ impl Transaction {
     }
 
     /// Commit transaction.
+    ///
+    /// Returns `ErrorKind::PreconditionFailed` if the table is read-only
+    /// (`Table::readonly()`), even when the transaction has no actions.
     pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
         if self.table.readonly() {
             return Err(Error::new(
