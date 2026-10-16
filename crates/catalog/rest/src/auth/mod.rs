@@ -29,10 +29,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 #[cfg(feature = "sigv4")]
 pub use aws_credential_types::Credentials;
+#[cfg(feature = "sigv4")]
+pub use aws_credential_types::provider::SharedCredentialsProvider;
 use iceberg::{Result, SessionContext};
 pub use oauth2::OAuth2Manager;
 #[cfg(feature = "sigv4")]
-pub use sigv4::{PayloadHashMode, SigV4Signer};
+pub use sigv4::{
+    PayloadHashMode, REST_CATALOG_PROP_ACCESS_KEY_ID, REST_CATALOG_PROP_SECRET_ACCESS_KEY,
+    REST_CATALOG_PROP_SESSION_TOKEN, REST_CATALOG_PROP_SIGNING_NAME,
+    REST_CATALOG_PROP_SIGNING_REGION, SIGNING_NAME_DEFAULT, SigV4AuthManager, SigV4Signer,
+};
 
 use crate::client::HttpClient;
 use crate::request::HttpRequest;
@@ -108,12 +114,21 @@ pub trait AuthManager: Debug + Send + Sync {
         let _ = context;
         Ok(catalog_session)
     }
+
+    /// Whether this manager's sessions sign requests. The catalog's default
+    /// client then does not follow redirects, which would replay a signature
+    /// at another URL.
+    fn signs_requests(&self) -> bool {
+        false
+    }
 }
 
 /// Authenticates outgoing REST catalog requests.
 #[async_trait]
 pub trait AuthSession: Debug + Send + Sync {
     /// Applies authentication to the request (adds headers, signs, ...).
+    ///
+    /// The request already carries the configured `header.*` values.
     async fn authenticate(&self, request: &mut HttpRequest) -> Result<()>;
 }
 
