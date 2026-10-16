@@ -141,7 +141,7 @@ mod tests {
 
     use crate::Runtime;
     use crate::arrow::{ArrowReader, ArrowReaderBuilder};
-    use crate::delete_vector::DeleteVector;
+    use crate::delete_vector::{DeleteVector, mixed_delete_vectors};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{DataContentType, DataFileFormat, NestedField, PrimitiveType, Schema, Type};
@@ -249,6 +249,96 @@ mod tests {
             ArrowReader::build_deletes_row_selection(&meta, &Some(vec![1]), &deletes).unwrap(),
             RowSelection::from(vec![select(1), skip(1), select(2)])
         );
+    }
+
+    /// The selection for `deleted` built one deleted position at a time.
+    fn expected_deletes_row_selection(
+        row_group_sizes: &[u64],
+        selected_row_groups: &Option<Vec<usize>>,
+        deleted: &[u64],
+    ) -> RowSelection {
+        let mut selectors = Vec::new();
+        let mut base = 0;
+        for (idx, &num_rows) in row_group_sizes.iter().enumerate() {
+            let end = base + num_rows;
+            if selected_row_groups
+                .as_ref()
+                .is_none_or(|selected| selected.contains(&idx))
+            {
+                let mut row = base;
+                let first = deleted.partition_point(|&p| p < base);
+                for &pos in deleted[first..].iter().take_while(|&&p| p < end) {
+                    selectors.push(RowSelector::select((pos - row) as usize));
+                    selectors.push(RowSelector::skip(1));
+                    row = pos + 1;
+                }
+                selectors.push(RowSelector::select((end - row) as usize));
+            }
+            base = end;
+        }
+        selectors.into()
+    }
+
+    /// Random row group layouts and selections over the delete vectors the iterator tests use,
+    /// compared with a selection built one deleted position at a time.
+    #[test]
+    fn test_build_deletes_row_selection_matches_model() {
+        let mut state = 3u64;
+        let mut rand = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let schema_descr = get_test_schema_descr();
+        let columns: Vec<_> = schema_descr
+            .columns()
+            .iter()
+            .map(|ptr| ColumnChunkMetaData::builder(ptr.clone()).build().unwrap())
+            .collect();
+
+        for deletes in mixed_delete_vectors() {
+            let deleted: Vec<u64> = deletes.iter().collect();
+            let num_rows = deleted.last().map_or(0, |&last| last + 1) + rand() % 100 + 1;
+            for _ in 0..8 {
+                // Row group boundaries, half of them next to a deleted position so that they
+                // fall inside runs.
+                let mut cuts: Vec<u64> = (0..rand() % 8)
+                    .map(|_| match deleted.len() {
+                        n if n > 0 && rand() % 2 == 0 => {
+                            (deleted[(rand() % n as u64) as usize] + rand() % 3).saturating_sub(1)
+                        }
+                        _ => rand() % num_rows,
+                    })
+                    .filter(|&cut| cut > 0 && cut < num_rows)
+                    .collect();
+                cuts.extend([0, num_rows]);
+                cuts.sort_unstable();
+                cuts.dedup();
+                let sizes: Vec<u64> = cuts.windows(2).map(|w| w[1] - w[0]).collect();
+                let row_groups: Vec<RowGroupMetaData> = sizes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &n)| {
+                        build_test_row_group_meta(
+                            schema_descr.clone(),
+                            columns.clone(),
+                            n as i64,
+                            i as i16,
+                        )
+                    })
+                    .collect();
+                let selected = (rand() % 4 != 0)
+                    .then(|| (0..sizes.len()).filter(|_| rand() % 2 == 0).collect());
+
+                assert_eq!(
+                    ArrowReader::build_deletes_row_selection(&row_groups, &selected, &deletes)
+                        .unwrap(),
+                    expected_deletes_row_selection(&sizes, &selected, &deleted),
+                    "row groups {sizes:?}, selected {selected:?}"
+                );
+            }
+        }
     }
 
     #[test]
