@@ -321,7 +321,7 @@ impl Display for Datum {
                 write!(f, "{}", timestamptz::nanoseconds_to_datetimetz(*val))
             }
             (_, PrimitiveLiteral::String(val)) => write!(f, r#""{val}""#),
-            (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(val)) => {
+            (PrimitiveType::Uuid | PrimitiveType::Unknown, PrimitiveLiteral::UInt128(val)) => {
                 write!(f, "{}", uuid::Uuid::from_u128(*val))
             }
             (_, PrimitiveLiteral::Binary(val)) => display_bytes(val, f),
@@ -334,6 +334,8 @@ impl Display for Datum {
             ) => {
                 write!(f, "{}", decimal_from_i128_with_scale(*val, *scale))
             }
+            // The scale lives on the dropped source type, so only the unscaled value is left.
+            (PrimitiveType::Unknown, PrimitiveLiteral::Int128(val)) => write!(f, "{val}"),
             (_, _) => {
                 unreachable!()
             }
