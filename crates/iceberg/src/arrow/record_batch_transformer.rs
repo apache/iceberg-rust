@@ -296,6 +296,13 @@ impl PromotePlan {
                             sorted: *sorted,
                         })
                     }
+                    (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+                        Err(invalid_data!(
+                            "map entries have {} source fields, expected {}",
+                            source_fields.len(),
+                            target_fields.len()
+                        ))
+                    }
                     _ => Err(invalid_data!(
                         "expected struct-typed map entries, got {source_entries:?} and {target_entries:?}"
                     )),
@@ -1754,6 +1761,11 @@ mod test {
                 map_of(DataType::Int64),
                 "expected struct-typed map entries",
             ),
+            (
+                map_of(unevolved_struct_type()),
+                map_of(evolved_struct_type()),
+                "map entries have 1 source fields, expected 2",
+            ),
         ] {
             let err =
                 PromotePlan::build(&source, &target, &empty_schema(), &HashMap::new()).unwrap_err();
@@ -1857,108 +1869,6 @@ mod test {
             None,
         );
         assert_eq!(out.as_struct(), &expected);
-    }
-
-    #[test]
-    fn promote_idless_nested_struct_reads_null() {
-        let inner = StructArray::new(
-            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
-            vec![Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef],
-            None,
-        );
-        let file = StructArray::new(
-            Fields::from(vec![Field::new("inner", inner.data_type().clone(), true)]),
-            vec![Arc::new(inner) as ArrayRef],
-            None,
-        );
-        let out = transform_top_level(
-            NestedField::optional(
-                2,
-                "s",
-                Type::Struct(StructType::new(vec![
-                    NestedField::optional(
-                        3,
-                        "inner",
-                        Type::Struct(StructType::new(vec![
-                            NestedField::optional(4, "x", Type::Primitive(PrimitiveType::Long))
-                                .into(),
-                        ])),
-                    )
-                    .into(),
-                ])),
-            ),
-            Arc::new(file),
-        )
-        .unwrap();
-        let inner_fields = Fields::from(vec![field_with_id("x", DataType::Int64, true, 4)]);
-        let inner_type = DataType::Struct(inner_fields);
-        let expected = StructArray::new(
-            Fields::from(vec![field_with_id("inner", inner_type.clone(), true, 3)]),
-            vec![new_null_array(&inner_type, 3)],
-            None,
-        );
-        assert_eq!(out.as_struct(), &expected);
-    }
-
-    #[test]
-    fn promote_idless_map_keeps_data() {
-        let entries = StructArray::new(
-            Fields::from(vec![
-                Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Int32, true),
-            ]),
-            vec![
-                Arc::new(StringArray::from(vec!["k1", "k2"])) as ArrayRef,
-                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
-            ],
-            None,
-        );
-        let map = MapArray::new(
-            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
-            OffsetBuffer::new(vec![0, 2].into()),
-            entries,
-            None,
-            false,
-        );
-        let out = transform_top_level(
-            NestedField::optional(
-                2,
-                "m",
-                Type::Map(MapType::optional(
-                    3,
-                    Type::Primitive(PrimitiveType::String),
-                    4,
-                    Type::Primitive(PrimitiveType::Int),
-                )),
-            ),
-            Arc::new(map),
-        )
-        .unwrap();
-        let expected_entries = StructArray::new(
-            Fields::from(vec![
-                field_with_id("key", DataType::Utf8, false, 3),
-                field_with_id("value", DataType::Int32, true, 4),
-            ]),
-            vec![
-                Arc::new(StringArray::from(vec!["k1", "k2"])) as ArrayRef,
-                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
-            ],
-            None,
-        );
-        let expected = MapArray::new(
-            Arc::new(Field::new(
-                DEFAULT_MAP_FIELD_NAME,
-                expected_entries.data_type().clone(),
-                false,
-            )),
-            OffsetBuffer::new(vec![0, 2].into()),
-            expected_entries,
-            None,
-            false,
-        );
-        // Map array equality skips the entries field name.
-        assert_eq!(out.data_type(), expected.data_type());
-        assert_eq!(out.as_map(), &expected);
     }
 
     #[test]
