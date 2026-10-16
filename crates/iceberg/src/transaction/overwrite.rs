@@ -24,6 +24,7 @@ use uuid::Uuid;
 use crate::error::{Result, invalid_data};
 use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
 use crate::table::Table;
+use crate::transaction::action::CommitStatus;
 use crate::transaction::snapshot::{
     DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
 };
@@ -34,6 +35,7 @@ use crate::transaction::{ActionCommit, TransactionAction};
 /// Creates a snapshot with `Operation::Overwrite` semantics — adds new data files and
 /// optionally removes existing data files by rewriting affected manifests with those
 /// entries marked as `ManifestStatus::Deleted`.
+#[derive(Clone)]
 pub struct OverwriteAction {
     check_duplicate: bool,
     commit_uuid: Option<Uuid>,
@@ -86,7 +88,11 @@ impl OverwriteAction {
 
 #[async_trait]
 impl TransactionAction for OverwriteAction {
-    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+    type State = ();
+
+    fn new_state(&self) -> Self::State {}
+
+    async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
         let mut deleted_files = HashMap::new();
         for file in &self.deleted_data_files {
             if file.content_type() != crate::spec::DataContentType::Data {
@@ -116,6 +122,8 @@ impl TransactionAction for OverwriteAction {
             .commit(operation, DefaultManifestProcess)
             .await
     }
+
+    async fn cleanup(self, _state: (), _table: &Table, _status: CommitStatus) {}
 }
 
 struct OverwriteOperation<'a> {
@@ -241,8 +249,9 @@ mod tests {
         Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::table::Table;
+    use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::tests::make_v3_minimal_table_in_catalog;
-    use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction, TransactionAction};
+    use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
     use crate::{ErrorKind, TableUpdate};
 
     fn test_data_file(path: &str, partition_spec_id: i32) -> DataFile {
@@ -410,7 +419,7 @@ mod tests {
                 table.metadata().default_partition_spec_id(),
             )])
             .delete_data_files(vec![file_a.clone()]);
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
         let new_snapshot: SnapshotRef = if let TableUpdate::AddSnapshot { snapshot } = &updates[0] {
             SnapshotRef::new(snapshot.clone())
@@ -535,7 +544,7 @@ mod tests {
                 file_a.clone(),
                 test_data_file("test/never-committed.parquet", spec_id),
             ]);
-        let err = Arc::new(action).commit(&table).await.err().unwrap();
+        let err = commit_with_fresh_state(action, &table).await.err().unwrap();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(
             err.to_string()
@@ -584,7 +593,7 @@ mod tests {
             let action = Transaction::new(&table)
                 .overwrite()
                 .delete_data_files(vec![incorrect]);
-            let err = Arc::new(action).commit(&table).await.err().unwrap();
+            let err = commit_with_fresh_state(action, &table).await.err().unwrap();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert!(
                 err.message()
@@ -609,7 +618,7 @@ mod tests {
             let action = Transaction::new(&table)
                 .overwrite()
                 .delete_data_files(vec![file]);
-            let err = Arc::new(action).commit(&table).await.err().unwrap();
+            let err = commit_with_fresh_state(action, &table).await.err().unwrap();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert!(err.message().contains("Only data content type is allowed"));
         }
@@ -748,7 +757,7 @@ mod tests {
         let action = Transaction::new(&table)
             .overwrite()
             .delete_data_files(vec![file]);
-        let err = Arc::new(action).commit(&table).await.err().unwrap();
+        let err = commit_with_fresh_state(action, &table).await.err().unwrap();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(
             err.message()

@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * `EncryptedOutputFile::key_metadata()` is replaced by `key_metadata_with_saved_file_metadata(&FileMetadata)`. Pass the metadata returned by `write()` or the writer's `close()` to include the stored length before encoding key metadata.
 * `EncryptedInputFile::metadata()` is now synchronous and derives the plaintext size from key metadata without a storage stat. Remove `.await` from calls to this method.
 * AGS1 readers now require `StandardKeyMetadata::file_length` and reject missing or invalid lengths without falling back to a storage stat. AGS1-encrypted manifests, manifest lists, and Puffin files written by earlier development builds without this field must be rewritten using a build that can still read them before upgrading. This matches the Java client's read contract.
+* `iceberg_catalog_loader::BoxedCatalogBuilder` has a new required method, `with_runtime`. Types implementing `CatalogBuilder` get it through the blanket impl; types implementing `BoxedCatalogBuilder` directly (for example, a wrapper around another `Box<dyn BoxedCatalogBuilder>`) must implement it, typically by forwarding the runtime to the builder they wrap.
 
 ## [v0.10.1] - 2026-07-28
 

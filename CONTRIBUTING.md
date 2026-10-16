@@ -38,6 +38,10 @@ First, thank you for contributing to Iceberg Rust! The goal of this document is 
 
 Once your changes are ready you must submit your branch as a [pull request](https://github.com/apache/iceberg-rust/pulls).
 
+#### Open Pull Request Limit
+
+With coding agents, the number of open PRs now far exceeds our review capacity. To help reviewers focus on fewer PRs, users without write access are limited to **3 open, non-draft PRs** at a time. If you've reached the limit, wait for existing PRs to be merged, close some of them, or convert some to drafts until you have fewer than three open PRs before opening another.
+
 #### Title
 
 The pull request title must follow the format outlined in the [conventional commits spec](https://www.conventionalcommits.org). [Conventional commits](https://www.conventionalcommits.org) is a standardized format for commit messages. iceberg-rust only requires this format for commits on the `main` branch. And because iceberg-rust squashes commits before merging branches, this means that only the pull request title must conform to this format.
@@ -117,6 +121,14 @@ tested in CI and developers have reproducible builds.
 
 In `Cargo.toml`, we specify the minimum version required to use iceberg-rust. This allows users to choose their
 dependency versions without always upgrading to the latest.
+
+Dependency licenses must comply with the [ASF 3rd Party License Policy](https://www.apache.org/legal/resolved.html).
+CI checks them against `deny.toml` with `cargo deny`; run `make check-dependency-licenses` to check locally. If a
+license is rejected, find its category in the policy:
+
+- Category A: add the license to `allow`.
+- Category B: add a per-crate entry to `exceptions`.
+- Category X: not allowed by ASF policy; do not take the dependency.
 
 ## Code of Conduct
 

@@ -157,16 +157,6 @@ require_checksum_command() {
   fi
 }
 
-require_cargo_deny() {
-  require_command cargo
-  if ! cargo deny --version >/dev/null 2>&1; then
-    echo "This step requires 'cargo-deny' for dependency license checks." >&2
-    echo "Install it with: cargo install --locked cargo-deny" >&2
-    echo "To skip this step locally, pass: --check_deps 0" >&2
-    return 1
-  fi
-}
-
 require_gpg_secret_key() {
   require_command gpg
   if ! gpg --list-secret-keys --with-colons 2>/dev/null | grep -q '^sec'; then
@@ -317,12 +307,8 @@ check_rc_tag_available() {
 }
 
 check_dependency_licenses() {
-  require_cargo_deny
-  (
-    trap - ERR
-    cd "${REPO_ROOT}"
-    cargo deny check license
-  )
+  require_command python3
+  python3 "${SCRIPT_DIR}/licenses.py" dependencies check
 }
 
 # Packages and builds every crate as `cargo publish` would, without uploading,
