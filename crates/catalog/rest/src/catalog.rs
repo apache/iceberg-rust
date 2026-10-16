@@ -39,8 +39,11 @@ use reqwest::{Client, Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
+#[cfg(feature = "sigv4")]
+use crate::auth::SigV4AuthManager;
 use crate::auth::{
-    AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, AuthSession, NoopAuthManager, OAuth2Manager,
+    AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AUTH_TYPE_SIGV4, AuthManager, AuthSession, NoopAuthManager,
+    OAuth2Manager,
 };
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
@@ -61,10 +64,15 @@ pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 /// Disable header redaction in error logs and `Debug` output (defaults to
 /// false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
-/// Authentication scheme: `none` or `oauth2`. When unset, `oauth2` is used
-/// if a `token`, `credential` or `oauth2-server-uri` is configured, `none`
-/// otherwise.
+/// Authentication scheme: `none`, `oauth2` or `sigv4` (requires the `sigv4`
+/// feature). When unset, `oauth2` is used if a `token`, `credential` or
+/// `oauth2-server-uri` is configured, `none` otherwise.
 pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
+
+/// Deprecated switch enabling SigV4, taking precedence over `rest.auth.type`.
+pub const REST_CATALOG_PROP_SIGV4_ENABLED: &str = "rest.sigv4-enabled";
+/// Auth scheme wrapped by SigV4: `oauth2` (the default) or `none`.
+pub const REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE: &str = "rest.auth.sigv4.delegate-auth-type";
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -116,6 +124,8 @@ impl CatalogBuilder for RestCatalogBuilder {
 
 impl RestCatalogBuilder {
     /// Configures the catalog with a custom HTTP client.
+    ///
+    /// With SigV4 signing, the client must not follow redirects.
     pub fn with_client(mut self, client: Client) -> Self {
         self.inner = self.inner.with_client(client);
         self
@@ -261,6 +271,19 @@ impl RestCatalogConfig {
         self.client
             .clone()
             .unwrap_or_else(|| self.default_client.get_or_init(Client::default).clone())
+    }
+
+    /// Builds the shared default client without following redirects. An
+    /// injected client is left as is.
+    pub(crate) fn disable_client_redirects(&self) {
+        if self.client.is_none() {
+            self.default_client.get_or_init(|| {
+                Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .build()
+                    .expect("failed to build default HTTP client")
+            });
+        }
     }
 
     /// Get the token from the config.
@@ -786,6 +809,17 @@ impl RestSessionCatalog {
     /// `credential` or `oauth2-server-uri` is configured (preserving
     /// pre-`rest.auth.type` setups), `none` when none is.
     fn auth_type(config: &RestCatalogConfig) -> String {
+        if config
+            .props
+            .get(REST_CATALOG_PROP_SIGV4_ENABLED)
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+        {
+            tracing::warn!(
+                "'{REST_CATALOG_PROP_SIGV4_ENABLED}' is deprecated; set \
+                 '{REST_CATALOG_PROP_AUTH_TYPE}={AUTH_TYPE_SIGV4}' instead"
+            );
+            return AUTH_TYPE_SIGV4.to_string();
+        }
         config
             .props
             .get(REST_CATALOG_PROP_AUTH_TYPE)
@@ -823,6 +857,35 @@ impl RestSessionCatalog {
         match auth_type.as_str() {
             AUTH_TYPE_NONE => Ok(Arc::new(NoopAuthManager)),
             AUTH_TYPE_OAUTH2 => Ok(Arc::new(OAuth2Manager::from_config(config)?)),
+            #[cfg(feature = "sigv4")]
+            AUTH_TYPE_SIGV4 => {
+                let delegate_type = config
+                    .props
+                    .get(REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE)
+                    .map(|value| value.to_ascii_lowercase());
+                // OAuth2 even without a token: `/v1/config` may supply one.
+                let delegate: Arc<dyn AuthManager> = match delegate_type.as_deref() {
+                    Some(AUTH_TYPE_NONE) => Arc::new(NoopAuthManager),
+                    Some(AUTH_TYPE_OAUTH2) | None => Arc::new(OAuth2Manager::from_config(config)?),
+                    Some(other) => {
+                        return Err(Error::new(
+                            ErrorKind::DataInvalid,
+                            format!(
+                                "unknown '{REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE}': {other}"
+                            ),
+                        ));
+                    }
+                };
+                Ok(Arc::new(SigV4AuthManager::from_properties(
+                    delegate,
+                    &config.props,
+                )?))
+            }
+            #[cfg(not(feature = "sigv4"))]
+            AUTH_TYPE_SIGV4 => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "SigV4 authentication requires the `sigv4` feature",
+            )),
             other => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
@@ -838,7 +901,11 @@ impl RestSessionCatalog {
     async fn client(&self) -> Result<&RestCatalogClient> {
         self.client
             .get_or_try_init(|| async {
-                RestCatalogClient::init(&self.user_config, self.resolve_auth_manager()?).await
+                let auth_manager = self.resolve_auth_manager()?;
+                if auth_manager.signs_requests() {
+                    self.user_config.disable_client_redirects();
+                }
+                RestCatalogClient::init(&self.user_config, auth_manager).await
             })
             .await
     }
@@ -1552,6 +1619,8 @@ impl Default for RestSessionCatalogBuilder {
 
 impl RestSessionCatalogBuilder {
     /// Configures the catalog with a custom HTTP client.
+    ///
+    /// With SigV4 signing, the client must not follow redirects.
     pub fn with_client(mut self, client: Client) -> Self {
         self.config.client = Some(client);
         self
@@ -1786,6 +1855,29 @@ mod tests {
 
     fn test_catalog(config: RestCatalogConfig) -> RestSessionCatalog {
         RestSessionCatalog::new(config, None, None, Runtime::current(), None)
+    }
+
+    #[cfg(feature = "sigv4")]
+    fn test_sigv4_manager() -> SigV4AuthManager {
+        use aws_credential_types::provider::SharedCredentialsProvider;
+
+        use crate::auth::{PayloadHashMode, SigV4AuthManager, SigV4Signer};
+
+        SigV4AuthManager::new(
+            Arc::new(NoopAuthManager),
+            SigV4Signer::builder()
+                .region("us-east-1")
+                .service("execute-api")
+                .mode(PayloadHashMode::IcebergRest)
+                .build(),
+            SharedCredentialsProvider::new(aws_credential_types::Credentials::new(
+                "ak",
+                "sk",
+                None::<String>,
+                None,
+                "test",
+            )),
+        )
     }
 
     fn test_catalog_with<M>(config: RestCatalogConfig, auth_manager: M) -> RestSessionCatalog
@@ -3156,6 +3248,343 @@ mod tests {
 
         let err = test_catalog(config).resolve_auth_manager().unwrap_err();
         assert!(err.message().contains(REST_CATALOG_PROP_AUTH_TYPE));
+    }
+
+    #[cfg(feature = "sigv4")]
+    fn sigv4_props() -> HashMap<String, String> {
+        HashMap::from([
+            (REST_CATALOG_PROP_AUTH_TYPE.into(), "SiGv4".into()),
+            (
+                crate::REST_CATALOG_PROP_SIGNING_REGION.into(),
+                "us-east-1".into(),
+            ),
+            (
+                crate::REST_CATALOG_PROP_ACCESS_KEY_ID.into(),
+                "CATALOG".into(),
+            ),
+            (
+                crate::REST_CATALOG_PROP_SECRET_ACCESS_KEY.into(),
+                "catalog-secret".into(),
+            ),
+        ])
+    }
+
+    #[cfg(feature = "sigv4")]
+    #[tokio::test]
+    async fn test_configured_sigv4_signs_handshake_catalog_and_context_requests() {
+        use mockito::Matcher;
+
+        let mut server = Server::new_async().await;
+        let config = server
+            .mock("GET", "/v1/config")
+            .match_header(
+                "authorization",
+                Matcher::Regex(
+                    r"^AWS4-HMAC-SHA256 Credential=CATALOG/\d{8}/us-east-1/execute-api/".into(),
+                ),
+            )
+            .match_header("original-authorization", Matcher::Missing)
+            .with_status(200)
+            .with_body(
+                r#"{"defaults":{},"overrides":{
+                "rest.signing-region":"eu-west-1",
+                "rest.access-key-id":"SERVER",
+                "rest.secret-access-key":"server-secret",
+                "token":"server-token"
+            }}"#,
+            )
+            .create_async()
+            .await;
+        let catalog_request = server
+            .mock("GET", "/v1/namespaces")
+            .match_header(
+                "authorization",
+                Matcher::Regex(
+                    r"^AWS4-HMAC-SHA256 Credential=SERVER/\d{8}/eu-west-1/execute-api/".into(),
+                ),
+            )
+            .match_header("original-authorization", "Bearer server-token")
+            .with_status(200)
+            .with_body(r#"{"namespaces":[]}"#)
+            .create_async()
+            .await;
+        let context_request = server
+            .mock("GET", "/v1/namespaces")
+            .match_header(
+                "authorization",
+                Matcher::Regex(
+                    r"^AWS4-HMAC-SHA256 Credential=CONTEXT/\d{8}/ap-south-1/execute-api/".into(),
+                ),
+            )
+            .match_header("original-authorization", "Bearer server-token")
+            .match_header("x-amz-security-token", "context-token")
+            .with_status(200)
+            .with_body(r#"{"namespaces":[]}"#)
+            .create_async()
+            .await;
+        let catalog = test_catalog(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(sigv4_props())
+                .build(),
+        );
+        catalog
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap();
+        let context = SessionContext::builder()
+            .properties(HashMap::from([(
+                crate::REST_CATALOG_PROP_SIGNING_REGION.into(),
+                "ap-south-1".into(),
+            )]))
+            .credentials(HashMap::from([
+                (
+                    crate::REST_CATALOG_PROP_ACCESS_KEY_ID.into(),
+                    "CONTEXT".to_string().into(),
+                ),
+                (
+                    crate::REST_CATALOG_PROP_SECRET_ACCESS_KEY.into(),
+                    "context-secret".to_string().into(),
+                ),
+                (
+                    crate::REST_CATALOG_PROP_SESSION_TOKEN.into(),
+                    "context-token".to_string().into(),
+                ),
+            ]))
+            .build();
+        catalog.list_namespaces(&context, None).await.unwrap();
+        config.assert_async().await;
+        catalog_request.assert_async().await;
+        context_request.assert_async().await;
+    }
+
+    #[cfg(feature = "sigv4")]
+    #[tokio::test]
+    async fn test_configured_sigv4_delegate_modes() {
+        for delegate in [None, Some("OAuth2"), Some("none")] {
+            let mut props = sigv4_props();
+            props.insert("token".into(), "delegate-token".into());
+            if let Some(delegate) = delegate {
+                props.insert(
+                    REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE.into(),
+                    delegate.into(),
+                );
+            }
+            let manager = test_catalog(
+                RestCatalogConfig::builder()
+                    .uri("http://localhost".into())
+                    .props(props.clone())
+                    .build(),
+            )
+            .resolve_auth_manager()
+            .unwrap();
+            let session = manager.init_session(&test_client(), &props).await.unwrap();
+            let mut request = HttpRequest::new(
+                Client::new()
+                    .get("https://rest.example.com/v1/config")
+                    .build()
+                    .unwrap(),
+            );
+            session.authenticate(&mut request).await.unwrap();
+            assert!(
+                request
+                    .headers()
+                    .get("authorization")
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .starts_with("AWS4-HMAC-SHA256 ")
+            );
+            if delegate == Some("none") {
+                assert!(!request.headers().contains_key("original-authorization"));
+            } else {
+                assert_eq!(
+                    request.headers().get("original-authorization").unwrap(),
+                    "Bearer delegate-token"
+                );
+            }
+        }
+        let mut props = sigv4_props();
+        props.insert(
+            REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE.into(),
+            "sigv4".into(),
+        );
+        let err = test_catalog(
+            RestCatalogConfig::builder()
+                .uri("http://localhost".into())
+                .props(props)
+                .build(),
+        )
+        .resolve_auth_manager()
+        .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .contains(REST_CATALOG_PROP_SIGV4_DELEGATE_AUTH_TYPE)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_legacy_sigv4_switch_and_injected_manager_precedence() {
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".into())
+            .props(HashMap::from([
+                (REST_CATALOG_PROP_AUTH_TYPE.into(), AUTH_TYPE_NONE.into()),
+                (REST_CATALOG_PROP_SIGV4_ENABLED.into(), "TRUE".into()),
+            ]))
+            .build();
+        assert_eq!(RestSessionCatalog::auth_type(&config), AUTH_TYPE_SIGV4);
+        let manager = test_catalog_with(config, NoopAuthManager)
+            .resolve_auth_manager()
+            .unwrap();
+        assert!(!manager.signs_requests());
+    }
+
+    #[cfg(not(feature = "sigv4"))]
+    #[tokio::test]
+    async fn test_configured_sigv4_requires_the_feature() {
+        for (key, value) in [
+            (REST_CATALOG_PROP_AUTH_TYPE, AUTH_TYPE_SIGV4),
+            (REST_CATALOG_PROP_SIGV4_ENABLED, "true"),
+        ] {
+            let config = RestCatalogConfig::builder()
+                .uri("http://localhost".into())
+                .props(HashMap::from([(key.into(), value.into())]))
+                .build();
+            let err = test_catalog(config).resolve_auth_manager().unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+            assert!(err.message().contains("`sigv4` feature"));
+        }
+    }
+
+    #[cfg(feature = "sigv4")]
+    #[tokio::test]
+    async fn test_configured_sigv4_does_not_follow_redirects() {
+        for legacy in [false, true] {
+            let mut server = Server::new_async().await;
+            let redirect = server
+                .mock("GET", "/v1/config")
+                .with_status(307)
+                .with_header("location", "/redirected")
+                .create_async()
+                .await;
+            let target = server
+                .mock("GET", "/redirected")
+                .expect(0)
+                .create_async()
+                .await;
+            let mut props = sigv4_props();
+            if legacy {
+                props.insert(REST_CATALOG_PROP_AUTH_TYPE.into(), AUTH_TYPE_NONE.into());
+                props.insert(REST_CATALOG_PROP_SIGV4_ENABLED.into(), "true".into());
+            }
+            let catalog = test_catalog(
+                RestCatalogConfig::builder()
+                    .uri(server.url())
+                    .props(props)
+                    .build(),
+            );
+            let err = catalog
+                .list_namespaces(&SessionContext::empty(), None)
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("307"), "{err}");
+            redirect.assert_async().await;
+            target.assert_async().await;
+        }
+    }
+
+    #[cfg(feature = "sigv4")]
+    #[tokio::test]
+    async fn test_a_signing_manager_does_not_follow_redirects() {
+        let mut server = Server::new_async().await;
+        let redirect = server
+            .mock("GET", "/v1/config")
+            .with_status(307)
+            .with_header("location", "https://elsewhere.example.com/v1/config")
+            .create_async()
+            .await;
+
+        let config = RestCatalogConfig::builder().uri(server.url()).build();
+        let err = test_catalog_with(config, test_sigv4_manager())
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("307"), "{err}");
+        redirect.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_a_non_signing_manager_still_follows_redirects() {
+        let mut server = Server::new_async().await;
+        let redirect = server
+            .mock("GET", "/v1/config")
+            .with_status(307)
+            .with_header("location", "/v1/config-final")
+            .create_async()
+            .await;
+        let final_config = server
+            .mock("GET", "/v1/config-final")
+            .with_status(200)
+            .with_body(r#"{"overrides": {}, "defaults": {}}"#)
+            .create_async()
+            .await;
+        let namespaces = server
+            .mock("GET", "/v1/namespaces")
+            .with_status(200)
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+
+        let config = RestCatalogConfig::builder().uri(server.url()).build();
+        test_catalog_with(config, NoopAuthManager)
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap();
+
+        redirect.assert_async().await;
+        final_config.assert_async().await;
+        namespaces.assert_async().await;
+    }
+
+    #[cfg(feature = "sigv4")]
+    #[tokio::test]
+    async fn test_configured_authorization_header_does_not_clobber_the_signature() {
+        use mockito::{Matcher, Mock};
+
+        let mut server = Server::new_async().await;
+        let signed = |m: Mock| {
+            m.match_header("authorization", Matcher::Regex("^AWS4-HMAC-SHA256 ".into()))
+                .match_header("original-authorization", "Bearer configured")
+        };
+        let config_mock = signed(server.mock("GET", "/v1/config"))
+            .with_status(200)
+            .with_body(r#"{"overrides": {}, "defaults": {}}"#)
+            .create_async()
+            .await;
+        let namespaces_mock = signed(server.mock("GET", "/v1/namespaces"))
+            .with_status(200)
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(HashMap::from([(
+                "header.authorization".to_string(),
+                "Bearer configured".to_string(),
+            )]))
+            .build();
+        let catalog = test_catalog_with(config, test_sigv4_manager());
+
+        catalog
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        namespaces_mock.assert_async().await;
     }
 
     #[tokio::test]
