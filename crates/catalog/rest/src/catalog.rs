@@ -51,7 +51,7 @@ use crate::response::HttpResponse;
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
-    NamespaceResponse, RegisterTableRequest, RenameTableRequest,
+    NamespaceResponse, RegisterTableRequest, RenameTableRequest, UpdateNamespacePropertiesRequest,
 };
 
 /// REST catalog URI
@@ -231,6 +231,10 @@ impl RestCatalogConfig {
 
     fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
         self.url_prefixed(&["namespaces", &ns.to_url_string()])
+    }
+
+    fn namespace_properties_endpoint(&self, ns: &NamespaceIdent) -> String {
+        self.url_prefixed(&["namespaces", &ns.to_url_string(), "properties"])
     }
 
     fn tables_endpoint(&self, ns: &NamespaceIdent) -> String {
@@ -1064,14 +1068,54 @@ impl SessionCatalog for RestSessionCatalog {
 
     async fn update_namespace(
         &self,
-        _context: &SessionContext,
-        _namespace: &NamespaceIdent,
-        _properties: HashMap<String, String>,
+        context: &SessionContext,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
     ) -> Result<()> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Updating namespace not supported yet!",
-        ))
+        let current = self.get_namespace(context, namespace).await?;
+        let removals = current
+            .properties()
+            .keys()
+            .filter(|key| !properties.contains_key(*key))
+            .cloned()
+            .collect_vec();
+        let updates: HashMap<String, String> = properties
+            .into_iter()
+            .filter(|(key, value)| current.properties().get(key) != Some(value))
+            .collect();
+
+        if removals.is_empty() && updates.is_empty() {
+            return Ok(());
+        }
+
+        let client = self.client().await?;
+
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(
+                    Method::POST,
+                    client.config.namespace_properties_endpoint(namespace),
+                )
+                .json(&UpdateNamespacePropertiesRequest {
+                    removals: Some(removals),
+                    updates,
+                }),
+        )?;
+
+        let http_response = client.query_catalog(context, request).await?;
+
+        match http_response.status() {
+            StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::NamespaceNotFound,
+                "Tried to update a namespace that does not exist",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                client.http_client.disable_header_redaction(),
+            )),
+        }
     }
 
     async fn drop_namespace(
@@ -3532,6 +3576,138 @@ mod tests {
 
         config_mock.assert_async().await;
         drop_ns_mock.assert_async().await;
+    }
+
+    async fn create_get_namespace_mock(server: &mut ServerGuard) -> Mock {
+        server
+            .mock("GET", "/v1/namespaces/ns1")
+            .with_body(
+                r#"{
+                "namespace": ["ns1"],
+                "properties": {
+                    "unchanged": "value",
+                    "changed": "old",
+                    "removed": "value"
+                }
+            }"#,
+            )
+            .create_async()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_update_namespace_sends_changed_and_removed_properties() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+        let get_ns_mock = create_get_namespace_mock(&mut server).await;
+        let update_ns_mock = server
+            .mock("POST", "/v1/namespaces/ns1/properties")
+            .match_body(mockito::Matcher::Json(json!({
+                "removals": ["removed"],
+                "updates": {
+                    "changed": "new",
+                    "added": "value"
+                }
+            })))
+            .with_body(
+                r#"{
+                "updated": ["changed", "added"],
+                "removed": ["removed"]
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        catalog
+            .update_namespace(
+                &SessionContext::empty(),
+                &NamespaceIdent::new("ns1".to_string()),
+                HashMap::from([
+                    ("unchanged".to_string(), "value".to_string()),
+                    ("changed".to_string(), "new".to_string()),
+                    ("added".to_string(), "value".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        get_ns_mock.assert_async().await;
+        update_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_update_namespace_without_changes_skips_request() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+        let get_ns_mock = create_get_namespace_mock(&mut server).await;
+        let update_ns_mock = server
+            .mock("POST", "/v1/namespaces/ns1/properties")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        catalog
+            .update_namespace(
+                &SessionContext::empty(),
+                &NamespaceIdent::new("ns1".to_string()),
+                HashMap::from([
+                    ("unchanged".to_string(), "value".to_string()),
+                    ("changed".to_string(), "old".to_string()),
+                    ("removed".to_string(), "value".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        get_ns_mock.assert_async().await;
+        update_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_update_namespace_dropped_after_load_returns_not_found() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+        let get_ns_mock = create_get_namespace_mock(&mut server).await;
+        let update_ns_mock = server
+            .mock("POST", "/v1/namespaces/ns1/properties")
+            .with_status(404)
+            .with_body(
+                r#"{
+                "error": {
+                    "message": "Namespace does not exist: ns1",
+                    "type": "NoSuchNamespaceException",
+                    "code": 404
+                }
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        let err = catalog
+            .update_namespace(
+                &SessionContext::empty(),
+                &NamespaceIdent::new("ns1".to_string()),
+                HashMap::new(),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::NamespaceNotFound);
+
+        config_mock.assert_async().await;
+        get_ns_mock.assert_async().await;
+        update_ns_mock.assert_async().await;
     }
 
     #[tokio::test]
