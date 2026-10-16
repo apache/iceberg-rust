@@ -44,6 +44,16 @@ github:
     - name: Merge Queue
       target: branch
       enforcement: active
+      bypass_actors:
+        # apache/root (ASF Infra).
+        - actor_id: 118420
+          actor_type: Team
+          bypass_mode: always
+        # apache/iceberg-public. Iceberg committers can opt into this team via
+        # https://gitbox.apache.org/boxer/.
+        - actor_id: 20107235
+          actor_type: Team
+          bypass_mode: pull_request
       conditions:
         ref_name:
           include:
