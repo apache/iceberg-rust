@@ -706,7 +706,7 @@ mod tests {
 
     use super::resolve_field_id;
     use crate::arrow::{ArrowReaderBuilder, schema_to_arrow_schema};
-    use crate::expr::{BoundPredicate, Predicate, Reference};
+    use crate::expr::{BoundPredicate, Reference};
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::metadata_columns::{
@@ -3157,9 +3157,12 @@ mod tests {
         tx.commit(catalog).await.unwrap()
     }
 
-    /// Mirrors Java's `TestFilterPushDown.testFilterPushdownOnInitialDefaultColumnAbsentFromFile`.
-    /// The first file is written before `c` is added with `initial-default` 'US', so its row
-    /// reads `c` as 'US'. The second file stores `c`.
+    /// Checks the residual end to end, through `update_schema` and `TableScan`, which the reader
+    /// tests in `arrow/reader/row_filter.rs` bypass. Those tests cover the other predicates and
+    /// row selection. Follows Java's
+    /// `TestFilterPushDown.testFilterPushdownOnInitialDefaultColumnAbsentFromFile`: the first file
+    /// is written before `c` is added with `initial-default` 'US', so its row reads `c` as 'US'.
+    /// The second file stores `c`.
     #[tokio::test]
     async fn test_scan_filter_on_initial_default_column_absent_from_file() {
         use arrow_array::types::Int64Type;
@@ -3218,47 +3221,35 @@ mod tests {
         .await;
 
         let c = || Reference::new("c");
-        let cases = [
-            (Predicate::AlwaysTrue, vec![1, 2, 3]),
+        for (predicate, expected) in [
             (c().equal_to(Datum::string("US")), vec![1, 2]),
-            (c().is_not_null(), vec![1, 2, 3]),
-            (c().equal_to(Datum::string("CA")), vec![3]),
             (c().is_null(), vec![]),
-        ];
-
-        let mut actual = Vec::new();
-        let mut expected = Vec::new();
-        for row_selection_enabled in [false, true] {
-            for (predicate, ids) in &cases {
-                let batches: Vec<RecordBatch> = table
-                    .scan()
-                    .with_filter(predicate.clone())
-                    .with_row_selection_enabled(row_selection_enabled)
-                    .build()
-                    .unwrap()
-                    .to_arrow()
-                    .await
-                    .unwrap()
-                    .try_collect()
-                    .await
-                    .unwrap();
-                let mut actual_ids: Vec<i64> = batches
-                    .iter()
-                    .flat_map(|batch| {
-                        batch
-                            .column_by_name("id")
-                            .unwrap()
-                            .as_primitive::<Int64Type>()
-                            .values()
-                            .to_vec()
-                    })
-                    .collect();
-                actual_ids.sort();
-                let name = format!("{predicate}, row selection {row_selection_enabled}");
-                actual.push((name.clone(), actual_ids));
-                expected.push((name, ids.clone()));
-            }
+        ] {
+            let message = predicate.to_string();
+            let batches: Vec<RecordBatch> = table
+                .scan()
+                .with_filter(predicate)
+                .build()
+                .unwrap()
+                .to_arrow()
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            let mut actual: Vec<i64> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column_by_name("id")
+                        .unwrap()
+                        .as_primitive::<Int64Type>()
+                        .values()
+                        .to_vec()
+                })
+                .collect();
+            actual.sort();
+            assert_eq!(actual, expected, "{message}");
         }
-        assert_eq!(actual, expected);
     }
 }

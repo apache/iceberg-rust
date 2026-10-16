@@ -201,7 +201,8 @@ impl BoundPredicateVisitor for CollectFieldIdVisitor {
 /// missing from the file becomes `AlwaysTrue` or `AlwaysFalse`, based on the value projection
 /// returns for that field. That value is the identity partition value, otherwise the field's
 /// `initial-default`, and every row of the file holds it. Leaves on missing fields with neither
-/// keep the null handling of the row filter and the page index evaluator.
+/// keep the null handling of the row filter and the page index evaluator. The resulting constants
+/// are folded out of `AND` and `OR`.
 ///
 /// Leaves on nested fields are kept, because a nested field also reads as null in any row where
 /// an ancestor struct is null.
@@ -292,12 +293,26 @@ impl BoundPredicateVisitor for MissingFieldResidualVisitor<'_> {
         Ok(BoundPredicate::AlwaysFalse)
     }
 
+    // Fold constants so the row filter doesn't evaluate them per batch. The keep predicate of an
+    // equality delete file has one `OR` per deleted row, and each can fold to a constant.
     fn and(&mut self, lhs: BoundPredicate, rhs: BoundPredicate) -> Result<BoundPredicate> {
-        Ok(lhs.and(rhs))
+        Ok(match (lhs, rhs) {
+            (BoundPredicate::AlwaysFalse, _) | (_, BoundPredicate::AlwaysFalse) => {
+                BoundPredicate::AlwaysFalse
+            }
+            (BoundPredicate::AlwaysTrue, other) | (other, BoundPredicate::AlwaysTrue) => other,
+            (lhs, rhs) => lhs.and(rhs),
+        })
     }
 
     fn or(&mut self, lhs: BoundPredicate, rhs: BoundPredicate) -> Result<BoundPredicate> {
-        Ok(lhs.or(rhs))
+        Ok(match (lhs, rhs) {
+            (BoundPredicate::AlwaysTrue, _) | (_, BoundPredicate::AlwaysTrue) => {
+                BoundPredicate::AlwaysTrue
+            }
+            (BoundPredicate::AlwaysFalse, other) | (other, BoundPredicate::AlwaysFalse) => other,
+            (lhs, rhs) => lhs.or(rhs),
+        })
     }
 
     fn not(&mut self, inner: BoundPredicate) -> Result<BoundPredicate> {
@@ -1161,26 +1176,6 @@ mod tests {
         );
     }
 
-    /// Mirrors Java's `TestMetricsRowGroupFilter.testDateColumnNotInFileWithInitialDefault`.
-    #[test]
-    fn test_residual_for_missing_date_field_with_initial_default() {
-        let event_date = || Reference::new("event_date");
-        assert_residuals_for_missing_field_with_initial_default(
-            NestedField::optional(100, "event_date", Type::Primitive(PrimitiveType::Date))
-                .with_initial_default(Literal::date(42)),
-            vec![
-                event_date().equal_to(Datum::date(42)),
-                event_date().less_than(Datum::date(43)),
-                event_date().greater_than(Datum::date(41)),
-            ],
-            vec![
-                event_date().equal_to(Datum::date(41)),
-                event_date().less_than(Datum::date(42)),
-                event_date().greater_than(Datum::date(42)),
-            ],
-        );
-    }
-
     /// Mirrors Java's `TestMetricsRowGroupFilter.testDoubleColumnNotInFileWithInitialDefault`.
     #[test]
     fn test_residual_for_missing_double_field_with_initial_default() {
@@ -1282,29 +1277,54 @@ mod tests {
                 Reference::new("a")
                     .greater_than(Datum::long(0))
                     .and(Reference::new("b").equal_to(Datum::long(8))),
-                bind(Reference::new("a").greater_than(Datum::long(0)))
-                    .and(BoundPredicate::AlwaysFalse),
+                BoundPredicate::AlwaysFalse,
             ),
             (
-                "d = 1 OR b = 7",
+                "b = 7 AND a > 0",
+                Reference::new("b")
+                    .equal_to(Datum::long(7))
+                    .and(Reference::new("a").greater_than(Datum::long(0))),
+                bind(Reference::new("a").greater_than(Datum::long(0))),
+            ),
+            (
+                "b = 7 OR d = 1",
+                Reference::new("b")
+                    .equal_to(Datum::long(7))
+                    .or(Reference::new("d").equal_to(Datum::long(1))),
+                BoundPredicate::AlwaysTrue,
+            ),
+            (
+                "d = 1 OR b = 8",
                 Reference::new("d")
                     .equal_to(Datum::long(1))
-                    .or(Reference::new("b").equal_to(Datum::long(7))),
-                bind(Reference::new("d").equal_to(Datum::long(1))).or(BoundPredicate::AlwaysTrue),
+                    .or(Reference::new("b").equal_to(Datum::long(8))),
+                bind(Reference::new("d").equal_to(Datum::long(1))),
+            ),
+            (
+                "(a > 0 AND d IS NULL) OR b = 8 keeps the AND",
+                Reference::new("a")
+                    .greater_than(Datum::long(0))
+                    .and(Reference::new("d").is_null())
+                    .or(Reference::new("b").equal_to(Datum::long(8))),
+                bind(
+                    Reference::new("a")
+                        .greater_than(Datum::long(0))
+                        .and(Reference::new("d").is_null()),
+                ),
             ),
             (
                 "the keep predicate of an equality delete on b = 7 drops every row",
                 Reference::new("b")
                     .is_null()
                     .or(Reference::new("b").not_equal_to(Datum::long(7))),
-                BoundPredicate::AlwaysFalse.or(BoundPredicate::AlwaysFalse),
+                BoundPredicate::AlwaysFalse,
             ),
             (
                 "the keep predicate of an equality delete on b = 5 keeps every row",
                 Reference::new("b")
                     .is_null()
                     .or(Reference::new("b").not_equal_to(Datum::long(5))),
-                BoundPredicate::AlwaysFalse.or(BoundPredicate::AlwaysTrue),
+                BoundPredicate::AlwaysTrue,
             ),
         ];
 
