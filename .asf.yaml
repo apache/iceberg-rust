@@ -35,25 +35,6 @@ github:
     rebase: false
   protected_branches:
     main:
-      required_status_checks:
-        # Check context names (job names, not workflow files) that Merge Queue
-        # waits for. Every producer workflow must run on both `pull_request`
-        # and `merge_group`, without path filters, so each context always
-        # reports. `strict` is omitted: Merge Queue validates every entry
-        # against an up-to-date main, and ASF defaults it to false.
-        contexts:
-          # Repository policy and security checks.
-          - Analyze Actions
-          - Run zizmor 🌈
-          - asf-allowlist-check
-
-          # Rust workflow gates.
-          - ci-required
-          - check-public-api
-
-          # Python bindings workflow gates.
-          - bindings-python-ci-required
-
       required_pull_request_reviews:
         required_approving_review_count: 1
         dismiss_stale_reviews: false
@@ -69,6 +50,27 @@ github:
             - "~DEFAULT_BRANCH"
           exclude: []
       rules:
+        - type: required_status_checks
+          parameters:
+            # PR branches need not be up to date with main: Merge Queue
+            # already tests each entry against the latest main.
+            strict_required_status_checks_policy: false
+            # Check context names (job names, not workflow files) that Merge
+            # Queue waits for. Every producer workflow must run on both
+            # `pull_request` and `merge_group`, without path filters, so each
+            # context always reports.
+            required_status_checks:
+              # Repository policy and security checks.
+              - context: Analyze Actions
+              - context: Run zizmor 🌈
+              - context: asf-allowlist-check
+
+              # Rust workflow gates.
+              - context: ci-required
+              - context: check-public-api
+
+              # Python bindings workflow gates.
+              - context: bindings-python-ci-required
         - type: merge_queue
           parameters:
             check_response_timeout_minutes: 360
@@ -83,6 +85,10 @@ github:
     allow_auto_merge: true
     # auto-delete head branches after being merged
     del_branch_on_merge: true
+    # Limit open, non-draft PRs per user without write access. See CONTRIBUTING.md.
+    creation_cap:
+      enabled: true
+      max_open_pull_requests: 3
   features:
     wiki: false
     issues: true
