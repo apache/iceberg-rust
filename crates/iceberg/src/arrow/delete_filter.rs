@@ -63,8 +63,9 @@ pub(crate) struct DeleteFilter {
 
 /// Action to take when trying to start loading a positional delete file
 pub(crate) enum PosDelLoadAction {
-    /// The file is not loaded, the caller should load it.
-    Load,
+    /// The file is not loaded, the caller should load it and call
+    /// [`PosDelLoadGuard::finish`] once its delete vectors are merged.
+    Load(PosDelLoadGuard),
     /// The file is already loaded, nothing to do.
     AlreadyLoaded,
     /// The file is currently being loaded by another task.
@@ -72,7 +73,39 @@ pub(crate) enum PosDelLoadAction {
     /// returning, as subsequent access (get_delete_vector) is synchronous. The
     /// future is created under the state lock so it cannot miss the loader's
     /// `notify_waiters()` (which stores no permit).
+    ///
+    /// The future also resolves when that load fails or is dropped, so the caller must
+    /// call [`DeleteFilter::try_start_pos_del_load`] again rather than assume the file
+    /// is loaded.
     WaitFor(OwnedNotified),
+}
+
+/// Ownership of an in-progress positional delete load, returned by
+/// [`DeleteFilter::try_start_pos_del_load`].
+///
+/// [`finish`](Self::finish) marks the file loaded. Dropping the guard without finishing,
+/// because the load failed or was cancelled, removes the `Loading` marker and wakes any
+/// waiters, so a later attempt can load the file instead of waiting forever.
+pub(crate) struct PosDelLoadGuard {
+    filter: DeleteFilter,
+    file_path: String,
+    finished: bool,
+}
+
+impl PosDelLoadGuard {
+    /// Marks the file as loaded and wakes any waiters.
+    pub(crate) fn finish(mut self) {
+        self.finished = true;
+        self.filter.finish_pos_del_load(&self.file_path);
+    }
+}
+
+impl Drop for PosDelLoadGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.filter.abandon_pos_del_load(&self.file_path);
+        }
+    }
 }
 
 impl DeleteFilter {
@@ -141,11 +174,15 @@ impl DeleteFilter {
             .positional_deletes
             .insert(file_path.to_string(), PosDelState::Loading(notifier));
 
-        PosDelLoadAction::Load
+        PosDelLoadAction::Load(PosDelLoadGuard {
+            filter: self.clone(),
+            file_path: file_path.to_string(),
+            finished: false,
+        })
     }
 
     /// Marks a positional delete file as successfully loaded and notifies any waiting tasks.
-    pub(crate) fn finish_pos_del_load(&self, file_path: &str) {
+    fn finish_pos_del_load(&self, file_path: &str) {
         let notify = {
             let mut state = self.state.write().unwrap();
             if let Some(PosDelState::Loading(notify)) = state
@@ -159,6 +196,21 @@ impl DeleteFilter {
         };
 
         if let Some(notify) = notify {
+            notify.notify_waiters();
+        }
+    }
+
+    /// Removes the `Loading` marker of a positional delete file whose load failed or was
+    /// dropped, and wakes any waiting tasks so they can try the load again.
+    fn abandon_pos_del_load(&self, file_path: &str) {
+        let removed = self
+            .state
+            .write()
+            .unwrap()
+            .positional_deletes
+            .remove(file_path);
+        debug_assert!(matches!(removed, Some(PosDelState::Loading(_))));
+        if let Some(PosDelState::Loading(notify)) = removed {
             notify.notify_waiters();
         }
     }
@@ -319,23 +371,50 @@ pub(crate) mod tests {
         let filter = DeleteFilter::new(Runtime::current());
         let path = "s3://bucket/pos-delete.parquet";
 
-        assert!(matches!(
-            filter.try_start_pos_del_load(path),
-            PosDelLoadAction::Load
-        ));
+        let PosDelLoadAction::Load(guard) = filter.try_start_pos_del_load(path) else {
+            panic!("expected Load for a new file");
+        };
 
         let PosDelLoadAction::WaitFor(notified) = filter.try_start_pos_del_load(path) else {
             panic!("expected WaitFor for an in-progress load");
         };
 
         // Loader completes and signals before the waiter awaits.
-        filter.finish_pos_del_load(path);
+        guard.finish();
 
         let waited = tokio::time::timeout(std::time::Duration::from_secs(5), notified).await;
         assert!(
             waited.is_ok(),
             "WaitFor future must resolve after finish_pos_del_load"
         );
+    }
+
+    #[tokio::test]
+    async fn test_abandoned_pos_del_load_wakes_waiters_and_can_be_retried() {
+        let filter = DeleteFilter::new(Runtime::current());
+        let path = "s3://bucket/pos-delete.parquet";
+
+        let PosDelLoadAction::Load(guard) = filter.try_start_pos_del_load(path) else {
+            panic!("expected Load for a new file");
+        };
+        let PosDelLoadAction::WaitFor(notified) = filter.try_start_pos_del_load(path) else {
+            panic!("expected WaitFor for an in-progress load");
+        };
+
+        // The load fails: its guard is dropped without `finish`.
+        drop(guard);
+
+        let waited = tokio::time::timeout(std::time::Duration::from_secs(5), notified).await;
+        assert!(
+            waited.is_ok(),
+            "WaitFor future must resolve when the load is dropped"
+        );
+
+        // The file is not loaded, so the next caller is told to load it.
+        assert!(matches!(
+            filter.try_start_pos_del_load(path),
+            PosDelLoadAction::Load(_)
+        ));
     }
 
     #[tokio::test]
