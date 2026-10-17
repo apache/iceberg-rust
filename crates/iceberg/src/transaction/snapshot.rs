@@ -139,18 +139,29 @@ impl<'a> SnapshotProducer<'a> {
             snapshot_id: Self::generate_unique_snapshot_id(table),
             commit_uuid,
             snapshot_properties,
-            added_data_files,
-            deleted_data_files,
+            added_data_files: Self::dedupe_data_files(added_data_files),
+            deleted_data_files: Self::dedupe_data_files(deleted_data_files),
             manifest_counter: AtomicU64::new(0),
         }
+    }
+
+    fn dedupe_data_files(files: Vec<DataFile>) -> Vec<DataFile> {
+        let mut seen = HashSet::with_capacity(files.len());
+        let keep: Vec<bool> = files
+            .iter()
+            .map(|f| seen.insert(f.file_path.as_str()))
+            .collect();
+        files
+            .into_iter()
+            .zip(keep)
+            .filter_map(|(file, keep)| keep.then_some(file))
+            .collect()
     }
 
     pub(crate) fn validate_added_data_files(&self) -> Result<()> {
         for data_file in &self.added_data_files {
             if data_file.content_type() != crate::spec::DataContentType::Data {
-                return Err(invalid_data!(
-                    "Only data content type is allowed for fast append"
-                ));
+                return Err(invalid_data!("Only data content type is allowed"));
             }
             // Check if the data file partition spec id matches the table default partition spec id.
             if self.table.metadata().default_partition_spec_id() != data_file.partition_spec_id {
@@ -350,7 +361,7 @@ impl<'a> SnapshotProducer<'a> {
         &mut self,
         snapshot_produce_operation: &OP,
         manifest_process: &MP,
-    ) -> Result<Vec<ManifestFile>> {
+    ) -> Result<(Vec<ManifestFile>, Summary)> {
         // Assert current snapshot producer contains new content to add to new snapshot.
         //
         // TODO: Allowing snapshot property setup with no added data files is a workaround.
@@ -367,6 +378,9 @@ impl<'a> SnapshotProducer<'a> {
         }
 
         let existing_manifests = snapshot_produce_operation.existing_manifest(self).await?;
+        let summary = self.summary(snapshot_produce_operation).map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
+        })?;
         let mut manifest_files = existing_manifests;
 
         // Process added entries.
@@ -391,7 +405,7 @@ impl<'a> SnapshotProducer<'a> {
         );
 
         let manifest_files = manifest_process.process_manifests(self, manifest_files);
-        Ok(manifest_files)
+        Ok((manifest_files, summary))
     }
 
     // Returns a `Summary` of the current snapshot
@@ -514,14 +528,7 @@ impl<'a> SnapshotProducer<'a> {
             ),
         };
 
-        // Calling self.summary() before self.produce_manifests() is important because self.added_data_files
-        // will be set to an empty vec after self.produce_manifests() returns, resulting in an empty summary
-        // being generated.
-        let summary = self.summary(&snapshot_produce_operation).map_err(|err| {
-            Error::new(ErrorKind::Unexpected, "Failed to create snapshot summary.").with_source(err)
-        })?;
-
-        let new_manifests = self
+        let (new_manifests, summary) = self
             .produce_manifests(&snapshot_produce_operation, &process)
             .await?;
 
