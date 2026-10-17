@@ -198,6 +198,9 @@ pub(crate) struct PlanContext {
     pub snapshot: SnapshotRef,
 
     pub table_metadata: TableMetadataRef,
+    /// The schema the scan projects. For a scan of the current state, this is
+    /// the table's current schema, not the snapshot's; for time travel, it is
+    /// the schema the snapshot was written with.
     pub snapshot_schema: SchemaRef,
     pub case_sensitive: bool,
     pub predicate: Option<Arc<Predicate>>,

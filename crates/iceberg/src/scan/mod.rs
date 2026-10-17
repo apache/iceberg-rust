@@ -53,13 +53,16 @@ use crate::{Error, ErrorKind, Result};
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
 
 /// Resolves a column name to its field ID, honouring the scan's case sensitivity.
-fn resolve_field_id(schema: &Schema, column_name: &str, case_sensitive: bool) -> Option<i32> {
+fn resolve_field_id(
+    schema: &Schema,
+    column_name: &str,
+    case_sensitive: bool,
+) -> Result<Option<i32>> {
     if case_sensitive {
-        schema.field_id_by_name(column_name)
+        Ok(schema.field_id_by_name(column_name))
     } else {
-        schema
-            .field_by_name_case_insensitive(column_name)
-            .map(|field| field.id)
+        let field = schema.field_by_name_case_insensitive_checked(column_name)?;
+        Ok(field.map(|field| field.id))
     }
 }
 
@@ -79,7 +82,7 @@ fn collect_scan_field_ids(
                 return get_metadata_field_id(column_name);
             }
 
-            let field_id = resolve_field_id(schema, column_name, case_sensitive).ok_or_else(|| {
+            let field_id = resolve_field_id(schema, column_name, case_sensitive)?.ok_or_else(|| {
                 invalid_data!("Column {column_name} not found in table. Schema: {schema}")
             })?;
 
@@ -208,7 +211,9 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Set the snapshot to scan. When not set, it uses current snapshot.
+    /// Set the snapshot to scan. The scan projects the schema that snapshot was
+    /// written with. When not set, the scan reads the current snapshot with the
+    /// table's current schema.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_id = Some(snapshot_id);
         self
@@ -310,7 +315,12 @@ impl<'a> TableScanBuilder<'a> {
             }
         };
 
-        let schema = snapshot.schema(self.table.metadata())?;
+        // A scan of the current state uses the table's current schema; time travel uses the
+        // schema its snapshot was written with.
+        let schema = match self.snapshot_id {
+            Some(_) => snapshot.schema(self.table.metadata())?,
+            None => self.table.metadata().current_schema().clone(),
+        };
         let field_ids =
             collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
         let snapshot_bound_predicate =
@@ -692,6 +702,7 @@ mod tests {
     use futures::{TryStreamExt, stream};
     use uuid::Uuid;
 
+    use super::resolve_field_id;
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::FileIO;
@@ -759,6 +770,58 @@ mod tests {
                 .build()
                 .is_err()
         );
+    }
+
+    #[test]
+    fn test_resolve_field_id_case_insensitive_rejects_ambiguous_name() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int.into()).into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert_eq!(resolve_field_id(&schema, "id", true).unwrap(), Some(1));
+        assert_eq!(resolve_field_id(&schema, "DATA", false).unwrap(), Some(3));
+        let error = resolve_field_id(&schema, "Id", false).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.message().contains("case-insensitively"), "{error}");
+    }
+
+    #[test]
+    fn test_case_insensitive_scan_with_ambiguous_schema() {
+        let fixture = TableTestFixture::new();
+        let mut metadata = fixture.table.metadata().clone();
+        let schema = Schema::builder()
+            .with_schema_id(metadata.current_schema_id())
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int.into()).into(),
+            ])
+            .build()
+            .unwrap();
+        metadata
+            .schemas
+            .insert(metadata.current_schema_id(), Arc::new(schema));
+        let table = fixture.table.with_metadata(Arc::new(metadata));
+
+        table
+            .scan()
+            .with_case_sensitive(false)
+            .select(["DATA"])
+            .build()
+            .unwrap();
+        let error = table
+            .scan()
+            .with_case_sensitive(false)
+            .select(["Id"])
+            .build()
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.message().contains("case-insensitively"), "{error}");
     }
 
     #[tokio::test]
@@ -840,6 +903,39 @@ mod tests {
         assert_eq!(
             table_scan.snapshot().unwrap().snapshot_id(),
             3051729675574597004
+        );
+    }
+
+    /// A scan of the current state reads the current snapshot with the table's
+    /// current schema, not the older one that snapshot was written with.
+    #[test]
+    fn test_scan_of_current_state_uses_current_schema() {
+        let table = TableTestFixture::new_with_column_added_after_last_write().table;
+
+        let table_scan = table.scan().build().unwrap();
+        assert_eq!(table_scan.snapshot(), table.metadata().current_snapshot());
+        assert_eq!(
+            table_scan.plan_context.as_ref().unwrap().snapshot_schema,
+            *table.metadata().current_schema()
+        );
+    }
+
+    /// A scan pinned to a snapshot uses the schema that snapshot was written
+    /// with, even when it is the current snapshot.
+    #[test]
+    fn test_time_travel_scan_uses_snapshot_schema() {
+        let table = TableTestFixture::new_with_column_added_after_last_write().table;
+        let snapshot = table.metadata().current_snapshot().unwrap();
+
+        let table_scan = table
+            .scan()
+            .snapshot_id(snapshot.snapshot_id())
+            .build()
+            .unwrap();
+        assert_eq!(table_scan.snapshot(), Some(snapshot));
+        assert_eq!(
+            table_scan.plan_context.as_ref().unwrap().snapshot_schema,
+            snapshot.schema(table.metadata()).unwrap()
         );
     }
 
