@@ -270,18 +270,38 @@ impl PromotePlan {
             }),
             (DataType::Map(source_entries, _), DataType::Map(target_entries, sorted)) => {
                 match (source_entries.data_type(), target_entries.data_type()) {
-                    (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+                    // Key and value match by position, as in iceberg-java's map readers.
+                    (DataType::Struct(source_fields), DataType::Struct(target_fields))
+                        if source_fields.len() == target_fields.len() =>
+                    {
                         Ok(PromotePlan::Map {
-                            entries: Self::build_struct_children(
-                                source_fields,
-                                target_fields,
-                                snapshot_schema,
-                                constant_fields,
-                            )?,
+                            entries: source_fields
+                                .iter()
+                                .zip(target_fields.iter())
+                                .enumerate()
+                                .map(|(source_index, (source_field, target_field))| {
+                                    Ok(ChildPlan::FromSource {
+                                        source_index,
+                                        plan: Self::build(
+                                            source_field.data_type(),
+                                            target_field.data_type(),
+                                            snapshot_schema,
+                                            constant_fields,
+                                        )?,
+                                    })
+                                })
+                                .collect::<Result<_>>()?,
                             entry_fields: target_fields.clone(),
                             field: target_entries.clone(),
                             sorted: *sorted,
                         })
+                    }
+                    (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+                        Err(invalid_data!(
+                            "map entries have {} source fields, expected {}",
+                            source_fields.len(),
+                            target_fields.len()
+                        ))
                     }
                     _ => Err(invalid_data!(
                         "expected struct-typed map entries, got {source_entries:?} and {target_entries:?}"
@@ -312,29 +332,9 @@ impl PromotePlan {
                 return Err(invalid_data!("duplicate field id {id} in struct"));
             }
         }
-        // Name mapping only assigns top-level ids, so fully id-less children match
-        // by position when the counts line up, and `build` checks each pair. This is
-        // a compatibility fallback until recursive name mapping (#1845): a same-type
-        // reorder reads positionally. Any missing id errors instead of nulling that child.
-        if source_by_id.len() != source_fields.len() {
-            if source_by_id.is_empty() && source_fields.len() == target_fields.len() {
-                return source_fields
-                    .iter()
-                    .zip(target_fields.iter())
-                    .enumerate()
-                    .map(|(source_index, (source_field, target_field))| {
-                        Ok(ChildPlan::FromSource {
-                            source_index,
-                            plan: Self::build(
-                                source_field.data_type(),
-                                target_field.data_type(),
-                                snapshot_schema,
-                                constant_fields,
-                            )?,
-                        })
-                    })
-                    .collect();
-            }
+        // Fully id-less children (no field ids and no name mapping) match no target
+        // field and read as absent, as in iceberg-java. A partial set of ids errors.
+        if !source_by_id.is_empty() && source_by_id.len() != source_fields.len() {
             return Err(invalid_data!(
                 "cannot reconcile struct fields by id: source fields do not all have field ids"
             ));
@@ -1427,7 +1427,7 @@ mod test {
     use arrow_array::types::Int32Type;
     use arrow_array::{
         Array, ArrayRef, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-        LargeListArray, ListArray, MapArray, RecordBatch, StringArray, StructArray,
+        LargeListArray, ListArray, MapArray, RecordBatch, StringArray, StructArray, new_null_array,
     };
     use arrow_buffer::{NullBuffer, OffsetBuffer};
     use arrow_cast::cast;
@@ -1702,16 +1702,28 @@ mod test {
     }
 
     #[test]
-    fn promote_struct_without_source_field_ids_errors() {
+    fn promote_struct_without_source_field_ids_reads_null() {
+        let nulls = NullBuffer::from(vec![true, true, false]);
         let source = Arc::new(StructArray::new(
             Fields::from(vec![Field::new("x", DataType::Int32, true)]),
-            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
-            None,
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+            Some(nulls.clone()),
         )) as ArrayRef;
 
-        let err = promote(&source, &evolved_struct_type(), &empty_schema()).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.to_string().contains("do not all have field ids"));
+        // Fields read as null and the struct keeps the file's validity, as Spark's reader does.
+        let out = promote(&source, &evolved_struct_type(), &empty_schema()).unwrap();
+        let expected = StructArray::new(
+            Fields::from(vec![
+                field_with_id("x", DataType::Int32, true, 5),
+                field_with_id("y", DataType::Int32, true, 6),
+            ]),
+            vec![
+                new_null_array(&DataType::Int32, 3),
+                new_null_array(&DataType::Int32, 3),
+            ],
+            Some(nulls),
+        );
+        assert_eq!(out.as_struct(), &expected);
     }
 
     #[test]
@@ -1748,6 +1760,11 @@ mod test {
                 map_of(DataType::Int32),
                 map_of(DataType::Int64),
                 "expected struct-typed map entries",
+            ),
+            (
+                map_of(unevolved_struct_type()),
+                map_of(evolved_struct_type()),
+                "map entries have 1 source fields, expected 2",
             ),
         ] {
             let err =
@@ -1855,64 +1872,20 @@ mod test {
     }
 
     #[test]
-    fn promote_idless_nested_struct_keeps_data() {
-        let inner = StructArray::new(
-            Fields::from(vec![Field::new("x", DataType::Int32, true)]),
-            vec![Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef],
+    fn promote_idless_map_struct_value_reads_null_fields() {
+        let value = StructArray::new(
+            Fields::from(vec![Field::new("v", DataType::Int32, true)]),
+            vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
             None,
         );
-        let file = StructArray::new(
-            Fields::from(vec![Field::new("inner", inner.data_type().clone(), true)]),
-            vec![Arc::new(inner) as ArrayRef],
-            None,
-        );
-        let out = transform_top_level(
-            NestedField::optional(
-                2,
-                "s",
-                Type::Struct(StructType::new(vec![
-                    NestedField::optional(
-                        3,
-                        "inner",
-                        Type::Struct(StructType::new(vec![
-                            NestedField::optional(4, "x", Type::Primitive(PrimitiveType::Long))
-                                .into(),
-                        ])),
-                    )
-                    .into(),
-                ])),
-            ),
-            Arc::new(file),
-        )
-        .unwrap();
-        let inner_fields = Fields::from(vec![field_with_id("x", DataType::Int64, true, 4)]);
-        let expected = StructArray::new(
-            Fields::from(vec![field_with_id(
-                "inner",
-                DataType::Struct(inner_fields.clone()),
-                true,
-                3,
-            )]),
-            vec![Arc::new(StructArray::new(
-                inner_fields,
-                vec![Arc::new(Int64Array::from(vec![10i64, 20, 30])) as ArrayRef],
-                None,
-            )) as ArrayRef],
-            None,
-        );
-        assert_eq!(out.as_struct(), &expected);
-    }
-
-    #[test]
-    fn promote_idless_map_keeps_data() {
         let entries = StructArray::new(
             Fields::from(vec![
                 Field::new("key", DataType::Utf8, false),
-                Field::new("value", DataType::Int32, true),
+                Field::new("value", value.data_type().clone(), true),
             ]),
             vec![
                 Arc::new(StringArray::from(vec!["k1", "k2"])) as ArrayRef,
-                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(value) as ArrayRef,
             ],
             None,
         );
@@ -1931,20 +1904,27 @@ mod test {
                     3,
                     Type::Primitive(PrimitiveType::String),
                     4,
-                    Type::Primitive(PrimitiveType::Int),
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(5, "v", Type::Primitive(PrimitiveType::Int)).into(),
+                    ])),
                 )),
             ),
             Arc::new(map),
         )
         .unwrap();
+        let value_fields = Fields::from(vec![field_with_id("v", DataType::Int32, true, 5)]);
         let expected_entries = StructArray::new(
             Fields::from(vec![
                 field_with_id("key", DataType::Utf8, false, 3),
-                field_with_id("value", DataType::Int32, true, 4),
+                field_with_id("value", DataType::Struct(value_fields.clone()), true, 4),
             ]),
             vec![
                 Arc::new(StringArray::from(vec!["k1", "k2"])) as ArrayRef,
-                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(StructArray::new(
+                    value_fields,
+                    vec![new_null_array(&DataType::Int32, 2)],
+                    None,
+                )) as ArrayRef,
             ],
             None,
         );
@@ -1959,40 +1939,8 @@ mod test {
             None,
             false,
         );
-        // Map array equality skips the entries field name.
         assert_eq!(out.data_type(), expected.data_type());
         assert_eq!(out.as_map(), &expected);
-    }
-
-    #[test]
-    fn promote_idless_same_type_reorder_stays_positional() {
-        // Without ids a same-type reorder is undetectable; #1845 replaces this fallback.
-        let source = Arc::new(StructArray::new(
-            Fields::from(vec![
-                Field::new("a", DataType::Int32, true),
-                Field::new("b", DataType::Int32, true),
-            ]),
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
-                Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef,
-            ],
-            None,
-        )) as ArrayRef;
-        let fields = Fields::from(vec![
-            field_with_id("b", DataType::Int32, true, 6),
-            field_with_id("a", DataType::Int32, true, 5),
-        ]);
-
-        let out = promote(&source, &DataType::Struct(fields.clone()), &empty_schema()).unwrap();
-        let expected = StructArray::new(
-            fields,
-            vec![
-                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
-                Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef,
-            ],
-            None,
-        );
-        assert_eq!(out.as_struct(), &expected);
     }
 
     #[test]
