@@ -32,10 +32,13 @@ OpenDAL-based storage backend implementations for [Apache Iceberg Rust](https://
 | Hugging Face         | `opendal-hf`     | ✅ Stable       | Hugging Face buckets and repositories         |
 | Alibaba Cloud OSS    | `opendal-oss`    | 🧪 Experimental | Alibaba Cloud Object Storage Service          |
 | Azure Datalake       | `opendal-azdls`  | 🧪 Experimental | Azure Datalake Storage v2                     |
+| HDFS                 | `opendal-hdfs-native` | 🧪 Experimental | HDFS via the native Rust client (`hdfs-native`) |
 
 You can enable all stable storage backends at once using the `opendal-all` feature flag.
 
 > Note that `opendal-oss` and `opendal-azdls` are currently experimental and not included in `opendal-all`.
+
+> `opendal-hdfs-native` is experimental and not included in `opendal-all`; see [HDFS](#hdfs).
 
 ## Usage
 
@@ -82,3 +85,40 @@ async fn main() -> iceberg::Result<()> {
     Ok(())
 }
 ```
+
+## HDFS
+
+The `opendal-hdfs-native` feature adds an HDFS backend built on
+[`hdfs-native`](https://github.com/Kimahriman/hdfs-native), a native Rust client that needs no
+JVM. Enable it on its own, since it is not part of `opendal-all`:
+
+```toml
+iceberg-storage-opendal = { version = "x.y.z", features = ["opendal-hdfs-native"] }
+```
+
+Then pass `OpenDalStorageFactory::HdfsNative` to your catalog builder, or use
+`OpenDalResolvingStorageFactory`, which routes `hdfs://` paths to it. The backend reads these
+properties:
+
+| Property | Description |
+| --- | --- |
+| `hdfs.name-node` | NameNode `host:port` for authority-less paths (`hdfs:///warehouse/...`); a comma-separated list enables HA failover |
+| `hdfs.name-node.<nameservice>` | The NameNodes of a nameservice used as a path authority (`hdfs://nameservice1/warehouse/...`), comma-separated |
+| `hdfs.host`, `hdfs.port` | PyIceberg's keys for authority-less paths; the port defaults to `8020` |
+| `hadoop.*` | Forwarded to the HDFS client with the prefix stripped, e.g. `hadoop.dfs.client.failover.max.attempts` |
+
+A path with a `host:port` authority is always used as is. For a table under
+`hdfs://nameservice1/warehouse` on an HA cluster:
+
+```text
+hdfs.name-node.nameservice1 = nn1.example.com:8020,nn2.example.com:8020
+```
+
+The client also loads `core-site.xml` and `hdfs-site.xml` from `$HADOOP_CONF_DIR`, else
+`$HADOOP_HOME/etc/hadoop`, and takes the user from `HADOOP_USER_NAME`. Kerberos is used when
+`hadoop.security.authentication` is `kerberos` there, with the default credential cache
+(`kinit`); `libgssapi_krb5` is loaded at runtime. PyIceberg's `hdfs.user` and
+`hdfs.kerberos_ticket` are ignored with a warning.
+
+Unlike Hadoop, a portless authority is never resolved from `$HADOOP_CONF_DIR` or dialed on
+port 8020: declare it with `hdfs.name-node.<nameservice>`.
