@@ -299,8 +299,16 @@ mod tests {
 
         for deletes in mixed_delete_vectors() {
             let deleted: Vec<u64> = deletes.iter().collect();
-            let num_rows = deleted.last().map_or(0, |&last| last + 1) + rand() % 100 + 1;
             for _ in 0..8 {
+                // Half the time the file ends at or before a deleted position, so the deletes
+                // past its end must be ignored.
+                let num_rows = match deleted.len() {
+                    n if n > 0 && rand() % 2 == 0 => {
+                        deleted[(rand() % n as u64) as usize].saturating_add(rand() % 2)
+                    }
+                    _ => deleted.last().map_or(0, |&last| last + 1) + rand() % 100,
+                }
+                .max(1);
                 // Row group boundaries, half of them next to a deleted position so that they
                 // fall inside runs.
                 let mut cuts: Vec<u64> = (0..rand() % 8)

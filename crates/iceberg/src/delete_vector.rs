@@ -94,8 +94,9 @@ impl DeleteVector {
 
     /// Returns the deleted positions as ascending, non-overlapping half-open ranges.
     ///
-    /// Adjacent ranges may not be merged (a run can be split at a container or 2^32 boundary),
-    /// so callers shouldn't assume a range is maximal.
+    /// Adjacent ranges may not be merged (a run is split at each 2^32 boundary), so callers
+    /// shouldn't assume a range is maximal. A range holding only `u64::MAX` is dropped, because a
+    /// half-open `u64` range can't hold it and no Parquet row can be there.
     pub(crate) fn ranges(&self) -> DeleteVectorRanges<'_> {
         DeleteVectorRanges {
             bitmaps: self.inner.bitmaps(),
@@ -337,8 +338,7 @@ pub(crate) struct DeleteVectorRanges<'a> {
 }
 
 impl DeleteVectorRanges<'_> {
-    /// Returns `None` only for a range holding nothing but `u64::MAX`, which a half-open `u64`
-    /// range can't hold. That position is past any row a Parquet file can have.
+    /// Returns `None` only for a range holding nothing but `u64::MAX`, see [`DeleteVector::ranges`].
     fn full_range(&self, start: u32, end_inclusive: u32) -> Option<(u64, u64)> {
         let base = u64::from(self.high_bits) << 32;
         let start = base | u64::from(start);
@@ -655,6 +655,20 @@ mod tests {
         ranges.skip_to(probe + 8);
         assert_eq!(ranges.next(), Some((probe + 8, probe + 13)));
         assert_eq!(ranges.next(), None);
+    }
+
+    #[test]
+    fn test_ranges_join_runs_across_2_16() {
+        // `roaring`'s `next_range` joins a run across containers, so these come back whole.
+        // Starting near the boundary also covers the positions walked before `next_range`.
+        for start in [(1 << 16) - 100, (1 << 16) - 2] {
+            let mut dv = DeleteVector::default();
+            dv.inner.insert_range(start..(3 << 16) + 5);
+            assert_eq!(dv.ranges().collect::<Vec<_>>(), vec![(
+                start,
+                (3 << 16) + 5
+            )]);
+        }
     }
 
     #[test]
