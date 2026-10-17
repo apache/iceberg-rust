@@ -31,10 +31,12 @@ repository = { workspace = true }
 
 [dependencies]
 async-trait = { workspace = true }
+backon = { workspace = true }
 iceberg = { workspace = true }
 iceberg-property-macro = { workspace = true }
 sqlx = { version = "0.8.1", features = ["any"], default-features = false }
 strum = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 
 [dev-dependencies]
@@ -45,10 +47,11 @@ sqlx = { version = "0.8.1", features = [
   "runtime-tokio",
   "any",
   "sqlite",
+  "postgres",
   "migrate",
 ], default-features = false }
 tempfile = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros"] }
 
 [lints]
 workspace = true

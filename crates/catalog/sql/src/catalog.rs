@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use backon::{ExponentialBuilder, Retryable};
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
@@ -64,7 +65,7 @@ static CATALOG_FIELD_TABLE_NAME: &str = "table_name";
 static CATALOG_FIELD_TABLE_NAMESPACE: &str = "table_namespace";
 static CATALOG_FIELD_METADATA_LOCATION_PROP: &str = "metadata_location";
 static CATALOG_FIELD_PREVIOUS_METADATA_LOCATION_PROP: &str = "previous_metadata_location";
-static CATALOG_FIELD_RECORD_TYPE: &str = "iceberg_type";
+const CATALOG_FIELD_RECORD_TYPE: &str = "iceberg_type";
 static CATALOG_FIELD_TABLE_RECORD_TYPE: &str = "TABLE";
 
 static NAMESPACE_TABLE_NAME: &str = "iceberg_namespace_properties";
@@ -338,22 +339,32 @@ pub enum SchemaVersion {
 impl SchemaVersion {
     /// Detect the schema version of an existing catalog table by introspecting its columns.
     async fn detect(pool: &AnyPool) -> Result<Self> {
-        let catalog_table_description = pool
-            .describe(&format!("SELECT * FROM {CATALOG_TABLE_NAME}"))
-            .await
-            .map_err(from_sqlx_error)?;
+        Self::probe(pool).await.map_err(from_sqlx_error)
+    }
 
-        let has_type_column = catalog_table_description.columns().iter().any(|column| {
+    async fn probe(pool: &AnyPool) -> sqlx::Result<Self> {
+        let mut transaction = pool.begin().await?;
+        // Run both reads as one unprepared batch in a transaction. The empty read refreshes
+        // the schema before the second statement prepares its column metadata. The second
+        // statement returns one NULL row even for an empty catalog.
+        let probe = format!(
+            "SELECT * FROM {CATALOG_TABLE_NAME} WHERE 1 = 0; \
+             SELECT catalog.* FROM (SELECT 1) AS probe \
+             LEFT JOIN {CATALOG_TABLE_NAME} AS catalog ON 1 = 0"
+        );
+        let catalog_row = transaction
+            .fetch_all(sqlx::raw_sql(&probe))
+            .await?
+            .pop()
+            .ok_or(sqlx::Error::RowNotFound)?;
+        let has_type_column = catalog_row.columns().iter().any(|column| {
             column
                 .name()
                 .eq_ignore_ascii_case(CATALOG_FIELD_RECORD_TYPE)
         });
+        transaction.commit().await?;
 
-        Ok(if has_type_column {
-            SchemaVersion::V1
-        } else {
-            SchemaVersion::V0
-        })
+        Ok(if has_type_column { Self::V1 } else { Self::V0 })
     }
 
     /// The trailing SQL `AND` clause used to exclude view rows when querying for tables.
@@ -380,6 +391,58 @@ impl SchemaVersion {
                 "ALTER TABLE {CATALOG_TABLE_NAME} ADD COLUMN {CATALOG_FIELD_RECORD_TYPE} VARCHAR(5)"
             )),
             SchemaVersion::V0 => None,
+        }
+    }
+
+    /// Migrates the catalog table to this schema version.
+    ///
+    /// Another catalog instance may complete the same migration after version detection but
+    /// before this statement runs. In that case, accept the statement error once re-detection
+    /// confirms that the requested version is already installed.
+    async fn migrate(self, pool: &AnyPool) -> Result<()> {
+        let Some(migration_sql) = self.migration_sql() else {
+            return Ok(());
+        };
+
+        match sqlx::query(&migration_sql).execute(pool).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                // Check the migration's result without interpreting vendor-specific errors.
+                // A competing migration may still need time to commit after the first probe.
+                let recovery = (|| async {
+                    match Self::detect(pool).await {
+                        Ok(detected) if detected == self => Ok(()),
+                        Ok(_) => Err(()),
+                        Err(probe_error) => {
+                            tracing::warn!(
+                                error = %probe_error,
+                                migration_error = %error,
+                                "failed to re-detect catalog schema after migration to {self} failed"
+                            );
+                            Err(())
+                        }
+                    }
+                })
+                .retry(
+                    ExponentialBuilder::new()
+                        .with_min_delay(Duration::from_millis(100))
+                        .with_max_delay(Duration::from_secs(60))
+                        .with_factor(2.0)
+                        .with_max_times(4),
+                )
+                .sleep(tokio::time::sleep)
+                .await;
+
+                if recovery.is_ok() {
+                    tracing::info!(
+                        error = %error,
+                        "catalog schema migration to {self} was completed concurrently"
+                    );
+                    Ok(())
+                } else {
+                    Err(from_sqlx_error(error))
+                }
+            }
         }
     }
 }
@@ -466,12 +529,7 @@ impl SqlCatalog {
                     detected_schema_version,
                     expected_schema_version,
                 );
-                if let Some(migration_sql) = SchemaVersion::V1.migration_sql() {
-                    sqlx::query(&migration_sql)
-                        .execute(&pool)
-                        .await
-                        .map_err(from_sqlx_error)?;
-                }
+                SchemaVersion::V1.migrate(&pool).await?;
                 SchemaVersion::V1
             }
             (SchemaVersion::V0, Some(SchemaVersion::V0) | None) => {
@@ -1223,8 +1281,11 @@ impl Catalog for SqlCatalog {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::error::Error as _;
     use std::hash::Hash;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
 
     use iceberg::io::LocalFsStorageFactory;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
@@ -1234,7 +1295,7 @@ mod tests {
     };
     use itertools::Itertools;
     use regex::Regex;
-    use sqlx::any::install_default_drivers;
+    use sqlx::any::{AnyPoolOptions, install_default_drivers};
     use sqlx::migrate::MigrateDatabase;
     use sqlx::{Column, Executor};
     use tempfile::TempDir;
@@ -2608,31 +2669,98 @@ mod tests {
     async fn test_detect_schema_version() {
         install_default_drivers();
 
-        let detected_schema = {
-            let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        for expected_schema in [SchemaVersion::V0, SchemaVersion::V1] {
+            let (uri, _temp_dir) = match expected_schema {
+                SchemaVersion::V0 => create_v0_sqlite_db().await,
+                SchemaVersion::V1 => create_v1_sqlite_db().await,
+            };
             let pool = sqlx::AnyPool::connect(&uri).await.unwrap();
-            let detected_schema = SchemaVersion::detect(&pool).await.unwrap();
+            assert_eq!(
+                SchemaVersion::detect(&pool).await.unwrap(),
+                expected_schema,
+                "a populated catalog should be detected as {expected_schema}",
+            );
+            sqlx::query("DELETE FROM iceberg_tables")
+                .execute(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                SchemaVersion::detect(&pool).await.unwrap(),
+                expected_schema,
+                "an empty catalog should be detected as {expected_schema}",
+            );
             pool.close().await;
-            detected_schema
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn test_schema_detection_after_concurrent_migration() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let pool = AnyPoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect(&uri)
+            .await
+            .unwrap();
         assert_eq!(
-            detected_schema,
-            SchemaVersion::V0,
-            "a catalog table without an iceberg_type column should be V0",
+            SchemaVersion::detect(&pool).await.unwrap(),
+            SchemaVersion::V0
         );
 
-        let detected_schema = {
-            let (uri, _temp_dir) = create_v1_sqlite_db().await;
-            let pool = sqlx::AnyPool::connect(&uri).await.unwrap();
-            let detected_schema = SchemaVersion::detect(&pool).await.unwrap();
-            pool.close().await;
-            detected_schema
-        };
+        let migrating_pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+        SchemaVersion::V1.migrate(&migrating_pool).await.unwrap();
+        // Reuse the V0 connection without executing any DDL on it first.
         assert_eq!(
-            detected_schema,
-            SchemaVersion::V1,
-            "a catalog table with an iceberg_type column should be V1",
+            SchemaVersion::detect(&pool).await.unwrap(),
+            SchemaVersion::V1
         );
+
+        pool.close().await;
+        migrating_pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_schema_detection_after_migration() {
+        install_default_drivers();
+
+        let uri =
+            std::env::var("ICEBERG_SQL_TEST_URI").unwrap_or_else(|_| "sqlite::memory:".to_string());
+        // Keep the temporary table and all probes on the same pooled connection.
+        let pool = AnyPoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .connect(&uri)
+            .await
+            .unwrap();
+        pool.execute(
+            "CREATE TEMPORARY TABLE iceberg_tables (
+                catalog_name VARCHAR(255),
+                table_namespace VARCHAR(255),
+                table_name VARCHAR(255),
+                metadata_location VARCHAR(1000),
+                previous_metadata_location VARCHAR(1000)
+            )",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            SchemaVersion::detect(&pool).await.unwrap(),
+            SchemaVersion::V0
+        );
+        SchemaVersion::V1.migrate(&pool).await.unwrap();
+        // Reuse the connection that detected V0 to recover from a duplicate-column error.
+        SchemaVersion::V1
+            .migrate(&pool)
+            .await
+            .expect("migration recovery must observe the updated catalog schema");
+        assert_eq!(
+            SchemaVersion::detect(&pool).await.unwrap(),
+            SchemaVersion::V1
+        );
+        pool.close().await;
     }
 
     #[tokio::test]
@@ -2657,6 +2785,21 @@ mod tests {
             err.to_string().contains("iceberg_tables"),
             "error should name the table it failed to introspect, got: {err}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_detect_schema_version_preserves_connection_error() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+        pool.close().await;
+
+        let error = SchemaVersion::detect(&pool).await.unwrap_err();
+        assert!(matches!(
+            error.source().unwrap().downcast_ref::<sqlx::Error>(),
+            Some(sqlx::Error::PoolClosed)
+        ));
     }
 
     #[tokio::test]
@@ -2697,6 +2840,247 @@ mod tests {
             record_type_column_exists(&uri).await,
             "iceberg_type column should exist when sql.schema-version=V1 was set",
         );
+    }
+
+    #[tokio::test]
+    async fn test_v0_schema_migration_preserves_ddl_error() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let acquisitions = Arc::new(AtomicUsize::new(0));
+        let pool = AnyPoolOptions::new()
+            .max_connections(1)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    connection.execute("PRAGMA query_only = ON").await?;
+                    Ok(())
+                })
+            })
+            .before_acquire({
+                let acquisitions = acquisitions.clone();
+                move |_, _| {
+                    acquisitions.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async { Ok(true) })
+                }
+            })
+            .connect(&uri)
+            .await
+            .unwrap();
+
+        acquisitions.store(0, Ordering::SeqCst);
+        let error = SchemaVersion::V1.migrate(&pool).await.unwrap_err();
+        assert_eq!(
+            acquisitions.load(Ordering::SeqCst),
+            6,
+            "readonly failures should return after bounded recovery probes"
+        );
+        let cause = error
+            .source()
+            .unwrap()
+            .downcast_ref::<sqlx::Error>()
+            .unwrap();
+        let database_error = cause.as_database_error().unwrap();
+        assert_eq!(database_error.code().as_deref(), Some("8"));
+        assert_eq!(
+            database_error.message(),
+            "attempt to write a readonly database"
+        );
+        assert_eq!(
+            SchemaVersion::detect(&pool).await.unwrap(),
+            SchemaVersion::V0
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_schema_migration_preserves_ddl_error_when_probes_fail() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let acquisitions = Arc::new(AtomicUsize::new(0));
+        let pool = AnyPoolOptions::new()
+            .max_connections(1)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    connection.execute("PRAGMA query_only = ON").await?;
+                    Ok(())
+                })
+            })
+            .before_acquire({
+                let acquisitions = acquisitions.clone();
+                move |connection, _| {
+                    let acquisition = acquisitions.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move {
+                        // Fail the DDL on a readonly connection, then remove the table
+                        // before recovery so probes fail with a different database error.
+                        if acquisition == 1 {
+                            connection.execute("PRAGMA query_only = OFF").await?;
+                            connection.execute("DROP TABLE iceberg_tables").await?;
+                        }
+                        Ok(true)
+                    })
+                }
+            })
+            .connect(&uri)
+            .await
+            .unwrap();
+
+        acquisitions.store(0, Ordering::SeqCst);
+        let error = SchemaVersion::V1.migrate(&pool).await.unwrap_err();
+        assert_eq!(acquisitions.load(Ordering::SeqCst), 6);
+        let cause = error
+            .source()
+            .unwrap()
+            .downcast_ref::<sqlx::Error>()
+            .unwrap();
+        assert_eq!(
+            cause.as_database_error().unwrap().message(),
+            "attempt to write a readonly database"
+        );
+        assert!(
+            SchemaVersion::detect(&pool)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("no such table")
+        );
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_schema_migration_probes_duplicate_column_immediately() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v1_sqlite_db().await;
+        let acquisitions = Arc::new(AtomicUsize::new(0));
+        let pool = AnyPoolOptions::new()
+            .max_connections(1)
+            .before_acquire({
+                let acquisitions = acquisitions.clone();
+                move |_, _| {
+                    acquisitions.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async { Ok(true) })
+                }
+            })
+            .connect(&uri)
+            .await
+            .unwrap();
+
+        acquisitions.store(0, Ordering::SeqCst);
+        SchemaVersion::V1.migrate(&pool).await.unwrap();
+        assert_eq!(acquisitions.load(Ordering::SeqCst), 2);
+        pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_v0_schema_migration_waits_for_later_probe() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let writer = AnyPoolOptions::new()
+            .max_connections(1)
+            .connect(&uri)
+            .await
+            .unwrap();
+        let pending_migration = Arc::new(tokio::sync::Mutex::new(
+            None::<sqlx::Transaction<'static, sqlx::Any>>,
+        ));
+        let acquisitions = Arc::new(AtomicUsize::new(0));
+        let pool = AnyPoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .after_connect(|connection, _| {
+                Box::pin(async move {
+                    // Surface lock contention immediately, leaving recovery to the migration.
+                    connection.execute("PRAGMA busy_timeout = 0").await?;
+                    Ok(())
+                })
+            })
+            .before_acquire({
+                let acquisitions = acquisitions.clone();
+                let pending_migration = pending_migration.clone();
+                move |_, _| {
+                    let acquisition = acquisitions.fetch_add(1, Ordering::SeqCst);
+                    let pending_migration = pending_migration.clone();
+                    Box::pin(async move {
+                        // Acquisition 0 executes DDL; acquisition 1 probes V0. Only make
+                        // the competing migration visible when the second probe starts.
+                        if acquisition == 2 {
+                            pending_migration
+                                .lock()
+                                .await
+                                .take()
+                                .unwrap()
+                                .commit()
+                                .await?;
+                        }
+                        Ok(true)
+                    })
+                }
+            })
+            .connect(&uri)
+            .await
+            .unwrap();
+
+        // Hold a competing migration uncommitted so the DDL fails with SQLITE_BUSY,
+        // while the first probe still sees V0. Commit it before the second probe.
+        let mut migration = writer.begin().await.unwrap();
+        sqlx::query(&SchemaVersion::V1.migration_sql().unwrap())
+            .execute(&mut *migration)
+            .await
+            .unwrap();
+        *pending_migration.lock().await = Some(migration);
+
+        // Pool initialization may acquire a connection internally.
+        acquisitions.store(0, Ordering::SeqCst);
+        let started = Instant::now();
+        SchemaVersion::V1.migrate(&pool).await.unwrap();
+        assert_eq!(acquisitions.load(Ordering::SeqCst), 3);
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert_eq!(
+            SchemaVersion::detect(&pool).await.unwrap(),
+            SchemaVersion::V1
+        );
+        pool.close().await;
+        writer.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_v0_schema_migration_is_concurrent_safe() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let pool1 = sqlx::AnyPool::connect(&uri).await.unwrap();
+        let pool2 = sqlx::AnyPool::connect(&uri).await.unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+        let migrate1 = async {
+            assert_eq!(
+                SchemaVersion::detect(&pool1).await.unwrap(),
+                SchemaVersion::V0
+            );
+            barrier.wait().await;
+            SchemaVersion::V1.migrate(&pool1).await
+        };
+        let migrate2 = async {
+            assert_eq!(
+                SchemaVersion::detect(&pool2).await.unwrap(),
+                SchemaVersion::V0
+            );
+            barrier.wait().await;
+            SchemaVersion::V1.migrate(&pool2).await
+        };
+
+        let (result1, result2) = tokio::join!(migrate1, migrate2);
+        assert!(result1.is_ok(), "first migration failed: {result1:?}");
+        assert!(result2.is_ok(), "second migration failed: {result2:?}");
+        assert_eq!(
+            SchemaVersion::detect(&pool1).await.unwrap(),
+            SchemaVersion::V1
+        );
+
+        pool1.close().await;
+        pool2.close().await;
     }
 
     #[tokio::test]
