@@ -45,13 +45,13 @@ use crate::auth::{
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
-use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
+use crate::endpoint::{Endpoint, V1_COMMIT_TRANSACTION, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
 use crate::types::{
-    CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
-    CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
-    NamespaceResponse, RegisterTableRequest, RenameTableRequest,
+    CatalogConfig, CommitTableRequest, CommitTableResponse, CommitTransactionRequest,
+    CreateNamespaceRequest, CreateTableRequest, ListNamespaceResponse, ListTablesResponse,
+    LoadTableResult, NamespaceResponse, RegisterTableRequest, RenameTableRequest,
 };
 
 /// REST catalog URI
@@ -239,6 +239,10 @@ impl RestCatalogConfig {
 
     fn rename_table_endpoint(&self) -> String {
         self.url_prefixed(&["tables", "rename"])
+    }
+
+    fn commit_transaction_endpoint(&self) -> String {
+        self.url_prefixed(&["transactions", "commit"])
     }
 
     fn register_table_endpoint(&self, ns: &NamespaceIdent) -> String {
@@ -599,6 +603,14 @@ impl RestCatalog {
     async fn client(&self) -> Result<&RestCatalogClient> {
         self.inner.client().await
     }
+
+    /// Commits changes to multiple tables atomically; see
+    /// [`RestSessionCatalog::commit_transaction`].
+    pub async fn commit_transaction(&self, commits: Vec<TableCommit>) -> Result<()> {
+        self.inner
+            .commit_transaction(&self.session_context, commits)
+            .await
+    }
 }
 
 /// Every operation forwards to its [`RestSessionCatalog`] equivalent with the
@@ -841,6 +853,70 @@ impl RestSessionCatalog {
                 RestCatalogClient::init(&self.user_config, self.resolve_auth_manager()?).await
             })
             .await
+    }
+
+    /// Commits changes to multiple tables atomically through
+    /// `POST /v1/{prefix}/transactions/commit`: every table is updated, or none is.
+    ///
+    /// Build each commit with
+    /// [`Transaction::prepare_commit`](iceberg::transaction::Transaction::prepare_commit).
+    /// The server returns no metadata, so reload the tables afterwards. On a
+    /// conflict, reload the tables and rebuild their transactions before retrying.
+    pub async fn commit_transaction(
+        &self,
+        context: &SessionContext,
+        commits: Vec<TableCommit>,
+    ) -> Result<()> {
+        if commits.is_empty() {
+            return Ok(());
+        }
+        if !self.supports_endpoint(&V1_COMMIT_TRANSACTION).await? {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "The REST server does not support multi-table commits",
+            ));
+        }
+
+        let client = self.client().await?;
+        let table_changes = commits
+            .into_iter()
+            .map(|mut commit| CommitTableRequest {
+                identifier: Some(commit.identifier().clone()),
+                requirements: commit.take_requirements(),
+                updates: commit.take_updates(),
+            })
+            .collect();
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(Method::POST, client.config.commit_transaction_endpoint())
+                .json(&CommitTransactionRequest { table_changes }),
+        )?;
+
+        let http_response = client.query_catalog(context, request).await?;
+
+        match http_response.status() {
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
+            StatusCode::NOT_FOUND => Err(Error::new(
+                ErrorKind::TableNotFound,
+                "Tried to update a table that does not exist",
+            )),
+            StatusCode::CONFLICT => Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                "CatalogCommitConflicts, one or more requirements failed. The client may retry.",
+            )
+            .with_retryable(true)),
+            StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::GATEWAY_TIMEOUT => Err(Error::new(
+                ErrorKind::Unexpected,
+                "A server-side problem occurred; the commit state is unknown.",
+            )),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                client.http_client.disable_header_redaction(),
+            )),
+        }
     }
 
     /// Returns whether the server supports `endpoint`, per the `endpoints` it
@@ -4410,6 +4486,106 @@ mod tests {
         config_mock.assert_async().await;
         update_table_mock.assert_async().await;
         load_table_mock.assert_async().await
+    }
+
+    /// A commit setting one property on `ns1.{name}`.
+    async fn property_commit(name: &str) -> TableCommit {
+        let file = File::open(format!(
+            "{}/testdata/create_table_response.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let resp = serde_json::from_reader::<_, LoadTableResult>(BufReader::new(file)).unwrap();
+        let table = Table::builder()
+            .metadata(resp.metadata)
+            .metadata_location(resp.metadata_location.unwrap())
+            .identifier(TableIdent::from_strs(["ns1", name]).unwrap())
+            .file_io(FileIO::new_with_fs())
+            .runtime(test_runtime())
+            .build()
+            .unwrap();
+        let tx = Transaction::new(&table);
+        let mut tx = tx
+            .update_table_properties()
+            .set("k".to_string(), "v".to_string())
+            .apply(tx)
+            .unwrap();
+        tx.prepare_commit().await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_commit_transaction() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let commit_mock = server
+            .mock("POST", "/v1/transactions/commit")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex(r#""table-changes""#.to_string()),
+                mockito::Matcher::Regex(r#""name":"test1""#.to_string()),
+                mockito::Matcher::Regex(r#""name":"test2""#.to_string()),
+            ]))
+            .with_status(204)
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        catalog
+            .commit_transaction(&SessionContext::empty(), vec![
+                property_commit("test1").await,
+                property_commit("test2").await,
+            ])
+            .await
+            .unwrap();
+
+        commit_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_commit_transaction_conflict() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let _commit = server
+            .mock("POST", "/v1/transactions/commit")
+            .with_status(409)
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        let err = catalog
+            .commit_transaction(&SessionContext::empty(), vec![
+                property_commit("test1").await,
+            ])
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
+    }
+
+    #[tokio::test]
+    async fn test_commit_transaction_unsupported() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock_with_exists_endpoints(&mut server).await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        let err = catalog
+            .commit_transaction(&SessionContext::empty(), vec![
+                property_commit("test1").await,
+            ])
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+    }
+
+    #[tokio::test]
+    async fn test_commit_transaction_empty() {
+        let server = Server::new_async().await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        catalog
+            .commit_transaction(&SessionContext::empty(), vec![])
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
