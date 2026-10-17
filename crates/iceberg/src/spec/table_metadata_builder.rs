@@ -695,28 +695,36 @@ impl TableMetadataBuilder {
             .set_current_schema(Self::LAST_ADDED)
     }
 
-    /// Validate schema field names against partition field names across all historical schemas.
+    /// Validate schema field names against the partition field names of every spec.
     ///
-    /// Due to Iceberg's multi-version property, this check ignores existing schema fields
-    /// that match partition names (schema evolution allows re-adding previously removed fields).
-    /// Only NEW field names that conflict with partition names are rejected.
+    /// A partition field whose source column is absent from `schema` is skipped: its spec is
+    /// historical, kept only so old metadata can be interpreted, so the name is free to reuse.
+    /// Otherwise the name may only be taken by the source column itself, which is the identity
+    /// partition case that [`Self::validate_partition_field_names`] allows in the other direction.
     ///
     /// # Errors
-    /// - Schema field name conflicts with partition field name but doesn't exist in any historical schema.
+    /// - A schema field takes the name of a partition field it is not the source of.
     fn validate_schema_field_names(&self, schema: &Schema) -> Result<()> {
-        if self.metadata.schemas.is_empty() {
-            return Ok(());
-        }
+        for (spec_id, spec) in &self.metadata.partition_specs {
+            for partition_field in spec.fields() {
+                if schema.field_by_id(partition_field.source_id).is_none() {
+                    continue;
+                }
 
-        for field_name in schema.field_id_to_name_map().values() {
-            let has_partition_conflict = self.metadata.partition_name_exists(field_name);
-            let is_new_field = !self.metadata.name_exists_in_any_schema(field_name);
+                let Some(schema_field) = schema.field_by_name(&partition_field.name) else {
+                    continue;
+                };
 
-            if has_partition_conflict && is_new_field {
-                return Err(invalid_data!(
-                    "Cannot add schema field '{field_name}' because it conflicts with existing partition field name. \
-                         Schema evolution cannot introduce field names that match existing partition field names."
-                ));
+                if schema_field.id != partition_field.source_id {
+                    return Err(invalid_data!(
+                        "Cannot add schema field '{}' with id {}: partition spec {} has a field of \
+                         that name sourced from field id {}",
+                        partition_field.name,
+                        schema_field.id,
+                        spec_id,
+                        partition_field.source_id
+                    ));
+                }
             }
         }
 
@@ -2822,8 +2830,8 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         let error_message = error.message();
-        assert!(error_message.contains("Cannot add schema field 'bucket_data' because it conflicts with existing partition field name"));
-        assert!(error_message.contains("Schema evolution cannot introduce field names that match existing partition field names"));
+        assert!(error_message.contains("Cannot add schema field 'bucket_data'"));
+        assert!(error_message.contains("sourced from field id 1"));
     }
 
     #[test]
@@ -3042,11 +3050,16 @@ mod tests {
         let builder2 = metadata.into_builder(Some("test_location".to_string()));
         let result2 = builder2.add_current_schema(conflicting_schema);
 
-        // This should fail because "bucket_data" conflicts with partition field name
-        // and doesn't exist in any historical schema
+        // This should fail because "bucket_data" takes the name of a partition field whose
+        // source column `data` is still in the schema
         assert!(result2.is_err());
         let error = result2.unwrap_err();
-        assert!(error.message().contains("Cannot add schema field 'bucket_data' because it conflicts with existing partition field name"));
+        assert!(
+            error
+                .message()
+                .contains("Cannot add schema field 'bucket_data'")
+        );
+        assert!(error.message().contains("sourced from field id 1"));
     }
 
     #[test]
@@ -3107,6 +3120,149 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// A v2 table of `data: string` partitioned by `bucket(data, 16)` as `bucket_data`.
+    fn bucket_partitioned_metadata() -> TableMetadata {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let spec = UnboundPartitionSpec::builder()
+            .with_spec_id(0)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("bucket_data")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap()
+            .build();
+
+        TableMetadataBuilder::new(
+            schema,
+            spec,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata
+    }
+
+    /// Replaces the default spec with an unpartitioned one. Spec 0 is retained but superseded.
+    fn unpartition(metadata: TableMetadata, file: &str) -> TableMetadata {
+        let metadata = metadata
+            .into_builder(Some(file.to_string()))
+            .add_default_partition_spec(UnboundPartitionSpec::builder().build())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        assert_ne!(metadata.default_partition_spec().spec_id(), 0);
+        assert!(metadata.partition_specs.contains_key(&0));
+        metadata
+    }
+
+    #[test]
+    fn test_schema_evolution_allows_a_superseded_partition_field_name_once_its_source_is_dropped() {
+        // `data`, the source of spec 0's `bucket_data`, is gone, so spec 0 can only be historical
+        // and its names are free. Iceberg Java skips its name check for exactly this case.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = unpartition(
+            bucket_partitioned_metadata(),
+            "s3://bucket/t/metadata/m1.json",
+        )
+        .into_builder(Some("s3://bucket/t/metadata/m2.json".to_string()))
+        .add_current_schema(schema.clone())
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        assert_eq!(metadata.current_schema().as_struct(), schema.as_struct());
+        assert!(metadata.current_schema().field_by_name("data").is_none());
+        // Spec 0 is kept so the snapshots written under it stay interpretable.
+        assert_eq!(
+            metadata.partition_spec_by_id(0).unwrap().fields()[0].name,
+            "bucket_data"
+        );
+    }
+
+    #[test]
+    fn test_schema_evolution_rejects_a_partition_field_name_while_its_source_remains() {
+        // `data` is still here, so `bucket_data` would be ambiguous. Iceberg Java rejects this
+        // whether or not spec 0 is still the default, because it rebuilds every spec.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let error = bucket_partitioned_metadata()
+            .into_builder(Some("s3://bucket/t/metadata/m1.json".to_string()))
+            .add_current_schema(schema.clone())
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error.message().contains("sourced from field id 1"),
+            "{error}"
+        );
+
+        let error = unpartition(
+            bucket_partitioned_metadata(),
+            "s3://bucket/t/metadata/m1.json",
+        )
+        .into_builder(Some("s3://bucket/t/metadata/m2.json".to_string()))
+        .add_current_schema(schema)
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error.message().contains("sourced from field id 1"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn test_schema_evolution_partition_name_check_is_order_independent() {
+        // Dropping the source column and dropping the partitioning in one set of changes must
+        // behave the same either way round.
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let unpartitioned = UnboundPartitionSpec::builder().build();
+
+        let schema_first = bucket_partitioned_metadata()
+            .into_builder(Some("s3://bucket/t/metadata/m1.json".to_string()))
+            .add_current_schema(schema.clone())
+            .and_then(|b| b.add_default_partition_spec(unpartitioned.clone()))
+            .and_then(|b| b.build());
+        let spec_first = bucket_partitioned_metadata()
+            .into_builder(Some("s3://bucket/t/metadata/m1.json".to_string()))
+            .add_default_partition_spec(unpartitioned)
+            .and_then(|b| b.add_current_schema(schema))
+            .and_then(|b| b.build());
+
+        assert!(schema_first.is_ok(), "{:?}", schema_first.err());
+        assert!(spec_first.is_ok(), "{:?}", spec_first.err());
+    }
+
     #[test]
     fn test_schema_evolution_prevents_new_field_conflicting_with_partition_field() {
         // Create initial schema WITHOUT the conflicting field
@@ -3156,11 +3312,16 @@ mod tests {
         let builder = metadata.into_builder(Some("test_location".to_string()));
         let result = builder.add_current_schema(conflicting_schema);
 
-        // This should fail because "bucket_data" conflicts with partition field name
-        // and doesn't exist in any historical schema
+        // This should fail because "bucket_data" takes the name of a partition field whose
+        // source column `data` is still in the schema
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(error.message().contains("Cannot add schema field 'bucket_data' because it conflicts with existing partition field name"));
+        assert!(
+            error
+                .message()
+                .contains("Cannot add schema field 'bucket_data'")
+        );
+        assert!(error.message().contains("sourced from field id 1"));
     }
 
     #[test]
