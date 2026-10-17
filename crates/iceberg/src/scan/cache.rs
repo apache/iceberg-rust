@@ -83,7 +83,8 @@ impl PartitionFilterCache {
         let has_dropped_source_column = partition_spec
             .fields()
             .iter()
-            .any(|field| schema.field_by_id(field.source_id).is_none());
+            .flat_map(|field| field.source_ids())
+            .any(|source_id| schema.field_by_id(*source_id).is_none());
 
         let partition_filter = if has_dropped_source_column {
             BoundPredicate::AlwaysTrue

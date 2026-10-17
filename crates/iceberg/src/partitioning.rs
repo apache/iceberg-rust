@@ -62,17 +62,17 @@ pub fn compute_unified_partition_type<'a>(
 
     for spec in &specs {
         for field in spec.fields() {
-            let field_id = field.field_id;
+            let field_id = field.field_id();
 
             // Reject unknown transforms up front: we cannot determine their result type,
             // so we cannot build a partition column for them. This check must precede the
             // active_field_ids filter below, otherwise an unknown transform could be
             // silently skipped.
-            if matches!(field.transform, Transform::Unknown) {
+            if matches!(field.transform(), Transform::Unknown) {
                 return Err(invalid_data!(
                     "Partition field '{}' uses an unknown transform whose result type \
                          cannot be determined",
-                    field.name
+                    field.name()
                 ));
             }
 
@@ -80,17 +80,18 @@ pub fn compute_unified_partition_type<'a>(
                 continue;
             }
 
-            let source_field = match schema.field_by_id(field.source_id) {
+            // Unknown transforms were rejected above, so the field reads one source column.
+            let source_field = match schema.field_by_id(field.source_id()?) {
                 Some(f) => f,
                 None => continue,
             };
 
             match field_map.get(&field_id) {
                 None => {
-                    let res_type = field.transform.result_type(&source_field.field_type)?;
+                    let res_type = field.transform().result_type(&source_field.field_type)?;
                     field_map.insert(field_id, field);
                     type_map.insert(field_id, res_type);
-                    name_map.insert(field_id, field.name.clone());
+                    name_map.insert(field_id, field.name().to_string());
                 }
                 Some(existing) => {
                     // V1 tables do not guarantee field ids are unique across specs, so two
@@ -99,8 +100,8 @@ pub fn compute_unified_partition_type<'a>(
                         return Err(invalid_data!(
                             "Conflicting partition fields for field id {field_id}: \
                                  '{}' and '{}'",
-                            field.name,
-                            existing.name
+                            field.name(),
+                            existing.name()
                         ));
                     }
 
@@ -108,7 +109,7 @@ pub fn compute_unified_partition_type<'a>(
                     // newer spec voided the field but an older spec has a real transform,
                     // keep the older spec's type.
                     if is_void_transform(existing) && !is_void_transform(field) {
-                        let res_type = field.transform.result_type(&source_field.field_type)?;
+                        let res_type = field.transform().result_type(&source_field.field_type)?;
                         field_map.insert(field_id, field);
                         type_map.insert(field_id, res_type);
                     }
@@ -143,16 +144,16 @@ pub fn compute_unified_partition_type<'a>(
 }
 
 fn is_void_transform(field: &PartitionField) -> bool {
-    matches!(field.transform, Transform::Void)
+    matches!(field.transform(), Transform::Void)
 }
 
 /// Two partition fields with the same field id are compatible if they share the same
 /// source id and have compatible transforms. Matches Java's
 /// `Partitioning.equivalentIgnoringNames`.
 fn equivalent_ignoring_names(field: &PartitionField, other: &PartitionField) -> bool {
-    field.field_id == other.field_id
-        && field.source_id == other.source_id
-        && compatible_transforms(&field.transform, &other.transform)
+    field.field_id() == other.field_id()
+        && field.source_ids() == other.source_ids()
+        && compatible_transforms(&field.transform(), &other.transform())
 }
 
 /// Transforms are compatible if they are equal, or if either is Void (a dropped field).
@@ -167,8 +168,13 @@ fn all_active_field_ids<'a>(
 ) -> HashSet<i32> {
     partition_specs
         .flat_map(|spec| spec.fields().iter())
-        .filter(|field| schema.field_by_id(field.source_id).is_some())
-        .map(|field| field.field_id)
+        .filter(|field| {
+            field
+                .source_ids()
+                .iter()
+                .all(|source_id| schema.field_by_id(*source_id).is_some())
+        })
+        .map(|field| field.field_id())
         .collect()
 }
 
@@ -395,7 +401,7 @@ mod tests {
             .add_unbound_field(
                 UnboundPartitionField::builder()
                     .source_ids(vec![4])
-                    .field_id(spec_v0.fields()[0].field_id)
+                    .field_id(spec_v0.fields()[0].field_id())
                     .name("category".to_string())
                     .transform(Transform::Identity)
                     .build()
