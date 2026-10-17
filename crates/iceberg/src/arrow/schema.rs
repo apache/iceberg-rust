@@ -24,7 +24,7 @@ use arrow_array::types::{Decimal128Type, validate_decimal_precision_and_scale};
 use arrow_array::{
     BinaryArray, BooleanArray, Date32Array, Datum as ArrowDatum, Decimal128Array,
     FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
-    TimestampMicrosecondArray, TimestampNanosecondArray,
+    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
 };
 use arrow_schema::extension::{ExtensionType, Uuid as UuidExtensionType};
 use arrow_schema::{
@@ -842,6 +842,9 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
         }
         (PrimitiveType::Date, PrimitiveLiteral::Int(value)) => {
             Ok(Arc::new(Date32Array::new_scalar(*value)))
+        }
+        (PrimitiveType::Time, PrimitiveLiteral::Long(value)) => {
+            Ok(Arc::new(Time64MicrosecondArray::new_scalar(*value)))
         }
         (PrimitiveType::Timestamp, PrimitiveLiteral::Long(value)) => {
             Ok(Arc::new(TimestampMicrosecondArray::new_scalar(*value)))
@@ -2612,6 +2615,18 @@ mod tests {
             let array = array.as_any().downcast_ref::<Date32Array>().unwrap();
             assert!(is_scalar);
             assert_eq!(array.value(0), 42);
+        }
+        {
+            let datum = Datum::time_micros(3_600_000_001).unwrap();
+            let arrow_datum = get_arrow_datum(&datum).unwrap();
+            let (array, is_scalar) = arrow_datum.get();
+            let array = array
+                .as_any()
+                .downcast_ref::<Time64MicrosecondArray>()
+                .unwrap();
+            let expected = Time64MicrosecondArray::from(vec![3_600_000_001]);
+            assert!(is_scalar);
+            assert_eq!(array, &expected);
         }
         {
             let datum = Datum::timestamp_micros(42);
