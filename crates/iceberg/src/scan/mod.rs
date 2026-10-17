@@ -675,6 +675,7 @@ impl TableScan {
             .send(DeleteFileContext {
                 manifest_entry: manifest_entry_context.manifest_entry.clone(),
                 partition_spec_id: manifest_entry_context.partition_spec_id,
+                partition_spec: manifest_entry_context.partition_spec.clone(),
             })
             .await?;
 
