@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::invalid_data;
 use crate::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
-    StorageFactory,
+    StorageCredentialProvider, StorageFactory,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -317,6 +317,15 @@ pub struct LocalFsStorageFactory;
 impl StorageFactory for LocalFsStorageFactory {
     fn build(&self, _config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         Ok(Arc::new(LocalFsStorage::new()))
+    }
+
+    /// Local filesystem storage needs no credentials.
+    fn build_with_credential_provider(
+        &self,
+        config: &StorageConfig,
+        _credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
+    ) -> Result<Arc<dyn Storage>> {
+        self.build(config)
     }
 }
 
