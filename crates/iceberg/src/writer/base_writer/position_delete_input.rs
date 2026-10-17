@@ -30,7 +30,6 @@
 //! new position delete files, so a format-version gate must be applied at the
 //! transaction/commit layer before routing v3 writes here.
 
-// Nothing wires `PositionDeletes` into a writer yet; the write-path plumbing lands in a follow-up.
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
@@ -76,6 +75,18 @@ impl PositionDeletes {
             inserted,
             "duplicate position delete: the same (file_path, pos) was inserted twice"
         );
+    }
+
+    /// Records a delete, ignoring duplicate `(file_path, pos)` pairs.
+    pub(crate) fn insert_dedup(&mut self, path: impl AsRef<str>, pos: u64) {
+        let path = path.as_ref();
+        if let Some(positions) = self.rows.get_mut(path) {
+            positions.insert(pos);
+        } else {
+            let mut positions = RoaringTreemap::new();
+            positions.insert(pos);
+            self.rows.insert(path.to_owned(), positions);
+        }
     }
 
     /// Returns whether no positions have been recorded. `insert` never leaves an empty
