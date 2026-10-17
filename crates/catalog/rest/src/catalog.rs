@@ -1177,7 +1177,11 @@ impl SessionCatalog for RestSessionCatalog {
                     name: creation.name,
                     location: creation.location,
                     schema: creation.schema,
-                    partition_spec: creation.partition_spec,
+                    // Iceberg Java's `PartitionSpecParser` requires `spec-id`.
+                    partition_spec: creation.partition_spec.map(|spec| match spec.spec_id() {
+                        Some(_) => spec,
+                        None => spec.with_spec_id(0),
+                    }),
                     write_order: creation.sort_order,
                     stage_create: Some(false),
                     properties: creation.properties,
@@ -4068,6 +4072,9 @@ mod tests {
 
         let create_table_mock = server
             .mock("POST", "/v1/namespaces/ns1/tables")
+            .match_body(mockito::Matcher::PartialJson(
+                json!({"partition-spec": {"spec-id": 0}}),
+            ))
             .with_status(200)
             .with_body_from_file(format!(
                 "{}/testdata/{}",
