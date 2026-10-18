@@ -20,12 +20,13 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
+use super::schema::assign_fresh_ids;
 use super::{
     DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
     ONE_MINUTE_MS, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile, Schema, SchemaRef,
     Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
     StatisticsFile, StructType, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
-    UnboundPartitionSpec,
+    UnboundPartitionField, UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result, invalid_data};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
@@ -190,6 +191,81 @@ impl TableMetadataBuilder {
             format_version,
             properties,
         )
+    }
+
+    /// Replaces the table's schema, partition spec and sort order, leaving it with no
+    /// current snapshot. Backs `REPLACE TABLE`.
+    ///
+    /// The table keeps its uuid, properties and snapshots, so earlier snapshots stay readable.
+    /// Columns the table already has keep their field ids, so data written before the replacement
+    /// stays readable through the columns both schemas share; new columns get ids above
+    /// `last_column_id`, never a dropped column's id.
+    ///
+    /// `location` moves the table, `None` leaves it in place. `properties` are applied on top of
+    /// the existing ones. `format-version` upgrades the table without being persisted; other
+    /// reserved properties are ignored.
+    ///
+    /// # Errors
+    /// - The table is format version 1, which is not supported.
+    /// - `format-version` is invalid or would downgrade the table.
+    /// - The partition spec or sort order names a column missing from `schema`.
+    /// - `schema` takes the name of a partition field in one of the table's specs without being
+    ///   that field's source column.
+    pub fn build_replacement(
+        self,
+        schema: Schema,
+        spec: impl Into<UnboundPartitionSpec>,
+        sort_order: SortOrder,
+        location: Option<String>,
+        properties: HashMap<String, String>,
+    ) -> Result<Self> {
+        if self.metadata.format_version == FormatVersion::V1 {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                "Table replacement is not supported for format version 1",
+            ));
+        }
+
+        let format_version = properties
+            .get(TableProperties::PROPERTY_FORMAT_VERSION)
+            .map(|value| {
+                serde_json::from_str::<FormatVersion>(value).map_err(|err| {
+                    invalid_data!("Unsupported format version: {value}").with_source(err)
+                })
+            })
+            .transpose()?
+            .unwrap_or(self.metadata.format_version);
+        let properties = properties
+            .into_iter()
+            .filter(|(key, _)| !TableProperties::RESERVED_PROPERTIES.contains(&key.as_str()))
+            .collect();
+        let spec = spec.into();
+
+        let previous_id_to_name = schema.field_id_to_name_map().clone();
+        let fresh_schema = assign_fresh_ids(
+            schema,
+            self.get_current_schema()?,
+            self.metadata.last_column_id,
+        )?;
+
+        let (fresh_spec, fresh_sort_order) =
+            Self::rebind_to_schema(&previous_id_to_name, &fresh_schema, spec, sort_order)?;
+        // Cleared so add_partition_spec can reuse the ids of equivalent fields in existing specs.
+        let fresh_spec = Self::forget_partition_field_ids(fresh_spec)?;
+
+        let builder = self
+            .upgrade_format_version(format_version)?
+            .remove_ref(MAIN_BRANCH)
+            .add_current_schema(fresh_schema)?
+            .add_default_partition_spec(fresh_spec)?
+            .add_default_sort_order(fresh_sort_order)?;
+
+        let builder = match location {
+            Some(location) => builder.set_location(location),
+            None => builder,
+        };
+
+        builder.set_properties(properties)
     }
 
     /// Changes uuid of table metadata.
@@ -844,14 +920,18 @@ impl TableMetadataBuilder {
         &self,
         unbound_spec: UnboundPartitionSpec,
     ) -> Result<UnboundPartitionSpec> {
-        // Build a map of (source_id, transform) -> field_id from existing specs
-        let equivalent_field_ids: HashMap<_, _> = self
+        let mut equivalent_field_ids = HashMap::new();
+        for field in self
             .metadata
             .partition_specs
             .values()
             .flat_map(|spec| spec.fields())
-            .map(|field| ((vec![field.source_id], field.transform), field.field_id))
-            .collect();
+        {
+            equivalent_field_ids
+                .entry((vec![field.source_id], field.transform))
+                .and_modify(|id: &mut i32| *id = (*id).max(field.field_id))
+                .or_insert(field.field_id);
+        }
 
         // Create new fields with reused field IDs where possible
         let fields = unbound_spec
@@ -1213,6 +1293,26 @@ impl TableMetadataBuilder {
             .collect()
     }
 
+    /// Returns `spec` with its partition field ids cleared, for [`Self::add_partition_spec`] to
+    /// reassign.
+    fn forget_partition_field_ids(spec: PartitionSpec) -> Result<UnboundPartitionSpec> {
+        let fields = spec
+            .fields()
+            .iter()
+            .map(|field| {
+                UnboundPartitionField::builder()
+                    .source_ids(vec![field.source_id])
+                    .name(field.name.clone())
+                    .transform(field.transform)
+                    .build()
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        UnboundPartitionSpec::builder()
+            .add_partition_fields(fields)
+            .map(|builder| builder.build())
+    }
+
     fn reassign_ids(
         schema: Schema,
         spec: UnboundPartitionSpec,
@@ -1226,6 +1326,20 @@ impl TableMetadataBuilder {
             .with_reassigned_field_ids(FIRST_FIELD_ID)
             .build()?;
 
+        let (fresh_spec, fresh_sort_order) =
+            Self::rebind_to_schema(&previous_id_to_name, &fresh_schema, spec, sort_order)?;
+
+        Ok((fresh_schema, fresh_spec, fresh_sort_order))
+    }
+
+    /// Rebuilds `spec` and `sort_order` against `fresh_schema`, looking up each source column by
+    /// the name `previous_id_to_name` gives for the field id they were built against.
+    fn rebind_to_schema(
+        previous_id_to_name: &HashMap<i32, String>,
+        fresh_schema: &Schema,
+        spec: UnboundPartitionSpec,
+        sort_order: SortOrder,
+    ) -> Result<(PartitionSpec, SortOrder)> {
         // Re-build partition spec with new ids
         let mut fresh_spec = PartitionSpecBuilder::new(fresh_schema.clone());
         for field in spec.fields() {
@@ -1267,9 +1381,9 @@ impl TableMetadataBuilder {
             field.source_id = new_field_id;
             fresh_order.with_sort_field(field);
         }
-        let fresh_sort_order = fresh_order.build(&fresh_schema)?;
+        let fresh_sort_order = fresh_order.build(fresh_schema)?;
 
-        Ok((fresh_schema, fresh_spec, fresh_sort_order))
+        Ok((fresh_spec, fresh_sort_order))
     }
 
     fn reuse_or_create_new_schema_id(&self, new_schema: &Schema) -> i32 {
@@ -3693,5 +3807,447 @@ mod tests {
         let spec2 = result.metadata.partition_spec_by_id(2).unwrap();
         let field_ids: Vec<i32> = spec2.fields().iter().map(|f| f.field_id).collect();
         assert_eq!(field_ids, vec![1000, 1001, 1002]); // Reused 1000, 1001; new 1002
+    }
+
+    fn unbound_field(source_id: i32, name: &str, transform: Transform) -> UnboundPartitionField {
+        UnboundPartitionField::builder()
+            .source_ids(vec![source_id])
+            .name(name)
+            .transform(transform)
+            .build()
+            .unwrap()
+    }
+
+    fn replacement_schema() -> Schema {
+        // `z` and `x` already exist in the table, `w` is new, `y` is dropped.
+        Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "z", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(3, "w", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    fn partition_replacement_builder(format_version: FormatVersion) -> TableMetadataBuilder {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "y", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+        let spec = UnboundPartitionSpec::builder()
+            .add_partition_field(unbound_field(1, "x", Transform::Identity))
+            .unwrap()
+            .add_partition_field(unbound_field(2, "y", Transform::Identity))
+            .unwrap()
+            .build();
+
+        TableMetadataBuilder::new(
+            schema,
+            spec,
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            format_version,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata
+        .into_builder(Some(
+            "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+        ))
+    }
+
+    fn populated_builder() -> TableMetadataBuilder {
+        let builder = builder_without_changes(FormatVersion::V2);
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("/snap-1.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        builder
+            .add_snapshot(snapshot)
+            .unwrap()
+            .set_ref(MAIN_BRANCH, SnapshotReference {
+                snapshot_id: 1,
+                retention: SnapshotRetention::branch(None, None, None),
+            })
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+    }
+
+    #[test]
+    fn test_build_replacement_keeps_the_field_ids_of_columns_the_table_already_has() {
+        let metadata = builder_without_changes(FormatVersion::V2)
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let schema = metadata.current_schema();
+        assert_eq!(schema.field_by_name("z").unwrap().id, 3);
+        assert_eq!(schema.field_by_name("x").unwrap().id, 1);
+        // A fresh id, not 2 — that one belonged to the dropped `y`.
+        assert_eq!(schema.field_by_name("w").unwrap().id, 4);
+        assert_eq!(metadata.last_column_id, 4);
+    }
+
+    #[test]
+    fn test_build_replacement_rebinds_the_partition_spec_and_sort_order() {
+        // Source ids refer to the replacement schema, where `w` is 3; it becomes 4 once assigned.
+        let spec = UnboundPartitionSpec::builder()
+            .add_partition_field(unbound_field(3, "w", Transform::Identity))
+            .unwrap()
+            .build();
+        let sort_order = SortOrder::builder()
+            .with_sort_field(SortField {
+                source_id: 3,
+                transform: Transform::Identity,
+                direction: SortDirection::Ascending,
+                null_order: NullOrder::First,
+            })
+            .build(&replacement_schema())
+            .unwrap();
+
+        let metadata = builder_without_changes(FormatVersion::V2)
+            .build_replacement(replacement_schema(), spec, sort_order, None, HashMap::new())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let w_id = metadata.current_schema().field_by_name("w").unwrap().id;
+        assert_eq!(w_id, 4);
+        assert_eq!(
+            metadata.default_partition_spec().fields()[0].source_id,
+            w_id
+        );
+        assert_eq!(metadata.default_partition_spec().fields()[0].field_id, 1001);
+        assert_eq!(metadata.default_sort_order().fields[0].source_id, w_id);
+    }
+
+    #[test]
+    fn test_build_replacement_reassigns_partition_ids_for_v2() {
+        let updated_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "z", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let updated_spec = UnboundPartitionSpec::builder()
+            .add_partition_field(unbound_field(2, "z_bucket", Transform::Bucket(8)))
+            .unwrap()
+            .add_partition_field(unbound_field(1, "x", Transform::Identity))
+            .unwrap()
+            .build();
+
+        let metadata = partition_replacement_builder(FormatVersion::V2)
+            .build_replacement(
+                updated_schema,
+                updated_spec,
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let fields = metadata
+            .default_partition_spec()
+            .fields()
+            .iter()
+            .map(|field| {
+                (
+                    field.source_id,
+                    field.field_id,
+                    field.name.as_str(),
+                    field.transform,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(metadata.default_partition_spec().spec_id(), 1);
+        assert_eq!(fields, vec![
+            (3, 1002, "z_bucket", Transform::Bucket(8)),
+            (1, 1000, "x", Transform::Identity),
+        ]);
+        assert_eq!(metadata.last_partition_id, 1002);
+    }
+
+    #[test]
+    fn test_build_replacement_keeps_the_table_and_its_snapshots_but_not_its_current_one() {
+        let base = populated_builder();
+        let uuid = base.metadata.table_uuid;
+
+        let metadata = base
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata.table_uuid, uuid);
+        assert_eq!(metadata.location, TEST_LOCATION);
+        assert_eq!(metadata.current_snapshot_id, None);
+        assert!(metadata.snapshot_by_id(1).is_some());
+        assert_eq!(metadata.snapshot_log.len(), 1);
+        assert_eq!(metadata.snapshot_log[0].snapshot_id, 1);
+        // The old schema is kept so the retained snapshots stay readable.
+        assert_eq!(metadata.schemas.len(), 2);
+        assert_ne!(metadata.current_schema_id, 0);
+    }
+
+    #[test]
+    fn test_build_replacement_changes_describe_the_replacement() {
+        let changes = populated_builder()
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .changes;
+
+        assert!(changes.contains(&TableUpdate::RemoveSnapshotRef {
+            ref_name: MAIN_BRANCH.to_string()
+        }));
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, TableUpdate::AddSchema { .. }))
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, TableUpdate::SetCurrentSchema { .. }))
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, TableUpdate::SetDefaultSpec { .. }))
+        );
+        assert!(
+            changes
+                .iter()
+                .any(|c| matches!(c, TableUpdate::SetDefaultSortOrder { .. }))
+        );
+        assert!(
+            !changes
+                .iter()
+                .any(|c| matches!(c, TableUpdate::SetLocation { .. }))
+        );
+    }
+
+    #[test]
+    fn test_build_replacement_moves_the_table_when_given_a_location() {
+        let metadata = builder_without_changes(FormatVersion::V2)
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                Some("s3://bucket/somewhere/else".to_string()),
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata.location, "s3://bucket/somewhere/else");
+    }
+
+    #[test]
+    fn test_build_replacement_applies_format_version_without_persisting_reserved_properties() {
+        let result = builder_without_changes(FormatVersion::V2)
+            .set_properties(HashMap::from_iter([(
+                "existing".to_string(),
+                "value".to_string(),
+            )]))
+            .unwrap()
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::from_iter([
+                    (
+                        TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
+                        "3".to_string(),
+                    ),
+                    (
+                        TableProperties::PROPERTY_UUID.to_string(),
+                        "ignored".to_string(),
+                    ),
+                    ("new".to_string(), "value".to_string()),
+                ]),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(result.metadata.format_version, FormatVersion::V3);
+        assert!(result.metadata.default_partition_spec().fields().is_empty());
+        assert_eq!(result.metadata.properties.get("existing").unwrap(), "value");
+        assert_eq!(result.metadata.properties.get("new").unwrap(), "value");
+        assert!(
+            !result
+                .metadata
+                .properties
+                .contains_key(TableProperties::PROPERTY_FORMAT_VERSION)
+        );
+        assert!(
+            !result
+                .metadata
+                .properties
+                .contains_key(TableProperties::PROPERTY_UUID)
+        );
+        assert!(result.changes.iter().any(|change| matches!(
+            change,
+            TableUpdate::UpgradeFormatVersion {
+                format_version: FormatVersion::V3
+            }
+        )));
+    }
+
+    #[test]
+    fn test_build_replacement_with_everything_unchanged_reuses_the_existing_ids() {
+        let base = builder_without_changes(FormatVersion::V2).build().unwrap();
+        let schema = base.metadata.current_schema().as_ref().clone();
+        let spec = base
+            .metadata
+            .default_partition_spec()
+            .as_ref()
+            .clone()
+            .into_unbound();
+        let sort_order = base.metadata.default_sort_order().as_ref().clone();
+
+        let result = base
+            .metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+            .build_replacement(
+                schema,
+                spec,
+                sort_order,
+                None,
+                HashMap::from_iter([(
+                    TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
+                    "3".to_string(),
+                )]),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        assert_eq!(result.metadata.format_version, FormatVersion::V3);
+        assert_eq!(result.metadata.current_schema_id, 0);
+        assert_eq!(result.metadata.schemas.len(), 1);
+        assert_eq!(result.metadata.default_partition_spec().spec_id(), 0);
+        assert_eq!(result.metadata.partition_specs.len(), 1);
+        assert_eq!(
+            result.metadata.default_partition_spec().fields()[0].field_id,
+            1000
+        );
+        assert_eq!(result.metadata.last_column_id, LAST_ASSIGNED_COLUMN_ID);
+        assert_eq!(result.metadata.last_partition_id, 1000);
+        assert_eq!(result.metadata.default_sort_order_id, 1);
+        assert_eq!(result.metadata.sort_orders.len(), 1);
+        // No SetCurrentSchema, since the schema is unchanged. Java is the same; its REST
+        // catalog appends one itself.
+        assert!(
+            !result
+                .changes
+                .iter()
+                .any(|c| matches!(c, TableUpdate::SetCurrentSchema { .. }))
+        );
+    }
+
+    #[test]
+    fn test_build_replacement_rejects_v1() {
+        let err = builder_without_changes(FormatVersion::V1)
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(err.to_string().contains("format version 1"), "{err}");
+    }
+
+    #[test]
+    fn test_build_replacement_rejects_v1_with_format_upgrade() {
+        let err = builder_without_changes(FormatVersion::V1)
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::from_iter([(
+                    TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
+                    "2".to_string(),
+                )]),
+            )
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(err.to_string().contains("format version 1"), "{err}");
+    }
+
+    #[test]
+    fn test_build_replacement_rejects_a_spec_on_a_missing_column() {
+        let err = builder_without_changes(FormatVersion::V2)
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder()
+                    .add_partition_field(unbound_field(99, "nope", Transform::Identity))
+                    .unwrap()
+                    .build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 }
