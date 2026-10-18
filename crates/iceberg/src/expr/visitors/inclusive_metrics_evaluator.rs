@@ -120,7 +120,8 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
         };
 
         if let Some(bound) = bound {
-            if cmp_fn(bound, datum) {
+            let bound = Self::promote_bound(bound, reference);
+            if cmp_fn(&bound, datum) {
                 return ROWS_MIGHT_MATCH;
             }
 
@@ -128,6 +129,16 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
         }
 
         ROWS_MIGHT_MATCH
+    }
+
+    /// Widens a stored bound to the reference's type so a bound written under a
+    /// narrower type (e.g. an `int` column later promoted to `long`) compares
+    /// against a predicate bound to the wider type.
+    fn promote_bound(bound: &Datum, reference: &BoundReference) -> Datum {
+        match reference.field().field_type.as_primitive_type() {
+            Some(primitive_type) => bound.promote_to(primitive_type),
+            None => bound.clone(),
+        }
     }
 }
 
@@ -259,6 +270,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(lower_bound) = self.lower_bound(field_id) {
+            let lower_bound = Self::promote_bound(lower_bound, reference);
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -269,6 +281,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
+            let upper_bound = Self::promote_bound(upper_bound, reference);
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -438,24 +451,26 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(lower_bound) = self.lower_bound(field_id) {
+            let lower_bound = Self::promote_bound(lower_bound, reference);
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
             }
 
-            if !literals.iter().any(|datum| datum.ge(lower_bound)) {
+            if !literals.iter().any(|datum| datum.ge(&lower_bound)) {
                 // if all values are less than lower bound, rows cannot match.
                 return ROWS_CANNOT_MATCH;
             }
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
+            let upper_bound = Self::promote_bound(upper_bound, reference);
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
             }
 
-            if !literals.iter().any(|datum| datum.le(upper_bound)) {
+            if !literals.iter().any(|datum| datum.le(&upper_bound)) {
                 // if all values are greater than upper bound, rows cannot match.
                 return ROWS_CANNOT_MATCH;
             }
@@ -519,6 +534,92 @@ mod test {
             InclusiveMetricsEvaluator::eval(&partition_filter, &data_file, case_sensitive).unwrap();
 
         assert!(result);
+    }
+
+    fn promotion_schema(primitive: PrimitiveType) -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::optional(
+                    1,
+                    "a",
+                    Type::Primitive(primitive),
+                ))])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn data_file_with_bounds(lower: Datum, upper: Datum) -> DataFile {
+        DataFile {
+            lower_bounds: HashMap::from([(1, lower)]),
+            upper_bounds: HashMap::from([(1, upper)]),
+            ..create_test_data_file()
+        }
+    }
+
+    #[test]
+    fn eval_promotes_int_bounds_for_inequality() {
+        // A column promoted int->long keeps int-typed column bounds in
+        // pre-promotion manifests; a predicate bound to the promoted long type
+        // must still match a file whose range covers it, not silently prune it.
+        let schema = promotion_schema(PrimitiveType::Long);
+        let data_file = data_file_with_bounds(Datum::int(5), Datum::int(10));
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            GreaterThan,
+            Reference::new("a"),
+            Datum::long(4),
+        ))
+        .bind(schema, true)
+        .unwrap();
+
+        assert!(InclusiveMetricsEvaluator::eval(&predicate, &data_file, true).unwrap());
+    }
+
+    #[test]
+    fn eval_promotes_int_bounds_for_in() {
+        let schema = promotion_schema(PrimitiveType::Long);
+        let data_file = data_file_with_bounds(Datum::int(5), Datum::int(10));
+        let predicate = Predicate::Set(SetExpression::new(
+            In,
+            Reference::new("a"),
+            FnvHashSet::from_iter([Datum::long(5), Datum::long(6)]),
+        ))
+        .bind(schema, true)
+        .unwrap();
+
+        assert!(InclusiveMetricsEvaluator::eval(&predicate, &data_file, true).unwrap());
+    }
+
+    #[test]
+    fn eval_promotes_int_bounds_for_eq() {
+        // With the bounds widened, `== 5` correctly prunes a file whose range is
+        // entirely above 5 (int bounds [6, 10]) instead of failing open.
+        let schema = promotion_schema(PrimitiveType::Long);
+        let data_file = data_file_with_bounds(Datum::int(6), Datum::int(10));
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            Eq,
+            Reference::new("a"),
+            Datum::long(5),
+        ))
+        .bind(schema, true)
+        .unwrap();
+
+        assert!(!InclusiveMetricsEvaluator::eval(&predicate, &data_file, true).unwrap());
+    }
+
+    #[test]
+    fn eval_promotes_float_bounds_for_inequality() {
+        let schema = promotion_schema(PrimitiveType::Double);
+        let data_file = data_file_with_bounds(Datum::float(1.5_f32), Datum::float(2.0_f32));
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            GreaterThan,
+            Reference::new("a"),
+            Datum::double(1.0),
+        ))
+        .bind(schema, true)
+        .unwrap();
+
+        assert!(InclusiveMetricsEvaluator::eval(&predicate, &data_file, true).unwrap());
     }
 
     #[test]

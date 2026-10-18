@@ -64,6 +64,22 @@ impl<'a> ExpressionEvaluatorVisitor<'a> {
     fn new(partition: &'a Struct) -> Self {
         Self { partition }
     }
+
+    /// Returns the partition value for `reference`, widened to the reference's
+    /// type so a value written under a narrower type (e.g. an `int` column later
+    /// promoted to `long`) compares correctly against the bound predicate.
+    fn partition_value(&self, reference: &BoundReference) -> Result<Option<Datum>> {
+        let Some(datum) = reference.accessor().get(self.partition)? else {
+            return Ok(None);
+        };
+
+        Ok(Some(
+            match reference.field().field_type.as_primitive_type() {
+                Some(primitive_type) => datum.promote_to(primitive_type),
+                None => datum,
+            },
+        ))
+    }
 }
 
 impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
@@ -130,7 +146,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match self.partition_value(reference)? {
             Some(datum) => Ok(&datum < literal),
             None => Ok(false),
         }
@@ -142,7 +158,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match self.partition_value(reference)? {
             Some(datum) => Ok(&datum <= literal),
             None => Ok(false),
         }
@@ -154,7 +170,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match self.partition_value(reference)? {
             Some(datum) => Ok(&datum > literal),
             None => Ok(false),
         }
@@ -166,7 +182,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match self.partition_value(reference)? {
             Some(datum) => Ok(&datum >= literal),
             None => Ok(false),
         }
@@ -178,7 +194,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match self.partition_value(reference)? {
             Some(datum) => Ok(&datum == literal),
             None => Ok(false),
         }
@@ -190,7 +206,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match self.partition_value(reference)? {
             Some(datum) => Ok(&datum != literal),
             None => Ok(true),
         }
@@ -227,7 +243,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match self.partition_value(reference)? {
             Some(datum) => Ok(literals.contains(&datum)),
             None => Ok(false),
         }
@@ -239,7 +255,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match self.partition_value(reference)? {
             Some(datum) => Ok(!literals.contains(&datum)),
             None => Ok(true),
         }
@@ -330,9 +346,7 @@ mod tests {
         Ok(ExpressionEvaluator::new(partition_filter))
     }
 
-    fn create_data_file_float() -> DataFile {
-        let partition = Struct::from_iter([Some(Literal::float(1.0_f32))]);
-
+    fn create_data_file(partition: Struct) -> DataFile {
         DataFile {
             content: DataContentType::Data,
             file_path: "/test/path".to_string(),
@@ -358,32 +372,12 @@ mod tests {
         }
     }
 
-    fn create_data_file_string() -> DataFile {
-        let partition = Struct::from_iter([Some(Literal::string("test str"))]);
+    fn create_data_file_float() -> DataFile {
+        create_data_file(Struct::from_iter([Some(Literal::float(1.0_f32))]))
+    }
 
-        DataFile {
-            content: DataContentType::Data,
-            file_path: "/test/path".to_string(),
-            file_format: DataFileFormat::Parquet,
-            partition,
-            record_count: 1,
-            file_size_in_bytes: 1,
-            column_sizes: HashMap::new(),
-            value_counts: HashMap::new(),
-            null_value_counts: HashMap::new(),
-            nan_value_counts: HashMap::new(),
-            lower_bounds: HashMap::new(),
-            upper_bounds: HashMap::new(),
-            key_metadata: None,
-            split_offsets: None,
-            equality_ids: None,
-            sort_order_id: None,
-            partition_spec_id: 0,
-            first_row_id: None,
-            referenced_data_file: None,
-            content_offset: None,
-            content_size_in_bytes: None,
-        }
+    fn create_data_file_string() -> DataFile {
+        create_data_file(Struct::from_iter([Some(Literal::string("test str"))]))
     }
 
     #[test]
@@ -882,6 +876,78 @@ mod tests {
         let result = expression_evaluator.eval(&data_file)?;
 
         assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_promotes_int_partition_to_long_predicate() -> Result<()> {
+        // A column partitioned as `int` and later promoted to `long` keeps `int`
+        // partition values in manifests written before the promotion; a predicate
+        // bound to the promoted `long` type must still match them.
+        let case_sensitive = true;
+        let (partition_spec, schema) = create_partition_spec(PrimitiveType::Long)?;
+
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::GreaterThanOrEq,
+            Reference::new("a"),
+            Datum::long(5_i64),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(partition_spec, &schema, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file(Struct::from_iter([Some(Literal::int(5_i32))]));
+
+        assert!(expression_evaluator.eval(&data_file)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_promotes_int_partition_in_set_predicate() -> Result<()> {
+        // The set-membership path matches on hash/equality, so it needs the same
+        // widening as the ordered comparisons.
+        let case_sensitive = true;
+        let (partition_spec, schema) = create_partition_spec(PrimitiveType::Long)?;
+
+        let predicate = Predicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            Reference::new("a"),
+            FnvHashSet::from_iter([Datum::long(5_i64), Datum::long(6_i64)]),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(partition_spec, &schema, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file(Struct::from_iter([Some(Literal::int(5_i32))]));
+
+        assert!(expression_evaluator.eval(&data_file)?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_promotes_float_partition_to_double_predicate() -> Result<()> {
+        // Same widening for a `float` column promoted to `double`.
+        let case_sensitive = true;
+        let (partition_spec, schema) = create_partition_spec(PrimitiveType::Double)?;
+
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            PredicateOperator::LessThan,
+            Reference::new("a"),
+            Datum::double(2.0_f64),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+
+        let expression_evaluator =
+            create_expression_evaluator(partition_spec, &schema, &predicate, case_sensitive)?;
+
+        let data_file = create_data_file(Struct::from_iter([Some(Literal::float(1.0_f32))]));
+
+        assert!(expression_evaluator.eval(&data_file)?);
 
         Ok(())
     }
