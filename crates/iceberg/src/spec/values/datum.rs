@@ -270,6 +270,12 @@ impl PartialOrd for Datum {
                 PrimitiveType::Binary,
             ) => val.partial_cmp(other_val),
             (
+                PrimitiveLiteral::Binary(_),
+                PrimitiveLiteral::Binary(_),
+                PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+                PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+            ) => None,
+            (
                 PrimitiveLiteral::Int128(val),
                 PrimitiveLiteral::Int128(other_val),
                 PrimitiveType::Decimal {
@@ -294,8 +300,12 @@ impl Display for Datum {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match (&self.r#type, &self.literal) {
             (_, PrimitiveLiteral::Boolean(val)) => write!(f, "{val}"),
-            (PrimitiveType::Int, PrimitiveLiteral::Int(val)) => write!(f, "{val}"),
-            (PrimitiveType::Long, PrimitiveLiteral::Long(val)) => write!(f, "{val}"),
+            (PrimitiveType::Int | PrimitiveType::Unknown, PrimitiveLiteral::Int(val)) => {
+                write!(f, "{val}")
+            }
+            (PrimitiveType::Long | PrimitiveType::Unknown, PrimitiveLiteral::Long(val)) => {
+                write!(f, "{val}")
+            }
             (_, PrimitiveLiteral::Float(val)) => write!(f, "{val}"),
             (_, PrimitiveLiteral::Double(val)) => write!(f, "{val}"),
             (PrimitiveType::Date, PrimitiveLiteral::Int(val)) => {
@@ -372,6 +382,12 @@ impl Datum {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "Cannot create datum for unknown type from bytes",
+                ));
+            }
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Cannot create geospatial datum from bytes yet",
                 ));
             }
             PrimitiveType::Boolean => {
