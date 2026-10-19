@@ -293,7 +293,7 @@ mod tests {
     };
     use crate::table::{StaticTable, Table};
     use crate::test_utils::{make_encrypted_table, test_runtime};
-    use crate::transaction::action::{ActionCommit, TransactionAction};
+    use crate::transaction::action::{ActionCommit, StatelessAction};
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, Result, TableCreation, TableIdent};
 
@@ -490,11 +490,12 @@ mod tests {
     }
 
     /// Records which FileIO the action was handed.
+    #[derive(Clone)]
     struct RecordingAction(Arc<std::sync::Mutex<Option<String>>>);
 
     #[async_trait]
-    impl TransactionAction for RecordingAction {
-        async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+    impl StatelessAction for RecordingAction {
+        async fn commit(&self, table: &Table) -> Result<ActionCommit> {
             *self.0.lock().unwrap() = Some(marker_of(table));
             Ok(ActionCommit::new(vec![], vec![]))
         }
@@ -563,11 +564,12 @@ mod tests {
     }
 
     /// Reads a file the table wrote before the transaction started.
+    #[derive(Clone)]
     struct ReadingAction(Arc<std::sync::Mutex<Option<String>>>);
 
     #[async_trait]
-    impl TransactionAction for ReadingAction {
-        async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+    impl StatelessAction for ReadingAction {
+        async fn commit(&self, table: &Table) -> Result<ActionCommit> {
             let read = table
                 .file_io()
                 .new_input("memory://warehouse/manifest")?
