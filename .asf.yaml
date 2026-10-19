@@ -33,14 +33,24 @@ github:
     squash_commit_message: PR_TITLE_AND_COMMIT_DETAILS
     merge: false
     rebase: false
-  protected_branches:
-    main:
+  # Disabled: GitHub blocks ruleset bypass while classic protection exists.
+  # The "Default Branch Protection" ruleset replaces it.
+  protected_branches: ~
+  rulesets:
+    - name: "Default Branch Protection"
+      type: branch
+      branches:
+        includes:
+          - "~DEFAULT_BRANCH"
+        excludes: []
+      bypass_teams:
+        - root
+      restrict_deletion: true
+      restrict_force_push: true
+      required_linear_history: true
       required_pull_request_reviews:
         required_approving_review_count: 1
         dismiss_stale_reviews: false
-
-      required_linear_history: true
-  rulesets:
     - name: Merge Queue
       target: branch
       enforcement: active
