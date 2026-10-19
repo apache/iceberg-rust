@@ -74,9 +74,10 @@ pub(crate) struct ManifestEntryContext {
     pub sort_order: Option<SortOrderRef>,
 }
 
-/// Returns whether any `int` or `float` field of `written` is widened to `long` or
-/// `double` in `current`, i.e. partition values written with `written` need widening
-/// before they compare against predicates bound to the current schema.
+/// Returns whether any `int` or `float` field of `written` is widened in `current`, to
+/// `long`/`double` or to `unknown` once its source column is dropped, i.e. partition
+/// values written with `written` need normalizing before they compare against predicates
+/// bound to the current schema or against delete-file partitions.
 fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
     current.fields().iter().zip(written.fields()).any(|(c, w)| {
         matches!(
@@ -84,8 +85,13 @@ fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
                 w.field_type.as_primitive_type(),
                 c.field_type.as_primitive_type()
             ),
-            (Some(PrimitiveType::Int), Some(PrimitiveType::Long))
-                | (Some(PrimitiveType::Float), Some(PrimitiveType::Double))
+            (
+                Some(PrimitiveType::Int),
+                Some(PrimitiveType::Long | PrimitiveType::Unknown)
+            ) | (
+                Some(PrimitiveType::Float),
+                Some(PrimitiveType::Double | PrimitiveType::Unknown)
+            )
         )
     })
 }
@@ -119,21 +125,21 @@ impl ManifestFileContext {
         // index compare like-typed values. The gate compares the partition types
         // themselves, not schema ids, since v1 may omit them (defaulting to 0). Column
         // bounds are widened lazily where the metrics evaluator compares them.
-        let promotion_target: Option<StructType> = match partition_spec.as_ref() {
+        let promotion_target: Option<(StructType, StructType)> = match partition_spec.as_ref() {
             Some(spec) => {
                 let current = spec.partition_type(&snapshot_schema)?;
                 let written = spec.partition_type(manifest.metadata().schema())?;
-                partition_types_differ(&current, &written).then_some(current)
+                partition_types_differ(&current, &written).then_some((current, written))
             }
             None => None,
         };
 
         for manifest_entry in manifest.entries() {
             let manifest_entry = match promotion_target.as_ref() {
-                Some(partition_type) => {
+                Some((current, written)) => {
                     let mut entry = manifest_entry.as_ref().clone();
                     entry.data_file.partition =
-                        entry.data_file.promoted_partition(partition_type)?;
+                        entry.data_file.promoted_partition(current, written)?;
                     Arc::new(entry)
                 }
                 None => manifest_entry.clone(),

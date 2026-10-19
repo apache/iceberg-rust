@@ -1290,6 +1290,106 @@ mod tests {
         assert_eq!(tasks[0].deletes().len(), 1);
     }
 
+    /// Evolves `table` so its historical `identity(x)` spec outlives the source column:
+    /// makes the default spec unpartitioned and drops `x` (field id 1) from the schema,
+    /// so the manifests' spec resolves `x` to `unknown`.
+    fn drop_promoted_partition_source(table: Table) -> Table {
+        let evolved_schema = Schema::builder()
+            .with_fields(
+                table
+                    .metadata()
+                    .current_schema()
+                    .as_struct()
+                    .fields()
+                    .iter()
+                    .filter(|field| field.id != 1)
+                    .cloned(),
+            )
+            .with_identifier_field_ids(vec![2])
+            .build()
+            .unwrap();
+        let metadata = TableMetadataBuilder::new_from_metadata(table.metadata().clone(), None)
+            .add_default_partition_spec(UnboundPartitionSpec::builder().build())
+            .unwrap()
+            .add_current_schema(evolved_schema)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        table.with_metadata(Arc::new(metadata))
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_eq_delete_after_dropping_promoted_source() {
+        // Partition source `x` promoted int -> long, then dropped. The data file (int)
+        // and its equality delete (long) must still normalize to the same long partition
+        // so the delete stays attached; otherwise it silently detaches.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete(false).await;
+        let table = drop_promoted_partition_source(fixture.table);
+
+        let tasks: Vec<FileScanTask> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_deletion_vector_after_dropping_promoted_source() {
+        // Same as above for a deletion vector: without widening the dropped numeric
+        // source the DV partition check errors (long(7) vs int(7)).
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_dv().await;
+        let table = drop_promoted_partition_source(fixture.table);
+
+        let tasks: Vec<FileScanTask> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_eq_delete_when_dropped_source_is_date() {
+        // A promoted numeric source `x` sits beside a dropped `date` source `d`. The gate
+        // fires on `x`'s int -> long widening, but `d` (stored as an int) must be copied
+        // through, not widened to long, or the data file's partition diverges from the
+        // equality delete's and detaches it.
+        let mut fixture = TableTestFixture::new();
+        fixture
+            .setup_promoted_partition_with_eq_delete_and_dropped_date()
+            .await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
     #[tokio::test]
     async fn test_plan_files_carries_row_lineage_into_file_scan_task() {
         let mut fixture = TableTestFixture::new();
