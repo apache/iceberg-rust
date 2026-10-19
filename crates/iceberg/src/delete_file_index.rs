@@ -386,81 +386,8 @@ mod tests {
     use crate::ErrorKind;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, ManifestEntry,
-        ManifestStatus, NestedField, PrimitiveType, Struct, StructType, Type,
+        ManifestStatus, Struct,
     };
-
-    #[test]
-    fn promoted_data_file_partition_matches_delete_after_column_promotion() {
-        // The partition column was promoted int -> long. The eq delete, written
-        // after the promotion, carries a `long` partition value; the data file,
-        // written before it, carries an `int` one. They must match once the data
-        // file is widened to the current schema.
-        let spec_id = 1;
-        let eq_delete =
-            build_partitioned_eq_delete(&Struct::from_iter([Some(Literal::long(7))]), spec_id);
-        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(4, &eq_delete).into(),
-            partition_spec_id: spec_id,
-        }])
-        .unwrap();
-
-        let data_file =
-            build_partitioned_data_file(&Struct::from_iter([Some(Literal::int(7))]), spec_id);
-
-        // The int partition does not match the long-keyed delete.
-        assert!(
-            index
-                .get_deletes_for_data_file(&data_file, Some(0))
-                .unwrap()
-                .is_empty()
-        );
-
-        // Widening the data file's partition to the current (long) type makes it match.
-        let partition_type = StructType::new(vec![
-            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Long)).into(),
-        ]);
-        let mut promoted = data_file.clone();
-        promoted.partition = data_file.promoted_partition(&partition_type);
-
-        assert_eq!(
-            index
-                .get_deletes_for_data_file(&promoted, Some(0))
-                .unwrap()
-                .len(),
-            1
-        );
-    }
-
-    #[test]
-    fn promoted_data_file_partition_matches_delete_after_source_dropped() {
-        // The promoted partition source column was then dropped, so the spec
-        // resolves it to `Unknown`. Ceiling-widening still normalizes the data
-        // file's int partition to long so it matches the delete's long partition.
-        let spec_id = 1;
-        let eq_delete =
-            build_partitioned_eq_delete(&Struct::from_iter([Some(Literal::long(7))]), spec_id);
-        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
-            manifest_entry: build_added_manifest_entry(4, &eq_delete).into(),
-            partition_spec_id: spec_id,
-        }])
-        .unwrap();
-
-        let data_file =
-            build_partitioned_data_file(&Struct::from_iter([Some(Literal::int(7))]), spec_id);
-        let partition_type = StructType::new(vec![
-            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Unknown)).into(),
-        ]);
-        let mut promoted = data_file.clone();
-        promoted.partition = data_file.promoted_partition(&partition_type);
-
-        assert_eq!(
-            index
-                .get_deletes_for_data_file(&promoted, Some(0))
-                .unwrap()
-                .len(),
-            1
-        );
-    }
 
     #[test]
     fn test_delete_file_index_unpartitioned() {

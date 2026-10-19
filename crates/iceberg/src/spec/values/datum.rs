@@ -1232,13 +1232,12 @@ impl Datum {
     /// Returns a copy whose literal is widened to `target` for the value
     /// promotions `int` -> `long` and `float` -> `double`, so a value written
     /// under the narrower type compares against a predicate bound to the wider
-    /// one. Any other `target` returns an unchanged copy; decimals already
-    /// compare across precisions.
-    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Datum {
-        match self.literal.promote_to(target) {
-            Some(literal) => Datum::new(target.clone(), literal),
-            None => self.clone(),
-        }
+    /// one. Returns `None` when `target` does not widen this value (decimals
+    /// already compare across precisions), so callers can avoid a copy.
+    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Option<Datum> {
+        self.literal
+            .promote_to(target)
+            .map(|literal| Datum::new(target.clone(), literal))
     }
 
     /// Returns true if the Literal represents a primitive type

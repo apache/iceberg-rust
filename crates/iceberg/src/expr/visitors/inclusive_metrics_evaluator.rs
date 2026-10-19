@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::borrow::Cow;
+
 use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
@@ -120,8 +122,8 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
         };
 
         if let Some(bound) = bound {
-            let bound = Self::promote_bound(bound, reference);
-            if cmp_fn(&bound, datum) {
+            let bound = &*Self::promote_bound(bound, reference);
+            if cmp_fn(bound, datum) {
                 return ROWS_MIGHT_MATCH;
             }
 
@@ -133,12 +135,15 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
 
     /// Widens a stored bound to the reference's type so a bound written under a
     /// narrower type (e.g. an `int` column later promoted to `long`) compares
-    /// against a predicate bound to the wider type.
-    fn promote_bound(bound: &Datum, reference: &BoundReference) -> Datum {
-        match reference.field().field_type.as_primitive_type() {
-            Some(primitive_type) => bound.promote_to(primitive_type),
-            None => bound.clone(),
-        }
+    /// against a predicate bound to the wider type. Borrows the bound when nothing
+    /// is promoted, so unpromoted bounds (e.g. strings/binaries) are not copied.
+    fn promote_bound<'b>(bound: &'b Datum, reference: &BoundReference) -> Cow<'b, Datum> {
+        reference
+            .field()
+            .field_type
+            .as_primitive_type()
+            .and_then(|primitive_type| bound.promote_to(primitive_type))
+            .map_or(Cow::Borrowed(bound), Cow::Owned)
     }
 }
 
@@ -270,7 +275,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(lower_bound) = self.lower_bound(field_id) {
-            let lower_bound = Self::promote_bound(lower_bound, reference);
+            let lower_bound = &*Self::promote_bound(lower_bound, reference);
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -281,7 +286,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
-            let upper_bound = Self::promote_bound(upper_bound, reference);
+            let upper_bound = &*Self::promote_bound(upper_bound, reference);
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -451,26 +456,26 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(lower_bound) = self.lower_bound(field_id) {
-            let lower_bound = Self::promote_bound(lower_bound, reference);
+            let lower_bound = &*Self::promote_bound(lower_bound, reference);
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
             }
 
-            if !literals.iter().any(|datum| datum.ge(&lower_bound)) {
+            if !literals.iter().any(|datum| datum.ge(lower_bound)) {
                 // if all values are less than lower bound, rows cannot match.
                 return ROWS_CANNOT_MATCH;
             }
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
-            let upper_bound = Self::promote_bound(upper_bound, reference);
+            let upper_bound = &*Self::promote_bound(upper_bound, reference);
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
             }
 
-            if !literals.iter().any(|datum| datum.le(&upper_bound)) {
+            if !literals.iter().any(|datum| datum.le(upper_bound)) {
                 // if all values are greater than upper bound, rows cannot match.
                 return ROWS_CANNOT_MATCH;
             }

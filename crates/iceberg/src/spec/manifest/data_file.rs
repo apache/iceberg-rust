@@ -208,12 +208,25 @@ impl DataFile {
     /// promoted (`int` -> `long`, `float` -> `double`) since the file's manifest
     /// was written. Values whose type is unchanged are copied through. Column
     /// bounds are widened separately, lazily, where they are compared.
-    pub(crate) fn promoted_partition(&self, partition_type: &StructType) -> Struct {
-        self.partition
+    ///
+    /// # Errors
+    /// Returns `DataInvalid` if the stored tuple and `partition_type` have different
+    /// lengths; they always should, since both come from the same spec.
+    pub(crate) fn promoted_partition(&self, partition_type: &StructType) -> Result<Struct> {
+        if self.partition.fields().len() != partition_type.fields().len() {
+            return Err(invalid_data!(
+                "Partition tuple has {} values but the spec partition type has {} fields",
+                self.partition.fields().len(),
+                partition_type.fields().len()
+            ));
+        }
+
+        Ok(self
+            .partition
             .iter()
             .zip(partition_type.fields())
             .map(|(value, field)| promote_partition_value(value, field))
-            .collect()
+            .collect())
     }
 
     /// Get the content type of the data file (data, equality deletes, or position deletes)
@@ -487,7 +500,7 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            data_file.promoted_partition(&partition_type),
+            data_file.promoted_partition(&partition_type).unwrap(),
             Struct::from_iter([Some(Literal::long(7)), Some(Literal::double(1.5))])
         );
     }
@@ -513,7 +526,7 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            data_file.promoted_partition(&partition_type),
+            data_file.promoted_partition(&partition_type).unwrap(),
             Struct::from_iter([Some(Literal::long(7))])
         );
     }
@@ -536,7 +549,7 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            data_file.promoted_partition(&partition_type),
+            data_file.promoted_partition(&partition_type).unwrap(),
             data_file.partition
         );
     }

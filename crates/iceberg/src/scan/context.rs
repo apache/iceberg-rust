@@ -30,7 +30,8 @@ use crate::scan::{
 };
 use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
-    PartitionSpecRef, SchemaRef, SnapshotRef, SortOrderRef, StructType, TableMetadataRef,
+    PartitionSpecRef, PrimitiveType, SchemaRef, SnapshotRef, SortOrderRef, StructType,
+    TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -77,13 +78,26 @@ pub(crate) struct ManifestEntryContext {
 /// (differing primitive types), i.e. partition values written with `written` need
 /// widening to `current` before they compare against predicates bound to the current
 /// schema.
+/// Returns whether any `int` or `float` field of `written` is widened in `current` (to
+/// `long` or `double`, or to `unknown` after its source column is dropped), i.e. partition
+/// values written with `written` need widening before they compare against predicates
+/// bound to the current schema.
 fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
-    current.fields().len() != written.fields().len()
-        || current
-            .fields()
-            .iter()
-            .zip(written.fields())
-            .any(|(c, w)| c.field_type.as_primitive_type() != w.field_type.as_primitive_type())
+    current.fields().iter().zip(written.fields()).any(|(c, w)| {
+        matches!(
+            (
+                w.field_type.as_primitive_type(),
+                c.field_type.as_primitive_type()
+            ),
+            (
+                Some(PrimitiveType::Int),
+                Some(PrimitiveType::Long | PrimitiveType::Unknown)
+            ) | (
+                Some(PrimitiveType::Float),
+                Some(PrimitiveType::Double | PrimitiveType::Unknown)
+            )
+        )
+    })
 }
 
 impl ManifestFileContext {
@@ -128,7 +142,8 @@ impl ManifestFileContext {
             let manifest_entry = match promotion_target.as_ref() {
                 Some(partition_type) => {
                     let mut entry = manifest_entry.as_ref().clone();
-                    entry.data_file.partition = entry.data_file.promoted_partition(partition_type);
+                    entry.data_file.partition =
+                        entry.data_file.promoted_partition(partition_type)?;
                     Arc::new(entry)
                 }
                 None => manifest_entry.clone(),
