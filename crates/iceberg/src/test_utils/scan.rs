@@ -606,12 +606,17 @@ impl TableTestFixture {
 
     /// Writes a data manifest under an older schema where the identity partition
     /// source `x` (id 1) is still `int` (so the partition value is stored as `int`),
-    /// plus an equality-delete manifest under the current schema where `x` is `long`.
-    /// Exercises the scan's reader-side widening: the old `int` partition must widen
-    /// to `long` so the delete, keyed by the current `long` partition, still matches
-    /// the data file. The data/delete parquet files themselves are not written, which
-    /// is enough for `plan_files` (it reads only manifests).
-    pub(crate) async fn setup_promoted_partition_with_eq_delete(&mut self) {
+    /// plus an equality-delete manifest. Exercises the scan's reader-side widening.
+    /// When `delete_before_promotion` is false the delete is written under the current
+    /// `long` schema (`long` partition), and the old `int` partition must widen to
+    /// match it. When true the delete is also written under the old `int` schema (`int`
+    /// partition), which matched on main and must keep matching once both sides widen.
+    /// The data/delete parquet files themselves are not written, which is enough for
+    /// `plan_files` (it reads only manifests).
+    pub(crate) async fn setup_promoted_partition_with_eq_delete(
+        &mut self,
+        delete_before_promotion: bool,
+    ) {
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
         let parent_snapshot = current_snapshot
             .parent_snapshot(self.table.metadata())
@@ -636,7 +641,7 @@ impl TableTestFixture {
         let mut data_writer = ManifestWriterBuilder::new(
             self.next_manifest_file(),
             Some(current_snapshot.snapshot_id()),
-            written_schema,
+            written_schema.clone(),
             current_partition_spec.as_ref().clone(),
         )
         .build_v2_data();
@@ -664,12 +669,21 @@ impl TableTestFixture {
             .unwrap();
         let data_manifest = data_writer.write_manifest_file().await.unwrap();
 
-        // Equality-delete manifest under the current (long) schema; Added in the
-        // current snapshot so its sequence number is above the data file's.
+        // Equality-delete manifest, Added in the current snapshot so its sequence
+        // number is above the data file's. Written under the old `int` schema or the
+        // current `long` schema depending on `delete_before_promotion`.
+        let (delete_schema, delete_partition) = if delete_before_promotion {
+            (written_schema, Struct::from_iter([Some(Literal::int(7))]))
+        } else {
+            (
+                current_schema.clone(),
+                Struct::from_iter([Some(Literal::long(7))]),
+            )
+        };
         let mut delete_writer = ManifestWriterBuilder::new(
             self.next_manifest_file(),
             Some(current_snapshot.snapshot_id()),
-            current_schema.clone(),
+            delete_schema,
             current_partition_spec.as_ref().clone(),
         )
         .build_v2_deletes();
@@ -686,7 +700,7 @@ impl TableTestFixture {
                             .file_format(DataFileFormat::Parquet)
                             .file_size_in_bytes(100)
                             .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::long(7))]))
+                            .partition(delete_partition)
                             .build()
                             .unwrap(),
                     )
@@ -711,6 +725,134 @@ impl TableTestFixture {
         );
         manifest_list_write
             .add_manifests(vec![data_manifest, delete_manifest].into_iter())
+            .unwrap();
+        manifest_list_write.close().await.unwrap();
+    }
+
+    /// Writes a v3 data manifest under an older schema where the identity partition
+    /// source `x` (id 1) is still `int`, plus a v3 deletion-vector manifest under the
+    /// current `long` schema whose DV references the data file with a `long` partition.
+    /// The reader-side widening must make the data file's `int` partition agree with
+    /// the DV's `long` partition so the DV partition check passes and the DV attaches;
+    /// on main the check errors. Parquet/Puffin files are not written (`plan_files`
+    /// reads only manifests).
+    pub(crate) async fn setup_promoted_partition_with_dv(&mut self) {
+        let metadata = TableMetadataBuilder::new_from_metadata(
+            self.table.metadata().clone(),
+            self.table.metadata_location().map(str::to_string),
+        )
+        .upgrade_format_version(FormatVersion::V3)
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+        self.table = Table::builder()
+            .metadata(metadata)
+            .identifier(self.table.identifier().clone())
+            .file_io(self.table.file_io().clone())
+            .metadata_location(self.table.metadata_location().unwrap().to_string())
+            .runtime(test_runtime())
+            .build()
+            .unwrap();
+
+        let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+        let parent_snapshot = current_snapshot
+            .parent_snapshot(self.table.metadata())
+            .unwrap();
+        let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+        let current_partition_spec = self.table.metadata().default_partition_spec();
+
+        let mut fields = current_schema.as_struct().fields().to_vec();
+        fields[0] = NestedField::required(1, "x", PrimitiveType::Int.into()).into();
+        let written_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(fields)
+                .build()
+                .unwrap(),
+        );
+
+        let data_file_path = format!("{}/x7.parquet", &self.table_location);
+
+        let mut data_writer = ManifestWriterBuilder::new(
+            self.next_manifest_file(),
+            Some(current_snapshot.snapshot_id()),
+            written_schema,
+            current_partition_spec.as_ref().clone(),
+        )
+        .build_v3_data();
+        data_writer
+            .add_existing_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Existing)
+                    .snapshot_id(parent_snapshot.snapshot_id())
+                    .sequence_number(parent_snapshot.sequence_number())
+                    .file_sequence_number(parent_snapshot.sequence_number())
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::Data)
+                            .file_path(data_file_path.clone())
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::int(7))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let data_manifest = data_writer.write_manifest_file().await.unwrap();
+
+        let mut dv_writer = ManifestWriterBuilder::new(
+            self.next_manifest_file(),
+            Some(current_snapshot.snapshot_id()),
+            current_schema.clone(),
+            current_partition_spec.as_ref().clone(),
+        )
+        .build_v3_deletes();
+        dv_writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::PositionDeletes)
+                            .file_path(format!("{}/dv.puffin", &self.table_location))
+                            .file_format(DataFileFormat::Puffin)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .referenced_data_file(Some(data_file_path))
+                            .content_offset(Some(0))
+                            .content_size_in_bytes(Some(40))
+                            .partition(Struct::from_iter([Some(Literal::long(7))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let dv_manifest = dv_writer.write_manifest_file().await.unwrap();
+
+        let manifest_list_writer = self
+            .table
+            .file_io()
+            .new_output(current_snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut manifest_list_write = ManifestListWriter::v3(
+            manifest_list_writer,
+            current_snapshot.snapshot_id(),
+            current_snapshot.parent_snapshot_id(),
+            current_snapshot.sequence_number(),
+            Some(42),
+        );
+        manifest_list_write
+            .add_manifests(vec![data_manifest, dv_manifest].into_iter())
             .unwrap();
         manifest_list_write.close().await.unwrap();
     }
