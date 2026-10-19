@@ -29,9 +29,7 @@ use super::{
 };
 use crate::Error;
 use crate::error::{Result, invalid_data};
-use crate::spec::{
-    DEFAULT_PARTITION_SPEC_ID, Literal, NestedFieldRef, PrimitiveType, Struct, StructType, Type,
-};
+use crate::spec::{DEFAULT_PARTITION_SPEC_ID, Literal, NestedFieldRef, Struct, StructType, Type};
 
 /// Data file carries data file path, partition tuple, metrics, …
 #[derive(Debug, PartialEq, Clone, Eq, Builder)]
@@ -190,10 +188,6 @@ fn promote_partition_value(value: Option<&Literal>, field: &NestedFieldRef) -> O
     match value {
         Some(Literal::Primitive(primitive)) => {
             let promoted = match field.field_type.as_primitive_type() {
-                // The partition source column was dropped, so there is no target type to
-                // widen to; widen to the promotion ceiling instead so this value and its
-                // deletes still normalize to the same type and the delete index matches.
-                Some(PrimitiveType::Unknown) => primitive.widen(),
                 Some(target) => primitive.promote_to(target),
                 None => None,
             };
@@ -211,7 +205,7 @@ impl DataFile {
     ///
     /// # Errors
     /// Returns `DataInvalid` if the stored tuple and `partition_type` have different
-    /// lengths; they always should, since both come from the same spec.
+    /// lengths; the lengths should always match, since both come from the same spec.
     pub(crate) fn promoted_partition(&self, partition_type: &StructType) -> Result<Struct> {
         if self.partition.fields().len() != partition_type.fields().len() {
             return Err(invalid_data!(
@@ -461,6 +455,7 @@ impl std::fmt::Display for DataFileFormat {
 
 #[cfg(test)]
 mod test {
+    use crate::ErrorKind;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, NestedField, PrimitiveType,
         Struct, StructType, Type,
@@ -506,10 +501,11 @@ mod test {
     }
 
     #[test]
-    fn promoted_partition_widens_dropped_source_to_ceiling() {
-        // A dropped partition source resolves to `Unknown`, so there is no target
-        // type; the value still widens to its ceiling so it keeps matching deletes
-        // written while the source still existed.
+    fn promoted_partition_leaves_dropped_source_unchanged() {
+        // A dropped partition source resolves to `Unknown`, which has no promotion
+        // target, so the value is copied through verbatim. Widening it (e.g. a
+        // `date`, stored as an `int`, to `long`) would diverge from delete manifests
+        // that skip promotion, silently detaching their deletes.
         let partition_type = StructType::new(vec![
             NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Unknown)).into(),
         ]);
@@ -527,7 +523,7 @@ mod test {
 
         assert_eq!(
             data_file.promoted_partition(&partition_type).unwrap(),
-            Struct::from_iter([Some(Literal::long(7))])
+            data_file.partition
         );
     }
 
@@ -551,6 +547,41 @@ mod test {
         assert_eq!(
             data_file.promoted_partition(&partition_type).unwrap(),
             data_file.partition
+        );
+    }
+
+    #[test]
+    fn promoted_partition_rejects_tuple_length_mismatch() {
+        let data_file = |values: Vec<Option<Literal>>| {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path("x.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .partition(Struct::from_iter(values))
+                .record_count(1)
+                .file_size_in_bytes(1)
+                .partition_spec_id(0)
+                .build()
+                .unwrap()
+        };
+        let one_field = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Long)).into(),
+        ]);
+        let two_fields = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Long)).into(),
+            NestedField::required(1001, "c", Type::Primitive(PrimitiveType::Long)).into(),
+        ]);
+
+        let longer = data_file(vec![Some(Literal::int(7)), Some(Literal::int(8))]);
+        assert_eq!(
+            longer.promoted_partition(&one_field).unwrap_err().kind(),
+            ErrorKind::DataInvalid
+        );
+
+        let shorter = data_file(vec![Some(Literal::int(7))]);
+        assert_eq!(
+            shorter.promoted_partition(&two_fields).unwrap_err().kind(),
+            ErrorKind::DataInvalid
         );
     }
 }

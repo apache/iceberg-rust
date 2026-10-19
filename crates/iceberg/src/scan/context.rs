@@ -74,14 +74,9 @@ pub(crate) struct ManifestEntryContext {
     pub sort_order: Option<SortOrderRef>,
 }
 
-/// Returns whether `current` widens any field of `written` at the same position
-/// (differing primitive types), i.e. partition values written with `written` need
-/// widening to `current` before they compare against predicates bound to the current
-/// schema.
-/// Returns whether any `int` or `float` field of `written` is widened in `current` (to
-/// `long` or `double`, or to `unknown` after its source column is dropped), i.e. partition
-/// values written with `written` need widening before they compare against predicates
-/// bound to the current schema.
+/// Returns whether any `int` or `float` field of `written` is widened to `long` or
+/// `double` in `current`, i.e. partition values written with `written` need widening
+/// before they compare against predicates bound to the current schema.
 fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
     current.fields().iter().zip(written.fields()).any(|(c, w)| {
         matches!(
@@ -89,13 +84,8 @@ fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
                 w.field_type.as_primitive_type(),
                 c.field_type.as_primitive_type()
             ),
-            (
-                Some(PrimitiveType::Int),
-                Some(PrimitiveType::Long | PrimitiveType::Unknown)
-            ) | (
-                Some(PrimitiveType::Float),
-                Some(PrimitiveType::Double | PrimitiveType::Unknown)
-            )
+            (Some(PrimitiveType::Int), Some(PrimitiveType::Long))
+                | (Some(PrimitiveType::Float), Some(PrimitiveType::Double))
         )
     })
 }
