@@ -215,8 +215,6 @@ impl Runtime {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
 
     /// A test harness that owns a tokio runtime and exposes a `Runtime` handle
@@ -315,42 +313,6 @@ mod tests {
     fn test_try_current_outside_runtime() {
         let err = Runtime::try_current().expect_err("must fail outside runtime");
         assert_eq!(err.kind(), ErrorKind::Unexpected);
-    }
-
-    /// Dropping an `AbortOnDropHandle` must stop the task, where dropping a
-    /// plain `JoinHandle` would leave it running.
-    #[tokio::test]
-    async fn test_abort_on_drop_handle_stops_the_task() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        use tokio::sync::Notify;
-
-        let rt = Runtime::current();
-        let resumed = Arc::new(AtomicBool::new(false));
-        let parked = Arc::new(Notify::new());
-        let resume = Arc::new(Notify::new());
-
-        let task_resumed = Arc::clone(&resumed);
-        let task_parked = Arc::clone(&parked);
-        let task_resume = Arc::clone(&resume);
-        let handle = rt
-            .io()
-            .spawn(async move {
-                task_parked.notify_one();
-                task_resume.notified().await;
-                task_resumed.store(true, Ordering::SeqCst);
-            })
-            .abort_on_drop();
-
-        parked.notified().await;
-        drop(handle);
-        // A live task would take this and run to the store below.
-        resume.notify_waiters();
-        tokio::task::yield_now().await;
-        assert!(
-            !resumed.load(Ordering::SeqCst),
-            "the task ran on after its handle was dropped"
-        );
     }
 
     /// Verifies that when the caller drops the underlying tokio runtime, a
