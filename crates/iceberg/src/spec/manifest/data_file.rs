@@ -29,7 +29,9 @@ use super::{
 };
 use crate::Error;
 use crate::error::{Result, invalid_data};
-use crate::spec::{DEFAULT_PARTITION_SPEC_ID, Struct, StructType, Type};
+use crate::spec::{
+    DEFAULT_PARTITION_SPEC_ID, Literal, NestedFieldRef, PrimitiveType, Struct, StructType, Type,
+};
 
 /// Data file carries data file path, partition tuple, metrics, …
 #[derive(Debug, PartialEq, Clone, Eq, Builder)]
@@ -184,7 +186,36 @@ pub struct DataFile {
     pub(crate) content_size_in_bytes: Option<i64>,
 }
 
+fn promote_partition_value(value: Option<&Literal>, field: &NestedFieldRef) -> Option<Literal> {
+    match value {
+        Some(Literal::Primitive(primitive)) => {
+            let promoted = match field.field_type.as_primitive_type() {
+                // The partition source column was dropped, so there is no target type to
+                // widen to; widen to the promotion ceiling instead so this value and its
+                // deletes still normalize to the same type and the delete index matches.
+                Some(PrimitiveType::Unknown) => primitive.widen(),
+                Some(target) => primitive.promote_to(target),
+                None => None,
+            };
+            promoted.map(Literal::Primitive).or_else(|| value.cloned())
+        }
+        other => other.cloned(),
+    }
+}
+
 impl DataFile {
+    /// Returns this file's partition tuple widened to `partition_type` for fields
+    /// promoted (`int` -> `long`, `float` -> `double`) since the file's manifest
+    /// was written. Values whose type is unchanged are copied through. Column
+    /// bounds are widened separately, lazily, where they are compared.
+    pub(crate) fn promoted_partition(&self, partition_type: &StructType) -> Struct {
+        self.partition
+            .iter()
+            .zip(partition_type.fields())
+            .map(|(value, field)| promote_partition_value(value, field))
+            .collect()
+    }
+
     /// Get the content type of the data file (data, equality deletes, or position deletes)
     pub fn content_type(&self) -> DataContentType {
         self.content
@@ -417,7 +448,11 @@ impl std::fmt::Display for DataFileFormat {
 
 #[cfg(test)]
 mod test {
-    use crate::spec::DataContentType;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, NestedField, PrimitiveType,
+        Struct, StructType, Type,
+    };
+
     #[test]
     fn test_data_content_type_default() {
         assert_eq!(DataContentType::default(), DataContentType::Data);
@@ -426,5 +461,83 @@ mod test {
     #[test]
     fn test_data_content_type_default_value() {
         assert_eq!(DataContentType::default() as i32, 0);
+    }
+
+    #[test]
+    fn promoted_partition_widens_int_and_float() {
+        // Partition columns promoted int -> long and float -> double; a file
+        // written before the promotion still carries the narrower types.
+        let partition_type = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Long)).into(),
+            NestedField::required(1001, "c", Type::Primitive(PrimitiveType::Double)).into(),
+        ]);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("x.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([
+                Some(Literal::int(7)),
+                Some(Literal::float(1.5_f32)),
+            ]))
+            .record_count(1)
+            .file_size_in_bytes(1)
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            data_file.promoted_partition(&partition_type),
+            Struct::from_iter([Some(Literal::long(7)), Some(Literal::double(1.5))])
+        );
+    }
+
+    #[test]
+    fn promoted_partition_widens_dropped_source_to_ceiling() {
+        // A dropped partition source resolves to `Unknown`, so there is no target
+        // type; the value still widens to its ceiling so it keeps matching deletes
+        // written while the source still existed.
+        let partition_type = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Unknown)).into(),
+        ]);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("x.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::int(7))]))
+            .record_count(1)
+            .file_size_in_bytes(1)
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            data_file.promoted_partition(&partition_type),
+            Struct::from_iter([Some(Literal::long(7))])
+        );
+    }
+
+    #[test]
+    fn promoted_partition_leaves_matching_types_unchanged() {
+        let partition_type = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Long)).into(),
+        ]);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("x.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::long(7))]))
+            .record_count(1)
+            .file_size_in_bytes(1)
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            data_file.promoted_partition(&partition_type),
+            data_file.partition
+        );
     }
 }

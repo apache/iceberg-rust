@@ -604,6 +604,117 @@ impl TableTestFixture {
         manifest_list_write.close().await.unwrap();
     }
 
+    /// Writes a data manifest under an older schema where the identity partition
+    /// source `x` (id 1) is still `int` (so the partition value is stored as `int`),
+    /// plus an equality-delete manifest under the current schema where `x` is `long`.
+    /// Exercises the scan's reader-side widening: the old `int` partition must widen
+    /// to `long` so the delete, keyed by the current `long` partition, still matches
+    /// the data file. The data/delete parquet files themselves are not written, which
+    /// is enough for `plan_files` (it reads only manifests).
+    pub(crate) async fn setup_promoted_partition_with_eq_delete(&mut self) {
+        let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+        let parent_snapshot = current_snapshot
+            .parent_snapshot(self.table.metadata())
+            .unwrap();
+        let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+        let current_partition_spec = self.table.metadata().default_partition_spec();
+
+        // The schema the data manifest was written under: the current schema with the
+        // partition source `x` still `int`.
+        let mut fields = current_schema.as_struct().fields().to_vec();
+        fields[0] = NestedField::required(1, "x", PrimitiveType::Int.into()).into();
+        let written_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(0)
+                .with_fields(fields)
+                .build()
+                .unwrap(),
+        );
+
+        // Data manifest under the old (int) schema; an Existing entry from the parent
+        // snapshot so its data sequence number is below the equality delete's.
+        let mut data_writer = ManifestWriterBuilder::new(
+            self.next_manifest_file(),
+            Some(current_snapshot.snapshot_id()),
+            written_schema,
+            current_partition_spec.as_ref().clone(),
+        )
+        .build_v2_data();
+        data_writer
+            .add_existing_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Existing)
+                    .snapshot_id(parent_snapshot.snapshot_id())
+                    .sequence_number(parent_snapshot.sequence_number())
+                    .file_sequence_number(parent_snapshot.sequence_number())
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::Data)
+                            .file_path(format!("{}/x7.parquet", &self.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::int(7))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let data_manifest = data_writer.write_manifest_file().await.unwrap();
+
+        // Equality-delete manifest under the current (long) schema; Added in the
+        // current snapshot so its sequence number is above the data file's.
+        let mut delete_writer = ManifestWriterBuilder::new(
+            self.next_manifest_file(),
+            Some(current_snapshot.snapshot_id()),
+            current_schema.clone(),
+            current_partition_spec.as_ref().clone(),
+        )
+        .build_v2_deletes();
+        delete_writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::EqualityDeletes)
+                            .equality_ids(Some(vec![2]))
+                            .file_path(format!("{}/eq-delete.parquet", &self.table_location))
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(7))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let delete_manifest = delete_writer.write_manifest_file().await.unwrap();
+
+        let manifest_list_writer = self
+            .table
+            .file_io()
+            .new_output(current_snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut manifest_list_write = ManifestListWriter::v2(
+            manifest_list_writer,
+            current_snapshot.snapshot_id(),
+            current_snapshot.parent_snapshot_id(),
+            current_snapshot.sequence_number(),
+        );
+        manifest_list_write
+            .add_manifests(vec![data_manifest, delete_manifest].into_iter())
+            .unwrap();
+        manifest_list_write.close().await.unwrap();
+    }
+
     /// Writes identical Parquet data files (1.parquet, 2.parquet, 3.parquet)
     /// and returns the file size in bytes.
     fn write_parquet_data_files(&self) -> u64 {

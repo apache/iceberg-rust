@@ -1235,10 +1235,9 @@ impl Datum {
     /// one. Any other `target` returns an unchanged copy; decimals already
     /// compare across precisions.
     pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Datum {
-        match (&self.literal, target) {
-            (PrimitiveLiteral::Int(value), PrimitiveType::Long) => Datum::long(*value),
-            (PrimitiveLiteral::Float(value), PrimitiveType::Double) => Datum::double(value.0),
-            _ => self.clone(),
+        match self.literal.promote_to(target) {
+            Some(literal) => Datum::new(target.clone(), literal),
+            None => self.clone(),
         }
     }
 

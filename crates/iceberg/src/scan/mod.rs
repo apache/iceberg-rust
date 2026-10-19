@@ -1196,6 +1196,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_scan_widens_old_partition_so_pruning_and_deletes_match() {
+        // Guards the reader-side normalization through a real scan: a data manifest
+        // written when the partition source `x` was `int` must have its `int(7)`
+        // partition widened to `long(7)` during planning, so (a) a `x = 7` (long)
+        // filter keeps the file and (b) the equality delete keyed by `long(7)`
+        // attaches. Without the normalization the int/long mismatch drops the delete
+        // (and prunes the file under the filter).
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete().await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].deletes().len(),
+            1,
+            "equality delete must attach after widening the old int partition to long"
+        );
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").equal_to(Datum::long(7)))
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            tasks.len(),
+            1,
+            "filter on the promoted type must not prune the file"
+        );
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
     async fn test_plan_files_carries_row_lineage_into_file_scan_task() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;

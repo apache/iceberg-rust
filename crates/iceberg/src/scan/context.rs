@@ -73,6 +73,19 @@ pub(crate) struct ManifestEntryContext {
     pub sort_order: Option<SortOrderRef>,
 }
 
+/// Returns whether `current` widens any field of `written` at the same position
+/// (differing primitive types), i.e. partition values written with `written` need
+/// widening to `current` before they compare against predicates bound to the current
+/// schema.
+fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
+    current.fields().len() != written.fields().len()
+        || current
+            .fields()
+            .iter()
+            .zip(written.fields())
+            .any(|(c, w)| c.field_type.as_primitive_type() != w.field_type.as_primitive_type())
+}
+
 impl ManifestFileContext {
     /// Consumes this [`ManifestFileContext`], fetching its Manifest from FileIO and then
     /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
@@ -95,7 +108,32 @@ impl ManifestFileContext {
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
+        // A manifest written under an older schema stores partition values in that
+        // schema's (narrower) types. When the current partition type widens the one the
+        // manifest was written with (e.g. an int source column promoted to long), widen
+        // each entry's partition tuple here so the pruning evaluator and the delete-file
+        // index compare like-typed values. The gate compares the partition types
+        // themselves, not schema ids, since v1 may omit them (defaulting to 0). Column
+        // bounds are widened lazily where the metrics evaluator compares them.
+        let promotion_target: Option<StructType> = match partition_spec.as_ref() {
+            Some(spec) => {
+                let current = spec.partition_type(&snapshot_schema)?;
+                let written = spec.partition_type(manifest.metadata().schema())?;
+                partition_types_differ(&current, &written).then_some(current)
+            }
+            None => None,
+        };
+
         for manifest_entry in manifest.entries() {
+            let manifest_entry = match promotion_target.as_ref() {
+                Some(partition_type) => {
+                    let mut entry = manifest_entry.as_ref().clone();
+                    entry.data_file.partition = entry.data_file.promoted_partition(partition_type);
+                    Arc::new(entry)
+                }
+                None => manifest_entry.clone(),
+            };
+
             // Carry the raw id through unresolved, then resolve it to an order for the
             // reader. The resolved order is `None` for the unsorted order (empty fields) so
             // that `Some` always means genuinely sorted, matching Java's `isSorted()` gate;
@@ -108,8 +146,7 @@ impl ManifestFileContext {
                 .cloned();
 
             let manifest_entry_context = ManifestEntryContext {
-                // TODO: refactor to avoid the expensive ManifestEntry clone
-                manifest_entry: manifest_entry.clone(),
+                manifest_entry,
                 expression_evaluator_cache: expression_evaluator_cache.clone(),
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
