@@ -17,10 +17,11 @@
 
 use fnv::FnvHashSet;
 
+use crate::Result;
+use crate::error::invalid_data;
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{DataFile, Datum};
-use crate::{Error, ErrorKind, Result};
 
 #[allow(dead_code)]
 const ROWS_MUST_MATCH: Result<bool> = Ok(true);
@@ -159,10 +160,7 @@ impl BoundPredicateVisitor for StrictMetricsEvaluator<'_> {
     }
 
     fn not(&mut self, _inner: bool) -> Result<bool> {
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            "NOT should be rewritten",
-        ))
+        Err(invalid_data!("NOT should be rewritten"))
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {

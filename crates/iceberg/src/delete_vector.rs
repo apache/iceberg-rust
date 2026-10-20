@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Deletion vectors: the deleted row positions of one data file, as a Puffin
+//! `deletion-vector-v1` blob decodes to. Public so an engine that reads
+//! Parquet with a reader of its own can still decode the vectors Iceberg
+//! writes.
+
 use std::ops::BitOrAssign;
 
 use bytes::Buf;
@@ -22,6 +27,7 @@ use roaring::bitmap::Iter;
 use roaring::treemap::BitmapIter;
 use roaring::{RoaringBitmap, RoaringTreemap};
 
+use crate::error::invalid_data;
 use crate::{Error, ErrorKind, Result};
 
 /// Magic bytes prefixing a serialized `deletion-vector-v1` bitmap, per the Iceberg Puffin spec.
@@ -32,24 +38,28 @@ const DV_MAGIC_BYTES: usize = 4;
 const DV_CRC_BYTES: usize = 4;
 const DV_MIN_BLOB_BYTES: usize = DV_LENGTH_PREFIX_BYTES + DV_MAGIC_BYTES + DV_CRC_BYTES;
 
+/// The deleted row positions of one data file: a set of 64-bit positions,
+/// kept as a [`RoaringTreemap`].
 #[derive(Debug, Default)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
 }
 
 impl DeleteVector {
-    #[allow(unused)]
+    /// Wraps `roaring_treemap`, whose members are the deleted positions.
     pub fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
         DeleteVector {
             inner: roaring_treemap,
         }
     }
 
+    /// Iterates the deleted positions in ascending order.
     pub fn iter(&self) -> DeleteVectorIterator<'_> {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
     }
 
+    /// Marks `pos` as deleted, returning whether it was not already.
     pub fn insert(&mut self, pos: u64) -> bool {
         self.inner.insert(pos)
     }
@@ -72,8 +82,14 @@ impl DeleteVector {
         Ok(positions.len())
     }
 
+    /// How many positions are deleted.
     pub fn len(&self) -> u64 {
         self.inner.len()
+    }
+
+    /// Whether no position is deleted.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
     }
 
     /// Parses a `deletion-vector-v1` Puffin blob into a `DeleteVector`.
@@ -98,12 +114,9 @@ impl DeleteVector {
     /// comparison, or the roaring payload fails to decode.
     pub fn deserialize(blob: &[u8]) -> Result<Self> {
         if blob.len() < DV_MIN_BLOB_BYTES {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion-vector-v1 blob is {} bytes, shorter than the {DV_MIN_BLOB_BYTES}-byte minimum",
-                    blob.len()
-                ),
+            return Err(invalid_data!(
+                "deletion-vector-v1 blob is {} bytes, shorter than the {DV_MIN_BLOB_BYTES}-byte minimum",
+                blob.len()
             ));
         }
 
@@ -133,12 +146,9 @@ fn verify_length_prefix(mut prefix: &[u8], body: &[u8]) -> Result<()> {
         .with_source(e)
     })? as usize;
     if declared_len != body.len() {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "deletion-vector-v1 length prefix is {declared_len}, expected {}",
-                body.len()
-            ),
+        return Err(invalid_data!(
+            "deletion-vector-v1 length prefix is {declared_len}, expected {}",
+            body.len()
         ));
     }
     Ok(())
@@ -154,11 +164,8 @@ fn verify_crc(body: &[u8], mut crc_bytes: &[u8]) -> Result<()> {
     })?;
     let computed_crc = crc32fast::hash(body);
     if computed_crc != stored_crc {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "deletion-vector-v1 CRC mismatch: computed {computed_crc:#010x}, stored {stored_crc:#010x}"
-            ),
+        return Err(invalid_data!(
+            "deletion-vector-v1 CRC mismatch: computed {computed_crc:#010x}, stored {stored_crc:#010x}"
         ));
     }
     Ok(())
@@ -166,9 +173,8 @@ fn verify_crc(body: &[u8], mut crc_bytes: &[u8]) -> Result<()> {
 
 fn verify_magic(magic: &[u8]) -> Result<()> {
     if magic != DV_MAGIC {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("deletion-vector-v1 magic mismatch: {magic:02x?}, expected {DV_MAGIC:02x?}"),
+        return Err(invalid_data!(
+            "deletion-vector-v1 magic mismatch: {magic:02x?}, expected {DV_MAGIC:02x?}"
         ));
     }
     Ok(())
@@ -182,21 +188,14 @@ fn verify_magic(magic: &[u8]) -> Result<()> {
 // that doesn't match what was actually written.
 fn decode_roaring_directory(mut reader: &[u8]) -> Result<RoaringTreemap> {
     let bitmap_count = reader.try_get_u64_le().map_err(|e| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            "failed to decode deletion-vector-v1 roaring payload",
-        )
-        .with_source(e)
+        invalid_data!("failed to decode deletion-vector-v1 roaring payload").with_source(e)
     })?;
     // The roaring portable format restricts the bitmap count to [0, 2^32 - 1] (it is stored as a
     // u64 with the upper 32 bits reserved as zero padding).
     if bitmap_count > u32::MAX as u64 {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "deletion-vector-v1 roaring bitmap count {bitmap_count} exceeds the {}-key maximum",
-                u32::MAX
-            ),
+        return Err(invalid_data!(
+            "deletion-vector-v1 roaring bitmap count {bitmap_count} exceeds the {}-key maximum",
+            u32::MAX
         ));
     }
 
@@ -204,30 +203,19 @@ fn decode_roaring_directory(mut reader: &[u8]) -> Result<RoaringTreemap> {
     let mut last_key: Option<u32> = None;
     for _ in 0..bitmap_count {
         let key = reader.try_get_u32_le().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "failed to decode deletion-vector-v1 roaring payload",
-            )
-            .with_source(e)
+            invalid_data!("failed to decode deletion-vector-v1 roaring payload").with_source(e)
         })?;
         if let Some(last) = last_key
             && key <= last
         {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion-vector-v1 roaring keys must be ordered by unsigned comparison, got key {key} after {last}"
-                ),
+            return Err(invalid_data!(
+                "deletion-vector-v1 roaring keys must be ordered by unsigned comparison, got key {key} after {last}"
             ));
         }
         last_key = Some(key);
 
         let bitmap = RoaringBitmap::deserialize_from(&mut reader).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "failed to decode deletion-vector-v1 roaring payload",
-            )
-            .with_source(e)
+            invalid_data!("failed to decode deletion-vector-v1 roaring payload").with_source(e)
         })?;
         bitmaps.push((key, bitmap));
     }
@@ -243,6 +231,7 @@ fn decode_roaring_directory(mut reader: &[u8]) -> Result<RoaringTreemap> {
 // There is a PR open on roaring to add this (https://github.com/RoaringBitmap/roaring-rs/pull/314)
 // and if that gets merged then we can simplify `DeleteVectorIterator` here, refactoring `advance_to`
 // to just a wrapper around the underlying iterator's method.
+/// Iterates the deleted positions of a [`DeleteVector`] in ascending order.
 pub struct DeleteVectorIterator<'a> {
     // NB: `BitMapIter` was only exposed publicly in https://github.com/RoaringBitmap/roaring-rs/pull/316
     // which is not yet released. As a consequence our Cargo.toml temporarily uses a git reference for
@@ -280,6 +269,8 @@ impl Iterator for DeleteVectorIterator<'_> {
 }
 
 impl DeleteVectorIterator<'_> {
+    /// Skips the positions below `pos`, so the next one yielded is the first
+    /// at or after it. Does nothing before the first position is yielded.
     pub fn advance_to(&mut self, pos: u64) {
         let hi = (pos >> 32) as u32;
         let lo = pos as u32;

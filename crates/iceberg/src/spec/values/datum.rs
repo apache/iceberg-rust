@@ -18,7 +18,7 @@
 //! Typed literals with validation
 
 use std::cmp::Ordering;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Display, Formatter, LowerExp};
 use std::str::FromStr;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
@@ -36,10 +36,10 @@ use super::literal::Literal;
 use super::primitive::PrimitiveLiteral;
 use super::serde::_serde::RawLiteral;
 use super::temporal::{date, time, timestamp, timestamptz};
-use crate::error::Result;
+use crate::ensure_data_valid;
+use crate::error::{Error, ErrorKind, Result, invalid_data};
 use crate::spec::MAX_DECIMAL_PRECISION;
 use crate::spec::datatypes::{PrimitiveType, Type};
-use crate::{Error, ErrorKind, ensure_data_valid};
 
 /// Maximum value for [`PrimitiveType::Time`] type in microseconds, e.g. 23 hours 59 minutes 59 seconds 999999 microseconds.
 pub(crate) const MAX_TIME_VALUE: i64 = 24 * 60 * 60 * 1_000_000i64 - 1;
@@ -270,6 +270,12 @@ impl PartialOrd for Datum {
                 PrimitiveType::Binary,
             ) => val.partial_cmp(other_val),
             (
+                PrimitiveLiteral::Binary(_),
+                PrimitiveLiteral::Binary(_),
+                PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+                PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+            ) => None,
+            (
                 PrimitiveLiteral::Int128(val),
                 PrimitiveLiteral::Int128(other_val),
                 PrimitiveType::Decimal {
@@ -294,8 +300,12 @@ impl Display for Datum {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match (&self.r#type, &self.literal) {
             (_, PrimitiveLiteral::Boolean(val)) => write!(f, "{val}"),
-            (PrimitiveType::Int, PrimitiveLiteral::Int(val)) => write!(f, "{val}"),
-            (PrimitiveType::Long, PrimitiveLiteral::Long(val)) => write!(f, "{val}"),
+            (PrimitiveType::Int | PrimitiveType::Unknown, PrimitiveLiteral::Int(val)) => {
+                write!(f, "{val}")
+            }
+            (PrimitiveType::Long | PrimitiveType::Unknown, PrimitiveLiteral::Long(val)) => {
+                write!(f, "{val}")
+            }
             (_, PrimitiveLiteral::Float(val)) => write!(f, "{val}"),
             (_, PrimitiveLiteral::Double(val)) => write!(f, "{val}"),
             (PrimitiveType::Date, PrimitiveLiteral::Int(val)) => {
@@ -368,6 +378,18 @@ impl Datum {
     /// See [this spec](https://iceberg.apache.org/spec/#binary-single-value-serialization) for reference.
     pub fn try_from_bytes(bytes: &[u8], data_type: PrimitiveType) -> Result<Self> {
         let literal = match data_type {
+            PrimitiveType::Unknown => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Cannot create datum for unknown type from bytes",
+                ));
+            }
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Cannot create geospatial datum from bytes yet",
+                ));
+            }
             PrimitiveType::Boolean => {
                 if bytes.len() == 1 && bytes[0] == 0u8 {
                     PrimitiveLiteral::Boolean(false)
@@ -419,14 +441,10 @@ impl Datum {
             }
             PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
-            PrimitiveType::Decimal { .. } => {
-                PrimitiveLiteral::Int128(i128_from_be_bytes(bytes).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Can't convert bytes to i128: {bytes:?}"),
-                    )
-                })?)
-            }
+            PrimitiveType::Decimal { .. } => PrimitiveLiteral::Int128(
+                i128_from_be_bytes(bytes)
+                    .ok_or_else(|| invalid_data!("Can't convert bytes to i128: {bytes:?}"))?,
+            ),
         };
         Ok(Datum::new(data_type, literal))
     }
@@ -452,23 +470,17 @@ impl Datum {
             PrimitiveLiteral::Binary(val) => ByteBuf::from(val.as_slice()),
             PrimitiveLiteral::Int128(val) => {
                 let PrimitiveType::Decimal { precision, .. } = self.r#type else {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "PrimitiveLiteral Int128 must be PrimitiveType Decimal but got {}",
-                            self.r#type
-                        ),
+                    return Err(invalid_data!(
+                        "PrimitiveLiteral Int128 must be PrimitiveType Decimal but got {}",
+                        self.r#type
                     ));
                 };
 
                 // It's required by iceberg spec that we must keep the minimum
                 // number of bytes for the value
                 let Ok(required_bytes) = Type::decimal_required_bytes(precision) else {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "PrimitiveType Decimal must has valid precision but got {precision}"
-                        ),
+                    return Err(invalid_data!(
+                        "PrimitiveType Decimal must has valid precision but got {precision}"
                     ));
                 };
 
@@ -481,9 +493,8 @@ impl Datum {
                 ByteBuf::from(bytes)
             }
             PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot convert AboveMax or BelowMin to bytes".to_string(),
+                return Err(invalid_data!(
+                    "Cannot convert AboveMax or BelowMin to bytes"
                 ));
             }
         };
@@ -526,9 +537,10 @@ impl Datum {
     /// );
     /// ```
     pub fn bool_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
-        let v = s.as_ref().parse::<bool>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse string to bool.").with_source(e)
-        })?;
+        let v = s
+            .as_ref()
+            .parse::<bool>()
+            .map_err(|e| invalid_data!("Can't parse string to bool.").with_source(e))?;
         Ok(Self::bool(v))
     }
 
@@ -640,11 +652,7 @@ impl Datum {
     /// ```
     pub fn date_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let t = s.as_ref().parse::<NaiveDate>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't parse date from string: {}", s.as_ref()),
-            )
-            .with_source(e)
+            invalid_data!("Can't parse date from string: {}", s.as_ref()).with_source(e)
         })?;
 
         Ok(Self::date(date::date_from_naive_date(t)))
@@ -665,10 +673,7 @@ impl Datum {
     /// ```
     pub fn date_from_ymd(year: i32, month: u32, day: u32) -> Result<Self> {
         let t = NaiveDate::from_ymd_opt(year, month, day).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't create date from year: {year}, month: {month}, day: {day}"),
-            )
+            invalid_data!("Can't create date from year: {year}, month: {month}, day: {day}")
         })?;
 
         Ok(Self::date(date::date_from_naive_date(t)))
@@ -738,11 +743,7 @@ impl Datum {
     /// ```
     pub fn time_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let t = s.as_ref().parse::<NaiveTime>().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't parse time from string: {}", s.as_ref()),
-            )
-            .with_source(e)
+            invalid_data!("Can't parse time from string: {}", s.as_ref()).with_source(e)
         })?;
 
         Ok(Self::time_from_naive_time(t))
@@ -761,10 +762,7 @@ impl Datum {
     /// ```
     pub fn time_from_hms_micro(hour: u32, min: u32, sec: u32, micro: u32) -> Result<Self> {
         let t = NaiveTime::from_hms_micro_opt(hour, min, sec, micro)
-            .ok_or_else(|| Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't create time from hour: {hour}, min: {min}, second: {sec}, microsecond: {micro}"),
-            ))?;
+            .ok_or_else(|| invalid_data!("Can't create time from hour: {hour}, min: {min}, second: {sec}, microsecond: {micro}"))?;
         Ok(Self::time_from_naive_time(t))
     }
 
@@ -836,9 +834,10 @@ impl Datum {
     /// assert_eq!(&format!("{t}"), "1992-03-01 01:02:03.000088");
     /// ```
     pub fn timestamp_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
-        let dt = s.as_ref().parse::<NaiveDateTime>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse timestamp.").with_source(e)
-        })?;
+        let dt = s
+            .as_ref()
+            .parse::<NaiveDateTime>()
+            .map_err(|e| invalid_data!("Can't parse timestamp.").with_source(e))?;
 
         Ok(Self::timestamp_from_datetime(dt))
     }
@@ -905,9 +904,8 @@ impl Datum {
     /// assert_eq!(&format!("{t}"), "1992-02-29 17:02:03.000088 UTC");
     /// ```
     pub fn timestamptz_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
-        let dt = DateTime::<Utc>::from_str(s.as_ref()).map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse datetime.").with_source(e)
-        })?;
+        let dt = DateTime::<Utc>::from_str(s.as_ref())
+            .map_err(|e| invalid_data!("Can't parse datetime.").with_source(e))?;
 
         Ok(Self::timestamptz_from_datetime(dt))
     }
@@ -959,11 +957,7 @@ impl Datum {
     /// ```
     pub fn uuid_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let uuid = uuid::Uuid::parse_str(s.as_ref()).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Can't parse uuid from string: {}", s.as_ref()),
-            )
-            .with_source(e)
+            invalid_data!("Can't parse uuid from string: {}", s.as_ref()).with_source(e)
         })?;
         Ok(Self::uuid(uuid))
     }
@@ -1097,18 +1091,17 @@ impl Datum {
     }
 
     fn string_to_i128<S: AsRef<str>>(s: S) -> Result<i128> {
-        s.as_ref().parse::<i128>().map_err(|e| {
-            Error::new(ErrorKind::DataInvalid, "Can't parse string to i128.").with_source(e)
-        })
+        s.as_ref()
+            .parse::<i128>()
+            .map_err(|e| invalid_data!("Can't parse string to i128.").with_source(e))
     }
 
     fn decimal_from_mantissa(mantissa: i128, precision: u32, scale: u32) -> Result<Self> {
         let r#type = Type::decimal(precision, scale)?;
         if decimal_precision(mantissa) > precision {
             let value = decimal_from_i128_with_scale(mantissa, scale);
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Decimal value {value} is too large for precision {precision}"),
+            return Err(invalid_data!(
+                "Decimal value {value} is too large for precision {precision}"
             ));
         }
 
@@ -1120,6 +1113,22 @@ impl Datum {
         } else {
             unreachable!("Decimal type must be primitive.")
         }
+    }
+
+    /// Replaces a decimal's unscaled value while preserving its precision and scale.
+    ///
+    /// The value is not checked against precision because transform projections
+    /// may use boundaries outside the source type's range.
+    pub(crate) fn with_decimal_mantissa(&self, mantissa: i128) -> Result<Self> {
+        ensure_data_valid!(
+            matches!(self.r#type, PrimitiveType::Decimal { .. }),
+            "Expected a decimal datum, got: {:?}",
+            self.r#type
+        );
+        Ok(Self::new(
+            self.r#type.clone(),
+            PrimitiveLiteral::Int128(mantissa),
+        ))
     }
 
     /// Convert the datum to `target_type`.
@@ -1174,11 +1183,8 @@ impl Datum {
                             scale: target_scale,
                             ..
                         },
-                    ) => Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Decimal scale conversion is not supported: source scale {self_scale}, target scale {target_scale}"
-                        ),
+                    ) => Err(invalid_data!(
+                        "Decimal scale conversion is not supported: source scale {self_scale}, target scale {target_scale}"
                     )),
                     (PrimitiveLiteral::String(val), _, PrimitiveType::Boolean) => {
                         Datum::bool_from_str(val)
@@ -1198,21 +1204,17 @@ impl Datum {
 
                     // TODO: implement more type conversions
                     (_, self_type, target_type) if self_type == target_type => Ok(self),
-                    _ => Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Can't convert datum from {} type to {} type.",
-                            self.r#type, target_primitive_type
-                        ),
+                    _ => Err(invalid_data!(
+                        "Can't convert datum from {} type to {} type.",
+                        self.r#type,
+                        target_primitive_type
                     )),
                 }
             }
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Can't convert datum from {} type to {} type.",
-                    self.r#type, target_type
-                ),
+            _ => Err(invalid_data!(
+                "Can't convert datum from {} type to {} type.",
+                self.r#type,
+                target_type
             )),
         }
     }
@@ -1240,11 +1242,66 @@ impl Datum {
     /// Returns a human-readable string representation of this literal.
     ///
     /// For string literals, this returns the raw string value without quotes.
+    /// Float and double literals are formatted like Java's `Float.toString` /
+    /// `Double.toString` (JDK 19+).
     /// For all other literals, it falls back to [`to_string()`](ToString::to_string).
     pub fn to_human_string(&self) -> String {
         match self.literal() {
             PrimitiveLiteral::String(s) => s.to_string(),
+            PrimitiveLiteral::Float(val) => human_float(val.0),
+            PrimitiveLiteral::Double(val) => human_float(val.0),
             _ => self.to_string(),
         }
+    }
+}
+
+/// Formats a float like Java's `Float.toString` / `Double.toString` (JDK 19+):
+/// plain decimal when `1e-3 <= |value| < 1e7`, otherwise `<d>.<ddd>E<exp>`,
+/// always with at least one digit after the point.
+fn human_float<T: Float + LowerExp + FromStr>(value: T) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    let sign = if value.is_sign_negative() { "-" } else { "" };
+    if value.is_infinite() {
+        return format!("{sign}Infinity");
+    }
+    if value.is_zero() {
+        return format!("{sign}0.0");
+    }
+
+    let abs = value.abs();
+    // `{:e}` gives the fewest digits that round-trip. Java uses at least two
+    // digits and, among decimals of that length that round-trip, the closest
+    // one, preferring an even last digit on ties (2097152.2 for 2097152.25f32,
+    // 4.9E-324 for f64::from_bits(1)). Exact formatting picks exactly that.
+    let shortest = format!("{abs:e}");
+    let precision = shortest.find('e').unwrap().saturating_sub(2).max(1);
+    let closest = format!("{abs:.precision$e}");
+    let scientific = if closest.parse::<T>().is_ok_and(|v| v == abs) {
+        closest
+    } else {
+        shortest
+    };
+    let (mantissa, exponent) = scientific.split_once('e').unwrap();
+    let exponent: i32 = exponent.parse().unwrap();
+    let digits = mantissa.replace('.', "");
+    let digits = digits.trim_end_matches('0');
+
+    if (-3..7).contains(&exponent) {
+        if exponent < 0 {
+            let zeros = "0".repeat((-exponent - 1) as usize);
+            format!("{sign}0.{zeros}{digits}")
+        } else {
+            let int_len = exponent as usize + 1;
+            if digits.len() > int_len {
+                format!("{sign}{}.{}", &digits[..int_len], &digits[int_len..])
+            } else {
+                format!("{sign}{digits:0<int_len$}.0")
+            }
+        }
+    } else {
+        let fraction = if digits.len() > 1 { &digits[1..] } else { "0" };
+        format!("{sign}{}.{fraction}E{exponent}", &digits[..1])
     }
 }

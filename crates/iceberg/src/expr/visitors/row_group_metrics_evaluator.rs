@@ -207,8 +207,14 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         Ok(lhs || rhs)
     }
 
-    fn not(&mut self, inner: bool) -> Result<bool> {
-        Ok(!inner)
+    fn not(&mut self, _: bool) -> Result<bool> {
+        // Negating a conservative "might match" bound is unsound (it can turn into
+        // "can't match" and prune row groups that do match), so NOT must be
+        // rewritten out of the predicate before it reaches this evaluator.
+        Err(Error::new(
+            ErrorKind::Unexpected,
+            "NOT unsupported at this point. NOT-rewrite should be performed first",
+        ))
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
@@ -297,7 +303,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             return ROW_GROUP_CANT_MATCH;
         }
 
-        if let Some(lower_bound) = self.min_value(field_id)? {
+        let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+
+        if let Some(lower_bound) = get_parquet_stat_min_as_datum(&primitive_type, stats)? {
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -307,7 +317,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             }
         }
 
-        if let Some(upper_bound) = self.max_value(field_id)? {
+        if let Some(upper_bound) = get_parquet_stat_max_as_datum(&primitive_type, stats)? {
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -351,7 +361,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             ));
         };
 
-        if let Some(lower_bound) = self.min_value(field_id)? {
+        let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+
+        if let Some(lower_bound) = get_parquet_stat_min_as_datum(&primitive_type, stats)? {
             let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -369,7 +383,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             }
         }
 
-        if let Some(upper_bound) = self.max_value(field_id)? {
+        if let Some(upper_bound) = get_parquet_stat_max_as_datum(&primitive_type, stats)? {
             let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -476,7 +490,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             return ROW_GROUP_MIGHT_MATCH;
         }
 
-        if let Some(lower_bound) = self.min_value(field_id)? {
+        let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+
+        if let Some(lower_bound) = get_parquet_stat_min_as_datum(&primitive_type, stats)? {
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROW_GROUP_MIGHT_MATCH;
@@ -488,7 +506,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             }
         }
 
-        if let Some(upper_bound) = self.max_value(field_id)? {
+        if let Some(upper_bound) = get_parquet_stat_max_as_datum(&primitive_type, stats)? {
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROW_GROUP_MIGHT_MATCH;
@@ -531,9 +549,9 @@ mod tests {
     use rand::Rng;
 
     use super::RowGroupMetricsEvaluator;
-    use crate::Result;
     use crate::expr::{Bind, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+    use crate::{ErrorKind, Result};
 
     #[test]
     fn eval_matches_no_rows_for_empty_row_group() -> Result<()> {
@@ -575,6 +593,32 @@ mod tests {
         )?;
 
         assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_error_for_not_predicate_requires_rewrite() -> Result<()> {
+        // The evaluator cannot soundly negate a conservative bound, so a NOT node
+        // that reaches it (one that was not rewritten away first) is rejected
+        // rather than silently mispruning a matching row group.
+        let row_group_metadata = create_row_group_metadata(1, 1, None, 1, None)?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = (!Reference::new("col_float").greater_than(Datum::float(5.0_f32)))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let err = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.message().contains("NOT"));
 
         Ok(())
     }
