@@ -45,7 +45,7 @@ impl PartitionFilterCache {
         table_metadata: &TableMetadataRef,
         schema: &Schema,
         case_sensitive: bool,
-        filter: BoundPredicate,
+        filter: &BoundPredicate,
     ) -> Result<Arc<BoundPredicate>> {
         // we need a block here to ensure that the `read()` gets dropped before we hit the `write()`
         // below, otherwise we hit deadlock
@@ -100,7 +100,7 @@ impl PartitionFilterCache {
             let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
 
             inclusive_projection
-                .project(&filter)?
+                .project(filter)?
                 .rewrite_not()
                 .bind(partition_schema.clone(), case_sensitive)?
         };
@@ -334,13 +334,13 @@ mod tests {
 
         let cache = PartitionFilterCache::new();
         let partition_filter = cache
-            .get(0, &table_metadata, &evolved_schema, true, filter.clone())
+            .get(0, &table_metadata, &evolved_schema, true, &filter)
             .unwrap();
         assert!(matches!(*partition_filter, BoundPredicate::AlwaysTrue));
 
         // The fallback is cached, so a second lookup returns the same instance.
         let cached = cache
-            .get(0, &table_metadata, &evolved_schema, true, filter)
+            .get(0, &table_metadata, &evolved_schema, true, &filter)
             .unwrap();
         assert!(Arc::ptr_eq(&partition_filter, &cached));
     }

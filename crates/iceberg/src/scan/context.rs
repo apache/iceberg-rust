@@ -22,7 +22,7 @@ use futures::channel::mpsc::Sender;
 use futures::{SinkExt, TryFutureExt};
 
 use crate::delete_file_index::DeleteFileIndex;
-use crate::expr::{Bind, BoundPredicate, Predicate};
+use crate::expr::{BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
 use crate::scan::{
     BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
@@ -234,22 +234,22 @@ impl PlanContext {
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
         let partition_spec_id = manifest_file.partition_spec_id;
 
-        let partition_filter = self.partition_filter_cache.get(
+        // Reuse the predicate bound when the scan was built instead of rebinding it for
+        // every manifest, including partition-filter cache hits.
+        let bound_predicate = self.snapshot_bound_predicate.as_deref().ok_or_else(|| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "Expected a predicate but none present",
+            )
+        })?;
+
+        self.partition_filter_cache.get(
             partition_spec_id,
             &self.table_metadata,
             &self.snapshot_schema,
             self.case_sensitive,
-            self.predicate
-                .as_ref()
-                .ok_or(Error::new(
-                    ErrorKind::Unexpected,
-                    "Expected a predicate but none present",
-                ))?
-                .as_ref()
-                .bind(self.snapshot_schema.clone(), self.case_sensitive)?,
-        )?;
-
-        Ok(partition_filter)
+            bound_predicate,
+        )
     }
 
     pub(crate) fn build_manifest_file_contexts(
