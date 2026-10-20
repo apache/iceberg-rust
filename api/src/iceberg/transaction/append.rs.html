@@ -778,191 +778,222 @@
 <a href=#778 id=778 data-nosnippet>778</a>    }
 <a href=#779 id=779 data-nosnippet>779</a>
 <a href=#780 id=780 data-nosnippet>780</a>    <span class="attr">#[tokio::test]
-<a href=#781 id=781 data-nosnippet>781</a>    </span><span class="kw">async fn </span>test_append_snapshot_properties() {
+<a href=#781 id=781 data-nosnippet>781</a>    </span><span class="kw">async fn </span>test_snapshot_summary_records_writer_identity() {
 <a href=#782 id=782 data-nosnippet>782</a>        <span class="kw">let </span>table = make_v2_minimal_table();
 <a href=#783 id=783 data-nosnippet>783</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
 <a href=#784 id=784 data-nosnippet>784</a>
-<a href=#785 id=785 data-nosnippet>785</a>        <span class="kw">let </span><span class="kw-2">mut </span>snapshot_properties = HashMap::new();
-<a href=#786 id=786 data-nosnippet>786</a>        snapshot_properties.insert(<span class="string">"key"</span>.to_string(), <span class="string">"val"</span>.to_string());
-<a href=#787 id=787 data-nosnippet>787</a>
-<a href=#788 id=788 data-nosnippet>788</a>        <span class="kw">let </span>action = tx
-<a href=#789 id=789 data-nosnippet>789</a>            .fast_append()
-<a href=#790 id=790 data-nosnippet>790</a>            .set_snapshot_properties(snapshot_properties);
-<a href=#791 id=791 data-nosnippet>791</a>        <span class="kw">let </span><span class="kw-2">mut </span>action_commit = commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.unwrap();
-<a href=#792 id=792 data-nosnippet>792</a>        <span class="kw">let </span>updates = action_commit.take_updates();
-<a href=#793 id=793 data-nosnippet>793</a>
-<a href=#794 id=794 data-nosnippet>794</a>        <span class="comment">// Check customized properties is contained in snapshot summary properties.
-<a href=#795 id=795 data-nosnippet>795</a>        </span><span class="kw">let </span>new_snapshot = <span class="kw">if let </span>TableUpdate::AddSnapshot { snapshot } = <span class="kw-2">&amp;</span>updates[<span class="number">0</span>] {
-<a href=#796 id=796 data-nosnippet>796</a>            snapshot
-<a href=#797 id=797 data-nosnippet>797</a>        } <span class="kw">else </span>{
-<a href=#798 id=798 data-nosnippet>798</a>            <span class="macro">unreachable!</span>()
-<a href=#799 id=799 data-nosnippet>799</a>        };
-<a href=#800 id=800 data-nosnippet>800</a>        <span class="macro">assert_eq!</span>(
-<a href=#801 id=801 data-nosnippet>801</a>            new_snapshot
-<a href=#802 id=802 data-nosnippet>802</a>                .summary()
-<a href=#803 id=803 data-nosnippet>803</a>                .additional_properties
-<a href=#804 id=804 data-nosnippet>804</a>                .get(<span class="string">"key"</span>)
-<a href=#805 id=805 data-nosnippet>805</a>                .unwrap(),
-<a href=#806 id=806 data-nosnippet>806</a>            <span class="string">"val"
-<a href=#807 id=807 data-nosnippet>807</a>        </span>);
-<a href=#808 id=808 data-nosnippet>808</a>    }
-<a href=#809 id=809 data-nosnippet>809</a>
-<a href=#810 id=810 data-nosnippet>810</a>    <span class="attr">#[tokio::test]
-<a href=#811 id=811 data-nosnippet>811</a>    </span><span class="kw">async fn </span>test_fast_append_file_with_incompatible_partition_value() {
-<a href=#812 id=812 data-nosnippet>812</a>        <span class="kw">let </span>table = make_v2_minimal_table();
-<a href=#813 id=813 data-nosnippet>813</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
-<a href=#814 id=814 data-nosnippet>814</a>        <span class="kw">let </span>action = tx.fast_append();
+<a href=#785 id=785 data-nosnippet>785</a>        <span class="kw">let </span>snapshot_properties = HashMap::from([
+<a href=#786 id=786 data-nosnippet>786</a>            (<span class="string">"key"</span>.to_string(), <span class="string">"val"</span>.to_string()),
+<a href=#787 id=787 data-nosnippet>787</a>            (<span class="string">"iceberg-version"</span>.to_string(), <span class="string">"caller"</span>.to_string()),
+<a href=#788 id=788 data-nosnippet>788</a>        ]);
+<a href=#789 id=789 data-nosnippet>789</a>
+<a href=#790 id=790 data-nosnippet>790</a>        <span class="kw">let </span>action = tx
+<a href=#791 id=791 data-nosnippet>791</a>            .fast_append()
+<a href=#792 id=792 data-nosnippet>792</a>            .set_snapshot_properties(snapshot_properties);
+<a href=#793 id=793 data-nosnippet>793</a>        <span class="kw">let </span><span class="kw-2">mut </span>action_commit = commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.unwrap();
+<a href=#794 id=794 data-nosnippet>794</a>        <span class="kw">let </span>updates = action_commit.take_updates();
+<a href=#795 id=795 data-nosnippet>795</a>
+<a href=#796 id=796 data-nosnippet>796</a>        <span class="kw">let </span>new_snapshot = <span class="kw">if let </span>TableUpdate::AddSnapshot { snapshot } = <span class="kw-2">&amp;</span>updates[<span class="number">0</span>] {
+<a href=#797 id=797 data-nosnippet>797</a>            snapshot
+<a href=#798 id=798 data-nosnippet>798</a>        } <span class="kw">else </span>{
+<a href=#799 id=799 data-nosnippet>799</a>            <span class="macro">unreachable!</span>()
+<a href=#800 id=800 data-nosnippet>800</a>        };
+<a href=#801 id=801 data-nosnippet>801</a>        <span class="kw">let </span>props = <span class="kw-2">&amp;</span>new_snapshot.summary().additional_properties;
+<a href=#802 id=802 data-nosnippet>802</a>        <span class="kw">let </span>version = <span class="macro">env!</span>(<span class="string">"CARGO_PKG_VERSION"</span>);
+<a href=#803 id=803 data-nosnippet>803</a>
+<a href=#804 id=804 data-nosnippet>804</a>        <span class="macro">assert_eq!</span>(
+<a href=#805 id=805 data-nosnippet>805</a>            props.get(<span class="string">"iceberg-version"</span>).unwrap(),
+<a href=#806 id=806 data-nosnippet>806</a>            <span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"Apache Iceberg Rust {version}"</span>)
+<a href=#807 id=807 data-nosnippet>807</a>        );
+<a href=#808 id=808 data-nosnippet>808</a>        <span class="macro">assert_eq!</span>(props.get(<span class="string">"key"</span>).unwrap(), <span class="string">"val"</span>);
+<a href=#809 id=809 data-nosnippet>809</a>    }
+<a href=#810 id=810 data-nosnippet>810</a>
+<a href=#811 id=811 data-nosnippet>811</a>    <span class="attr">#[tokio::test]
+<a href=#812 id=812 data-nosnippet>812</a>    </span><span class="kw">async fn </span>test_append_snapshot_properties() {
+<a href=#813 id=813 data-nosnippet>813</a>        <span class="kw">let </span>table = make_v2_minimal_table();
+<a href=#814 id=814 data-nosnippet>814</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
 <a href=#815 id=815 data-nosnippet>815</a>
-<a href=#816 id=816 data-nosnippet>816</a>        <span class="comment">// check add data file with incompatible partition value
-<a href=#817 id=817 data-nosnippet>817</a>        </span><span class="kw">let </span>data_file = DataFileBuilder::default()
-<a href=#818 id=818 data-nosnippet>818</a>            .content(DataContentType::Data)
-<a href=#819 id=819 data-nosnippet>819</a>            .file_path(<span class="string">"test/3.parquet"</span>.to_string())
-<a href=#820 id=820 data-nosnippet>820</a>            .file_format(DataFileFormat::Parquet)
-<a href=#821 id=821 data-nosnippet>821</a>            .file_size_in_bytes(<span class="number">100</span>)
-<a href=#822 id=822 data-nosnippet>822</a>            .record_count(<span class="number">1</span>)
-<a href=#823 id=823 data-nosnippet>823</a>            .partition_spec_id(table.metadata().default_partition_spec_id())
-<a href=#824 id=824 data-nosnippet>824</a>            .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::string(<span class="string">"test"</span>))]))
-<a href=#825 id=825 data-nosnippet>825</a>            .build()
-<a href=#826 id=826 data-nosnippet>826</a>            .unwrap();
-<a href=#827 id=827 data-nosnippet>827</a>
-<a href=#828 id=828 data-nosnippet>828</a>        <span class="kw">let </span>action = action.add_data_files(<span class="macro">vec!</span>[data_file.clone()]);
-<a href=#829 id=829 data-nosnippet>829</a>
-<a href=#830 id=830 data-nosnippet>830</a>        <span class="macro">assert!</span>(commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.is_err());
-<a href=#831 id=831 data-nosnippet>831</a>    }
-<a href=#832 id=832 data-nosnippet>832</a>
-<a href=#833 id=833 data-nosnippet>833</a>    <span class="attr">#[tokio::test]
-<a href=#834 id=834 data-nosnippet>834</a>    </span><span class="kw">async fn </span>test_fast_append_dedupes_intra_batch_duplicate_paths() {
-<a href=#835 id=835 data-nosnippet>835</a>        <span class="kw">let </span>table = make_v2_minimal_table();
-<a href=#836 id=836 data-nosnippet>836</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
-<a href=#837 id=837 data-nosnippet>837</a>
-<a href=#838 id=838 data-nosnippet>838</a>        <span class="kw">let </span>make_file = |size: u64, records: u64| {
-<a href=#839 id=839 data-nosnippet>839</a>            DataFileBuilder::default()
-<a href=#840 id=840 data-nosnippet>840</a>                .content(DataContentType::Data)
-<a href=#841 id=841 data-nosnippet>841</a>                .file_path(<span class="string">"test/dup.parquet"</span>.to_string())
-<a href=#842 id=842 data-nosnippet>842</a>                .file_format(DataFileFormat::Parquet)
-<a href=#843 id=843 data-nosnippet>843</a>                .file_size_in_bytes(size)
-<a href=#844 id=844 data-nosnippet>844</a>                .record_count(records)
-<a href=#845 id=845 data-nosnippet>845</a>                .partition_spec_id(table.metadata().default_partition_spec_id())
-<a href=#846 id=846 data-nosnippet>846</a>                .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">1</span>))]))
-<a href=#847 id=847 data-nosnippet>847</a>                .build()
-<a href=#848 id=848 data-nosnippet>848</a>                .unwrap()
-<a href=#849 id=849 data-nosnippet>849</a>        };
-<a href=#850 id=850 data-nosnippet>850</a>
-<a href=#851 id=851 data-nosnippet>851</a>        <span class="comment">// Same path three times: the manifest keeps a single entry, the first one.
-<a href=#852 id=852 data-nosnippet>852</a>        </span><span class="kw">let </span>action = tx.fast_append().add_data_files(<span class="macro">vec!</span>[
-<a href=#853 id=853 data-nosnippet>853</a>            make_file(<span class="number">100</span>, <span class="number">10</span>),
-<a href=#854 id=854 data-nosnippet>854</a>            make_file(<span class="number">200</span>, <span class="number">20</span>),
-<a href=#855 id=855 data-nosnippet>855</a>            make_file(<span class="number">300</span>, <span class="number">30</span>),
-<a href=#856 id=856 data-nosnippet>856</a>        ]);
-<a href=#857 id=857 data-nosnippet>857</a>        <span class="kw">let </span><span class="kw-2">mut </span>action_commit = commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.unwrap();
-<a href=#858 id=858 data-nosnippet>858</a>        <span class="kw">let </span>files = committed_data_files(<span class="kw-2">&amp;</span>table, <span class="kw-2">&amp;</span>action_commit.take_updates()).<span class="kw">await</span>;
-<a href=#859 id=859 data-nosnippet>859</a>        <span class="macro">assert_eq!</span>(<span class="number">1</span>, files.len());
-<a href=#860 id=860 data-nosnippet>860</a>        <span class="macro">assert_eq!</span>(<span class="number">100</span>, files[<span class="number">0</span>].file_size_in_bytes());
-<a href=#861 id=861 data-nosnippet>861</a>    }
-<a href=#862 id=862 data-nosnippet>862</a>
-<a href=#863 id=863 data-nosnippet>863</a>    <span class="attr">#[tokio::test]
-<a href=#864 id=864 data-nosnippet>864</a>    </span><span class="kw">async fn </span>test_fast_append_dedupes_regardless_of_check_duplicate_flag() {
-<a href=#865 id=865 data-nosnippet>865</a>        <span class="kw">let </span>table = make_v2_minimal_table();
-<a href=#866 id=866 data-nosnippet>866</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
-<a href=#867 id=867 data-nosnippet>867</a>
-<a href=#868 id=868 data-nosnippet>868</a>        <span class="kw">let </span>make_file = || {
-<a href=#869 id=869 data-nosnippet>869</a>            DataFileBuilder::default()
-<a href=#870 id=870 data-nosnippet>870</a>                .content(DataContentType::Data)
-<a href=#871 id=871 data-nosnippet>871</a>                .file_path(<span class="string">"test/dup.parquet"</span>.to_string())
-<a href=#872 id=872 data-nosnippet>872</a>                .file_format(DataFileFormat::Parquet)
-<a href=#873 id=873 data-nosnippet>873</a>                .file_size_in_bytes(<span class="number">100</span>)
-<a href=#874 id=874 data-nosnippet>874</a>                .record_count(<span class="number">10</span>)
-<a href=#875 id=875 data-nosnippet>875</a>                .partition_spec_id(table.metadata().default_partition_spec_id())
-<a href=#876 id=876 data-nosnippet>876</a>                .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">1</span>))]))
-<a href=#877 id=877 data-nosnippet>877</a>                .build()
-<a href=#878 id=878 data-nosnippet>878</a>                .unwrap()
-<a href=#879 id=879 data-nosnippet>879</a>        };
-<a href=#880 id=880 data-nosnippet>880</a>
-<a href=#881 id=881 data-nosnippet>881</a>        <span class="comment">// `check_duplicate` only gates the cross-snapshot check; intra-batch dedupe runs regardless.
-<a href=#882 id=882 data-nosnippet>882</a>        </span><span class="kw">let </span>action = tx
-<a href=#883 id=883 data-nosnippet>883</a>            .fast_append()
-<a href=#884 id=884 data-nosnippet>884</a>            .with_check_duplicate(<span class="bool-val">false</span>)
-<a href=#885 id=885 data-nosnippet>885</a>            .add_data_files(<span class="macro">vec!</span>[make_file(), make_file()]);
-<a href=#886 id=886 data-nosnippet>886</a>        <span class="kw">let </span><span class="kw-2">mut </span>action_commit = commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.unwrap();
-<a href=#887 id=887 data-nosnippet>887</a>        <span class="kw">let </span>files = committed_data_files(<span class="kw-2">&amp;</span>table, <span class="kw-2">&amp;</span>action_commit.take_updates()).<span class="kw">await</span>;
-<a href=#888 id=888 data-nosnippet>888</a>        <span class="macro">assert_eq!</span>(<span class="number">1</span>, files.len());
-<a href=#889 id=889 data-nosnippet>889</a>    }
-<a href=#890 id=890 data-nosnippet>890</a>
-<a href=#891 id=891 data-nosnippet>891</a>    <span class="attr">#[tokio::test]
-<a href=#892 id=892 data-nosnippet>892</a>    </span><span class="kw">async fn </span>test_fast_append() {
-<a href=#893 id=893 data-nosnippet>893</a>        <span class="kw">let </span>table = make_v2_minimal_table();
-<a href=#894 id=894 data-nosnippet>894</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
-<a href=#895 id=895 data-nosnippet>895</a>        <span class="kw">let </span>action = tx.fast_append();
-<a href=#896 id=896 data-nosnippet>896</a>
-<a href=#897 id=897 data-nosnippet>897</a>        <span class="kw">let </span>data_file = DataFileBuilder::default()
-<a href=#898 id=898 data-nosnippet>898</a>            .content(DataContentType::Data)
-<a href=#899 id=899 data-nosnippet>899</a>            .file_path(<span class="string">"test/3.parquet"</span>.to_string())
-<a href=#900 id=900 data-nosnippet>900</a>            .file_format(DataFileFormat::Parquet)
-<a href=#901 id=901 data-nosnippet>901</a>            .file_size_in_bytes(<span class="number">100</span>)
-<a href=#902 id=902 data-nosnippet>902</a>            .record_count(<span class="number">1</span>)
-<a href=#903 id=903 data-nosnippet>903</a>            .partition_spec_id(table.metadata().default_partition_spec_id())
-<a href=#904 id=904 data-nosnippet>904</a>            .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">300</span>))]))
-<a href=#905 id=905 data-nosnippet>905</a>            .build()
-<a href=#906 id=906 data-nosnippet>906</a>            .unwrap();
-<a href=#907 id=907 data-nosnippet>907</a>
-<a href=#908 id=908 data-nosnippet>908</a>        <span class="kw">let </span>action = action.add_data_files(<span class="macro">vec!</span>[data_file.clone()]);
-<a href=#909 id=909 data-nosnippet>909</a>        <span class="kw">let </span><span class="kw-2">mut </span>action_commit = commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.unwrap();
-<a href=#910 id=910 data-nosnippet>910</a>        <span class="kw">let </span>updates = action_commit.take_updates();
-<a href=#911 id=911 data-nosnippet>911</a>        <span class="kw">let </span>requirements = action_commit.take_requirements();
-<a href=#912 id=912 data-nosnippet>912</a>
-<a href=#913 id=913 data-nosnippet>913</a>        <span class="comment">// check updates and requirements
-<a href=#914 id=914 data-nosnippet>914</a>        </span><span class="macro">assert!</span>(
-<a href=#915 id=915 data-nosnippet>915</a>            <span class="macro">matches!</span>((<span class="kw-2">&amp;</span>updates[<span class="number">0</span>],<span class="kw-2">&amp;</span>updates[<span class="number">1</span>]), (TableUpdate::AddSnapshot { snapshot },TableUpdate::SetSnapshotRef { reference,ref_name }) <span class="kw">if </span>snapshot.snapshot_id() == reference.snapshot_id &amp;&amp; ref_name == MAIN_BRANCH)
-<a href=#916 id=916 data-nosnippet>916</a>        );
-<a href=#917 id=917 data-nosnippet>917</a>        <span class="macro">assert_eq!</span>(
-<a href=#918 id=918 data-nosnippet>918</a>            <span class="macro">vec!</span>[
-<a href=#919 id=919 data-nosnippet>919</a>                TableRequirement::UuidMatch {
-<a href=#920 id=920 data-nosnippet>920</a>                    uuid: table.metadata().uuid()
-<a href=#921 id=921 data-nosnippet>921</a>                },
-<a href=#922 id=922 data-nosnippet>922</a>                TableRequirement::RefSnapshotIdMatch {
-<a href=#923 id=923 data-nosnippet>923</a>                    r#ref: MAIN_BRANCH.to_string(),
-<a href=#924 id=924 data-nosnippet>924</a>                    snapshot_id: table.metadata().current_snapshot_id
-<a href=#925 id=925 data-nosnippet>925</a>                }
-<a href=#926 id=926 data-nosnippet>926</a>            ],
-<a href=#927 id=927 data-nosnippet>927</a>            requirements
-<a href=#928 id=928 data-nosnippet>928</a>        );
-<a href=#929 id=929 data-nosnippet>929</a>
-<a href=#930 id=930 data-nosnippet>930</a>        <span class="comment">// check manifest list
-<a href=#931 id=931 data-nosnippet>931</a>        </span><span class="kw">let </span>new_snapshot: SnapshotRef = <span class="kw">if let </span>TableUpdate::AddSnapshot { snapshot } = <span class="kw-2">&amp;</span>updates[<span class="number">0</span>] {
-<a href=#932 id=932 data-nosnippet>932</a>            SnapshotRef::new(snapshot.clone())
-<a href=#933 id=933 data-nosnippet>933</a>        } <span class="kw">else </span>{
-<a href=#934 id=934 data-nosnippet>934</a>            <span class="macro">unreachable!</span>()
-<a href=#935 id=935 data-nosnippet>935</a>        };
-<a href=#936 id=936 data-nosnippet>936</a>        <span class="kw">let </span>manifest_list = table
-<a href=#937 id=937 data-nosnippet>937</a>            .manifest_list_reader(<span class="kw-2">&amp;</span>new_snapshot)
-<a href=#938 id=938 data-nosnippet>938</a>            .load()
-<a href=#939 id=939 data-nosnippet>939</a>            .<span class="kw">await
-<a href=#940 id=940 data-nosnippet>940</a>            </span>.unwrap();
-<a href=#941 id=941 data-nosnippet>941</a>        <span class="macro">assert_eq!</span>(<span class="number">1</span>, manifest_list.entries().len());
-<a href=#942 id=942 data-nosnippet>942</a>        <span class="macro">assert_eq!</span>(
-<a href=#943 id=943 data-nosnippet>943</a>            manifest_list.entries()[<span class="number">0</span>].sequence_number,
-<a href=#944 id=944 data-nosnippet>944</a>            new_snapshot.sequence_number()
-<a href=#945 id=945 data-nosnippet>945</a>        );
-<a href=#946 id=946 data-nosnippet>946</a>
-<a href=#947 id=947 data-nosnippet>947</a>        <span class="comment">// check manifest
-<a href=#948 id=948 data-nosnippet>948</a>        </span><span class="kw">let </span>manifest = table
-<a href=#949 id=949 data-nosnippet>949</a>            .manifest_reader()
-<a href=#950 id=950 data-nosnippet>950</a>            .read(<span class="kw-2">&amp;</span>manifest_list.entries()[<span class="number">0</span>])
-<a href=#951 id=951 data-nosnippet>951</a>            .<span class="kw">await
-<a href=#952 id=952 data-nosnippet>952</a>            </span>.unwrap();
-<a href=#953 id=953 data-nosnippet>953</a>        <span class="macro">assert_eq!</span>(<span class="number">1</span>, manifest.entries().len());
-<a href=#954 id=954 data-nosnippet>954</a>        <span class="macro">assert_eq!</span>(
-<a href=#955 id=955 data-nosnippet>955</a>            new_snapshot.sequence_number(),
-<a href=#956 id=956 data-nosnippet>956</a>            manifest.entries()[<span class="number">0</span>]
-<a href=#957 id=957 data-nosnippet>957</a>                .sequence_number()
-<a href=#958 id=958 data-nosnippet>958</a>                .expect(<span class="string">"Inherit sequence number by load manifest"</span>)
+<a href=#816 id=816 data-nosnippet>816</a>        <span class="kw">let </span><span class="kw-2">mut </span>snapshot_properties = HashMap::new();
+<a href=#817 id=817 data-nosnippet>817</a>        snapshot_properties.insert(<span class="string">"key"</span>.to_string(), <span class="string">"val"</span>.to_string());
+<a href=#818 id=818 data-nosnippet>818</a>
+<a href=#819 id=819 data-nosnippet>819</a>        <span class="kw">let </span>action = tx
+<a href=#820 id=820 data-nosnippet>820</a>            .fast_append()
+<a href=#821 id=821 data-nosnippet>821</a>            .set_snapshot_properties(snapshot_properties);
+<a href=#822 id=822 data-nosnippet>822</a>        <span class="kw">let </span><span class="kw-2">mut </span>action_commit = commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.unwrap();
+<a href=#823 id=823 data-nosnippet>823</a>        <span class="kw">let </span>updates = action_commit.take_updates();
+<a href=#824 id=824 data-nosnippet>824</a>
+<a href=#825 id=825 data-nosnippet>825</a>        <span class="comment">// Check customized properties is contained in snapshot summary properties.
+<a href=#826 id=826 data-nosnippet>826</a>        </span><span class="kw">let </span>new_snapshot = <span class="kw">if let </span>TableUpdate::AddSnapshot { snapshot } = <span class="kw-2">&amp;</span>updates[<span class="number">0</span>] {
+<a href=#827 id=827 data-nosnippet>827</a>            snapshot
+<a href=#828 id=828 data-nosnippet>828</a>        } <span class="kw">else </span>{
+<a href=#829 id=829 data-nosnippet>829</a>            <span class="macro">unreachable!</span>()
+<a href=#830 id=830 data-nosnippet>830</a>        };
+<a href=#831 id=831 data-nosnippet>831</a>        <span class="macro">assert_eq!</span>(
+<a href=#832 id=832 data-nosnippet>832</a>            new_snapshot
+<a href=#833 id=833 data-nosnippet>833</a>                .summary()
+<a href=#834 id=834 data-nosnippet>834</a>                .additional_properties
+<a href=#835 id=835 data-nosnippet>835</a>                .get(<span class="string">"key"</span>)
+<a href=#836 id=836 data-nosnippet>836</a>                .unwrap(),
+<a href=#837 id=837 data-nosnippet>837</a>            <span class="string">"val"
+<a href=#838 id=838 data-nosnippet>838</a>        </span>);
+<a href=#839 id=839 data-nosnippet>839</a>    }
+<a href=#840 id=840 data-nosnippet>840</a>
+<a href=#841 id=841 data-nosnippet>841</a>    <span class="attr">#[tokio::test]
+<a href=#842 id=842 data-nosnippet>842</a>    </span><span class="kw">async fn </span>test_fast_append_file_with_incompatible_partition_value() {
+<a href=#843 id=843 data-nosnippet>843</a>        <span class="kw">let </span>table = make_v2_minimal_table();
+<a href=#844 id=844 data-nosnippet>844</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
+<a href=#845 id=845 data-nosnippet>845</a>        <span class="kw">let </span>action = tx.fast_append();
+<a href=#846 id=846 data-nosnippet>846</a>
+<a href=#847 id=847 data-nosnippet>847</a>        <span class="comment">// check add data file with incompatible partition value
+<a href=#848 id=848 data-nosnippet>848</a>        </span><span class="kw">let </span>data_file = DataFileBuilder::default()
+<a href=#849 id=849 data-nosnippet>849</a>            .content(DataContentType::Data)
+<a href=#850 id=850 data-nosnippet>850</a>            .file_path(<span class="string">"test/3.parquet"</span>.to_string())
+<a href=#851 id=851 data-nosnippet>851</a>            .file_format(DataFileFormat::Parquet)
+<a href=#852 id=852 data-nosnippet>852</a>            .file_size_in_bytes(<span class="number">100</span>)
+<a href=#853 id=853 data-nosnippet>853</a>            .record_count(<span class="number">1</span>)
+<a href=#854 id=854 data-nosnippet>854</a>            .partition_spec_id(table.metadata().default_partition_spec_id())
+<a href=#855 id=855 data-nosnippet>855</a>            .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::string(<span class="string">"test"</span>))]))
+<a href=#856 id=856 data-nosnippet>856</a>            .build()
+<a href=#857 id=857 data-nosnippet>857</a>            .unwrap();
+<a href=#858 id=858 data-nosnippet>858</a>
+<a href=#859 id=859 data-nosnippet>859</a>        <span class="kw">let </span>action = action.add_data_files(<span class="macro">vec!</span>[data_file.clone()]);
+<a href=#860 id=860 data-nosnippet>860</a>
+<a href=#861 id=861 data-nosnippet>861</a>        <span class="macro">assert!</span>(commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.is_err());
+<a href=#862 id=862 data-nosnippet>862</a>    }
+<a href=#863 id=863 data-nosnippet>863</a>
+<a href=#864 id=864 data-nosnippet>864</a>    <span class="attr">#[tokio::test]
+<a href=#865 id=865 data-nosnippet>865</a>    </span><span class="kw">async fn </span>test_fast_append_dedupes_intra_batch_duplicate_paths() {
+<a href=#866 id=866 data-nosnippet>866</a>        <span class="kw">let </span>table = make_v2_minimal_table();
+<a href=#867 id=867 data-nosnippet>867</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
+<a href=#868 id=868 data-nosnippet>868</a>
+<a href=#869 id=869 data-nosnippet>869</a>        <span class="kw">let </span>make_file = |size: u64, records: u64| {
+<a href=#870 id=870 data-nosnippet>870</a>            DataFileBuilder::default()
+<a href=#871 id=871 data-nosnippet>871</a>                .content(DataContentType::Data)
+<a href=#872 id=872 data-nosnippet>872</a>                .file_path(<span class="string">"test/dup.parquet"</span>.to_string())
+<a href=#873 id=873 data-nosnippet>873</a>                .file_format(DataFileFormat::Parquet)
+<a href=#874 id=874 data-nosnippet>874</a>                .file_size_in_bytes(size)
+<a href=#875 id=875 data-nosnippet>875</a>                .record_count(records)
+<a href=#876 id=876 data-nosnippet>876</a>                .partition_spec_id(table.metadata().default_partition_spec_id())
+<a href=#877 id=877 data-nosnippet>877</a>                .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">1</span>))]))
+<a href=#878 id=878 data-nosnippet>878</a>                .build()
+<a href=#879 id=879 data-nosnippet>879</a>                .unwrap()
+<a href=#880 id=880 data-nosnippet>880</a>        };
+<a href=#881 id=881 data-nosnippet>881</a>
+<a href=#882 id=882 data-nosnippet>882</a>        <span class="comment">// Same path three times: the manifest keeps a single entry, the first one.
+<a href=#883 id=883 data-nosnippet>883</a>        </span><span class="kw">let </span>action = tx.fast_append().add_data_files(<span class="macro">vec!</span>[
+<a href=#884 id=884 data-nosnippet>884</a>            make_file(<span class="number">100</span>, <span class="number">10</span>),
+<a href=#885 id=885 data-nosnippet>885</a>            make_file(<span class="number">200</span>, <span class="number">20</span>),
+<a href=#886 id=886 data-nosnippet>886</a>            make_file(<span class="number">300</span>, <span class="number">30</span>),
+<a href=#887 id=887 data-nosnippet>887</a>        ]);
+<a href=#888 id=888 data-nosnippet>888</a>        <span class="kw">let </span><span class="kw-2">mut </span>action_commit = commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.unwrap();
+<a href=#889 id=889 data-nosnippet>889</a>        <span class="kw">let </span>files = committed_data_files(<span class="kw-2">&amp;</span>table, <span class="kw-2">&amp;</span>action_commit.take_updates()).<span class="kw">await</span>;
+<a href=#890 id=890 data-nosnippet>890</a>        <span class="macro">assert_eq!</span>(<span class="number">1</span>, files.len());
+<a href=#891 id=891 data-nosnippet>891</a>        <span class="macro">assert_eq!</span>(<span class="number">100</span>, files[<span class="number">0</span>].file_size_in_bytes());
+<a href=#892 id=892 data-nosnippet>892</a>    }
+<a href=#893 id=893 data-nosnippet>893</a>
+<a href=#894 id=894 data-nosnippet>894</a>    <span class="attr">#[tokio::test]
+<a href=#895 id=895 data-nosnippet>895</a>    </span><span class="kw">async fn </span>test_fast_append_dedupes_regardless_of_check_duplicate_flag() {
+<a href=#896 id=896 data-nosnippet>896</a>        <span class="kw">let </span>table = make_v2_minimal_table();
+<a href=#897 id=897 data-nosnippet>897</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
+<a href=#898 id=898 data-nosnippet>898</a>
+<a href=#899 id=899 data-nosnippet>899</a>        <span class="kw">let </span>make_file = || {
+<a href=#900 id=900 data-nosnippet>900</a>            DataFileBuilder::default()
+<a href=#901 id=901 data-nosnippet>901</a>                .content(DataContentType::Data)
+<a href=#902 id=902 data-nosnippet>902</a>                .file_path(<span class="string">"test/dup.parquet"</span>.to_string())
+<a href=#903 id=903 data-nosnippet>903</a>                .file_format(DataFileFormat::Parquet)
+<a href=#904 id=904 data-nosnippet>904</a>                .file_size_in_bytes(<span class="number">100</span>)
+<a href=#905 id=905 data-nosnippet>905</a>                .record_count(<span class="number">10</span>)
+<a href=#906 id=906 data-nosnippet>906</a>                .partition_spec_id(table.metadata().default_partition_spec_id())
+<a href=#907 id=907 data-nosnippet>907</a>                .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">1</span>))]))
+<a href=#908 id=908 data-nosnippet>908</a>                .build()
+<a href=#909 id=909 data-nosnippet>909</a>                .unwrap()
+<a href=#910 id=910 data-nosnippet>910</a>        };
+<a href=#911 id=911 data-nosnippet>911</a>
+<a href=#912 id=912 data-nosnippet>912</a>        <span class="comment">// `check_duplicate` only gates the cross-snapshot check; intra-batch dedupe runs regardless.
+<a href=#913 id=913 data-nosnippet>913</a>        </span><span class="kw">let </span>action = tx
+<a href=#914 id=914 data-nosnippet>914</a>            .fast_append()
+<a href=#915 id=915 data-nosnippet>915</a>            .with_check_duplicate(<span class="bool-val">false</span>)
+<a href=#916 id=916 data-nosnippet>916</a>            .add_data_files(<span class="macro">vec!</span>[make_file(), make_file()]);
+<a href=#917 id=917 data-nosnippet>917</a>        <span class="kw">let </span><span class="kw-2">mut </span>action_commit = commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.unwrap();
+<a href=#918 id=918 data-nosnippet>918</a>        <span class="kw">let </span>files = committed_data_files(<span class="kw-2">&amp;</span>table, <span class="kw-2">&amp;</span>action_commit.take_updates()).<span class="kw">await</span>;
+<a href=#919 id=919 data-nosnippet>919</a>        <span class="macro">assert_eq!</span>(<span class="number">1</span>, files.len());
+<a href=#920 id=920 data-nosnippet>920</a>    }
+<a href=#921 id=921 data-nosnippet>921</a>
+<a href=#922 id=922 data-nosnippet>922</a>    <span class="attr">#[tokio::test]
+<a href=#923 id=923 data-nosnippet>923</a>    </span><span class="kw">async fn </span>test_fast_append() {
+<a href=#924 id=924 data-nosnippet>924</a>        <span class="kw">let </span>table = make_v2_minimal_table();
+<a href=#925 id=925 data-nosnippet>925</a>        <span class="kw">let </span>tx = Transaction::new(<span class="kw-2">&amp;</span>table);
+<a href=#926 id=926 data-nosnippet>926</a>        <span class="kw">let </span>action = tx.fast_append();
+<a href=#927 id=927 data-nosnippet>927</a>
+<a href=#928 id=928 data-nosnippet>928</a>        <span class="kw">let </span>data_file = DataFileBuilder::default()
+<a href=#929 id=929 data-nosnippet>929</a>            .content(DataContentType::Data)
+<a href=#930 id=930 data-nosnippet>930</a>            .file_path(<span class="string">"test/3.parquet"</span>.to_string())
+<a href=#931 id=931 data-nosnippet>931</a>            .file_format(DataFileFormat::Parquet)
+<a href=#932 id=932 data-nosnippet>932</a>            .file_size_in_bytes(<span class="number">100</span>)
+<a href=#933 id=933 data-nosnippet>933</a>            .record_count(<span class="number">1</span>)
+<a href=#934 id=934 data-nosnippet>934</a>            .partition_spec_id(table.metadata().default_partition_spec_id())
+<a href=#935 id=935 data-nosnippet>935</a>            .partition(Struct::from_iter([<span class="prelude-val">Some</span>(Literal::long(<span class="number">300</span>))]))
+<a href=#936 id=936 data-nosnippet>936</a>            .build()
+<a href=#937 id=937 data-nosnippet>937</a>            .unwrap();
+<a href=#938 id=938 data-nosnippet>938</a>
+<a href=#939 id=939 data-nosnippet>939</a>        <span class="kw">let </span>action = action.add_data_files(<span class="macro">vec!</span>[data_file.clone()]);
+<a href=#940 id=940 data-nosnippet>940</a>        <span class="kw">let </span><span class="kw-2">mut </span>action_commit = commit_with_fresh_state(action, <span class="kw-2">&amp;</span>table).<span class="kw">await</span>.unwrap();
+<a href=#941 id=941 data-nosnippet>941</a>        <span class="kw">let </span>updates = action_commit.take_updates();
+<a href=#942 id=942 data-nosnippet>942</a>        <span class="kw">let </span>requirements = action_commit.take_requirements();
+<a href=#943 id=943 data-nosnippet>943</a>
+<a href=#944 id=944 data-nosnippet>944</a>        <span class="comment">// check updates and requirements
+<a href=#945 id=945 data-nosnippet>945</a>        </span><span class="macro">assert!</span>(
+<a href=#946 id=946 data-nosnippet>946</a>            <span class="macro">matches!</span>((<span class="kw-2">&amp;</span>updates[<span class="number">0</span>],<span class="kw-2">&amp;</span>updates[<span class="number">1</span>]), (TableUpdate::AddSnapshot { snapshot },TableUpdate::SetSnapshotRef { reference,ref_name }) <span class="kw">if </span>snapshot.snapshot_id() == reference.snapshot_id &amp;&amp; ref_name == MAIN_BRANCH)
+<a href=#947 id=947 data-nosnippet>947</a>        );
+<a href=#948 id=948 data-nosnippet>948</a>        <span class="macro">assert_eq!</span>(
+<a href=#949 id=949 data-nosnippet>949</a>            <span class="macro">vec!</span>[
+<a href=#950 id=950 data-nosnippet>950</a>                TableRequirement::UuidMatch {
+<a href=#951 id=951 data-nosnippet>951</a>                    uuid: table.metadata().uuid()
+<a href=#952 id=952 data-nosnippet>952</a>                },
+<a href=#953 id=953 data-nosnippet>953</a>                TableRequirement::RefSnapshotIdMatch {
+<a href=#954 id=954 data-nosnippet>954</a>                    r#ref: MAIN_BRANCH.to_string(),
+<a href=#955 id=955 data-nosnippet>955</a>                    snapshot_id: table.metadata().current_snapshot_id
+<a href=#956 id=956 data-nosnippet>956</a>                }
+<a href=#957 id=957 data-nosnippet>957</a>            ],
+<a href=#958 id=958 data-nosnippet>958</a>            requirements
 <a href=#959 id=959 data-nosnippet>959</a>        );
 <a href=#960 id=960 data-nosnippet>960</a>
-<a href=#961 id=961 data-nosnippet>961</a>        <span class="macro">assert_eq!</span>(
-<a href=#962 id=962 data-nosnippet>962</a>            new_snapshot.snapshot_id(),
-<a href=#963 id=963 data-nosnippet>963</a>            manifest.entries()[<span class="number">0</span>].snapshot_id().unwrap()
-<a href=#964 id=964 data-nosnippet>964</a>        );
-<a href=#965 id=965 data-nosnippet>965</a>        <span class="macro">assert_eq!</span>(data_file, <span class="kw-2">*</span>manifest.entries()[<span class="number">0</span>].data_file());
-<a href=#966 id=966 data-nosnippet>966</a>    }
-<a href=#967 id=967 data-nosnippet>967</a>}
+<a href=#961 id=961 data-nosnippet>961</a>        <span class="comment">// check manifest list
+<a href=#962 id=962 data-nosnippet>962</a>        </span><span class="kw">let </span>new_snapshot: SnapshotRef = <span class="kw">if let </span>TableUpdate::AddSnapshot { snapshot } = <span class="kw-2">&amp;</span>updates[<span class="number">0</span>] {
+<a href=#963 id=963 data-nosnippet>963</a>            SnapshotRef::new(snapshot.clone())
+<a href=#964 id=964 data-nosnippet>964</a>        } <span class="kw">else </span>{
+<a href=#965 id=965 data-nosnippet>965</a>            <span class="macro">unreachable!</span>()
+<a href=#966 id=966 data-nosnippet>966</a>        };
+<a href=#967 id=967 data-nosnippet>967</a>        <span class="kw">let </span>manifest_list = table
+<a href=#968 id=968 data-nosnippet>968</a>            .manifest_list_reader(<span class="kw-2">&amp;</span>new_snapshot)
+<a href=#969 id=969 data-nosnippet>969</a>            .load()
+<a href=#970 id=970 data-nosnippet>970</a>            .<span class="kw">await
+<a href=#971 id=971 data-nosnippet>971</a>            </span>.unwrap();
+<a href=#972 id=972 data-nosnippet>972</a>        <span class="macro">assert_eq!</span>(<span class="number">1</span>, manifest_list.entries().len());
+<a href=#973 id=973 data-nosnippet>973</a>        <span class="macro">assert_eq!</span>(
+<a href=#974 id=974 data-nosnippet>974</a>            manifest_list.entries()[<span class="number">0</span>].sequence_number,
+<a href=#975 id=975 data-nosnippet>975</a>            new_snapshot.sequence_number()
+<a href=#976 id=976 data-nosnippet>976</a>        );
+<a href=#977 id=977 data-nosnippet>977</a>
+<a href=#978 id=978 data-nosnippet>978</a>        <span class="comment">// check manifest
+<a href=#979 id=979 data-nosnippet>979</a>        </span><span class="kw">let </span>manifest = table
+<a href=#980 id=980 data-nosnippet>980</a>            .manifest_reader()
+<a href=#981 id=981 data-nosnippet>981</a>            .read(<span class="kw-2">&amp;</span>manifest_list.entries()[<span class="number">0</span>])
+<a href=#982 id=982 data-nosnippet>982</a>            .<span class="kw">await
+<a href=#983 id=983 data-nosnippet>983</a>            </span>.unwrap();
+<a href=#984 id=984 data-nosnippet>984</a>        <span class="macro">assert_eq!</span>(<span class="number">1</span>, manifest.entries().len());
+<a href=#985 id=985 data-nosnippet>985</a>        <span class="macro">assert_eq!</span>(
+<a href=#986 id=986 data-nosnippet>986</a>            new_snapshot.sequence_number(),
+<a href=#987 id=987 data-nosnippet>987</a>            manifest.entries()[<span class="number">0</span>]
+<a href=#988 id=988 data-nosnippet>988</a>                .sequence_number()
+<a href=#989 id=989 data-nosnippet>989</a>                .expect(<span class="string">"Inherit sequence number by load manifest"</span>)
+<a href=#990 id=990 data-nosnippet>990</a>        );
+<a href=#991 id=991 data-nosnippet>991</a>
+<a href=#992 id=992 data-nosnippet>992</a>        <span class="macro">assert_eq!</span>(
+<a href=#993 id=993 data-nosnippet>993</a>            new_snapshot.snapshot_id(),
+<a href=#994 id=994 data-nosnippet>994</a>            manifest.entries()[<span class="number">0</span>].snapshot_id().unwrap()
+<a href=#995 id=995 data-nosnippet>995</a>        );
+<a href=#996 id=996 data-nosnippet>996</a>        <span class="macro">assert_eq!</span>(data_file, <span class="kw-2">*</span>manifest.entries()[<span class="number">0</span>].data_file());
+<a href=#997 id=997 data-nosnippet>997</a>    }
+<a href=#998 id=998 data-nosnippet>998</a>}
 </code></pre></div></section></main></body></html>
