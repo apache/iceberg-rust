@@ -40,7 +40,7 @@ use serde_json::Value as JsonValue;
 use crate::arrow::schema_to_arrow_schema;
 use crate::error::invalid_data;
 use crate::spec::{
-    ManifestContentType, ManifestFile, ManifestMetadata, ManifestStatus, Schema,
+    FormatVersion, ManifestContentType, ManifestFile, ManifestMetadata, ManifestStatus, Schema,
     manifest_entry_fields,
 };
 use crate::{Error, Result};
@@ -153,7 +153,12 @@ pub fn read_manifest_entries(bytes: &[u8], manifest_file: &ManifestFile) -> Resu
             "arrow-avro split the manifest into more than one batch"
         ));
     }
-    let entries = project_struct(&StructArray::from(batch), &avro_schema, schema.fields())?;
+    let entries = project_struct(
+        &StructArray::from(batch),
+        &avro_schema,
+        schema.fields(),
+        *metadata.format_version(),
+    )?;
     Ok(RecordBatch::from(inherit(entries, manifest_file)?))
 }
 
@@ -206,7 +211,12 @@ fn non_null_type(avro_type: &JsonValue) -> &JsonValue {
 
 /// Builds each of `fields` from the column of `array` that the Avro record
 /// `record` gives the same field ID.
-fn project_struct(array: &StructArray, record: &JsonValue, fields: &Fields) -> Result<StructArray> {
+fn project_struct(
+    array: &StructArray,
+    record: &JsonValue,
+    fields: &Fields,
+    format_version: FormatVersion,
+) -> Result<StructArray> {
     let avro_fields = record["fields"]
         .as_array()
         .ok_or_else(|| invalid_data!("manifest Avro type {record} is not a record"))?;
@@ -222,8 +232,9 @@ fn project_struct(array: &StructArray, record: &JsonValue, fields: &Fields) -> R
                     array.column(index),
                     non_null_type(&avro_fields[index]["type"]),
                     field,
+                    format_version,
                 )?,
-                None => missing_field(field, array.len())?,
+                None => missing_field(field, array.len(), format_version)?,
             },
         );
     }
@@ -232,12 +243,15 @@ fn project_struct(array: &StructArray, record: &JsonValue, fields: &Fields) -> R
 }
 
 /// Builds the column for a field that the manifest doesn't have.
-fn missing_field(field: &Field, len: usize) -> Result<ArrayRef> {
+fn missing_field(field: &Field, len: usize, format_version: FormatVersion) -> Result<ArrayRef> {
     // v1 manifests have no content or sequence number columns, which v2+
-    // readers read as 0.
+    // readers read as 0. A v2+ manifest may lack file_sequence_number (Java
+    // wrote none before 1.1.0), which reads as null and is inherited.
     match field_id(field) {
         CONTENT_FIELD_ID => Ok(Arc::new(Int32Array::from_value(0, len))),
-        SEQUENCE_NUMBER_FIELD_ID | FILE_SEQUENCE_NUMBER_FIELD_ID => {
+        SEQUENCE_NUMBER_FIELD_ID | FILE_SEQUENCE_NUMBER_FIELD_ID
+            if format_version == FormatVersion::V1 =>
+        {
             Ok(Arc::new(Int64Array::from_value(0, len)))
         }
         _ if field.is_nullable() => Ok(new_null_array(field.data_type(), len)),
@@ -253,7 +267,12 @@ fn missing_field(field: &Field, len: usize) -> Result<ArrayRef> {
 
 /// Converts the decoded `array` of Avro type `avro_type` to `field`, the
 /// spec's Arrow field for it.
-fn project(array: &ArrayRef, avro_type: &JsonValue, field: &Field) -> Result<ArrayRef> {
+fn project(
+    array: &ArrayRef,
+    avro_type: &JsonValue,
+    field: &Field,
+    format_version: FormatVersion,
+) -> Result<ArrayRef> {
     let type_mismatch = || {
         invalid_data!(
             "manifest field {} has Avro type {avro_type}, which doesn't match {}",
@@ -266,10 +285,16 @@ fn project(array: &ArrayRef, avro_type: &JsonValue, field: &Field) -> Result<Arr
             array.as_struct_opt().ok_or_else(type_mismatch)?,
             avro_type,
             fields,
+            format_version,
         )?),
         DataType::List(element) => {
             let list = array.as_list_opt::<i32>().ok_or_else(type_mismatch)?;
-            let values = project(list.values(), non_null_type(&avro_type["items"]), element)?;
+            let values = project(
+                list.values(),
+                non_null_type(&avro_type["items"]),
+                element,
+                format_version,
+            )?;
             Arc::new(
                 ListArray::try_new(
                     element.clone(),
@@ -290,6 +315,7 @@ fn project(array: &ArrayRef, avro_type: &JsonValue, field: &Field) -> Result<Arr
                 list.values().as_struct_opt().ok_or_else(type_mismatch)?,
                 &avro_type["items"],
                 key_value,
+                format_version,
             )?;
             Arc::new(
                 MapArray::try_new(
@@ -391,8 +417,11 @@ fn fill_nulls(array: &ArrayRef, rows: Option<&BooleanArray>, value: i64) -> Resu
 }
 
 /// Assigns first row IDs to the data files that lack one, following first row
-/// ID inheritance. As in Java's `ManifestReader`, deleted entries take no row
-/// IDs, and a manifest without a first row ID clears them all.
+/// ID inheritance. Deleted entries take no row IDs, because the spec's
+/// suggested manifest `first_row_id` increment, `added_rows_count` plus
+/// `existing_rows_count`, leaves no room for them. A manifest without a first
+/// row ID belongs to a snapshot without row lineage, so all its row IDs are
+/// null.
 fn inherit_first_row_ids(
     first_row_ids: &Int64Array,
     status: &Int32Array,
@@ -414,6 +443,12 @@ fn inherit_first_row_ids(
     {
         match first_row_id {
             None if status != ManifestStatus::Deleted as i32 => {
+                if record_count < 0 {
+                    return Err(invalid_data!(
+                        "negative record_count {record_count} assigning first row IDs in {}",
+                        manifest_file.manifest_path
+                    ));
+                }
                 builder.append_value(next_row_id);
                 next_row_id = next_row_id.checked_add(record_count).ok_or_else(|| {
                     invalid_data!(
@@ -1112,6 +1147,49 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_v2_manifest_without_file_sequence_number_inherits() {
+        let file = |i: usize| {
+            data_file(DataContentType::Data, &format!("s3://b/data/{i}.parquet"))
+                .build()
+                .unwrap()
+        };
+        let (bytes, mut manifest_file) = write_manifest(
+            partition_spec(&[]),
+            Some(1),
+            |b| b.build_v2_data(),
+            |writer| {
+                writer.add_file(file(0), -1).unwrap();
+                writer.add_existing_file(file(1), 3, 5, Some(5)).unwrap();
+            },
+        )
+        .await;
+        // Java wrote v2 manifests without file_sequence_number before 1.1.0.
+        let bytes = rewrite_manifest(
+            &bytes,
+            Codec::Null,
+            |schema| {
+                schema["fields"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|field| field["name"] != "file_sequence_number")
+            },
+            |record| {
+                let AvroValue::Record(fields) = record else {
+                    panic!("manifest entry is not a record");
+                };
+                fields.retain(|(name, _)| name != "file_sequence_number");
+            },
+        );
+        manifest_file.sequence_number = 7;
+        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+
+        assert_eq!(
+            column(&batch, "file_sequence_number").as_ref(),
+            &Int64Array::from(vec![Some(7), None]) as &dyn Array
+        );
+    }
+
     async fn first_row_id_manifest() -> (Vec<u8>, ManifestFile) {
         let file = |i: usize, record_count: u64, first_row_id: Option<i64>| DataFile {
             first_row_id,
@@ -1164,6 +1242,31 @@ mod tests {
         assert_eq!(data_file_column(&batch, "first_row_id").null_count(), 5);
 
         manifest_file.first_row_id = Some(i64::MAX as u64 - 5);
+        let err = read_manifest_entries(&bytes, &manifest_file).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+
+        // A negative record_count would assign overlapping row IDs.
+        let bytes = rewrite_manifest(
+            &bytes,
+            Codec::Null,
+            |_| {},
+            |record| {
+                let AvroValue::Record(fields) = record else {
+                    panic!("manifest entry is not a record");
+                };
+                let Some((_, AvroValue::Record(data_file))) =
+                    fields.iter_mut().find(|(name, _)| name == "data_file")
+                else {
+                    panic!("manifest entry has no data_file record");
+                };
+                for (name, value) in data_file {
+                    if name == "record_count" && *value == AvroValue::Long(10) {
+                        *value = AvroValue::Long(-10);
+                    }
+                }
+            },
+        );
+        manifest_file.first_row_id = Some(100);
         let err = read_manifest_entries(&bytes, &manifest_file).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
