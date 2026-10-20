@@ -41,7 +41,6 @@ tracing = { workspace = true }
 itertools = { workspace = true }
 regex = { workspace = true }
 sqlx = { version = "0.8.1", features = [
-  "tls-rustls",
   "runtime-tokio",
   "any",
   "sqlite",
