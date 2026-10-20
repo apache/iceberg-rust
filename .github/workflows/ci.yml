@@ -119,6 +119,11 @@ jobs:
       - name: Setup Rust toolchain
         uses: $/.github/actions/setup-builder
 
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
       - name: Cargo clippy
         run: make check-clippy
 
