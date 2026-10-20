@@ -20,8 +20,6 @@
 all-features = true
 
 [licenses]
-unused-allowed-license = "deny"
-unused-license-exception = "deny"
 allow = [
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
@@ -38,6 +36,8 @@ allow = [
   # https://www.apache.org/legal/resolved.html#category-a
   "BSL-1.0",
 ]
+unused-allowed-license = "deny"
+unused-license-exception = "deny"
 
 exceptions = [
   # The MPL license is allowed (binary-only):
