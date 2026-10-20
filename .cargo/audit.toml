@@ -37,4 +37,11 @@ ignore = [
   # once the transitive dependency set permits quick-xml >=0.41.0.
   "RUSTSEC-2026-0194",
   "RUSTSEC-2026-0195",
+  # `webpki-roots` < 1.0.10 bundles a distrusted emSign root.
+  #
+  # sqlx-core 0.8.6 pulls in webpki-roots 0.26.11, the final 0.26.x release.
+  # It only re-exports webpki-roots 1.x, which the lockfile pins to the fixed
+  # 1.0.10, but cargo-audit flags it by version number. Remove once sqlx moves
+  # to webpki-roots 1.x directly.
+  "RUSTSEC-2026-0381",
 ]
