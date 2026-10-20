@@ -49,5 +49,21 @@ jobs:
         with:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
+      # cargo-public-api has no prebuilt binaries and takes about 5 minutes to build,
+      # so cache it on its own instead of relying on the much larger Rust cache above,
+      # which is often evicted. The key uses the Makefile, which pins the version.
+      - name: Cache cargo-public-api
+        id: cache-public-api
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-public-api
+          key: cargo-public-api-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Makefile') }}
+
+      - name: Install cargo-public-api
+        if: steps.cache-public-api.outputs.cache-hit != 'true'
+        run: make install-cargo-public-api
+
       - name: Check public API
-        run: make check-public-api
+        # A binary restored from the cache lacks cargo's install records, so the Makefile's
+        # install prerequisite would rebuild it. `-o` tells make to skip that target.
+        run: make -o install-cargo-public-api check-public-api
