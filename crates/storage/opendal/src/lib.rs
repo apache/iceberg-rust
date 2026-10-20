@@ -603,8 +603,7 @@ impl OpenDalStorage {
             OpenDalStorage::Azdls { config, .. } => {
                 let azure_path = path.parse::<AzureStoragePath>()?;
                 match_path_with_config(&azure_path, config)?;
-                let relative_path_len = azure_path.path.len();
-                Ok(&path[path.len() - relative_path_len..])
+                Ok(azure_path.relative_path(path))
             }
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { .. } => {
@@ -1176,7 +1175,7 @@ mod tests {
             storage
                 .relativize_path("abfss://myfs@myaccount.dfs.core.windows.net/path/to/file.parquet")
                 .unwrap(),
-            "/path/to/file.parquet"
+            "path/to/file.parquet"
         );
     }
 }
