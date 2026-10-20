@@ -34,6 +34,7 @@ use crate::spec::{
 use crate::table::Table;
 use crate::transaction::ActionCommit;
 use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
+
 /// A trait that defines how different table operations produce new snapshots.
 ///
 /// `SnapshotProduceOperation` is used by [`SnapshotProducer`] to customize snapshot creation
