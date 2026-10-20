@@ -22,10 +22,10 @@ use uuid::Uuid;
 
 use super::{
     DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
-    ONE_MINUTE_MS, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile, Schema, SchemaRef,
-    Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
-    StatisticsFile, StructType, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
-    UnboundPartitionSpec,
+    ONE_MINUTE_MS, PartitionField, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
+    Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
+    SortOrderRef, StatisticsFile, StructType, TableMetadata, TableProperties, Transform,
+    UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result, invalid_data};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
@@ -751,10 +751,8 @@ impl TableMetadataBuilder {
 
             // If name exists in schemas, validate against current schema rules
             if let Some(schema_field) = current_schema.field_by_name(partition_field.name()) {
-                let is_identity_or_void_transform = matches!(
-                    partition_field.transform(),
-                    crate::spec::Transform::Identity | crate::spec::Transform::Void
-                );
+                let is_identity_or_void_transform =
+                    matches!(partition_field.transform(), Transform::Identity | Transform::Void);
                 let has_matching_source_id = schema_field.id == partition_field.source_id()?;
 
                 if !is_identity_or_void_transform {
@@ -847,14 +845,12 @@ impl TableMetadataBuilder {
         &self,
         unbound_spec: UnboundPartitionSpec,
     ) -> Result<UnboundPartitionSpec> {
-        // Build a map of (source_id, transform) -> field_id from existing specs
-        let equivalent_field_ids: HashMap<_, _> = self
-            .metadata
-            .partition_specs
-            .values()
-            .flat_map(|spec| spec.fields())
-            .map(|field| ((vec![field.source_id], field.transform), field.field_id))
-            .collect();
+        let equivalent_field_ids = Self::highest_equivalent_field_ids(
+            self.metadata
+                .partition_specs
+                .values()
+                .flat_map(|spec| spec.fields()),
+        );
 
         // Create new fields with reused field IDs where possible
         let fields = unbound_spec
@@ -876,6 +872,23 @@ impl TableMetadataBuilder {
             spec_id: unbound_spec.spec_id,
             fields,
         })
+    }
+
+    /// Map each (source_ids, transform) pair to the highest field id assigned to it.
+    ///
+    /// Taking the highest keeps the result independent of the order `fields` arrive in, which for
+    /// the specs of a `TableMetadata` is an arbitrary `HashMap` iteration order.
+    fn highest_equivalent_field_ids<'a>(
+        fields: impl Iterator<Item = &'a PartitionField>,
+    ) -> HashMap<(Vec<i32>, Transform), i32> {
+        let mut equivalent_field_ids = HashMap::new();
+        for field in fields {
+            equivalent_field_ids
+                .entry((vec![field.source_id], field.transform))
+                .and_modify(|id: &mut i32| *id = (*id).max(field.field_id))
+                .or_insert(field.field_id);
+        }
+        equivalent_field_ids
     }
 
     /// Set the default partition spec.
@@ -3725,5 +3738,122 @@ mod tests {
         let spec2 = result.metadata.partition_spec_by_id(2).unwrap();
         let field_ids: Vec<i32> = spec2.fields().iter().map(|f| f.field_id).collect();
         assert_eq!(field_ids, vec![1000, 1001, 1002]); // Reused 1000, 1001; new 1002
+    }
+
+    #[test]
+    fn test_highest_equivalent_field_ids_is_independent_of_field_order() {
+        let field = |source_id, field_id, transform| PartitionField {
+            source_id,
+            field_id,
+            name: format!("f{field_id}"),
+            transform,
+        };
+        let fields = [
+            field(1, 1000, Transform::Identity),
+            field(2, 1003, Transform::Identity),
+            field(1, 1006, Transform::Identity),
+            field(1, 1005, Transform::Bucket(16)),
+            field(2, 1001, Transform::Identity),
+            field(1, 1002, Transform::Identity),
+            field(1, 1004, Transform::Bucket(16)),
+        ];
+        let expected = HashMap::from([
+            ((vec![1], Transform::Identity), 1006),
+            ((vec![2], Transform::Identity), 1003),
+            ((vec![1], Transform::Bucket(16)), 1005),
+        ]);
+
+        assert_eq!(
+            TableMetadataBuilder::highest_equivalent_field_ids(fields.iter()),
+            expected
+        );
+        assert_eq!(
+            TableMetadataBuilder::highest_equivalent_field_ids(fields.iter().rev()),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_partition_field_id_reuse_picks_the_highest_of_several_candidates() {
+        // These specs give identity(x) four different field ids, which a writer that does not
+        // reuse ids can leave behind. `partition_specs` is a HashMap, so the id reused for a new
+        // spec must not depend on which of them is visited first.
+        let metadata: TableMetadata = serde_json::from_value(serde_json::json!({
+            "format-version": 2,
+            "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+            "location": "s3://bucket/test/location",
+            "last-sequence-number": 0,
+            "last-updated-ms": 1602638573590i64,
+            "last-column-id": 2,
+            "current-schema-id": 0,
+            "schemas": [{
+                "type": "struct",
+                "schema-id": 0,
+                "fields": [
+                    {"id": 1, "name": "x", "required": true, "type": "long"},
+                    {"id": 2, "name": "y", "required": true, "type": "long"},
+                ],
+            }],
+            "default-spec-id": 3,
+            "last-partition-id": 1006,
+            "partition-specs": [
+                {"spec-id": 0, "fields": [
+                    {"name": "x", "transform": "identity", "source-id": 1, "field-id": 1000},
+                ]},
+                {"spec-id": 1, "fields": [
+                    {"name": "x", "transform": "identity", "source-id": 1, "field-id": 1002},
+                ]},
+                {"spec-id": 2, "fields": [
+                    {"name": "x", "transform": "identity", "source-id": 1, "field-id": 1004},
+                ]},
+                {"spec-id": 3, "fields": [
+                    {"name": "x", "transform": "identity", "source-id": 1, "field-id": 1006},
+                ]},
+            ],
+            "default-sort-order-id": 0,
+            "sort-orders": [{"order-id": 0, "fields": []}],
+        }))
+        .unwrap();
+
+        // Two fields, so this is not compatible with any existing spec and is added as a new
+        // one rather than resolving to an existing spec id.
+        let new_spec = UnboundPartitionSpec::builder()
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("x")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap()
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("y")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap()
+            .build();
+
+        let result = metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/v1.json".to_string(),
+            ))
+            .add_partition_spec(new_spec)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let spec = result.metadata.partition_spec_by_id(4).unwrap();
+        let fields: Vec<(i32, i32)> = spec
+            .fields()
+            .iter()
+            .map(|f| (f.source_id, f.field_id))
+            .collect();
+        assert_eq!(fields, vec![(1, 1006), (2, 1007)]);
+        assert_eq!(result.metadata.last_partition_id, 1007);
     }
 }
