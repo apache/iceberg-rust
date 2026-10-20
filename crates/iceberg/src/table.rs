@@ -221,11 +221,8 @@ impl Table {
 
     /// Returns this table bound to `runtime`, sharing its manifest cache.
     ///
-    /// Work the table spawns, such as scan planning and reads, runs on
-    /// `runtime` from then on. Unlike rebuilding the table through
-    /// [`Table::builder`], which starts with an empty cache, the returned
-    /// table and the original share manifests and manifest lists already
-    /// loaded by either.
+    /// Tasks such as scan planning and reads are spawned on `runtime`. A table rebuilt
+    /// through [`Table::builder`] starts with an empty cache.
     pub fn with_runtime(mut self, runtime: Runtime) -> Self {
         self.runtime = runtime;
         self
