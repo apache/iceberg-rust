@@ -147,11 +147,8 @@ impl FileScanTaskReader {
             .delete_file_loader
             .load_deletes(task.deletes(), task.schema_ref());
 
-        // Open the Parquet file once, loading its metadata. Spawn it: once the
-        // caller holds `concurrency_limit_data_files` streams it stops polling for
-        // more, and an open left mid-response keeps part of the HTTP/2 connection
-        // window, which stalls every read sharing that connection. Aborts on drop,
-        // so a dropped scan stops opening files.
+        // Spawned so the open finishes even when the caller stops polling (#3276).
+        // Aborts on drop, so a dropped scan stops opening files.
         let path = task.data_file_path().to_string();
         let file_io = self.file_io.clone();
         let file_size_in_bytes = task.file_size_in_bytes();
@@ -3820,9 +3817,7 @@ mod tests {
     /// them, and on a shared HTTP/2 connection an open stopped mid-request holds
     /// part of the connection window, which stalls every other read (#3276).
     mod open_progress {
-        use std::io::Cursor;
         use std::ops::Range;
-        use std::sync::atomic::{AtomicU64, Ordering};
 
         use async_trait::async_trait;
         use bytes::Bytes;
@@ -3832,6 +3827,7 @@ mod tests {
 
         use super::*;
         use crate::Result;
+        use crate::arrow::scan_metrics::ScanMetrics;
         use crate::io::{
             FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, MemoryStorage, OutputFile,
             Storage, StorageConfig, StorageFactory,
@@ -3844,27 +3840,22 @@ mod tests {
         /// Scheduler turns, far more than a request needs to finish.
         const YIELDS: usize = 100;
 
-        /// In-memory files that count the requests a scan makes against them.
-        /// Writing does not go through [`CountedRead`], so it is not counted.
+        /// In-memory files whose reads take a scheduler turn to answer.
         #[derive(Debug, Clone, Default, Serialize, Deserialize)]
         struct CountedStorage {
             #[serde(skip)]
             files: MemoryStorage,
-            #[serde(skip)]
-            requests: Arc<AtomicU64>,
         }
 
         struct CountedRead {
-            requests: Arc<AtomicU64>,
             contents: Bytes,
         }
 
         #[async_trait]
         impl FileRead for CountedRead {
             async fn read(&self, range: Range<u64>) -> Result<Bytes> {
-                self.requests.fetch_add(1, Ordering::SeqCst);
-                // Answering takes a turn, so a request in flight when the scan
-                // stops being polled completes only if something else drives it.
+                // A request in flight when the scan stops being polled finishes
+                // only if something else drives it.
                 tokio::task::yield_now().await;
                 Ok(self
                     .contents
@@ -3877,7 +3868,6 @@ mod tests {
         impl Storage for CountedStorage {
             async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
                 Ok(Box::new(CountedRead {
-                    requests: Arc::clone(&self.requests),
                     contents: self.files.read(path).await?,
                 }))
             }
@@ -3936,9 +3926,9 @@ mod tests {
             }
         }
 
-        /// A scan of `CONCURRENCY` identical Parquet files, and the count of the
-        /// requests it has made.
-        async fn counted_scan() -> (Arc<AtomicU64>, ArrowRecordBatchStream) {
+        /// A scan of `CONCURRENCY` identical Parquet files, and the metrics that
+        /// count the bytes it has read.
+        async fn counted_scan() -> (ScanMetrics, ArrowRecordBatchStream) {
             let schema = Arc::new(
                 Schema::builder()
                     .with_schema_id(1)
@@ -3948,22 +3938,14 @@ mod tests {
                     .build()
                     .unwrap(),
             );
-            let arrow_schema = Arc::new(ArrowSchema::new(vec![
-                Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "1".to_string(),
-                )])),
-            ]));
-            let batch = RecordBatch::try_new(Arc::clone(&arrow_schema), vec![Arc::new(
-                Int32Array::from(vec![1, 2, 3]),
-            )
-                as ArrayRef])
-            .unwrap();
-            let mut contents = Cursor::new(Vec::new());
-            let mut writer = ArrowWriter::try_new(&mut contents, arrow_schema, None).unwrap();
-            writer.write(&batch).unwrap();
-            writer.close().unwrap();
-            let contents = Bytes::from(contents.into_inner());
+            let tmp_dir = TempDir::new().unwrap();
+            let on_disk = write_plain_parquet(
+                tmp_dir.path().to_str().unwrap(),
+                "data.parquet",
+                vec![],
+                vec![],
+            );
+            let contents = Bytes::from(std::fs::read(on_disk).unwrap());
 
             let storage = CountedStorage::default();
             let mut tasks = Vec::with_capacity(CONCURRENCY);
@@ -3985,7 +3967,6 @@ mod tests {
                 );
             }
 
-            let requests = Arc::clone(&storage.requests);
             let file_io = FileIOBuilder::new(Arc::new(CountedStorageFactory { storage })).build();
             let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
                 .with_data_file_concurrency_limit(CONCURRENCY)
@@ -3993,7 +3974,8 @@ mod tests {
                 .build();
             let tasks =
                 Box::pin(futures::stream::iter(tasks.into_iter().map(Ok))) as FileScanTaskStream;
-            (requests, reader.read(tasks).unwrap().stream())
+            let result = reader.read(tasks).unwrap();
+            (result.metrics().clone(), result.stream())
         }
 
         /// Gives the scheduler turns until `done` holds, or `YIELDS` pass.
@@ -4006,49 +3988,42 @@ mod tests {
             }
         }
 
-        fn sent(requests: &AtomicU64) -> u64 {
-            requests.load(Ordering::SeqCst)
-        }
-
         /// An open must carry on through its requests although the scan is never
         /// polled again.
         #[tokio::test]
         async fn test_open_proceeds_without_the_scan_being_polled() {
-            let (requests, scan) = counted_scan().await;
+            let (metrics, scan) = counted_scan().await;
             let mut scan = Box::pin(scan);
 
             // One poll starts an open per concurrency slot. Nothing polls the
-            // scan after this, so only a spawned open can send a further request.
+            // scan after this, so only a spawned open can read any further.
             let _ = futures::poll!(scan.next());
-            let on_the_first_poll = sent(&requests);
-            spin(|| sent(&requests) > on_the_first_poll).await;
+            let on_the_first_poll = metrics.bytes_read();
+            spin(|| metrics.bytes_read() > on_the_first_poll).await;
             assert!(
-                sent(&requests) > on_the_first_poll,
-                "the opens stopped at {on_the_first_poll} requests, where the scan stopped polling"
+                metrics.bytes_read() > on_the_first_poll,
+                "the opens stopped at {on_the_first_poll} bytes, where the scan stopped polling"
             );
         }
 
         /// A dropped scan must stop opening files.
         #[tokio::test]
         async fn test_dropped_scan_stops_opening_files() {
-            let (requests, scan) = counted_scan().await;
+            let (metrics, scan) = counted_scan().await;
             let mut scan = Box::pin(scan);
 
             let _ = futures::poll!(scan.next());
-            spin(|| sent(&requests) >= CONCURRENCY as u64).await;
-            let in_flight = sent(&requests);
-            assert!(
-                in_flight >= CONCURRENCY as u64,
-                "no open reached the storage"
-            );
+            spin(|| metrics.bytes_read() > 0).await;
+            let in_flight = metrics.bytes_read();
+            assert!(in_flight > 0, "no open reached the storage");
 
             drop(scan);
             spin(|| false).await;
             assert_eq!(
-                sent(&requests),
+                metrics.bytes_read(),
                 in_flight,
-                "a dropped scan sent {} more requests",
-                sent(&requests) - in_flight
+                "a dropped scan read {} more bytes",
+                metrics.bytes_read() - in_flight
             );
         }
     }
