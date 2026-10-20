@@ -20,6 +20,8 @@
 all-features = true
 
 [licenses]
+unused-allowed-license = "deny"
+unused-license-exception = "deny"
 allow = [
   "Apache-2.0",
   "Apache-2.0 WITH LLVM-exception",
