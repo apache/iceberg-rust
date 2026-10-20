@@ -16,7 +16,6 @@
 // under the License.
 
 use std::collections::HashSet;
-use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -26,7 +25,7 @@ use crate::spec::{
     MAIN_BRANCH, SnapshotReference, SnapshotRetention, TableMetadata, TableProperties,
 };
 use crate::table::Table;
-use crate::transaction::action::{ActionCommit, TransactionAction};
+use crate::transaction::action::{ActionCommit, StatelessAction};
 use crate::{Error, Result, TableRequirement, TableUpdate};
 
 /// A transaction action that removes snapshots from table metadata.
@@ -52,6 +51,7 @@ use crate::{Error, Result, TableRequirement, TableUpdate};
 ///   explicitly is an error, since
 ///   [`remove_snapshots`](crate::spec::TableMetadataBuilder::remove_snapshots) would otherwise
 ///   drop the ref silently.
+#[derive(Clone)]
 pub struct ExpireSnapshotsAction {
     explicit_ids_to_remove: Vec<i64>,
     older_than_ms: Option<i64>,
@@ -296,8 +296,8 @@ struct ExpirePlan {
 }
 
 #[async_trait]
-impl TransactionAction for ExpireSnapshotsAction {
-    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+impl StatelessAction for ExpireSnapshotsAction {
+    async fn commit(&self, table: &Table) -> Result<ActionCommit> {
         let metadata = table.metadata();
         let properties = metadata.table_properties();
 
@@ -372,8 +372,9 @@ mod tests {
         SnapshotRetention, StatisticsFile, Summary,
     };
     use crate::table::Table;
+    use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::Transaction;
-    use crate::transaction::action::{ApplyTransactionAction, TransactionAction};
+    use crate::transaction::action::ApplyTransactionAction;
     use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
     use crate::transaction::tests::{make_v2_minimal_table, make_v2_table};
     use crate::{TableRequirement, TableUpdate};
@@ -397,7 +398,10 @@ mod tests {
     }
 
     async fn updates_of(table: &Table, action: ExpireSnapshotsAction) -> Vec<TableUpdate> {
-        Arc::new(action).commit(table).await.unwrap().take_updates()
+        commit_with_fresh_state(action, table)
+            .await
+            .unwrap()
+            .take_updates()
     }
 
     async fn expired(table: &Table, action: ExpireSnapshotsAction) -> Vec<i64> {
@@ -580,7 +584,7 @@ mod tests {
     async fn test_cannot_expire_current_snapshot() {
         let table = make_v2_table();
         let action = action().expire_snapshot_ids(vec![CURRENT_SNAPSHOT]);
-        assert!(Arc::new(action).commit(&table).await.is_err());
+        assert!(commit_with_fresh_state(action, &table).await.is_err());
     }
 
     /// `make_v2_table` with a tag pointing at the older snapshot.
@@ -607,14 +611,13 @@ mod tests {
     async fn test_cannot_expire_tagged_snapshot_explicitly() {
         let table = table_with_tag_on_old();
         let action = action().expire_snapshot_ids(vec![OLD_SNAPSHOT]);
-        assert!(Arc::new(action).commit(&table).await.is_err());
+        assert!(commit_with_fresh_state(action, &table).await.is_err());
     }
 
     #[tokio::test]
     async fn test_age_expiry_skips_tagged_snapshot() {
         let table = table_with_tag_on_old();
-        let mut commit = Arc::new(action().expire_older_than_ms(i64::MAX))
-            .commit(&table)
+        let mut commit = commit_with_fresh_state(action().expire_older_than_ms(i64::MAX), &table)
             .await
             .unwrap();
         // Both snapshots are referenced (current + tag), so nothing is expired.
@@ -765,16 +768,16 @@ mod tests {
         let table = table.with_metadata(Arc::new(metadata));
 
         let action = action().expire_snapshot_ids(vec![OLD_SNAPSHOT]);
-        assert!(Arc::new(action).commit(&table).await.is_err());
+        assert!(commit_with_fresh_state(action, &table).await.is_err());
     }
 
     #[tokio::test]
     async fn test_commit_asserts_main_ref() {
         let table = make_v2_table();
-        let mut commit = Arc::new(action().expire_snapshot_ids(vec![OLD_SNAPSHOT]))
-            .commit(&table)
-            .await
-            .unwrap();
+        let mut commit =
+            commit_with_fresh_state(action().expire_snapshot_ids(vec![OLD_SNAPSHOT]), &table)
+                .await
+                .unwrap();
         assert!(
             commit
                 .take_requirements()
@@ -902,8 +905,7 @@ mod tests {
     async fn test_retain_last_zero_errors() {
         let table = make_v2_table();
         assert!(
-            Arc::new(action().retain_last(0))
-                .commit(&table)
+            commit_with_fresh_state(action().retain_last(0), &table)
                 .await
                 .is_err()
         );
@@ -917,7 +919,7 @@ mod tests {
         );
         // 2 is the head of a non-main branch, so it cannot be expired explicitly.
         let action = action().expire_snapshot_ids(vec![2]);
-        assert!(Arc::new(action).commit(&table).await.is_err());
+        assert!(commit_with_fresh_state(action, &table).await.is_err());
     }
 
     #[tokio::test]

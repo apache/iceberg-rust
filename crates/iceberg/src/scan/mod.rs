@@ -218,10 +218,12 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Set the snapshot to scan.
+    /// Set the snapshot to scan. The scan projects the schema that snapshot was
+    /// written with.
     ///
     /// The last call to this or [`Self::as_of_time`] takes precedence.
-    /// If neither is set, uses the current snapshot.
+    /// If neither is set, the scan reads the current snapshot with the table's
+    /// current schema.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
         self.snapshot_selection = Some(SnapshotSelection::SnapshotId(snapshot_id));
         self
@@ -229,8 +231,8 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Select a snapshot at or before a timestamp in milliseconds since the Unix epoch.
     ///
-    /// Uses the table's main history. The last call to this or [`Self::snapshot_id`]
-    /// takes precedence.
+    /// Uses the table's main history, and projects the schema the selected snapshot
+    /// was written with. The last call to this or [`Self::snapshot_id`] takes precedence.
     ///
     /// ```
     /// # use iceberg::TableIdent;
@@ -337,6 +339,7 @@ impl<'a> TableScanBuilder<'a> {
             }
             None => None,
         };
+        let is_time_travel = selected_snapshot.is_some();
         let snapshot = match selected_snapshot {
             Some((snapshot_id, not_found_message)) => self
                 .table
@@ -364,7 +367,13 @@ impl<'a> TableScanBuilder<'a> {
             }
         };
 
-        let schema = snapshot.schema(self.table.metadata())?;
+        // A scan of the current state uses the table's current schema; time travel uses the
+        // schema its snapshot was written with.
+        let schema = if is_time_travel {
+            snapshot.schema(self.table.metadata())?
+        } else {
+            self.table.metadata().current_schema().clone()
+        };
         let field_ids =
             collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
         let snapshot_bound_predicate =
@@ -1319,6 +1328,39 @@ mod tests {
         assert_eq!(schemas[0], schemas[1]);
         assert_eq!(schemas[0].fields().len(), 1);
         assert_eq!(schemas[2].fields().len(), 8);
+    }
+
+    /// A scan of the current state reads the current snapshot with the table's
+    /// current schema, not the older one that snapshot was written with.
+    #[test]
+    fn test_scan_of_current_state_uses_current_schema() {
+        let table = TableTestFixture::new_with_column_added_after_last_write().table;
+
+        let table_scan = table.scan().build().unwrap();
+        assert_eq!(table_scan.snapshot(), table.metadata().current_snapshot());
+        assert_eq!(
+            table_scan.plan_context.as_ref().unwrap().snapshot_schema,
+            *table.metadata().current_schema()
+        );
+    }
+
+    /// A scan pinned to a snapshot uses the schema that snapshot was written
+    /// with, even when it is the current snapshot.
+    #[test]
+    fn test_time_travel_scan_uses_snapshot_schema() {
+        let table = TableTestFixture::new_with_column_added_after_last_write().table;
+        let snapshot = table.metadata().current_snapshot().unwrap();
+
+        let table_scan = table
+            .scan()
+            .snapshot_id(snapshot.snapshot_id())
+            .build()
+            .unwrap();
+        assert_eq!(table_scan.snapshot(), Some(snapshot));
+        assert_eq!(
+            table_scan.plan_context.as_ref().unwrap().snapshot_schema,
+            snapshot.schema(table.metadata()).unwrap()
+        );
     }
 
     fn table_with_property(key: &str, value: &str) -> Table {
