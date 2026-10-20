@@ -246,9 +246,6 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - name: Start Docker containers
-        run: make docker-up
-
       - name: Run tests
         shell: bash
         env:
@@ -257,7 +254,16 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_BUCKET: ${{ secrets.HF_BUCKET }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
-        run: cargo nextest run --all-targets --all-features --workspace
+        run: |
+          # Start the containers in the background so they come up while the tests compile.
+          make docker-up > "$RUNNER_TEMP/docker-up.log" 2>&1 &
+          docker_up_pid=$!
+          cargo nextest run --no-run --all-targets --all-features --workspace
+          if ! wait "$docker_up_pid"; then
+            cat "$RUNNER_TEMP/docker-up.log"
+            exit 1
+          fi
+          cargo nextest run --all-targets --all-features --workspace
 
       - name: Run doc tests
         if: ${{ !cancelled() }}
