@@ -50,19 +50,19 @@ impl ExpressionEvaluator {
     }
 }
 
-/// Acts as a visitor for [`ExpressionEvaluator`] to apply
-/// evaluation logic to different parts of a data structure,
-/// specifically for data file partitions.
+/// Evaluates a [`BoundPredicate`] against one row of values, such as a
+/// [`DataFile`]'s partition [`Struct`].
 #[derive(Debug)]
-struct ExpressionEvaluatorVisitor<'a> {
-    /// Reference to a [`DataFile`]'s partition [`Struct`].
-    partition: &'a Struct,
+pub(crate) struct ExpressionEvaluatorVisitor<'a> {
+    /// Laid out like the struct the predicate was bound to, because each reference's accessor
+    /// reads its value by position.
+    row: &'a Struct,
 }
 
 impl<'a> ExpressionEvaluatorVisitor<'a> {
     /// Creates a new [`ExpressionEvaluatorVisitor`].
-    fn new(partition: &'a Struct) -> Self {
-        Self { partition }
+    pub(crate) fn new(row: &'a Struct) -> Self {
+        Self { row }
     }
 }
 
@@ -93,7 +93,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(_) => Ok(false),
             None => Ok(true),
         }
@@ -104,21 +104,21 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(_) => Ok(true),
             None => Ok(false),
         }
     }
 
     fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(datum.is_nan()),
             None => Ok(false),
         }
     }
 
     fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(!datum.is_nan()),
             None => Ok(true),
         }
@@ -130,7 +130,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum < literal),
             None => Ok(false),
         }
@@ -142,7 +142,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum <= literal),
             None => Ok(false),
         }
@@ -154,7 +154,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum > literal),
             None => Ok(false),
         }
@@ -166,7 +166,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum >= literal),
             None => Ok(false),
         }
@@ -178,7 +178,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum == literal),
             None => Ok(false),
         }
@@ -190,7 +190,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum != literal),
             None => Ok(true),
         }
@@ -202,7 +202,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let Some(datum) = reference.accessor().get(self.partition)? else {
+        let Some(datum) = reference.accessor().get(self.row)? else {
             return Ok(false);
         };
 
@@ -227,7 +227,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(literals.contains(&datum)),
             None => Ok(false),
         }
@@ -239,7 +239,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(!literals.contains(&datum)),
             None => Ok(true),
         }
