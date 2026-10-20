@@ -222,18 +222,12 @@ jobs:
         run: cargo build -p iceberg --no-default-features
 
   tests:
+    name: Tests
     needs: lint
     runs-on: ubuntu-24.04
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
-    strategy:
-      max-parallel: 15
-      matrix:
-        test-suite:
-          - { name: "default", args: "--all-targets --all-features --workspace" }
-          - { name: "doc", args: "--doc --all-features --workspace" }
-    name: Tests (${{ matrix.test-suite.name }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -245,17 +239,14 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: ${{ matrix.test-suite.name }}
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
-        if: matrix.test-suite.name == 'default'
         uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
         with:
           tool: cargo-nextest
 
       - name: Start Docker containers
-        if: matrix.test-suite.name == 'default'
         run: make docker-up
 
       - name: Run tests
@@ -266,15 +257,14 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_BUCKET: ${{ secrets.HF_BUCKET }}
           HF_DATASET: ${{ secrets.HF_DATASET }}
-        run: |
-          if [ "${{ matrix.test-suite.name }}" = "default" ]; then
-            cargo nextest run ${{ matrix.test-suite.args }}
-          else
-            cargo test --no-fail-fast ${{ matrix.test-suite.args }}
-          fi
+        run: cargo nextest run --all-targets --all-features --workspace
+
+      - name: Run doc tests
+        if: ${{ !cancelled() }}
+        run: make doc-test
 
       - name: Stop Docker containers
-        if: always() && matrix.test-suite.name == 'default'
+        if: always()
         run: make docker-down
 
   msrv:
