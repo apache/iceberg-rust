@@ -1992,6 +1992,53 @@ mod tests {
     }
 
     #[test]
+    fn test_partition_to_path_with_dropped_source_column() {
+        for (source_type, transform, value, expected) in [
+            (
+                PrimitiveType::Int,
+                Transform::Identity,
+                Literal::int(1),
+                "p=1",
+            ),
+            (
+                PrimitiveType::Timestamp,
+                Transform::Identity,
+                Literal::long(1),
+                "p=1",
+            ),
+            (
+                PrimitiveType::Int,
+                Transform::Truncate(10),
+                Literal::int(10),
+                "p=10",
+            ),
+        ] {
+            let schema = Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "kept", PrimitiveType::Int.into()).into(),
+                    NestedField::required(2, "dropped", source_type.into()).into(),
+                ])
+                .build()
+                .unwrap();
+            let spec = PartitionSpec::builder(schema)
+                .add_partition_field("dropped", "p", transform)
+                .unwrap()
+                .build()
+                .unwrap();
+            let current_schema = Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "kept", PrimitiveType::Int.into()).into(),
+                ])
+                .build()
+                .unwrap();
+            assert_eq!(
+                spec.partition_to_path(&Struct::from_iter([Some(value)]), current_schema.into()),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn test_partition_to_path() {
         let schema = Schema::builder()
             .with_fields(vec![
@@ -2026,6 +2073,32 @@ mod tests {
         assert_eq!(
             spec.partition_to_path(&data, schema.into()),
             "id=42/name=alice/ts_hour=1970-02-11-16/empty_void=null"
+        );
+    }
+
+    #[test]
+    fn test_partition_to_path_float_matches_java() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "d", Type::Primitive(PrimitiveType::Double)).into(),
+                NestedField::required(2, "f", Type::Primitive(PrimitiveType::Float)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("d", "d", Transform::Identity)
+            .unwrap()
+            .add_partition_field("f", "f", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let data = Struct::from_iter([Some(Literal::double(1.0)), Some(Literal::float(1.0e7_f32))]);
+
+        assert_eq!(
+            spec.partition_to_path(&data, schema.into()),
+            "d=1.0/f=1.0E7"
         );
     }
 

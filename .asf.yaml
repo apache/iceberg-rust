@@ -33,45 +33,67 @@ github:
     squash_commit_message: PR_TITLE_AND_COMMIT_DETAILS
     merge: false
     rebase: false
-  protected_branches:
-    main:
-      required_status_checks:
-        # Check context names (job names, not workflow files) that Merge Queue
-        # waits for. Every producer workflow must run on both `pull_request`
-        # and `merge_group`, without path filters, so each context always
-        # reports. `strict` is omitted: Merge Queue validates every entry
-        # against an up-to-date main, and ASF defaults it to false.
-        contexts:
-          # Repository policy and security checks.
-          - Analyze Actions
-          - Run zizmor 🌈
-          - asf-allowlist-check
-
-          # Rust workflow gates.
-          - ci-required
-          - check-public-api
-
-          # Python bindings workflow gates.
-          - bindings-python-ci-required
-
+  # Disabled: GitHub blocks ruleset bypass while classic protection exists.
+  # The "Default Branch Protection" ruleset replaces it.
+  protected_branches: ~
+  rulesets:
+    - name: "Default Branch Protection"
+      type: branch
+      branches:
+        includes:
+          - "~DEFAULT_BRANCH"
+        excludes: []
+      bypass_teams:
+        - root
+      restrict_deletion: true
+      restrict_force_push: true
+      required_linear_history: true
       required_pull_request_reviews:
         required_approving_review_count: 1
         dismiss_stale_reviews: false
-
-      required_linear_history: true
-  rulesets:
     - name: Merge Queue
       target: branch
       enforcement: active
+      bypass_actors:
+        # apache/root (ASF Infra).
+        - actor_id: 118420
+          actor_type: Team
+          bypass_mode: always
+        # apache/iceberg-public. Iceberg committers can opt into this team via
+        # https://gitbox.apache.org/boxer/.
+        - actor_id: 20107235
+          actor_type: Team
+          bypass_mode: pull_request
       conditions:
         ref_name:
           include:
             - "~DEFAULT_BRANCH"
           exclude: []
       rules:
+        - type: required_status_checks
+          parameters:
+            # PR branches need not be up to date with main: Merge Queue
+            # already tests each entry against the latest main.
+            strict_required_status_checks_policy: false
+            # Check context names (job names, not workflow files) that Merge
+            # Queue waits for. Every producer workflow must run on both
+            # `pull_request` and `merge_group`, without path filters, so each
+            # context always reports.
+            required_status_checks:
+              # Repository policy and security checks.
+              - context: Analyze Actions
+              - context: Run zizmor 🌈
+              - context: asf-allowlist-check
+
+              # Rust workflow gates.
+              - context: ci-required
+              - context: check-public-api
+
+              # Python bindings workflow gates.
+              - context: bindings-python-ci-required
         - type: merge_queue
           parameters:
-            check_response_timeout_minutes: 90
+            check_response_timeout_minutes: 360
             grouping_strategy: ALLGREEN
             max_entries_to_build: 1
             max_entries_to_merge: 1
@@ -83,6 +105,10 @@ github:
     allow_auto_merge: true
     # auto-delete head branches after being merged
     del_branch_on_merge: true
+    # Limit open, non-draft PRs per user without write access. See CONTRIBUTING.md.
+    creation_cap:
+      enabled: true
+      max_open_pull_requests: 3
   features:
     wiki: false
     issues: true

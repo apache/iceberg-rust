@@ -23,7 +23,7 @@ pub fn iceberg_catalog_glue::GlueCatalog::update_namespace<'life0, 'life1, 'asyn
 pub fn iceberg_catalog_glue::GlueCatalog::update_table<'life0, 'async_trait>(&'life0 self, commit: iceberg::catalog::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub struct iceberg_catalog_glue::GlueCatalogBuilder
 impl core::default::Default for iceberg_catalog_glue::GlueCatalogBuilder
-pub fn iceberg_catalog_glue::GlueCatalogBuilder::default() -> Self
+pub fn iceberg_catalog_glue::GlueCatalogBuilder::default() -> iceberg_catalog_glue::GlueCatalogBuilder
 impl core::fmt::Debug for iceberg_catalog_glue::GlueCatalogBuilder
 pub fn iceberg_catalog_glue::GlueCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg::catalog::CatalogBuilder for iceberg_catalog_glue::GlueCatalogBuilder

@@ -549,6 +549,65 @@ fn avro_bytes_string() {
 }
 
 #[test]
+fn geospatial_binary_deserialization_is_not_yet_supported() {
+    for primitive_type in [
+        PrimitiveType::Geometry(Default::default()),
+        PrimitiveType::Geography(Default::default()),
+    ] {
+        let err = Datum::try_from_bytes(&[1, 2, 3], primitive_type).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+    }
+}
+
+#[test]
+fn geospatial_wkt_json_is_not_yet_supported() {
+    for primitive_type in [
+        PrimitiveType::Geometry(Default::default()),
+        PrimitiveType::Geography(Default::default()),
+    ] {
+        let err = Literal::try_from_json(
+            serde_json::json!("POINT (1 2)"),
+            &Primitive(primitive_type.clone()),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        assert_eq!(
+            err.message(),
+            "WKT deserialization for geospatial types is not yet supported"
+        );
+
+        let err = Literal::Primitive(PrimitiveLiteral::Binary(vec![1, 2, 3]))
+            .try_into_json(&Primitive(primitive_type))
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        assert_eq!(
+            err.message(),
+            "WKT serialization for geospatial types is not yet supported"
+        );
+    }
+}
+
+#[test]
+fn geospatial_datums_are_not_orderable() {
+    let geometry_type = PrimitiveType::Geometry(Default::default());
+    let geography_type = PrimitiveType::Geography(Default::default());
+    let geometry = Datum::new(
+        geometry_type.clone(),
+        PrimitiveLiteral::Binary(vec![1, 2, 3]),
+    );
+    let other_geometry = Datum::new(geometry_type, PrimitiveLiteral::Binary(vec![4, 5, 6]));
+    let geography = Datum::new(
+        geography_type.clone(),
+        PrimitiveLiteral::Binary(vec![1, 2, 3]),
+    );
+    let other_geography = Datum::new(geography_type, PrimitiveLiteral::Binary(vec![4, 5, 6]));
+
+    assert_eq!(geometry.partial_cmp(&other_geometry), None);
+    assert_eq!(geography.partial_cmp(&other_geography), None);
+}
+
+#[test]
 fn avro_bytes_decimal() {
     // (input_bytes, decimal_num, expect_scale, expect_precision)
     let cases = vec![
@@ -1985,4 +2044,39 @@ fn test_raw_literal_project_by_name_rejects_missing_required_field() {
 
     let err = raw.project_by_name(&expected).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::DataInvalid);
+}
+
+/// Expected values are the output of Java's `Double.toString` / `Float.toString` (JDK 21).
+#[test]
+fn test_datum_to_human_string_float_matches_java() {
+    let double = |value: f64| Datum::double(value).to_human_string();
+    assert_eq!(double(1.0), "1.0");
+    assert_eq!(double(100.0), "100.0");
+    assert_eq!(double(0.0), "0.0");
+    assert_eq!(double(-0.0), "-0.0");
+    assert_eq!(double(1.5), "1.5");
+    assert_eq!(double(0.001), "0.001");
+    assert_eq!(double(9999999.0), "9999999.0");
+    assert_eq!(double(1.0e7), "1.0E7");
+    assert_eq!(double(1.0e-5), "1.0E-5");
+    assert_eq!(double(1.23456789e20), "1.23456789E20");
+    assert_eq!(double(1.0e23), "1.0E23");
+    assert_eq!(double(f64::INFINITY), "Infinity");
+    assert_eq!(double(f64::NEG_INFINITY), "-Infinity");
+    assert_eq!(double(f64::NAN), "NaN");
+    assert_eq!(double(f64::MAX), "1.7976931348623157E308");
+    // Java uses at least two significant digits.
+    assert_eq!(double(f64::from_bits(1)), "4.9E-324");
+    // Halfway between two 17-digit decimals: Java picks the even one.
+    assert_eq!(double(2f64.powi(-25)), "2.9802322387695312E-8");
+
+    let float = |value: f32| Datum::float(value).to_human_string();
+    assert_eq!(float(1.0), "1.0");
+    assert_eq!(float(-0.0), "-0.0");
+    assert_eq!(float(0.1), "0.1");
+    assert_eq!(float(1.0e7), "1.0E7");
+    assert_eq!(float(f32::NEG_INFINITY), "-Infinity");
+    assert_eq!(float(f32::from_bits(1)), "1.4E-45");
+    // 2097152.25, halfway between 2097152.2 and 2097152.3.
+    assert_eq!(float(f32::from_bits(0x4a00_0001)), "2097152.2");
 }
