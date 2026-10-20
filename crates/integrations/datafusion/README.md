@@ -20,3 +20,9 @@
 # Apache Iceberg DataFusion Integration
 
 This crate contains the integration of Apache DataFusion and Apache Iceberg.
+
+## Governance change
+
+The 0.11.x line of releases is the last set of releases of the `iceberg-datafusion` crate governed by the Apache Iceberg project.
+Future releases will be governed by the Apache DataFusion project.
+The source code, and information on where how to install future versions of this crate, are available at [apache/datafusion-iceberg on GitHub](https://github.com/apache/datafusion-iceberg/).
