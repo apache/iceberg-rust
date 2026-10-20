@@ -437,6 +437,9 @@ impl UnboundPartitionSpec {
     }
 
     /// Bind this unbound partition spec to a schema.
+    ///
+    /// Unlike [`PartitionSpecBuilder::add_unbound_field`], this accepts redundant fields, such
+    /// as two time granularities of one column, because spec evolution produces them.
     pub fn bind(self, schema: impl Into<SchemaRef>) -> Result<PartitionSpec> {
         PartitionSpecBuilder::new_from_unbound(self, schema)?.build()
     }
@@ -577,8 +580,6 @@ impl PartitionSpecBuilder {
         let mut builder =
             Self::new(schema).with_spec_id(unbound.spec_id.unwrap_or(DEFAULT_PARTITION_SPEC_ID));
 
-        // Binding skips the redundancy check, as Java does: an evolved spec can keep several
-        // time granularities of one column, or several v1 `void` placeholders for it.
         for field in unbound.fields {
             builder = builder.add_field_allowing_redundancy(field)?;
         }
@@ -632,11 +633,18 @@ impl PartitionSpecBuilder {
     ///
     /// If partition field id is set, it is used as the field id.
     /// Otherwise, a new `field_id` is assigned.
+    ///
+    /// Rejects a field that is redundant with an existing one, such as a second time
+    /// granularity of the same column. [`UnboundPartitionSpec::bind`] accepts such fields.
     pub fn add_unbound_field(self, field: UnboundPartitionField) -> Result<Self> {
+        self.check_name_set_and_unique(&field.name)?;
         self.check_for_redundant_partitions(&field.source_ids, &field.transform)?;
         self.add_field_allowing_redundancy(field)
     }
 
+    /// Same as [`Self::add_unbound_field`] without the redundancy check, as Java's
+    /// `PartitionSpec.Builder.add` does. Used to bind persisted specs, where evolution can leave
+    /// several time granularities or void fields for one column.
     fn add_field_allowing_redundancy(mut self, field: UnboundPartitionField) -> Result<Self> {
         self.check_name_set_and_unique(&field.name)?;
         Self::check_name_does_not_collide_with_schema(&field, &self.schema)?;
@@ -715,20 +723,19 @@ impl PartitionSpecBuilder {
     /// Ensure that the partition name is unique among columns in the schema.
     /// Duplicate names are allowed if:
     /// 1. The column is sourced from the column with the same name.
-    /// 2. AND the transformation is identity or void. A void field named after its source is
-    ///    what removing an identity field from a format version 1 spec leaves behind.
+    /// 2. AND [`Transform::may_share_name_with_source`] holds for the transform.
     fn check_name_does_not_collide_with_schema(
         field: &UnboundPartitionField,
         schema: &Schema,
     ) -> Result<()> {
         match schema.field_by_name(field.name.as_str()) {
             Some(schema_collision) => {
-                if matches!(field.transform, Transform::Identity | Transform::Void) {
+                if field.transform.may_share_name_with_source() {
                     if schema_collision.id == field.source_id()? {
                         Ok(())
                     } else {
                         Err(invalid_data!(
-                            "Cannot create identity partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
+                            "Cannot create identity or void partition sourced from different field in schema. Field name '{}' has id `{}` in schema but partition source id is `{}`",
                             field.name,
                             schema_collision.id,
                             field.source_id()?
@@ -1639,7 +1646,78 @@ mod tests {
 
         let err = unbound.bind(ts_schema()).unwrap_err();
 
-        assert!(err.message().contains("sourced from different field"));
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("Field name 'id'"));
+    }
+
+    #[test]
+    fn test_bind_accepts_identical_fields_with_different_names() {
+        let bucket_field = |field_id: i32, name: &str| UnboundPartitionField {
+            source_ids: vec![2],
+            field_id: Some(field_id),
+            name: name.to_string(),
+            transform: Transform::Bucket(16),
+        };
+        let unbound = UnboundPartitionSpec {
+            spec_id: Some(1),
+            fields: vec![
+                bucket_field(1000, "id_bucket"),
+                bucket_field(1001, "id_bucket_2"),
+            ],
+        };
+
+        let spec = unbound.bind(ts_schema()).unwrap();
+
+        let expected = PartitionSpec {
+            spec_id: 1,
+            fields: vec![
+                PartitionField {
+                    source_id: 2,
+                    field_id: 1000,
+                    name: "id_bucket".to_string(),
+                    transform: Transform::Bucket(16),
+                },
+                PartitionField {
+                    source_id: 2,
+                    field_id: 1001,
+                    name: "id_bucket_2".to_string(),
+                    transform: Transform::Bucket(16),
+                },
+            ],
+        };
+        assert_eq!(spec, expected);
+    }
+
+    #[test]
+    fn test_bind_rejects_repeated_partition_name() {
+        let unbound = UnboundPartitionSpec {
+            spec_id: Some(1),
+            fields: vec![
+                ts_field(1000, "ts_part", Transform::Day),
+                ts_field(1001, "ts_part", Transform::Hour),
+            ],
+        };
+
+        let err = unbound.bind(ts_schema()).unwrap_err();
+
+        assert!(
+            err.message()
+                .contains("Cannot use partition name more than once")
+        );
+    }
+
+    #[test]
+    fn test_add_unbound_field_checks_name_before_redundancy() {
+        let err = PartitionSpec::builder(ts_schema())
+            .add_unbound_field(ts_field(1000, "ts_part", Transform::Day))
+            .unwrap()
+            .add_unbound_field(ts_field(1001, "ts_part", Transform::Hour))
+            .unwrap_err();
+
+        assert!(
+            err.message()
+                .contains("Cannot use partition name more than once")
+        );
     }
 
     #[test]

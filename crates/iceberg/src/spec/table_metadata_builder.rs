@@ -751,11 +751,9 @@ impl TableMetadataBuilder {
 
             // If name exists in schemas, validate against current schema rules
             if let Some(schema_field) = current_schema.field_by_name(partition_field.name()) {
-                let is_identity_or_void_transform =
-                    matches!(partition_field.transform(), Transform::Identity | Transform::Void);
                 let has_matching_source_id = schema_field.id == partition_field.source_id()?;
 
-                if !is_identity_or_void_transform {
+                if !partition_field.transform().may_share_name_with_source() {
                     return Err(invalid_data!(
                         "Cannot create partition with name '{}' that conflicts with schema field and is not an identity or void transform.",
                         partition_field.name()
@@ -764,7 +762,7 @@ impl TableMetadataBuilder {
 
                 if !has_matching_source_id {
                     return Err(invalid_data!(
-                        "Cannot create identity partition sourced from different field in schema. \
+                        "Cannot create identity or void partition sourced from different field in schema. \
                              Field name '{}' has id `{}` in schema but partition source id is `{}`",
                         partition_field.name(),
                         schema_field.id,
@@ -2500,6 +2498,63 @@ mod tests {
         let expected = added_spec.with_spec_id(1).bind(schema()).unwrap();
         assert_eq!(metadata.default_partition_spec().as_ref(), &expected);
         assert_eq!(metadata.last_partition_id, 1001);
+    }
+
+    #[test]
+    fn test_add_partition_spec_accepts_two_time_granularities_of_one_column() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "ts", Type::Primitive(PrimitiveType::Timestamptz)).into(),
+            ])
+            .build()
+            .unwrap();
+        let time_field = |field_id: i32, name: &str, transform: Transform| {
+            UnboundPartitionField::builder()
+                .source_ids(vec![1])
+                .field_id(field_id)
+                .name(name)
+                .transform(transform)
+                .build()
+                .unwrap()
+        };
+        let added_spec = UnboundPartitionSpec {
+            spec_id: None,
+            fields: vec![
+                time_field(1000, "ts_day", Transform::Day),
+                time_field(1001, "ts_hour", Transform::Hour),
+            ],
+        };
+        let metadata = TableMetadataBuilder::new(
+            schema.clone(),
+            PartitionSpec::unpartition_spec(),
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let metadata = metadata
+            .into_builder(None)
+            .add_default_partition_spec(added_spec.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        // Every later commit re-validates the default spec.
+        let metadata = metadata
+            .into_builder(None)
+            .set_properties(HashMap::from([("key".to_string(), "value".to_string())]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let expected = added_spec.with_spec_id(1).bind(schema).unwrap();
+        assert_eq!(metadata.default_partition_spec().as_ref(), &expected);
     }
 
     #[test]
