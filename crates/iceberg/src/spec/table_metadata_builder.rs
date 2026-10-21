@@ -606,9 +606,6 @@ impl TableMetadataBuilder {
     /// Important: Use this method with caution. The builder does not check
     /// if the added schema is compatible with the current schema.
     pub fn add_schema(mut self, schema: Schema) -> Result<Self> {
-        // Validate that new schema fields don't conflict with existing partition field names
-        self.validate_schema_field_names(&schema)?;
-
         let new_schema_id = self.reuse_or_create_new_schema_id(&schema);
         let schema_found = self.metadata.schemas.contains_key(&new_schema_id);
 
@@ -652,6 +649,7 @@ impl TableMetadataBuilder {
     /// Errors:
     /// - provided `schema_id` is -1 but no schema has been added via `add_schema`.
     /// - No schema with the provided `schema_id` exists.
+    /// - A field of the schema takes the name of a partition field it is not the source of.
     pub fn set_current_schema(mut self, mut schema_id: i32) -> Result<Self> {
         if schema_id == Self::LAST_ADDED {
             schema_id = self.last_added_schema_id.ok_or_else(|| {
@@ -666,9 +664,10 @@ impl TableMetadataBuilder {
             return Ok(self);
         }
 
-        let _schema = self.metadata.schemas.get(&schema_id).ok_or_else(|| {
+        let schema = self.metadata.schemas.get(&schema_id).ok_or_else(|| {
             invalid_data!("Cannot set current schema to unknown schema with id: '{schema_id}'")
         })?;
+        self.validate_schema_field_names(schema)?;
 
         // Old partition specs and sort-orders should be preserved even if they are not compatible with the new schema,
         // so that older metadata can still be interpreted.
@@ -3261,6 +3260,87 @@ mod tests {
 
         assert!(schema_first.is_ok(), "{:?}", schema_first.err());
         assert!(spec_first.is_ok(), "{:?}", spec_first.err());
+    }
+
+    #[test]
+    fn test_set_current_schema_rejects_a_partition_field_name_from_a_spec_added_after_the_schema() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let conflicting_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let spec = UnboundPartitionSpec::builder()
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("bucket_data")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap()
+            .build();
+
+        let error = TableMetadataBuilder::new(
+            schema,
+            UnboundPartitionSpec::builder().build(),
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .add_schema(conflicting_schema)
+        .and_then(|b| b.add_partition_spec(spec))
+        .and_then(|b| b.set_current_schema(TableMetadataBuilder::LAST_ADDED))
+        .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error.message().contains("sourced from field id 1"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn test_schema_with_a_conflicting_partition_field_name_can_be_added_but_not_made_current() {
+        let conflicting_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::required(2, "bucket_data", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = bucket_partitioned_metadata()
+            .into_builder(Some("s3://bucket/t/metadata/m1.json".to_string()))
+            .add_schema(conflicting_schema.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        assert_eq!(metadata.current_schema_id(), 0);
+        assert_eq!(
+            metadata.schema_by_id(1).unwrap().as_struct(),
+            conflicting_schema.as_struct()
+        );
+
+        let error = metadata
+            .into_builder(Some("s3://bucket/t/metadata/m2.json".to_string()))
+            .set_current_schema(1)
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(
+            error.message().contains("sourced from field id 1"),
+            "{error}"
+        );
     }
 
     #[test]
