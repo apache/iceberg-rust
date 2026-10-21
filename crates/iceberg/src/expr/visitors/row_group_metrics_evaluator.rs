@@ -1731,13 +1731,17 @@ mod tests {
         Ok(())
     }
 
-    fn eval_nan_bounds_inequality(filter: Predicate) -> Result<bool> {
+    // A NaN with the sign bit set sorts below -Inf under `total_cmp`, so it
+    // exercises the `>` / `>=` side of the NaN check as well.
+    const NAN_BOUNDS: [f32; 2] = [f32::NAN, f32::from_bits(0xffc0_0000)];
+
+    fn eval_nan_bounds_inequality(filter: &Predicate, nan: f32) -> Result<bool> {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
             Some(Statistics::float(
-                Some(f32::NAN),
-                Some(f32::NAN),
+                Some(nan),
+                Some(nan),
                 None,
                 Some(0),
                 false,
@@ -1747,7 +1751,7 @@ mod tests {
         )?;
 
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
-        let filter = filter.bind(iceberg_schema_ref.clone(), false)?;
+        let filter = filter.clone().bind(iceberg_schema_ref.clone(), false)?;
 
         RowGroupMetricsEvaluator::eval(
             &filter,
@@ -1760,28 +1764,36 @@ mod tests {
     #[test]
     fn eval_true_for_nan_lower_bound_less_than() -> Result<()> {
         let filter = Reference::new("col_float").less_than(Datum::float(5.0_f32));
-        assert!(eval_nan_bounds_inequality(filter)?);
+        for nan in NAN_BOUNDS {
+            assert!(eval_nan_bounds_inequality(&filter, nan)?);
+        }
         Ok(())
     }
 
     #[test]
     fn eval_true_for_nan_lower_bound_less_than_or_eq() -> Result<()> {
         let filter = Reference::new("col_float").less_than_or_equal_to(Datum::float(5.0_f32));
-        assert!(eval_nan_bounds_inequality(filter)?);
+        for nan in NAN_BOUNDS {
+            assert!(eval_nan_bounds_inequality(&filter, nan)?);
+        }
         Ok(())
     }
 
     #[test]
     fn eval_true_for_nan_upper_bound_greater_than() -> Result<()> {
         let filter = Reference::new("col_float").greater_than(Datum::float(5.0_f32));
-        assert!(eval_nan_bounds_inequality(filter)?);
+        for nan in NAN_BOUNDS {
+            assert!(eval_nan_bounds_inequality(&filter, nan)?);
+        }
         Ok(())
     }
 
     #[test]
     fn eval_true_for_nan_upper_bound_greater_than_or_eq() -> Result<()> {
         let filter = Reference::new("col_float").greater_than_or_equal_to(Datum::float(5.0_f32));
-        assert!(eval_nan_bounds_inequality(filter)?);
+        for nan in NAN_BOUNDS {
+            assert!(eval_nan_bounds_inequality(&filter, nan)?);
+        }
         Ok(())
     }
 
