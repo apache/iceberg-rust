@@ -1,0 +1,42 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Configuration for `cargo about`, which lists the license texts of the Rust
+# dependencies compiled into pyiceberg-core.
+#
+# Keep `accepted` in line with deny.toml. Order is preference when a crate offers
+# a choice, so add new licenses at the end.
+#
+# Accepted licenses must be ASF Category A or B:
+# https://www.apache.org/legal/resolved.html
+accepted = [
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  # Not on that page; Category A per
+  # https://issues.apache.org/jira/browse/LEGAL-660
+  "Unicode-3.0",
+  "Zlib",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
