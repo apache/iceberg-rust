@@ -79,6 +79,9 @@ static MAX_CONNECTIONS: u32 = 10; // Default the SQL pool to 10 connections if n
 static IDLE_TIMEOUT: u64 = 10; // Default the maximum idle timeout per connection to 10s before it is closed
 static TEST_BEFORE_ACQUIRE: bool = true; // Default the health-check of each connection to enabled prior to returning
 
+const SCHEMA_MIGRATION_RETRY_MIN_DELAY: Duration = Duration::from_millis(100);
+const SCHEMA_MIGRATION_MAX_RETRIES: usize = 4;
+
 /// Parses one pool-property value; the `Properties` derive adds the property-key context.
 fn parse_pool_property<T>(value: &str) -> Result<T>
 where
@@ -400,6 +403,11 @@ impl SchemaVersion {
     /// before this statement runs. In that case, accept the statement error once re-detection
     /// confirms that the requested version is already installed.
     async fn migrate(self, pool: &AnyPool) -> Result<()> {
+        enum RecoveryError {
+            SchemaNotReady,
+            ProbeFailed,
+        }
+
         let Some(migration_sql) = self.migration_sql() else {
             return Ok(());
         };
@@ -412,24 +420,23 @@ impl SchemaVersion {
                 let recovery = (|| async {
                     match Self::detect(pool).await {
                         Ok(detected) if detected == self => Ok(()),
-                        Ok(_) => Err(()),
+                        Ok(_) => Err(RecoveryError::SchemaNotReady),
                         Err(probe_error) => {
                             tracing::warn!(
                                 error = %probe_error,
                                 migration_error = %error,
                                 "failed to re-detect catalog schema after migration to {self} failed"
                             );
-                            Err(())
+                            Err(RecoveryError::ProbeFailed)
                         }
                     }
                 })
                 .retry(
                     ExponentialBuilder::new()
-                        .with_min_delay(Duration::from_millis(100))
-                        .with_max_delay(Duration::from_secs(60))
-                        .with_factor(2.0)
-                        .with_max_times(4),
+                        .with_min_delay(SCHEMA_MIGRATION_RETRY_MIN_DELAY)
+                        .with_max_times(SCHEMA_MIGRATION_MAX_RETRIES),
                 )
+                .when(|error| matches!(error, RecoveryError::SchemaNotReady))
                 .sleep(tokio::time::sleep)
                 .await;
 
@@ -1285,7 +1292,7 @@ mod tests {
     use std::hash::Hash;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     use iceberg::io::LocalFsStorageFactory;
     use iceberg::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
@@ -1302,7 +1309,8 @@ mod tests {
 
     use crate::catalog::{
         CATALOG_FIELD_RECORD_TYPE, CATALOG_TABLE_NAME, IDLE_TIMEOUT, MAX_CONNECTIONS,
-        NAMESPACE_LOCATION_PROPERTY_KEY, NAMESPACE_TABLE_NAME, SQL_CATALOG_PROP_BIND_STYLE,
+        NAMESPACE_LOCATION_PROPERTY_KEY, NAMESPACE_TABLE_NAME, SCHEMA_MIGRATION_MAX_RETRIES,
+        SCHEMA_MIGRATION_RETRY_MIN_DELAY, SQL_CATALOG_PROP_BIND_STYLE,
         SQL_CATALOG_PROP_BIND_STYLE_LEGACY, SQL_CATALOG_PROP_SCHEMA_VERSION, SQL_CATALOG_PROP_URI,
         SQL_CATALOG_PROP_WAREHOUSE, SqlCatalogProperties, TEST_BEFORE_ACQUIRE,
     };
@@ -2871,7 +2879,7 @@ mod tests {
         let error = SchemaVersion::V1.migrate(&pool).await.unwrap_err();
         assert_eq!(
             acquisitions.load(Ordering::SeqCst),
-            6,
+            SCHEMA_MIGRATION_MAX_RETRIES + 2,
             "readonly failures should return after bounded recovery probes"
         );
         let cause = error
@@ -2927,7 +2935,7 @@ mod tests {
 
         acquisitions.store(0, Ordering::SeqCst);
         let error = SchemaVersion::V1.migrate(&pool).await.unwrap_err();
-        assert_eq!(acquisitions.load(Ordering::SeqCst), 6);
+        assert_eq!(acquisitions.load(Ordering::SeqCst), 2);
         let cause = error
             .source()
             .unwrap()
@@ -2945,6 +2953,27 @@ mod tests {
                 .contains("no such table")
         );
         pool.close().await;
+    }
+
+    #[tokio::test]
+    async fn test_schema_migration_stops_when_pool_is_closed() {
+        install_default_drivers();
+
+        let (uri, _temp_dir) = create_v0_sqlite_db().await;
+        let pool = sqlx::AnyPool::connect(&uri).await.unwrap();
+        pool.close().await;
+
+        let error = tokio::time::timeout(
+            SCHEMA_MIGRATION_RETRY_MIN_DELAY,
+            SchemaVersion::V1.migrate(&pool),
+        )
+        .await
+        .expect("a closed pool should fail before the first retry delay")
+        .unwrap_err();
+        assert!(matches!(
+            error.source().unwrap().downcast_ref::<sqlx::Error>(),
+            Some(sqlx::Error::PoolClosed)
+        ));
     }
 
     #[tokio::test]
@@ -3036,7 +3065,7 @@ mod tests {
         let started = Instant::now();
         SchemaVersion::V1.migrate(&pool).await.unwrap();
         assert_eq!(acquisitions.load(Ordering::SeqCst), 3);
-        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(started.elapsed() >= SCHEMA_MIGRATION_RETRY_MIN_DELAY);
         assert_eq!(
             SchemaVersion::detect(&pool).await.unwrap(),
             SchemaVersion::V1
