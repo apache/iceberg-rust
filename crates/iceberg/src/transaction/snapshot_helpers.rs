@@ -30,7 +30,7 @@ use crate::spec::{
     DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestFile,
     ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, PartitionSpecRef,
     SchemaRef, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
-    StructType, Summary, TableProperties, update_snapshot_summaries,
+    StructType, Summary, TableProperties, set_iceberg_version, update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -216,14 +216,17 @@ pub(crate) fn build_summary(
 
     properties.extend(collector.build());
 
-    update_snapshot_summaries(
+    let mut summary = update_snapshot_summaries(
         Summary {
             operation,
             additional_properties: properties,
         },
         metadata.current_snapshot().map(|s| s.summary()),
         truncate_full_table,
-    )
+    )?;
+    // Recorded last so it also overrides a user-supplied `iceberg-version`.
+    set_iceberg_version(&mut summary.additional_properties);
+    Ok(summary)
 }
 
 /// Everything one attempt needs to turn a resulting manifest set into a snapshot.
