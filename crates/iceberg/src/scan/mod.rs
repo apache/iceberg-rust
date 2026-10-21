@@ -1223,6 +1223,11 @@ mod tests {
             1,
             "equality delete must attach after widening the old int partition to long"
         );
+        assert_eq!(
+            tasks[0].partition(),
+            Some(&Struct::from_iter([Some(Literal::long(7))])),
+            "the widened long(7) tuple must reach FileScanTask::partition()"
+        );
 
         let tasks: Vec<FileScanTask> = fixture
             .table
@@ -1242,6 +1247,23 @@ mod tests {
             "filter on the promoted type must not prune the file"
         );
         assert_eq!(tasks[0].deletes().len(), 1);
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").equal_to(Datum::long(8)))
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(
+            tasks.is_empty(),
+            "a file in partition x=7 must be pruned by an x=8 filter"
+        );
     }
 
     #[tokio::test]
