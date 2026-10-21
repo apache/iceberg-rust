@@ -99,7 +99,7 @@ impl AddColumn {
 /// This action accumulates schema modifications (column additions and deletions)
 /// via builder methods. At commit time, it validates all operations against the
 /// current table schema, auto-assigns field IDs from `table.metadata().last_column_id()`
-/// (unless a column was given an explicit ID via [`AddColumn::id`]), builds a new schema, and emits `AddSchema` + `SetCurrentSchema` updates with a
+/// (unless a column was given an explicit ID via the `AddColumn` builder's `id`), builds a new schema, and emits `AddSchema` + `SetCurrentSchema` updates with a
 /// `CurrentSchemaIdMatch` requirement.
 ///
 /// # Example
