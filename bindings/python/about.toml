@@ -41,6 +41,14 @@ accepted = [
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 
+# The published crate omits its LICENSE, so cargo-about fetches it from the
+# upstream repository.
+[alloc-stdlib.clarify]
+license = "BSD-3-Clause"
+[[alloc-stdlib.clarify.git]]
+checksum = "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+path = "LICENSE"
+
 # libm's license is in LICENSE.txt, which cargo-about doesn't match by name.
 [libm.clarify]
 license = "MIT"
