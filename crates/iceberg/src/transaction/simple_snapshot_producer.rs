@@ -60,28 +60,24 @@ pub(crate) struct SimpleSnapshotProducer {
     added_manifests: Option<AddedManifests>,
     /// Metadata files written by this producer (manifests and every attempt's
     /// manifest list).
-    // TODO: cleanup is not implemented yet; terminal cleanup (stateful
-    // transaction RFC, milestone 3) consumes this set.
+    // TODO(#3417): cleanup is not implemented yet; terminal cleanup consumes
+    // this set.
     #[allow(dead_code)]
     owned_artifacts: HashSet<String>,
 }
 
-/// The manifests written for one append's added files, together with the
-/// table-level inputs they were written under.
+/// The manifests written for one append's added files.
 ///
-/// A manifest file embeds its schema and partition spec and is encoded for a
-/// specific format version, so the set is only reusable while the table it is
-/// rebased onto still has the same schema and format version. The partition
-/// spec is implied: every file is validated against the default spec, so the
-/// spec is fixed for the lifetime of the producer by that check.
-///
-/// The guard is table-level because its inputs are table-level: when they
-/// change, every manifest in the set is invalid together.
+/// Reusable across attempts as long as the format version is unchanged: a v1
+/// manifest entry has no sequence number of its own and cannot inherit the one
+/// a v2 manifest list assigns after an upgrade. The added files and their
+/// partition specs are fixed by the action, and a manifest's embedded schema
+/// is only used to bind its partition spec, so neither needs a guard (matching
+/// Java's `FastAppend`).
 struct AddedManifests {
     /// One manifest today. Several once added files are grouped by partition
     /// spec (#3500) or rolled over at a target size (#3499).
     manifests: Vec<ManifestFile>,
-    schema_id: i32,
     format_version: FormatVersion,
 }
 
@@ -235,7 +231,7 @@ impl SimpleSnapshotProducer {
     }
 
     /// Returns the manifests for the added files, writing them only if no
-    /// reusable set exists for the current schema and format version.
+    /// reusable set exists for the current format version.
     async fn added_manifests(
         &mut self,
         table: &Table,
@@ -243,11 +239,9 @@ impl SimpleSnapshotProducer {
         data_files: &[DataFile],
     ) -> Result<Vec<ManifestFile>> {
         let metadata = table.metadata();
-        let schema_id = metadata.current_schema_id();
         let format_version = metadata.format_version();
 
         if let Some(cached) = &self.added_manifests
-            && cached.schema_id == schema_id
             && cached.format_version == format_version
         {
             return Ok(cached.manifests.clone());
@@ -278,7 +272,6 @@ impl SimpleSnapshotProducer {
 
         self.added_manifests = Some(AddedManifests {
             manifests: manifests.clone(),
-            schema_id,
             format_version,
         });
         Ok(manifests)
@@ -423,7 +416,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_added_manifest_is_rewritten_when_schema_changes() {
+    /// A manifest's embedded schema only binds its partition spec, so a
+    /// concurrent schema change does not invalidate it (as in Java).
+    async fn test_added_manifest_is_reused_across_schema_change() {
         let table = make_v2_minimal_table();
         let mut producer = SimpleSnapshotProducer::new(None);
         let files = vec![data_file(&table, "test/1.parquet")];
@@ -473,12 +468,11 @@ mod tests {
             .load()
             .await
             .unwrap();
-        assert_ne!(
+        assert_eq!(
             first_list.entries()[0].manifest_path,
-            second_list.entries()[0].manifest_path,
-            "a manifest embeds its schema, so a schema change must invalidate reuse"
+            second_list.entries()[0].manifest_path
         );
-        assert_eq!(producer.manifest_counter, 2);
+        assert_eq!(producer.manifest_counter, 1);
     }
 
     /// A v1 manifest entry carries no sequence number and is read back as 0,

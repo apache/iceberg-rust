@@ -174,7 +174,7 @@ pub(crate) async fn current_manifests(table: &Table) -> Result<Vec<ManifestFile>
 /// (`SnapshotProducer.summary`), where computed `added-*`/`total-*` values are
 /// written after user properties so a user cannot shadow them with a bad (or
 /// merely wrong) value that would corrupt the snapshot summary.
-pub(crate) fn build_summary(
+fn build_summary(
     table: &Table,
     operation: Operation,
     mut properties: HashMap<String, String>,

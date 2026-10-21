@@ -106,8 +106,8 @@ impl TransactionAction for FastAppendAction {
     }
 
     async fn cleanup(self, _state: SimpleSnapshotProducer, _table: &Table, _status: CommitStatus) {
-        // TODO: remove the producer's uncommitted artifacts once terminal cleanup
-        // is wired up (stateful transaction RFC, milestone 3).
+        // TODO(#3417): remove the producer's uncommitted artifacts once terminal
+        // cleanup is wired up.
     }
 }
 
@@ -133,7 +133,9 @@ mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::{commit_with_fresh_state, make_encrypted_table, test_runtime};
-    use crate::transaction::tests::{make_v2_minimal_table, with_retry_properties};
+    use crate::transaction::tests::{
+        make_v2_minimal_table, make_v3_minimal_table, with_retry_properties,
+    };
     use crate::transaction::{ApplyTransactionAction, FastAppendAction, Transaction};
     use crate::{TableCommit, TableIdent, TableRequirement, TableUpdate};
 
@@ -954,9 +956,28 @@ mod tests {
     /// recomputed against S1 (see #3418).
     #[tokio::test]
     async fn test_fast_append_retry_rebases_onto_concurrent_commit() {
+        let (s1, s2) = rebase_onto_concurrent_commit(make_v2_minimal_table()).await;
+        assert_eq!(s1.first_row_id(), None);
+        assert_eq!(s2.first_row_id(), None);
+    }
+
+    /// On a v3 table the retry must also move the row range: S2's first row id
+    /// is S1's `next_row_id`, not S0's.
+    #[tokio::test]
+    async fn test_fast_append_retry_rebases_row_range_onto_concurrent_commit() {
+        let (s1, s2) = rebase_onto_concurrent_commit(make_v3_minimal_table()).await;
+
+        // B's single-row file takes row 0 in S1, so A's file starts at row 1.
+        assert_eq!(s1.row_range(), Some((0, 1)));
+        assert_eq!(s2.row_range(), Some((1, 1)));
+    }
+
+    /// Runs the concurrent-append rebase scenario on `s0` and returns the
+    /// snapshots committed by writer B (S1) and writer A (S2).
+    async fn rebase_onto_concurrent_commit(s0: Table) -> (SnapshotRef, SnapshotRef) {
         // `TableCommit::apply` derives the next metadata location from the
         // current one, so it needs a well-formed name.
-        let s0 = with_retry_properties(make_v2_minimal_table(), "3").with_metadata_location(
+        let s0 = with_retry_properties(s0, "3").with_metadata_location(
             "memory:///table/metadata/00000-9c12d441-03fe-4693-9a96-a0705ddf69c1.metadata.json"
                 .to_string(),
         );
@@ -1025,7 +1046,7 @@ mod tests {
             .apply(tx)
             .unwrap();
         let s2 = tx.commit(&mock_catalog).await.unwrap();
-        let s2_snapshot = s2.metadata().current_snapshot().unwrap();
+        let s2_snapshot = s2.metadata().current_snapshot().unwrap().clone();
 
         // S2 is rebased onto S1, not S0.
         assert_eq!(
@@ -1047,7 +1068,7 @@ mod tests {
 
         // S2 carries B's manifest forward and adds A's. A's manifest is the one
         // written during the first attempt (counter 0), reused after rebase.
-        let manifest_list = s2.manifest_list_reader(s2_snapshot).load().await.unwrap();
+        let manifest_list = s2.manifest_list_reader(&s2_snapshot).load().await.unwrap();
         assert_eq!(manifest_list.entries().len(), 2);
         let b_manifest = manifest_list
             .entries()
@@ -1074,5 +1095,7 @@ mod tests {
         assert_eq!(summary.get("added-data-files").unwrap(), "1");
         assert_eq!(summary.get("total-data-files").unwrap(), "2");
         assert_eq!(summary.get("total-records").unwrap(), "2");
+
+        (s1_snapshot, s2_snapshot)
     }
 }

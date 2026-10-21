@@ -333,6 +333,26 @@ mod tests {
             .unwrap()
     }
 
+    pub(crate) fn make_v3_minimal_table() -> Table {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV3ValidMinimal.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json")
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIO::new_with_memory())
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
     async fn make_v2_minimal_readonly_table() -> Table {
         let table = make_v2_minimal_table();
         StaticTable::from_metadata(
