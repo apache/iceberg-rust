@@ -134,8 +134,8 @@ mod tests {
     use crate::table::Table;
     use crate::test_utils::{commit_with_fresh_state, make_encrypted_table, test_runtime};
     use crate::transaction::tests::{make_v2_minimal_table, with_retry_properties};
-    use crate::transaction::{ApplyTransactionAction, Transaction};
-    use crate::{Error, ErrorKind, TableIdent, TableRequirement, TableUpdate};
+    use crate::transaction::{ApplyTransactionAction, FastAppendAction, Transaction};
+    use crate::{TableCommit, TableIdent, TableRequirement, TableUpdate};
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
@@ -945,91 +945,134 @@ mod tests {
         assert_eq!(data_file, *manifest.entries()[0].data_file());
     }
 
-    /// A fast append that hits a retryable conflict must not leave the committed
-    /// snapshot pointing at a second copy of its manifest: the producer state
-    /// survives the retry, so the manifest is reused and only the manifest list
-    /// is rewritten (see #3418).
+    /// Two writers append concurrently. Writer A starts from S0, but writer B
+    /// commits S1 first, so A's first attempt fails the `RefSnapshotIdMatch`
+    /// requirement and A rebases onto S1 to commit S2.
+    ///
+    /// The producer state survives the retry: A's manifest is written once and
+    /// reused, while parent, sequence number, manifest list and summary are
+    /// recomputed against S1 (see #3418).
     #[tokio::test]
-    async fn test_fast_append_retry_reuses_manifest() {
+    async fn test_fast_append_retry_rebases_onto_concurrent_commit() {
         // `TableCommit::apply` derives the next metadata location from the
         // current one, so it needs a well-formed name.
-        let table = with_retry_properties(make_v2_minimal_table(), "3").with_metadata_location(
+        let s0 = with_retry_properties(make_v2_minimal_table(), "3").with_metadata_location(
             "memory:///table/metadata/00000-9c12d441-03fe-4693-9a96-a0705ddf69c1.metadata.json"
                 .to_string(),
         );
-        let commit_uuid = Uuid::now_v7();
+        let data_file = |path: &str| {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path(path.to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(100)
+                .record_count(1)
+                .partition_spec_id(s0.metadata().default_partition_spec_id())
+                .partition(Struct::from_iter([Some(Literal::long(300))]))
+                .build()
+                .unwrap()
+        };
 
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("test/1.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .file_size_in_bytes(100)
-            .record_count(1)
-            .partition_spec_id(table.metadata().default_partition_spec_id())
-            .partition(Struct::from_iter([Some(Literal::long(300))]))
+        // Writer B commits S1 on top of S0.
+        let mut b_commit = commit_with_fresh_state(
+            FastAppendAction::new().add_data_files(vec![data_file("test/b.parquet")]),
+            &s0,
+        )
+        .await
+        .unwrap();
+        let s1 = TableCommit::builder()
+            .ident(s0.identifier().clone())
+            .updates(b_commit.take_updates())
+            .requirements(b_commit.take_requirements())
             .build()
+            .apply(s0.clone())
             .unwrap();
+        let s1_snapshot = s1.metadata().current_snapshot().unwrap().clone();
 
-        // Base never changes; the first update_table fails with a retryable
-        // conflict, the second applies the commit.
+        // The catalog serves S0 to A's first attempt and S1 afterwards; every
+        // update is validated against S1, so the first attempt's
+        // `RefSnapshotIdMatch { snapshot_id: None }` fails with a real conflict.
         let mut mock_catalog = MockCatalog::new();
-        let base = table.clone();
-        mock_catalog.expect_load_table().returning_st(move |_| {
-            let base = base.clone();
-            Box::pin(async move { Ok(base) })
-        });
-        let attempts = AtomicU32::new(0);
-        let base = table.clone();
+        let loads = AtomicU32::new(0);
+        let (load_s0, load_s1) = (s0.clone(), s1.clone());
+        mock_catalog
+            .expect_load_table()
+            .times(2)
+            .returning_st(move |_| {
+                let table = if loads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    load_s0.clone()
+                } else {
+                    load_s1.clone()
+                };
+                Box::pin(async move { Ok(table) })
+            });
+        let apply_s1 = s1.clone();
         mock_catalog
             .expect_update_table()
             .times(2)
             .returning_st(move |commit| {
-                let base = base.clone();
-                if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                    Box::pin(async move {
-                        Err(
-                            Error::new(ErrorKind::CatalogCommitConflicts, "Commit conflict")
-                                .with_retryable(true),
-                        )
-                    })
-                } else {
-                    Box::pin(async move { commit.apply(base) })
-                }
+                let s1 = apply_s1.clone();
+                Box::pin(async move { commit.apply(s1) })
             });
 
-        let tx = Transaction::new(&table);
+        // Writer A starts from S0.
+        let a_uuid = Uuid::now_v7();
+        let tx = Transaction::new(&s0);
         let tx = tx
             .fast_append()
-            .set_commit_uuid(commit_uuid)
-            .add_data_files(vec![data_file])
+            .set_commit_uuid(a_uuid)
+            .add_data_files(vec![data_file("test/a.parquet")])
             .apply(tx)
             .unwrap();
-        let committed = tx.commit(&mock_catalog).await.unwrap();
+        let s2 = tx.commit(&mock_catalog).await.unwrap();
+        let s2_snapshot = s2.metadata().current_snapshot().unwrap();
 
-        let snapshot = committed.metadata().current_snapshot().unwrap();
-        // The committed manifest list is the second attempt's.
+        // S2 is rebased onto S1, not S0.
+        assert_eq!(
+            s2_snapshot.parent_snapshot_id(),
+            Some(s1_snapshot.snapshot_id())
+        );
+        assert_eq!(
+            s2_snapshot.sequence_number(),
+            s1_snapshot.sequence_number() + 1
+        );
+        // The committed manifest list is A's second attempt.
         assert!(
-            snapshot
+            s2_snapshot
                 .manifest_list()
-                .ends_with(&format!("-1-{commit_uuid}.avro")),
+                .ends_with(&format!("-1-{a_uuid}.avro")),
             "unexpected manifest list path {}",
-            snapshot.manifest_list()
+            s2_snapshot.manifest_list()
         );
 
-        // It references exactly one manifest, written under the requested UUID
-        // during the first attempt (counter 0) and reused by the second.
-        let manifest_list = committed
-            .manifest_list_reader(snapshot)
-            .load()
-            .await
-            .unwrap();
-        assert_eq!(manifest_list.entries().len(), 1);
+        // S2 carries B's manifest forward and adds A's. A's manifest is the one
+        // written during the first attempt (counter 0), reused after rebase.
+        let manifest_list = s2.manifest_list_reader(s2_snapshot).load().await.unwrap();
+        assert_eq!(manifest_list.entries().len(), 2);
+        let b_manifest = manifest_list
+            .entries()
+            .iter()
+            .find(|m| m.added_snapshot_id == s1_snapshot.snapshot_id())
+            .expect("S2 should carry B's manifest forward");
+        let a_manifest = manifest_list
+            .entries()
+            .iter()
+            .find(|m| m.added_snapshot_id == s2_snapshot.snapshot_id())
+            .expect("S2 should add A's manifest");
         assert!(
-            manifest_list.entries()[0]
+            a_manifest
                 .manifest_path
-                .ends_with(&format!("{commit_uuid}-m0.avro")),
+                .ends_with(&format!("{a_uuid}-m0.avro")),
             "unexpected manifest path {}",
-            manifest_list.entries()[0].manifest_path
+            a_manifest.manifest_path
         );
+        assert_eq!(a_manifest.sequence_number, s2_snapshot.sequence_number());
+        assert_eq!(b_manifest.sequence_number, s1_snapshot.sequence_number());
+
+        // Summary totals are computed against S1, not S0.
+        let summary = &s2_snapshot.summary().additional_properties;
+        assert_eq!(summary.get("added-data-files").unwrap(), "1");
+        assert_eq!(summary.get("total-data-files").unwrap(), "2");
+        assert_eq!(summary.get("total-records").unwrap(), "2");
     }
 }
