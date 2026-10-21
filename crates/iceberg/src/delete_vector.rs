@@ -464,30 +464,26 @@ pub(crate) fn frame_dv_blob(vector: &[u8]) -> Vec<u8> {
 /// 2^16 and 2^32 boundaries, and empty bitmaps between used ones.
 #[cfg(test)]
 pub(crate) fn mixed_delete_vectors() -> Vec<DeleteVector> {
-    let mut state = 0x9E37_79B9_7F4A_7C15u64;
-    let mut rand = move || {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state
-    };
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
 
+    let mut rng = StdRng::seed_from_u64(7);
     let mut vectors = vec![DeleteVector::default()];
     for case in 0..40u64 {
         let mut dv = DeleteVector::default();
         let base = if case % 4 == 0 { (1u64 << 32) - 40 } else { 0 };
-        let mut pos = base + rand() % 50;
-        for _ in 0..(rand() % 60) {
-            let run = match rand() % 5 {
+        let mut pos = base + rng.random_range(0..50);
+        for _ in 0..rng.random_range(0..60) {
+            let run = match rng.random_range(0..5) {
                 0 => 1,
                 1 => 2,
                 // one past the probe length: the rest comes from `next_range`
                 2 => u64::from(RUN_PROBE_LEN) + 1,
-                3 => 1 + rand() % 40,
-                _ => 1 + rand() % 70_000,
+                3 => rng.random_range(1..=40),
+                _ => rng.random_range(1..=70_000),
             };
             dv.inner.insert_range(pos..pos + run);
-            pos += run + 1 + rand() % 30;
+            pos += run + rng.random_range(1..=30);
         }
         vectors.push(dv);
     }
@@ -509,6 +505,9 @@ pub(crate) fn mixed_delete_vectors() -> Vec<DeleteVector> {
 
 #[cfg(test)]
 mod tests {
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
     use super::*;
 
     #[test]
@@ -532,13 +531,7 @@ mod tests {
 
     #[test]
     fn test_ranges_skip_to_matches_model() {
-        let mut state = 7u64;
-        let mut rand = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut rng = StdRng::seed_from_u64(7);
 
         for dv in mixed_delete_vectors() {
             let deleted: Vec<u64> = dv.iter().collect();
@@ -549,10 +542,10 @@ mod tests {
             let mut done = 0u64;
             let mut ranges = dv.ranges();
             loop {
-                match rand() % 6 {
+                match rng.random_range(0..6) {
                     0 | 1 => {
-                        let target =
-                            done.max(deleted.get(next).copied().unwrap_or(max)) + rand() % 200;
+                        let target = done.max(deleted.get(next).copied().unwrap_or(max))
+                            + rng.random_range(0..200);
                         ranges.skip_to(target);
                         next = deleted.partition_point(|&p| p < target);
                         done = target;
@@ -560,10 +553,10 @@ mod tests {
                     }
                     // A target at or below `done`, near it or anywhere below: does nothing.
                     2 => {
-                        let back = if rand() % 2 == 0 {
-                            done.saturating_sub(rand() % 200)
+                        let back = if rng.random_bool(0.5) {
+                            done.saturating_sub(rng.random_range(0..200))
                         } else {
-                            rand() % (done + 1)
+                            rng.random_range(0..=done)
                         };
                         ranges.skip_to(back);
                         continue;
@@ -595,13 +588,7 @@ mod tests {
 
     #[test]
     fn test_advance_to_matches_model() {
-        let mut state = 11u64;
-        let mut rand = move || {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state
-        };
+        let mut rng = StdRng::seed_from_u64(11);
 
         for dv in mixed_delete_vectors() {
             let deleted: Vec<u64> = dv.iter().collect();
@@ -610,20 +597,20 @@ mod tests {
             let mut done = 0u64;
             let mut iter = dv.iter();
             loop {
-                match rand() % 6 {
+                match rng.random_range(0..6) {
                     0 => {
-                        let target =
-                            done.max(deleted.get(next).copied().unwrap_or(max)) + rand() % 200;
+                        let target = done.max(deleted.get(next).copied().unwrap_or(max))
+                            + rng.random_range(0..200);
                         iter.advance_to(target);
                         next = deleted.partition_point(|&p| p < target);
                         done = target;
                         continue;
                     }
                     1 => {
-                        let back = if rand() % 2 == 0 {
-                            done.saturating_sub(rand() % 200)
+                        let back = if rng.random_bool(0.5) {
+                            done.saturating_sub(rng.random_range(0..200))
                         } else {
-                            rand() % (done + 1)
+                            rng.random_range(0..=done)
                         };
                         iter.advance_to(back);
                         continue;
