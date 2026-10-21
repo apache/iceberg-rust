@@ -32,5 +32,5 @@ runs:
         cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml about.hbs > cargo-about-output.txt
         # Both are symlinks to the root files, remove them so the redirects don't write through.
         rm LICENSE NOTICE
-        cat ../../LICENSE cargo-about-output.txt > LICENSE
+        cat ../../LICENSE cargo-about-output.txt third-party-licenses.txt > LICENSE
         { cat ../../NOTICE; echo; cat third-party-notices.txt; } > NOTICE
