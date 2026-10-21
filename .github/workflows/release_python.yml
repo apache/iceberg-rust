@@ -142,6 +142,7 @@ jobs:
     strategy:
       max-parallel: 15
       matrix:
+        # Keep `targets` in bindings/python/about.toml in sync with these.
         include:
           - { os: windows-latest }
           - { os: windows-11-arm }

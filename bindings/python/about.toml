@@ -40,6 +40,16 @@ accepted = [
 ]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
+# The wheel targets in release_python.yml and release_python_nightly.yml. Keep in sync.
+targets = [
+  "aarch64-apple-darwin",
+  "aarch64-pc-windows-msvc",
+  "aarch64-unknown-linux-gnu",
+  "armv7-unknown-linux-gnueabihf",
+  "x86_64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+]
 
 # The published crate omits its LICENSE, so cargo-about fetches it from the
 # upstream repository.
