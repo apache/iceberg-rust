@@ -23,7 +23,7 @@ use typed_builder::TypedBuilder;
 
 use crate::spec::{
     ListType, Literal, MapType, NestedField, NestedFieldRef, SCHEMA_NAME_DELIMITER, Schema,
-    StructType, Type,
+    StructType, Type, index_by_id,
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, StatelessAction};
@@ -157,24 +157,6 @@ impl UpdateSchemaAction {
 // ---------------------------------------------------------------------------
 // ID assignment helpers
 // ---------------------------------------------------------------------------
-
-/// Collect the IDs of a `NestedField` and all its nested sub-fields.
-fn collect_field_ids(field: &NestedField) -> Vec<i32> {
-    let nested = match field.field_type.as_ref() {
-        Type::Primitive(_) | Type::Variant(_) => vec![],
-        Type::Struct(struct_type) => struct_type
-            .fields()
-            .iter()
-            .flat_map(|f| collect_field_ids(f))
-            .collect(),
-        Type::List(list_type) => collect_field_ids(&list_type.element_field),
-        Type::Map(map_type) => [&map_type.key_field, &map_type.value_field]
-            .into_iter()
-            .flat_map(|f| collect_field_ids(f))
-            .collect(),
-    };
-    std::iter::once(field.id).chain(nested).collect()
-}
 
 /// Recursively assign fresh field IDs to a `NestedField` and all its nested sub-fields.
 ///
@@ -362,13 +344,14 @@ impl StatelessAction for UpdateSchemaAction {
 
         // Explicit IDs must be new: anything at or below `last_column_id` may belong to a
         // dropped column, and reusing it would make old data files read as the new column.
-        let explicit_ids: Vec<i32> = self
-            .additions
-            .iter()
-            .filter(|add| add.id.is_some())
-            .flat_map(|add| collect_field_ids(&add.to_nested_field()))
-            .collect();
-        if let Some(&id) = explicit_ids.iter().find(|&&id| id <= last_column_id) {
+        let explicit_ids = index_by_id(&StructType::new(
+            self.additions
+                .iter()
+                .filter(|add| add.id.is_some())
+                .map(|add| add.to_nested_field())
+                .collect(),
+        ))?;
+        if let Some(&id) = explicit_ids.keys().find(|&&id| id <= last_column_id) {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 format!(
@@ -377,7 +360,7 @@ impl StatelessAction for UpdateSchemaAction {
             ));
         }
         // Fresh IDs start above any explicit ID so the two can be mixed in one update.
-        if let Some(&max_explicit_id) = explicit_ids.iter().max() {
+        if let Some(&max_explicit_id) = explicit_ids.keys().max() {
             last_column_id = max_explicit_id;
         }
 
@@ -1375,5 +1358,30 @@ mod tests {
             };
             assert_eq!(err.kind(), ErrorKind::PreconditionFailed, "id {id}");
         }
+    }
+
+    #[tokio::test]
+    async fn test_add_columns_with_same_explicit_id_fails() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("a")
+                    .field_type(Type::Primitive(PrimitiveType::Int))
+                    .id(10)
+                    .build(),
+            )
+            .add_column(
+                AddColumn::builder()
+                    .name("b")
+                    .field_type(Type::Primitive(PrimitiveType::Int))
+                    .id(10)
+                    .build(),
+            );
+
+        assert!(commit_with_fresh_state(action, &table).await.is_err());
     }
 }
