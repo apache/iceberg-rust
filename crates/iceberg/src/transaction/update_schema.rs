@@ -159,20 +159,21 @@ impl UpdateSchemaAction {
 // ---------------------------------------------------------------------------
 
 /// Collect the IDs of a `NestedField` and all its nested sub-fields.
-fn collect_field_ids(field: &NestedField, ids: &mut Vec<i32>) {
-    ids.push(field.id);
-    match field.field_type.as_ref() {
-        Type::Primitive(_) | Type::Variant(_) => {}
+fn collect_field_ids(field: &NestedField) -> Vec<i32> {
+    let nested = match field.field_type.as_ref() {
+        Type::Primitive(_) | Type::Variant(_) => vec![],
         Type::Struct(struct_type) => struct_type
             .fields()
             .iter()
-            .for_each(|f| collect_field_ids(f, ids)),
-        Type::List(list_type) => collect_field_ids(&list_type.element_field, ids),
-        Type::Map(map_type) => {
-            collect_field_ids(&map_type.key_field, ids);
-            collect_field_ids(&map_type.value_field, ids);
-        }
-    }
+            .flat_map(|f| collect_field_ids(f))
+            .collect(),
+        Type::List(list_type) => collect_field_ids(&list_type.element_field),
+        Type::Map(map_type) => [&map_type.key_field, &map_type.value_field]
+            .into_iter()
+            .flat_map(|f| collect_field_ids(f))
+            .collect(),
+    };
+    std::iter::once(field.id).chain(nested).collect()
 }
 
 /// Recursively assign fresh field IDs to a `NestedField` and all its nested sub-fields.
@@ -361,10 +362,12 @@ impl StatelessAction for UpdateSchemaAction {
 
         // Explicit IDs must be new: anything at or below `last_column_id` may belong to a
         // dropped column, and reusing it would make old data files read as the new column.
-        let mut explicit_ids = Vec::new();
-        for add in self.additions.iter().filter(|add| add.id.is_some()) {
-            collect_field_ids(&add.to_nested_field(), &mut explicit_ids);
-        }
+        let explicit_ids: Vec<i32> = self
+            .additions
+            .iter()
+            .filter(|add| add.id.is_some())
+            .flat_map(|add| collect_field_ids(&add.to_nested_field()))
+            .collect();
         if let Some(&id) = explicit_ids.iter().find(|&&id| id <= last_column_id) {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
