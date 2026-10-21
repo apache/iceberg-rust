@@ -16,7 +16,7 @@
 # under the License.
 
 name: Generate wheel third-party licenses
-description: 'Regenerates bindings/python/LICENSE with the root LICENSE plus the licenses of the Rust dependencies bundled in the wheels. The sdist keeps the root LICENSE.'
+description: 'Regenerates bindings/python/LICENSE and NOTICE with the root files plus the licenses and notices of the Rust dependencies bundled in the wheels. The sdist keeps the root files.'
 runs:
   using: "composite"
   steps:
@@ -25,11 +25,12 @@ runs:
       with:
         tool: cargo-about@0.9.2
 
-    - name: Generate LICENSE
+    - name: Generate LICENSE and NOTICE
       shell: bash
       working-directory: bindings/python
       run: |
         cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml about.hbs > cargo-about-output.txt
-        # LICENSE is a symlink to the root file, remove it so the redirect doesn't write through.
-        rm LICENSE
+        # Both are symlinks to the root files, remove them so the redirects don't write through.
+        rm LICENSE NOTICE
         cat ../../LICENSE cargo-about-output.txt > LICENSE
+        { cat ../../NOTICE; echo; cat third-party-notices.txt; } > NOTICE

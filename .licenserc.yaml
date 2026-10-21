@@ -23,6 +23,7 @@ header:
   paths-ignore:
     - "LICENSE"
     - "NOTICE"
+    - "bindings/python/third-party-notices.txt"
     - ".gitattributes"
     - "**/*.json"
     # Generated content by mdbook
