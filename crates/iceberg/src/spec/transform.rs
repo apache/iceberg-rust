@@ -25,7 +25,6 @@ use chrono::Datelike;
 use fnv::FnvHashSet;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use super::values::decimal_utils::decimal_from_i128_with_scale;
 use super::values::temporal::date;
 use super::{Datum, PrimitiveLiteral};
 use crate::ErrorKind;
@@ -279,7 +278,15 @@ impl Transform {
     pub fn result_type(&self, input_type: &Type) -> Result<Type> {
         match self {
             Transform::Identity => {
-                if matches!(input_type, Type::Primitive(_)) {
+                if matches!(
+                    input_type,
+                    Type::Primitive(PrimitiveType::Geometry(_) | PrimitiveType::Geography(_))
+                ) {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{input_type} is not a valid input type of identity transform",),
+                    ))
+                } else if matches!(input_type, Type::Primitive(_)) {
                     Ok(input_type.clone())
                 } else {
                     Err(invalid_data!(
@@ -762,8 +769,8 @@ impl Transform {
             PredicateOperator::LessThan => match (datum.data_type(), datum.literal()) {
                 (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Some(Datum::int(v - 1)),
                 (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Some(Datum::long(v - 1)),
-                (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
-                    Some(Datum::decimal(decimal_from_i128_with_scale(v - 1, 0))?)
+                (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(_)) => {
+                    Some(Self::try_decrement_number(datum)?)
                 }
                 (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Some(Datum::date(v - 1)),
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
@@ -783,8 +790,8 @@ impl Transform {
             PredicateOperator::GreaterThan => match (datum.data_type(), datum.literal()) {
                 (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Some(Datum::int(v + 1)),
                 (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Some(Datum::long(v + 1)),
-                (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
-                    Some(Datum::decimal(decimal_from_i128_with_scale(v + 1, 0))?)
+                (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(_)) => {
+                    Some(Self::try_increment_number(datum)?)
                 }
                 (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Some(Datum::date(v + 1)),
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
@@ -873,7 +880,13 @@ impl Transform {
         transformed: &Datum,
     ) -> Option<AdjustedProjection> {
         let should_adjust = match self {
-            Transform::Day => matches!(original.data_type(), PrimitiveType::Timestamp),
+            Transform::Day => matches!(
+                original.data_type(),
+                PrimitiveType::Timestamp
+                    | PrimitiveType::Timestamptz
+                    | PrimitiveType::TimestampNs
+                    | PrimitiveType::TimestamptzNs
+            ),
             Transform::Year | Transform::Month => true,
             _ => false,
         };
@@ -928,7 +941,7 @@ impl Transform {
             (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Ok(Datum::int(v + 1)),
             (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Ok(Datum::long(v + 1)),
             (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
-                Datum::decimal(decimal_from_i128_with_scale(v + 1, 0))
+                datum.with_decimal_mantissa(v + 1)
             }
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Ok(Datum::date(v + 1)),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
@@ -966,7 +979,7 @@ impl Transform {
             (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Ok(Datum::int(v - 1)),
             (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Ok(Datum::long(v - 1)),
             (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(v)) => {
-                Datum::decimal(decimal_from_i128_with_scale(v - 1, 0))
+                datum.with_decimal_mantissa(v - 1)
             }
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Ok(Datum::date(v - 1)),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {

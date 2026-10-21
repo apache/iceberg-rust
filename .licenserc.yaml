@@ -27,8 +27,6 @@ header:
     - "**/*.json"
     # Generated content by mdbook
     - "website/book"
-    # Generated content by scripts
-    - "**/DEPENDENCIES.*.tsv"
     # Generated content by cargo-public-api
     - "**/public-api.txt"
     # Generated content by trybuild

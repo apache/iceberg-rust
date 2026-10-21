@@ -40,6 +40,10 @@ pub struct PuffinWriter {
 
 impl PuffinWriter {
     /// Returns a new Puffin writer for an unencrypted file.
+    ///
+    /// With `compress_footer` enabled, [iceberg-java] cannot read the file.
+    ///
+    /// [iceberg-java]: https://github.com/apache/iceberg/blob/e70a2efcd06c009910a354c71ee892a7742cc60e/core/src/main/java/org/apache/iceberg/puffin/PuffinFormat.java#L127-L142
     pub async fn new(
         output_file: &OutputFile,
         properties: HashMap<String, String>,
@@ -57,6 +61,8 @@ impl PuffinWriter {
     /// Use this when writing Puffin files with transparent encryption. Blob
     /// and footer offsets are recorded as plaintext positions, matching what
     /// an unencrypted writer would produce.
+    ///
+    /// See [`Self::new`] for footer compression compatibility.
     pub async fn new_from_encrypted(
         encrypted_output: &EncryptedOutputFile,
         properties: HashMap<String, String>,

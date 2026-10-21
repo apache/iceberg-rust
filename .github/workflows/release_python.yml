@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   validate-release-tag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       cargo-version: ${{ steps.validate.outputs.cargo-version }}
       is-rc: ${{ steps.validate.outputs.is-rc }}
@@ -103,7 +103,7 @@ jobs:
           echo "is-rc=$IS_RC" >> $GITHUB_OUTPUT
 
   sdist:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [validate-release-tag]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -144,14 +144,15 @@ jobs:
       matrix:
         include:
           - { os: windows-latest }
+          - { os: windows-11-arm }
           - { os: macos-latest, target: "universal2-apple-darwin" }
-          - { os: ubuntu-latest, target: "x86_64" }
+          - { os: ubuntu-24.04, target: "x86_64" }
           - {
-              os: ubuntu-latest,
+              os: ubuntu-24.04,
               target: "aarch64",
               manylinux: "manylinux_2_28",
             }
-          - { os: ubuntu-latest, target: "armv7l" }
+          - { os: ubuntu-24.04, target: "armv7l" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -190,7 +191,7 @@ jobs:
           working-directory: "bindings/python"
           command: build
           args: --release -o dist -i python3.12 # Explicitly set interpreter; manylinux containers have multiple Pythons and maturin may pick an older one
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.9.3"
           enable-cache: true
@@ -212,7 +213,7 @@ jobs:
   pypi-publish:
     name: Publish Python 🐍 distribution 📦 to Pypi
     needs: [sdist, wheels]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     environment:
       name: pypi

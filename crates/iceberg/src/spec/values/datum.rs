@@ -18,7 +18,7 @@
 //! Typed literals with validation
 
 use std::cmp::Ordering;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Display, Formatter, LowerExp};
 use std::str::FromStr;
 
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
@@ -270,6 +270,12 @@ impl PartialOrd for Datum {
                 PrimitiveType::Binary,
             ) => val.partial_cmp(other_val),
             (
+                PrimitiveLiteral::Binary(_),
+                PrimitiveLiteral::Binary(_),
+                PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+                PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+            ) => None,
+            (
                 PrimitiveLiteral::Int128(val),
                 PrimitiveLiteral::Int128(other_val),
                 PrimitiveType::Decimal {
@@ -294,8 +300,12 @@ impl Display for Datum {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match (&self.r#type, &self.literal) {
             (_, PrimitiveLiteral::Boolean(val)) => write!(f, "{val}"),
-            (PrimitiveType::Int, PrimitiveLiteral::Int(val)) => write!(f, "{val}"),
-            (PrimitiveType::Long, PrimitiveLiteral::Long(val)) => write!(f, "{val}"),
+            (PrimitiveType::Int | PrimitiveType::Unknown, PrimitiveLiteral::Int(val)) => {
+                write!(f, "{val}")
+            }
+            (PrimitiveType::Long | PrimitiveType::Unknown, PrimitiveLiteral::Long(val)) => {
+                write!(f, "{val}")
+            }
             (_, PrimitiveLiteral::Float(val)) => write!(f, "{val}"),
             (_, PrimitiveLiteral::Double(val)) => write!(f, "{val}"),
             (PrimitiveType::Date, PrimitiveLiteral::Int(val)) => {
@@ -372,6 +382,12 @@ impl Datum {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "Cannot create datum for unknown type from bytes",
+                ));
+            }
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Cannot create geospatial datum from bytes yet",
                 ));
             }
             PrimitiveType::Boolean => {
@@ -1099,6 +1115,22 @@ impl Datum {
         }
     }
 
+    /// Replaces a decimal's unscaled value while preserving its precision and scale.
+    ///
+    /// The value is not checked against precision because transform projections
+    /// may use boundaries outside the source type's range.
+    pub(crate) fn with_decimal_mantissa(&self, mantissa: i128) -> Result<Self> {
+        ensure_data_valid!(
+            matches!(self.r#type, PrimitiveType::Decimal { .. }),
+            "Expected a decimal datum, got: {:?}",
+            self.r#type
+        );
+        Ok(Self::new(
+            self.r#type.clone(),
+            PrimitiveLiteral::Int128(mantissa),
+        ))
+    }
+
     /// Convert the datum to `target_type`.
     pub fn to(self, target_type: &Type) -> Result<Datum> {
         match target_type {
@@ -1210,11 +1242,66 @@ impl Datum {
     /// Returns a human-readable string representation of this literal.
     ///
     /// For string literals, this returns the raw string value without quotes.
+    /// Float and double literals are formatted like Java's `Float.toString` /
+    /// `Double.toString` (JDK 19+).
     /// For all other literals, it falls back to [`to_string()`](ToString::to_string).
     pub fn to_human_string(&self) -> String {
         match self.literal() {
             PrimitiveLiteral::String(s) => s.to_string(),
+            PrimitiveLiteral::Float(val) => human_float(val.0),
+            PrimitiveLiteral::Double(val) => human_float(val.0),
             _ => self.to_string(),
         }
+    }
+}
+
+/// Formats a float like Java's `Float.toString` / `Double.toString` (JDK 19+):
+/// plain decimal when `1e-3 <= |value| < 1e7`, otherwise `<d>.<ddd>E<exp>`,
+/// always with at least one digit after the point.
+fn human_float<T: Float + LowerExp + FromStr>(value: T) -> String {
+    if value.is_nan() {
+        return "NaN".to_string();
+    }
+    let sign = if value.is_sign_negative() { "-" } else { "" };
+    if value.is_infinite() {
+        return format!("{sign}Infinity");
+    }
+    if value.is_zero() {
+        return format!("{sign}0.0");
+    }
+
+    let abs = value.abs();
+    // `{:e}` gives the fewest digits that round-trip. Java uses at least two
+    // digits and, among decimals of that length that round-trip, the closest
+    // one, preferring an even last digit on ties (2097152.2 for 2097152.25f32,
+    // 4.9E-324 for f64::from_bits(1)). Exact formatting picks exactly that.
+    let shortest = format!("{abs:e}");
+    let precision = shortest.find('e').unwrap().saturating_sub(2).max(1);
+    let closest = format!("{abs:.precision$e}");
+    let scientific = if closest.parse::<T>().is_ok_and(|v| v == abs) {
+        closest
+    } else {
+        shortest
+    };
+    let (mantissa, exponent) = scientific.split_once('e').unwrap();
+    let exponent: i32 = exponent.parse().unwrap();
+    let digits = mantissa.replace('.', "");
+    let digits = digits.trim_end_matches('0');
+
+    if (-3..7).contains(&exponent) {
+        if exponent < 0 {
+            let zeros = "0".repeat((-exponent - 1) as usize);
+            format!("{sign}0.{zeros}{digits}")
+        } else {
+            let int_len = exponent as usize + 1;
+            if digits.len() > int_len {
+                format!("{sign}{}.{}", &digits[..int_len], &digits[int_len..])
+            } else {
+                format!("{sign}{digits:0<int_len$}.0")
+            }
+        }
+    } else {
+        let fraction = if digits.len() > 1 { &digits[1..] } else { "0" };
+        format!("{sign}{}.{fraction}E{exponent}", &digits[..1])
     }
 }

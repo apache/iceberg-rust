@@ -219,6 +219,15 @@ impl Table {
         self
     }
 
+    /// Returns this table bound to `runtime`, sharing its manifest cache.
+    ///
+    /// Tasks such as scan planning and reads are spawned on `runtime`. A table rebuilt
+    /// through [`Table::builder`] starts with an empty cache.
+    pub fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     /// Returns a TableBuilder to build a table
     pub fn builder() -> TableBuilder {
         TableBuilder::new()
@@ -495,6 +504,31 @@ mod tests {
             .unwrap();
         assert!(!table.readonly());
         assert_eq!(table.identifier.name(), "table");
+    }
+
+    #[tokio::test]
+    async fn test_table_with_runtime_moves_work_and_keeps_object_cache() {
+        let old = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let table = Table::builder()
+            .metadata(load_test_metadata("TableMetadataV2Valid.json"))
+            .identifier(TableIdent::from_strs(["ns", "table"]).unwrap())
+            .file_io(FileIO::new_with_memory())
+            .runtime(Runtime::new(&old))
+            .build()
+            .unwrap();
+        // With the old runtime shut down, the spawn below succeeds only if
+        // `rebound` uses the new one.
+        old.shutdown_background();
+
+        let rebound = table.clone().with_runtime(Runtime::try_current().unwrap());
+
+        assert!(Arc::ptr_eq(&table.object_cache(), &rebound.object_cache()));
+        assert_eq!(
+            rebound.runtime().io().spawn(async { 42 }).await.unwrap(),
+            42
+        );
     }
 
     fn make_kms() -> Arc<dyn KeyManagementClient> {

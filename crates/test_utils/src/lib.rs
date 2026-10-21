@@ -20,7 +20,12 @@
 //! It's not intended for use outside of `iceberg-rust`.
 
 #[cfg(feature = "tests")]
+mod runtime;
+
+#[cfg(feature = "tests")]
 pub use common::*;
+#[cfg(feature = "tests")]
+pub use runtime::test_runtime;
 
 #[cfg(feature = "tests")]
 mod common {

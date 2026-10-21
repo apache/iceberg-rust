@@ -28,6 +28,7 @@ use serde::de::{Error, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value as JsonValue;
 
+use super::geospatial::{GeographyType, GeometryType, parse_geography, parse_geometry};
 use super::values::Literal;
 use crate::ensure_data_valid;
 use crate::error::Result;
@@ -133,7 +134,7 @@ impl Type {
     /// Minimum [`FormatVersion`] required to support this type, **without** taking
     /// nested field types into account.
     ///
-    /// `Unknown` / `TimestampNs` / `TimestamptzNs` / `Variant` require
+    /// `Unknown` / `TimestampNs` / `TimestamptzNs` / `Geometry` / `Geography` / `Variant` require
     /// [`FormatVersion::V3`]; every other type is valid from [`FormatVersion::V1`]. Mirrors Java's
     /// `Schema.MIN_FORMAT_VERSIONS` (a shallow lookup keyed by type id), so it
     /// intentionally does not recurse: callers needing the floor for a whole schema
@@ -143,7 +144,11 @@ impl Type {
     pub(crate) fn min_format_version(&self) -> FormatVersion {
         match self {
             Type::Primitive(
-                PrimitiveType::Unknown | PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+                PrimitiveType::Unknown
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs
+                | PrimitiveType::Geometry(_)
+                | PrimitiveType::Geography(_),
             )
             | Type::Variant(_) => FormatVersion::V3,
             _ => FormatVersion::V1,
@@ -191,10 +196,7 @@ impl Type {
     /// Creates  decimal type.
     #[inline(always)]
     pub fn decimal(precision: u32, scale: u32) -> Result<Self> {
-        ensure_data_valid!(
-            precision > 0 && precision <= MAX_DECIMAL_PRECISION,
-            "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",
-        );
+        validate_decimal_precision(precision)?;
         Ok(Type::Primitive(PrimitiveType::Decimal { precision, scale }))
     }
 
@@ -277,6 +279,10 @@ pub enum PrimitiveType {
     Binary,
     /// Default / null column type used when a more specific type is not known.
     Unknown,
+    /// Geometry values encoded as well-known binary.
+    Geometry(GeometryType),
+    /// Geography values encoded as well-known binary.
+    Geography(GeographyType),
 }
 
 impl PrimitiveType {
@@ -300,6 +306,8 @@ impl PrimitiveType {
                 | (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(_))
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(_))
                 | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Geometry(_), PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Geography(_), PrimitiveLiteral::Binary(_))
         )
     }
 }
@@ -328,6 +336,16 @@ impl<'de> Deserialize<'de> for PrimitiveType {
             deserialize_decimal(s.into_deserializer())
         } else if s.starts_with("fixed") {
             deserialize_fixed(s.into_deserializer())
+        } else if s
+            .get(..8)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("geometry"))
+        {
+            parse_geometry(&s).map_err(D::Error::custom)
+        } else if s
+            .get(..9)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("geography"))
+        {
+            parse_geography(&s).map_err(D::Error::custom)
         } else {
             PrimitiveType::deserialize(s.into_deserializer())
         }
@@ -342,24 +360,48 @@ impl Serialize for PrimitiveType {
                 serialize_decimal(precision, scale, serializer)
             }
             PrimitiveType::Fixed(l) => serialize_fixed(l, serializer),
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                serializer.serialize_str(&self.to_string())
+            }
             _ => PrimitiveType::serialize(self, serializer),
         }
     }
 }
 
+fn validate_decimal_precision(precision: u32) -> Result<()> {
+    // Leave scale unconstrained for Java parity; the spec leaves scale > precision open.
+    ensure_data_valid!(precision > 0, "Decimal precision must be greater than zero",);
+    ensure_data_valid!(
+        precision <= MAX_DECIMAL_PRECISION,
+        "Decimals with precision larger than {MAX_DECIMAL_PRECISION} are not supported: {precision}",
+    );
+    Ok(())
+}
+
 fn deserialize_decimal<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
 where D: Deserializer<'de> {
     let s = String::deserialize(deserializer)?;
-    let (precision, scale) = s
-        .trim_start_matches(r"decimal(")
-        .trim_end_matches(')')
-        .split_once(',')
-        .ok_or_else(|| D::Error::custom("Decimal requires precision and scale: {s}"))?;
+    let malformed = || D::Error::custom(format!("Invalid decimal type: {s}"));
 
-    Ok(PrimitiveType::Decimal {
-        precision: precision.trim().parse().map_err(D::Error::custom)?,
-        scale: scale.trim().parse().map_err(D::Error::custom)?,
-    })
+    let (precision, scale) = s
+        .strip_prefix("decimal(")
+        .and_then(|inner| inner.strip_suffix(')'))
+        .ok_or_else(malformed)?
+        .split_once(',')
+        .ok_or_else(|| D::Error::custom(format!("Decimal requires precision and scale: {s}")))?;
+
+    let (precision, scale) = (precision.trim(), scale.trim());
+    if [precision, scale]
+        .iter()
+        .any(|token| token.is_empty() || !token.bytes().all(|byte| byte.is_ascii_digit()))
+    {
+        return Err(malformed());
+    }
+    let precision: u32 = precision.parse().map_err(D::Error::custom)?;
+    let scale: u32 = scale.parse().map_err(D::Error::custom)?;
+    validate_decimal_precision(precision).map_err(D::Error::custom)?;
+
+    Ok(PrimitiveType::Decimal { precision, scale })
 }
 
 fn serialize_decimal<S>(
@@ -375,12 +417,16 @@ where
 
 fn deserialize_fixed<'de, D>(deserializer: D) -> std::result::Result<PrimitiveType, D::Error>
 where D: Deserializer<'de> {
-    let fixed = String::deserialize(deserializer)?
-        .trim_start_matches(r"fixed[")
-        .trim_end_matches(']')
-        .to_owned();
+    let s = String::deserialize(deserializer)?;
 
-    fixed
+    let length = s
+        .strip_prefix("fixed[")
+        .and_then(|inner| inner.strip_suffix(']'))
+        .map(str::trim)
+        .filter(|length| !length.is_empty() && length.bytes().all(|byte| byte.is_ascii_digit()))
+        .ok_or_else(|| D::Error::custom(format!("Invalid fixed type: {s}")))?;
+
+    length
         .parse()
         .map(PrimitiveType::Fixed)
         .map_err(D::Error::custom)
@@ -413,6 +459,13 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Uuid => write!(f, "uuid"),
             PrimitiveType::Fixed(size) => write!(f, "fixed({size})"),
             PrimitiveType::Binary => write!(f, "binary"),
+            PrimitiveType::Geometry(geometry) => write!(f, "geometry({})", geometry.crs()),
+            PrimitiveType::Geography(geography) => write!(
+                f,
+                "geography({}, {})",
+                geography.crs(),
+                geography.algorithm().as_str()
+            ),
         }
     }
 }
@@ -922,10 +975,13 @@ impl<'de> Deserialize<'de> for VariantType {
 
 #[cfg(test)]
 mod tests {
+    use std::hash::{Hash, Hasher};
+
     use pretty_assertions::assert_eq;
     use uuid::Uuid;
 
     use super::*;
+    use crate::spec::geospatial::{DEFAULT_GEOSPATIAL_CRS, EdgeInterpolationAlgorithm};
     use crate::spec::values::PrimitiveLiteral;
 
     fn check_type_serde(json: &str, expected_type: Type) {
@@ -1052,6 +1108,67 @@ mod tests {
                 name_lookup: OnceLock::default(),
             }),
         )
+    }
+
+    #[test]
+    fn primitive_type_geospatial() {
+        let cases = vec![
+            (
+                r#""geometry""#,
+                PrimitiveType::Geometry(GeometryType::default()),
+                "geometry(OGC:CRS84)",
+            ),
+            (
+                r#""GeOmEtRy ( EPSG:3857 )""#,
+                PrimitiveType::Geometry(GeometryType::new(Some("EPSG:3857".to_string())).unwrap()),
+                "geometry(EPSG:3857)",
+            ),
+            (
+                r#""GEOGRAPHY""#,
+                PrimitiveType::Geography(GeographyType::default()),
+                "geography(OGC:CRS84, spherical)",
+            ),
+            (
+                r#""GeOgRaPhY ( OGC:CRS27 , KARNEY )""#,
+                PrimitiveType::Geography(
+                    GeographyType::new(
+                        Some("OGC:CRS27".to_string()),
+                        EdgeInterpolationAlgorithm::Karney,
+                    )
+                    .unwrap(),
+                ),
+                "geography(OGC:CRS27, karney)",
+            ),
+        ];
+
+        for (json, expected, display) in cases {
+            let actual: PrimitiveType = serde_json::from_str(json).unwrap();
+            assert_eq!(
+                actual, expected,
+                "parsed primitive type did not match expectation"
+            );
+            assert_eq!(actual.to_string(), display, "display impl did not match");
+            assert_eq!(
+                serde_json::to_string(&actual).unwrap(),
+                format!(r#""{display}""#),
+                "JSON serialization did not match expectation"
+            );
+        }
+
+        let equivalent_default = GeometryType::new(Some("EPSG:4326".to_string())).unwrap();
+        assert_eq!(equivalent_default.crs(), "EPSG:4326");
+        assert_ne!(equivalent_default, GeometryType::default());
+        let lowercase_default =
+            GeometryType::new(Some(DEFAULT_GEOSPATIAL_CRS.to_ascii_lowercase())).unwrap();
+        assert_eq!(lowercase_default, GeometryType::default());
+        let mut lowercase_hash = std::collections::hash_map::DefaultHasher::new();
+        lowercase_default.hash(&mut lowercase_hash);
+        let mut default_hash = std::collections::hash_map::DefaultHasher::new();
+        GeometryType::default().hash(&mut default_hash);
+        assert_eq!(lowercase_hash.finish(), default_hash.finish());
+        assert!(
+            serde_json::from_str::<PrimitiveType>(r#""geography(OGC:CRS27,unknown)""#).is_err()
+        );
     }
 
     #[test]
@@ -1327,6 +1444,182 @@ mod tests {
     }
 
     #[test]
+    fn test_reject_malformed_decimal_and_fixed_type_strings() {
+        for invalid in [
+            r#""decimal(50, 2)""#,
+            r#""decimal(0, 0)""#,
+            r#""decimal(decimal(5, 2)))""#,
+            r#""decimal(decimal(5, 2)""#,
+            r#""decimal(5, 2""#,
+            r#""decimal(5, 2)))))""#,
+            r#""decimal(5, 2, 3)""#,
+            r#""decimal(-5, 2)""#,
+            r#""decimal(5, -2)""#,
+            r#""decimal(-5, -2)""#,
+            r#""decimal(-2, -5)""#,
+            r#""decimal((5, 2))""#,
+            r#""decimal[5, 2]""#,
+            r#""decimal()""#,
+            r#""fixed[fixed[16]]]""#,
+            r#""fixed[16""#,
+            r#""fixed[16]]]""#,
+            r#""fixed[[16]]""#,
+            r#""fixed[[16]""#,
+            r#""fixed(16)""#,
+            r#""fixed[]""#,
+        ] {
+            assert!(
+                serde_json::from_str::<Type>(invalid).is_err(),
+                "expected {invalid} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_reject_leading_plus_in_type_strings() {
+        for invalid in [
+            r#""decimal(+5, 2)""#,
+            r#""decimal(5, +2)""#,
+            r#""decimal(+5, +2)""#,
+            r#""fixed[+16]""#,
+        ] {
+            assert!(serde_json::from_str::<Type>(invalid).is_err(), "{invalid}");
+            assert!(
+                serde_json::from_str::<PrimitiveType>(invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_constructor_json_roundtrip() {
+        for (precision, scale) in [(1, 0), (5, 5), (5, 8), (38, 38)] {
+            let decimal = Type::decimal(precision, scale).unwrap();
+            let serialized = serde_json::to_string(&decimal).unwrap();
+            let reparsed: Type = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(reparsed, decimal);
+            let primitive: PrimitiveType = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(Type::Primitive(primitive), decimal);
+        }
+        for precision in [0, 39] {
+            assert!(Type::decimal(precision, 0).is_err());
+            let json = format!(r#""decimal({precision}, 0)""#);
+            assert!(serde_json::from_str::<Type>(&json).is_err());
+            assert!(serde_json::from_str::<PrimitiveType>(&json).is_err());
+        }
+    }
+
+    #[test]
+    fn test_empty_decimal_and_fixed_tokens() {
+        for invalid in [
+            r#""decimal(, 2)""#,
+            r#""decimal(5,)""#,
+            r#""decimal( , )""#,
+            r#""fixed[]""#,
+            r#""fixed[ ]""#,
+        ] {
+            assert!(serde_json::from_str::<Type>(invalid).is_err(), "{invalid}");
+            assert!(
+                serde_json::from_str::<PrimitiveType>(invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_and_fixed_overflow_errors() {
+        for invalid in [
+            r#""decimal(9999999999, 2)""#,
+            r#""decimal(5, 9999999999)""#,
+            r#""fixed[18446744073709551616]""#,
+        ] {
+            assert!(serde_json::from_str::<Type>(invalid).is_err(), "{invalid}");
+            let error = serde_json::from_str::<PrimitiveType>(invalid).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("number too large to fit in target type"),
+                "unexpected error for {invalid}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decimal_zero_precision_error() {
+        let error = serde_json::from_str::<PrimitiveType>(r#""decimal(0, 0)""#).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Decimal precision must be greater than zero"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_accept_valid_decimal_and_fixed_type_strings() {
+        for (json, canonical, expected) in [
+            (
+                r#""decimal(9, 2)""#,
+                r#""decimal(9, 2)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                }),
+            ),
+            (
+                r#""decimal(38, 10)""#,
+                r#""decimal(38, 10)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 38,
+                    scale: 10,
+                }),
+            ),
+            (
+                r#""decimal(5,2)""#,
+                r#""decimal(5, 2)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 5,
+                    scale: 2,
+                }),
+            ),
+            (
+                r#""decimal(5, 0)""#,
+                r#""decimal(5, 0)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 5,
+                    scale: 0,
+                }),
+            ),
+            (
+                r#""decimal(5, 5)""#,
+                r#""decimal(5, 5)""#,
+                Type::Primitive(PrimitiveType::Decimal {
+                    precision: 5,
+                    scale: 5,
+                }),
+            ),
+            (
+                r#""fixed[16]""#,
+                r#""fixed[16]""#,
+                Type::Primitive(PrimitiveType::Fixed(16)),
+            ),
+        ] {
+            check_type_serde_roundtrip_value(json, canonical, expected);
+        }
+    }
+
+    fn check_type_serde_roundtrip_value(json: &str, canonical: &str, expected_type: Type) {
+        let parsed: Type = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed, expected_type);
+        let serialized = serde_json::to_string(&parsed).unwrap();
+        assert_eq!(serialized, canonical);
+        let primitive: PrimitiveType = serde_json::from_str(json).unwrap();
+        assert_eq!(serde_json::to_string(&primitive).unwrap(), canonical);
+        let reparsed: Type = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(reparsed, expected_type);
+    }
+
+    #[test]
     fn test_primitive_type_compatible() {
         let pairs = vec![
             (PrimitiveType::Boolean, PrimitiveLiteral::Boolean(true)),
@@ -1353,6 +1646,14 @@ mod tests {
             ),
             (PrimitiveType::Fixed(8), PrimitiveLiteral::Binary(vec![1])),
             (PrimitiveType::Binary, PrimitiveLiteral::Binary(vec![1])),
+            (
+                PrimitiveType::Geometry(GeometryType::default()),
+                PrimitiveLiteral::Binary(vec![1]),
+            ),
+            (
+                PrimitiveType::Geography(GeographyType::default()),
+                PrimitiveLiteral::Binary(vec![1]),
+            ),
         ];
         for (ty, literal) in pairs {
             assert!(ty.compatible(&literal));
