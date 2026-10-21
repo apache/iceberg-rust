@@ -41,6 +41,13 @@ accepted = [
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 
+# libm's license is in LICENSE.txt, which cargo-about doesn't match by name.
+[libm.clarify]
+license = "MIT"
+[[libm.clarify.files]]
+checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
+path = "LICENSE.txt"
+
 # zstd-sys vendors zstd's C code (BSD-3-Clause, Meta) next to the Rust
 # bindings (BSD-3-Clause, Facebook); neither is in its Cargo.toml license.
 [zstd-sys.clarify]
