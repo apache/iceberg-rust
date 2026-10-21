@@ -36,6 +36,8 @@ allow = [
   # https://www.apache.org/legal/resolved.html#category-a
   "BSL-1.0",
 ]
+unused-allowed-license = "deny"
+unused-license-exception = "deny"
 
 exceptions = [
   # The MPL license is allowed (binary-only):
