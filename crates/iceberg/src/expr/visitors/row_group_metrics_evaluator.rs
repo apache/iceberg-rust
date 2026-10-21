@@ -177,6 +177,13 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
         }?;
 
         if let Some(bound) = bound {
+            if bound.is_nan() {
+                // NaN indicates unreliable bounds (e.g. parquet-mr <= 1.9 records a
+                // NaN that starts a row group as both min and max).
+                // See the InclusiveMetricsEvaluator docs for more.
+                return ROW_GROUP_MIGHT_MATCH;
+            }
+
             if cmp_fn(&bound, datum) {
                 return ROW_GROUP_MIGHT_MATCH;
             }
@@ -549,7 +556,7 @@ mod tests {
     use rand::Rng;
 
     use super::RowGroupMetricsEvaluator;
-    use crate::expr::{Bind, Reference};
+    use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
     use crate::{ErrorKind, Result};
 
@@ -1721,6 +1728,60 @@ mod tests {
         )?;
 
         assert!(result);
+        Ok(())
+    }
+
+    fn eval_nan_bounds_inequality(filter: Predicate) -> Result<bool> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(
+                Some(f32::NAN),
+                Some(f32::NAN),
+                None,
+                Some(0),
+                false,
+            )),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+        let filter = filter.bind(iceberg_schema_ref.clone(), false)?;
+
+        RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )
+    }
+
+    #[test]
+    fn eval_true_for_nan_lower_bound_less_than() -> Result<()> {
+        let filter = Reference::new("col_float").less_than(Datum::float(5.0_f32));
+        assert!(eval_nan_bounds_inequality(filter)?);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_lower_bound_less_than_or_eq() -> Result<()> {
+        let filter = Reference::new("col_float").less_than_or_equal_to(Datum::float(5.0_f32));
+        assert!(eval_nan_bounds_inequality(filter)?);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_upper_bound_greater_than() -> Result<()> {
+        let filter = Reference::new("col_float").greater_than(Datum::float(5.0_f32));
+        assert!(eval_nan_bounds_inequality(filter)?);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_upper_bound_greater_than_or_eq() -> Result<()> {
+        let filter = Reference::new("col_float").greater_than_or_equal_to(Datum::float(5.0_f32));
+        assert!(eval_nan_bounds_inequality(filter)?);
         Ok(())
     }
 
