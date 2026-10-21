@@ -543,6 +543,8 @@ fn json_null_nested_list_elements() {
 
 #[test]
 fn json_null_nested_map_values() {
+    // Iceberg permits null values in optional map fields. Java's SingleValueParser
+    // currently rejects them through ImmutableMap, but Rust must round-trip them.
     for data_type in nullable_nested_json_types() {
         check_json_serde(
             r#"{"keys": ["a"], "values": [null]}"#,
