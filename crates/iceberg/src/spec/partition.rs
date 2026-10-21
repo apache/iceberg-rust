@@ -1934,6 +1934,21 @@ mod tests {
                 Literal::int(10),
                 "p=10",
             ),
+            (
+                PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                },
+                Transform::Identity,
+                Literal::decimal(123),
+                "p=123",
+            ),
+            (
+                PrimitiveType::Uuid,
+                Transform::Identity,
+                Literal::uuid_from_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap(),
+                "p=f79c3e09-677c-4bbd-a479-3f349cb785e7",
+            ),
         ] {
             let schema = Schema::builder()
                 .with_fields(vec![

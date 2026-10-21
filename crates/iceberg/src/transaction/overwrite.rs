@@ -55,7 +55,8 @@ impl OverwriteAction {
         }
     }
 
-    /// Set whether to check duplicate files.
+    /// Set whether to reject added paths already live in the table (enabled by default).
+    /// This also rejects paths deleted and re-added in the same overwrite.
     pub fn with_check_duplicate(mut self, v: bool) -> Self {
         self.check_duplicate = v;
         self
@@ -68,6 +69,15 @@ impl OverwriteAction {
     }
 
     /// Specify data files to be removed from the table in this overwrite.
+    ///
+    /// Files are matched by path against the current snapshot's live data files.
+    /// Their `record_count`, `file_size_in_bytes`, `partition_spec_id` and `partition`
+    /// must match the committed entry. Duplicate paths keep the first occurrence.
+    ///
+    /// # Errors
+    ///
+    /// The commit fails with [`crate::ErrorKind::DataInvalid`] for non-data files,
+    /// paths that are not live in the current snapshot, or mismatched metadata.
     pub fn delete_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
         self.deleted_data_files.extend(data_files);
         self
@@ -184,17 +194,34 @@ impl SnapshotProduceOperation for OverwriteOperation<'_> {
                 for entry in manifest.entries().iter().filter(|entry| entry.is_alive()) {
                     if let Some(requested) = self.deleted_files.get(entry.file_path()) {
                         let actual = entry.data_file();
-                        if requested.record_count != actual.record_count
-                            || requested.file_size_in_bytes != actual.file_size_in_bytes
-                            || requested.partition_spec_id != actual.partition_spec_id
-                            || requested.partition != actual.partition
-                        {
-                            return Err(invalid_data!(
-                                "Delete file metadata does not match the table: {}",
-                                entry.file_path()
-                            ));
-                        }
-                        deletes.push(requested.file_path.as_str());
+                        let mismatch = if requested.record_count != actual.record_count {
+                            format!(
+                                "record_count: requested {}, table has {}",
+                                requested.record_count, actual.record_count
+                            )
+                        } else if requested.file_size_in_bytes != actual.file_size_in_bytes {
+                            format!(
+                                "file_size_in_bytes: requested {}, table has {}",
+                                requested.file_size_in_bytes, actual.file_size_in_bytes
+                            )
+                        } else if requested.partition_spec_id != actual.partition_spec_id {
+                            format!(
+                                "partition_spec_id: requested {}, table has {}",
+                                requested.partition_spec_id, actual.partition_spec_id
+                            )
+                        } else if requested.partition != actual.partition {
+                            format!(
+                                "partition: requested {:?}, table has {:?}",
+                                requested.partition, actual.partition
+                            )
+                        } else {
+                            deletes.push(requested.file_path.as_str());
+                            continue;
+                        };
+                        return Err(invalid_data!(
+                            "Delete file metadata does not match the table: {} ({mismatch})",
+                            entry.file_path()
+                        ));
                     }
                 }
                 if deletes.is_empty() {
@@ -245,14 +272,14 @@ mod tests {
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, ManifestListWriter,
-        ManifestStatus, ManifestWriterBuilder, Operation, PrimitiveType, SnapshotRef, Struct,
-        Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
+        ManifestStatus, ManifestWriterBuilder, NestedField, Operation, PrimitiveType, Schema,
+        SnapshotRef, Struct, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::tests::make_v3_minimal_table_in_catalog;
     use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
-    use crate::{ErrorKind, TableUpdate};
+    use crate::{Catalog, ErrorKind, TableCommit, TableCreation, TableUpdate};
 
     fn test_data_file(path: &str, partition_spec_id: i32) -> DataFile {
         DataFileBuilder::default()
@@ -554,6 +581,122 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_overwrite_deletes_files_after_partition_source_promotion() {
+        let catalog = new_memory_catalog().await;
+        let base = make_v3_minimal_table_in_catalog(&catalog).await;
+        for transform in [Transform::Identity, Transform::Truncate(10)] {
+            let schema = Schema::builder()
+                .with_fields([NestedField::required(1, "x", PrimitiveType::Int.into()).into()])
+                .build()
+                .unwrap();
+            let spec = UnboundPartitionSpec::builder()
+                .add_partition_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![1])
+                        .name("p")
+                        .transform(transform)
+                        .build()
+                        .unwrap(),
+                )
+                .unwrap()
+                .build();
+            let table = catalog
+                .create_table(
+                    base.identifier().namespace(),
+                    TableCreation::builder()
+                        .name(format!("promoted-{transform}"))
+                        .schema(schema)
+                        .partition_spec(spec)
+                        .format_version(crate::spec::FormatVersion::V3)
+                        .build(),
+                )
+                .await
+                .unwrap();
+            let file = DataFile {
+                partition: Struct::from_iter([Some(Literal::int(300))]),
+                ..test_data_file(
+                    "test/a.parquet",
+                    table.metadata().default_partition_spec_id(),
+                )
+            };
+            let tx = Transaction::new(&table);
+            let table = tx
+                .fast_append()
+                .add_data_files([file.clone()])
+                .apply(tx)
+                .unwrap()
+                .commit(&catalog)
+                .await
+                .unwrap();
+            let schema = Schema::builder()
+                .with_fields([NestedField::required(1, "x", PrimitiveType::Long.into()).into()])
+                .build()
+                .unwrap();
+            let table = catalog
+                .update_table(
+                    TableCommit::builder()
+                        .ident(table.identifier().clone())
+                        .requirements(vec![])
+                        .updates(vec![
+                            TableUpdate::AddSchema { schema },
+                            TableUpdate::SetCurrentSchema { schema_id: -1 },
+                        ])
+                        .build(),
+                )
+                .await
+                .unwrap();
+            let tx = Transaction::new(&table);
+            let table = tx
+                .overwrite()
+                .delete_data_files([file])
+                .apply(tx)
+                .unwrap()
+                .commit(&catalog)
+                .await
+                .unwrap();
+            let snapshot = table.metadata().current_snapshot().unwrap();
+            assert_eq!(snapshot.summary().operation, Operation::Delete);
+            assert_eq!(
+                snapshot.summary().additional_properties["deleted-records"],
+                "1"
+            );
+            assert_eq!(current_manifest_entries(&table).await, [(
+                ManifestStatus::Deleted,
+                "test/a.parquet".to_string()
+            )]);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_rejects_readding_a_deleted_path_by_default() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let file = test_data_file(
+            "test/a.parquet",
+            table.metadata().default_partition_spec_id(),
+        );
+        let tx = Transaction::new(&table);
+        let table = tx
+            .fast_append()
+            .add_data_files([file.clone()])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let action = Transaction::new(&table)
+            .overwrite()
+            .delete_data_files([file.clone()])
+            .add_data_files([file]);
+        let err = commit_with_fresh_state(action, &table).await.err().unwrap();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .contains("Cannot add files that are already referenced by table")
+        );
+    }
+
+    #[tokio::test]
     async fn test_overwrite_rejects_incorrect_delete_metrics() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
@@ -568,37 +711,49 @@ mod tests {
             .commit(&catalog)
             .await
             .unwrap();
-        for incorrect in [
-            DataFile {
-                record_count: 99,
-                ..file.clone()
-            },
-            DataFile {
-                file_size_in_bytes: 999,
-                ..file.clone()
-            },
-            DataFile {
-                partition: Struct::from_iter([Some(Literal::long(999))]),
-                ..file.clone()
-            },
-            DataFile {
-                partition_spec_id: 99,
-                ..file.clone()
-            },
-            DataFile {
-                partition: Struct::from_iter([Some(Literal::string("invalid"))]),
-                ..file.clone()
-            },
+        for (incorrect, mismatch) in [
+            (
+                DataFile {
+                    record_count: 99,
+                    ..file.clone()
+                },
+                "record_count: requested 99, table has 1",
+            ),
+            (
+                DataFile {
+                    file_size_in_bytes: 999,
+                    ..file.clone()
+                },
+                "file_size_in_bytes: requested 999, table has 100",
+            ),
+            (
+                DataFile {
+                    partition: Struct::from_iter([Some(Literal::long(999))]),
+                    ..file.clone()
+                },
+                "partition: requested Struct { fields: [Some(Primitive(Long(999)))] }, table has Struct { fields: [Some(Primitive(Long(300)))] }",
+            ),
+            (
+                DataFile {
+                    partition_spec_id: 99,
+                    ..file.clone()
+                },
+                "partition_spec_id: requested 99, table has 0",
+            ),
+            (
+                DataFile {
+                    partition: Struct::from_iter([Some(Literal::string("invalid"))]),
+                    ..file.clone()
+                },
+                "partition: requested",
+            ),
         ] {
             let action = Transaction::new(&table)
                 .overwrite()
                 .delete_data_files(vec![incorrect]);
             let err = commit_with_fresh_state(action, &table).await.err().unwrap();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
-            assert!(
-                err.message()
-                    .contains("Delete file metadata does not match")
-            );
+            assert!(err.message().contains(mismatch));
         }
     }
 
@@ -694,7 +849,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_overwrite_rejects_a_path_in_a_delete_manifest() {
+    async fn test_overwrite_preserves_delete_manifests_and_rejects_their_paths() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
         let spec_id = table.metadata().default_partition_spec_id();
@@ -763,5 +918,36 @@ mod tests {
             err.message()
                 .contains("Missing required files to delete: test/deletes.parquet")
         );
+
+        let original = table
+            .manifest_list_reader(table.metadata().current_snapshot().unwrap())
+            .load()
+            .await
+            .unwrap()
+            .entries()
+            .iter()
+            .find(|m| m.manifest_path == "test/delete-manifest.avro")
+            .unwrap()
+            .clone();
+        let tx = Transaction::new(&table);
+        let table = tx
+            .overwrite()
+            .delete_data_files([test_data_file("test/a.parquet", spec_id)])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let manifests = table
+            .manifest_list_reader(table.metadata().current_snapshot().unwrap())
+            .load()
+            .await
+            .unwrap();
+        let preserved = manifests
+            .entries()
+            .iter()
+            .find(|m| m.manifest_path == original.manifest_path)
+            .unwrap();
+        assert_eq!(preserved, &original);
     }
 }
