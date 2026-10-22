@@ -2377,12 +2377,25 @@ mod tests {
     #[test]
     fn eval_keeps_uint32_pages_of_long_field() -> Result<()> {
         // Parquet `UINT_32` columns map to `long` but have INT32 page bounds.
-        let (metadata, _temp_file) =
-            create_parquet_file_from_values(&[100_u32, 3_000_000_000], |v| {
-                Arc::new(UInt32Array::from(v))
-            })?;
+        // The last page mixes both values, so its raw signed max is smaller
+        // than its min and a sign-extending widening would prune it.
+        let mixed: Vec<u32> = [100_u32, 3_000_000_000].repeat(512);
+        let (metadata, _temp_file) = create_single_column_parquet_file(&[
+            Arc::new(UInt32Array::from(vec![100_u32; 1024])),
+            Arc::new(UInt32Array::from(vec![3_000_000_000_u32; 1024])),
+            Arc::new(UInt32Array::from(mixed)),
+        ])?;
 
-        assert_keeps_all_pages(&metadata, PrimitiveType::Long, 2048, [
+        let column_index = &metadata.column_index().unwrap()[0][0];
+        let parquet::file::page_index::column_index::ColumnIndexMetaData::INT32(idx) = column_index
+        else {
+            panic!("expected INT32 column index, got {column_index:?}");
+        };
+        let bounds: Vec<_> = idx.min_values_iter().zip(idx.max_values_iter()).collect();
+        assert_eq!(bounds.len(), 3);
+        assert_eq!(bounds[2], (Some(&100), Some(&(3_000_000_000_u32 as i32))));
+
+        assert_keeps_all_pages(&metadata, PrimitiveType::Long, 3072, [
             Reference::new("col").equal_to(Datum::long(3_000_000_000_i64)),
             Reference::new("col").greater_than(Datum::long(2_000_000_000)),
             Reference::new("col").is_in([
