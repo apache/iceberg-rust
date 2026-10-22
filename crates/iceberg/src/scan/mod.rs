@@ -33,7 +33,7 @@ use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
-use crate::arrow::ArrowReaderBuilder;
+use crate::arrow::{ArrowReaderBuilder, TableScanReaderOptions};
 pub use crate::arrow::{ScanMetrics, ScanResult};
 use crate::delete_file_index::DeleteFileIndex;
 use crate::error::invalid_data;
@@ -602,21 +602,49 @@ impl TableScan {
 
     /// Returns an [`ArrowRecordBatchStream`].
     pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
-        let mut arrow_reader_builder =
-            ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
-                .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
-                .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-                .with_row_selection_enabled(self.row_selection_enabled)
-                .with_bloom_filter_enabled(self.bloom_filter_enabled);
-
-        if let Some(batch_size) = self.batch_size {
-            arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
-        }
-
-        arrow_reader_builder
+        self.reader_options()
+            .apply_to(ArrowReaderBuilder::new(
+                self.file_io.clone(),
+                self.runtime.clone(),
+            ))
             .build()
             .read(self.plan_files().await?)
             .map(|result| result.stream())
+    }
+
+    /// Captures reader settings independently of this scan's planning state.
+    ///
+    /// Projection, predicates, and delete references are carried by the planned
+    /// file tasks; manifest-planning concurrency is not a reader setting.
+    ///
+    /// ```no_run
+    /// # use futures::{TryStreamExt, stream};
+    /// # use iceberg::{Result, Runtime, arrow::ArrowReaderBuilder, io::FileIO, table::Table};
+    /// # async fn read(table: &Table, local_io: FileIO, local_runtime: Runtime) -> Result<()> {
+    /// let scan = table.scan().with_batch_size(Some(1024)).build()?;
+    /// let options = scan.reader_options();
+    /// let tasks: Vec<_> = scan.plan_files().await?.try_collect().await?;
+    /// drop(scan);
+    ///
+    /// let reader = options
+    ///     .apply_to(ArrowReaderBuilder::new(local_io, local_runtime))
+    ///     .build();
+    /// let batches: Vec<_> = reader
+    ///     .read(Box::pin(stream::iter(tasks.into_iter().map(Ok))))?
+    ///     .stream()
+    ///     .try_collect()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn reader_options(&self) -> TableScanReaderOptions {
+        TableScanReaderOptions {
+            batch_size: self.batch_size,
+            data_file_concurrency_limit: self.concurrency_limit_data_files,
+            row_group_filtering_enabled: self.row_group_filtering_enabled,
+            row_selection_enabled: self.row_selection_enabled,
+            bloom_filter_enabled: self.bloom_filter_enabled,
+        }
     }
 
     /// Returns a reference to the column names of the table scan.
@@ -760,7 +788,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::resolve_field_id;
-    use crate::arrow::ArrowReaderBuilder;
+    use crate::arrow::{ArrowReaderBuilder, TableScanReaderOptions};
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::FileIO;
     use crate::metadata_columns::{
@@ -781,7 +809,7 @@ mod tests {
     };
     use crate::test_utils::test_runtime;
     use crate::util::snapshot::snapshot_id_as_of_time;
-    use crate::{ErrorKind, TableIdent};
+    use crate::{ErrorKind, Runtime, TableIdent};
 
     #[tokio::test]
     async fn test_table_scan_columns() {
@@ -2013,6 +2041,64 @@ mod tests {
 
         let int64_arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(int64_arr.value(0), 1);
+    }
+
+    #[tokio::test]
+    async fn reader_options_preserve_reads_after_dropping_scan() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_multi_row_group_manifest(&[150, 299]).await;
+        for enabled in [false, true] {
+            let scan = fixture
+                .table
+                .scan()
+                .select(["y"])
+                .with_filter(Reference::new("y").greater_than(Datum::long(1100)))
+                .with_batch_size(Some(17))
+                .with_data_file_concurrency_limit(1)
+                .with_row_group_filtering_enabled(enabled)
+                .with_row_selection_enabled(enabled)
+                .with_bloom_filter_enabled(enabled)
+                .build()
+                .unwrap();
+            let expected: Vec<_> = scan.to_arrow().await.unwrap().try_collect().await.unwrap();
+            let tasks: Vec<_> = scan
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            let options = scan.reader_options();
+            let serialized = serde_json::to_value(options).unwrap();
+            assert_eq!(
+                serialized,
+                serde_json::json!({
+                    "batch_size": 17,
+                    "data_file_concurrency_limit": 1,
+                    "row_group_filtering_enabled": enabled,
+                    "row_selection_enabled": enabled,
+                    "bloom_filter_enabled": enabled,
+                })
+            );
+            let options: TableScanReaderOptions = serde_json::from_value(serialized).unwrap();
+            drop(scan);
+            let reader = options
+                .apply_to(ArrowReaderBuilder::new(
+                    FileIO::new_with_fs(),
+                    Runtime::try_current().unwrap(),
+                ))
+                .build();
+            let actual: Vec<_> = reader
+                .read(Box::pin(stream::iter(tasks.into_iter().map(Ok))))
+                .unwrap()
+                .stream()
+                .try_collect()
+                .await
+                .unwrap();
+            assert!(!actual.is_empty());
+            assert!(actual.iter().all(|batch| batch.num_rows() <= 17));
+            assert_eq!(actual, expected);
+        }
     }
 
     #[tokio::test]
