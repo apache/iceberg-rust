@@ -42,6 +42,7 @@ mod predicate_visitor;
 mod projection;
 mod row_filter;
 mod row_lineage;
+mod scan_options;
 pub use file_reader::ArrowFileReader;
 pub(crate) use options::ParquetReadOptions;
 use predicate_visitor::{CollectFieldIdVisitor, PredicateConverter};
@@ -49,6 +50,7 @@ use projection::{
     add_fallback_field_ids_to_arrow_schema, apply_name_mapping_to_arrow_schema,
     find_leaf_by_field_id,
 };
+pub use scan_options::TableScanReaderOptions;
 
 /// Builder to create ArrowReader
 pub struct ArrowReaderBuilder {

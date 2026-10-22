@@ -104,6 +104,27 @@ pub struct iceberg::arrow::ScanResult
 impl iceberg::scan::ScanResult
 pub fn iceberg::scan::ScanResult::metrics(&self) -> &iceberg::scan::ScanMetrics
 pub fn iceberg::scan::ScanResult::stream(self) -> iceberg::scan::ArrowRecordBatchStream
+pub struct iceberg::arrow::TableScanReaderOptions
+impl iceberg::arrow::TableScanReaderOptions
+pub fn iceberg::arrow::TableScanReaderOptions::apply_to(&self, builder: iceberg::arrow::ArrowReaderBuilder) -> iceberg::arrow::ArrowReaderBuilder
+pub fn iceberg::arrow::TableScanReaderOptions::batch_size(&self) -> core::option::Option<usize>
+pub fn iceberg::arrow::TableScanReaderOptions::bloom_filter_enabled(&self) -> bool
+pub fn iceberg::arrow::TableScanReaderOptions::data_file_concurrency_limit(&self) -> usize
+pub fn iceberg::arrow::TableScanReaderOptions::row_group_filtering_enabled(&self) -> bool
+pub fn iceberg::arrow::TableScanReaderOptions::row_selection_enabled(&self) -> bool
+impl core::clone::Clone for iceberg::arrow::TableScanReaderOptions
+pub fn iceberg::arrow::TableScanReaderOptions::clone(&self) -> iceberg::arrow::TableScanReaderOptions
+impl core::cmp::Eq for iceberg::arrow::TableScanReaderOptions
+impl core::cmp::PartialEq for iceberg::arrow::TableScanReaderOptions
+pub fn iceberg::arrow::TableScanReaderOptions::eq(&self, other: &iceberg::arrow::TableScanReaderOptions) -> bool
+impl core::fmt::Debug for iceberg::arrow::TableScanReaderOptions
+pub fn iceberg::arrow::TableScanReaderOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg::arrow::TableScanReaderOptions
+impl core::marker::StructuralPartialEq for iceberg::arrow::TableScanReaderOptions
+impl serde_core::ser::Serialize for iceberg::arrow::TableScanReaderOptions
+pub fn iceberg::arrow::TableScanReaderOptions::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::arrow::TableScanReaderOptions
+pub fn iceberg::arrow::TableScanReaderOptions::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub const iceberg::arrow::DEFAULT_MAP_FIELD_NAME: &str
 pub const iceberg::arrow::PROJECTED_PARTITION_VALUE_COLUMN: &str
 pub const iceberg::arrow::UTC_TIME_ZONE: &str
@@ -1436,6 +1457,7 @@ pub struct iceberg::scan::TableScan
 impl iceberg::scan::TableScan
 pub fn iceberg::scan::TableScan::column_names(&self) -> core::option::Option<&[alloc::string::String]>
 pub async fn iceberg::scan::TableScan::plan_files(&self) -> iceberg::Result<iceberg::scan::FileScanTaskStream>
+pub fn iceberg::scan::TableScan::reader_options(&self) -> iceberg::arrow::TableScanReaderOptions
 pub fn iceberg::scan::TableScan::snapshot(&self) -> core::option::Option<&iceberg::spec::SnapshotRef>
 pub async fn iceberg::scan::TableScan::to_arrow(&self) -> iceberg::Result<iceberg::scan::ArrowRecordBatchStream>
 impl core::fmt::Debug for iceberg::scan::TableScan
