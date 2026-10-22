@@ -37,6 +37,28 @@ You can enable all stable storage backends at once using the `opendal-all` featu
 
 > Note that `opendal-oss` and `opendal-azdls` are currently experimental and not included in `opendal-all`.
 
+## TLS Crypto Provider
+
+The HTTP-backed storage backends use [rustls](https://docs.rs/rustls). One of these feature flags selects its crypto provider:
+
+| Feature Flag | Default | Description                                                                                              |
+| ------------ | ------- | -------------------------------------------------------------------------------------------------------- |
+| `aws-lc-rs`  | ✅      | [aws-lc-rs](https://docs.rs/aws-lc-rs), built from C source                                             |
+| `ring`       |         | [ring](https://docs.rs/ring); the application must install the process default provider before use |
+
+With `ring`, disable the default features and install the provider once at startup:
+
+```toml
+[dependencies]
+iceberg-storage-opendal = { version = "x.y.z", default-features = false, features = ["opendal-s3", "ring"] }
+```
+
+```rust
+rustls::crypto::ring::default_provider()
+    .install_default()
+    .expect("a rustls crypto provider is installed before any TLS use");
+```
+
 ## Usage
 
 Add the crate to your `Cargo.toml` with the feature flags for the backends you need:
