@@ -327,9 +327,13 @@ impl<'a> PageIndexEvaluator<'a> {
                 .enumerate()
                 .zip(row_counts.iter())
                 .map(|((i, (min, max)), &row_count)| {
-                    predicate(
+                    let (min, max) = Self::drop_nan_bounds(
                         min.map(|&val| Self::float_bound_to_datum(field_type, val)),
                         max.map(|&val| Self::float_bound_to_datum(field_type, val)),
+                    );
+                    predicate(
+                        min,
+                        max,
                         PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
@@ -340,7 +344,7 @@ impl<'a> PageIndexEvaluator<'a> {
                 .enumerate()
                 .zip(row_counts.iter())
                 .map(|((i, (min, max)), &row_count)| {
-                    predicate(
+                    let (min, max) = Self::drop_nan_bounds(
                         min.map(|&val| {
                             Datum::new(
                                 field_type.clone(),
@@ -353,6 +357,10 @@ impl<'a> PageIndexEvaluator<'a> {
                                 PrimitiveLiteral::Double(OrderedFloat::from(val)),
                             )
                         }),
+                    );
+                    predicate(
+                        min,
+                        max,
                         PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
@@ -545,6 +553,16 @@ impl<'a> PageIndexEvaluator<'a> {
                 PrimitiveLiteral::Float(OrderedFloat::from(val)),
             )
         })
+    }
+
+    /// Drops both bounds of a page if either is NaN. Legacy writers may store
+    /// NaN bounds for pages that hold other values, so such bounds are
+    /// unreliable and the page might match.
+    fn drop_nan_bounds(min: Option<Datum>, max: Option<Datum>) -> (Option<Datum>, Option<Datum>) {
+        if min.as_ref().is_some_and(Datum::is_nan) || max.as_ref().is_some_and(Datum::is_nan) {
+            return (None, None);
+        }
+        (min, max)
     }
 
     /// Converts an `INT64` page bound into a [`Datum`] according to the field's
@@ -1021,7 +1039,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::{
-        ArrayRef, Decimal128Array, FixedSizeBinaryArray, Float32Array, Int32Array,
+        ArrayRef, Decimal128Array, FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array,
         LargeBinaryArray, RecordBatch, StringArray, UInt32Array,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
@@ -1029,7 +1047,8 @@ mod tests {
     use parquet::arrow::arrow_reader::{
         ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelector,
     };
-    use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
+    use parquet::file::metadata::{ColumnIndexBuilder, PageIndexPolicy, ParquetMetaData};
+    use parquet::file::page_index::column_index::ColumnIndexMetaData;
     use parquet::file::properties::WriterProperties;
     use rand::Rng;
     use tempfile::NamedTempFile;
@@ -1369,7 +1388,7 @@ mod tests {
     fn get_test_metadata(
         metadata: &ParquetMetaData,
     ) -> (
-        Vec<parquet::file::page_index::column_index::ColumnIndexMetaData>,
+        Vec<ColumnIndexMetaData>,
         Vec<parquet::file::page_index::offset_index::OffsetIndexMetaData>,
         &parquet::file::metadata::RowGroupMetaData,
     ) {
@@ -2466,8 +2485,7 @@ mod tests {
         ])?;
 
         let column_index = &metadata.column_index().unwrap()[0][0];
-        let parquet::file::page_index::column_index::ColumnIndexMetaData::INT32(idx) = column_index
-        else {
+        let ColumnIndexMetaData::INT32(idx) = column_index else {
             panic!("expected INT32 column index, got {column_index:?}");
         };
         let bounds: Vec<_> = idx.min_values_iter().zip(idx.max_values_iter()).collect();
@@ -2496,6 +2514,110 @@ mod tests {
                 vec![RowSelector::skip(1024), RowSelector::select(2048)],
             ),
         ])
+    }
+
+    #[test]
+    fn eval_keeps_float_pages_with_nan_bounds() -> Result<()> {
+        // Legacy writers may store NaN bounds for pages holding other values.
+        // The finite bound of each page here would otherwise prune it.
+        fn nan_bounded_index(
+            physical_type: parquet::basic::Type,
+            to_bytes: impl Fn(f64) -> Vec<u8>,
+        ) -> ColumnIndexMetaData {
+            let mut builder = ColumnIndexBuilder::new(physical_type);
+            builder.append(false, to_bytes(f64::NAN), to_bytes(1.0), 0);
+            builder.append(false, to_bytes(2.0), to_bytes(f64::NAN), 0);
+            builder.build().unwrap()
+        }
+
+        let float_index = nan_bounded_index(parquet::basic::Type::FLOAT, |v| {
+            (v as f32).to_le_bytes().to_vec()
+        });
+        let double_index =
+            nan_bounded_index(parquet::basic::Type::DOUBLE, |v| v.to_le_bytes().to_vec());
+        let (float_metadata, _float_file) =
+            create_parquet_file_from_values(&[1.0_f32, 2.0], |v| Arc::new(Float32Array::from(v)))?;
+        let (double_metadata, _double_file) =
+            create_parquet_file_from_values(&[1.0_f64, 2.0], |v| Arc::new(Float64Array::from(v)))?;
+
+        for (metadata, column_index, field_type, datum, other) in [
+            (
+                &float_metadata,
+                &float_index,
+                PrimitiveType::Float,
+                Datum::float(1.5_f32),
+                Datum::float(1.25_f32),
+            ),
+            // FLOAT bounds widened for a `float` -> `double` promotion.
+            (
+                &float_metadata,
+                &float_index,
+                PrimitiveType::Double,
+                Datum::double(1.5),
+                Datum::double(1.25),
+            ),
+            (
+                &double_metadata,
+                &double_index,
+                PrimitiveType::Double,
+                Datum::double(1.5),
+                Datum::double(1.25),
+            ),
+        ] {
+            let (_, offset_index, row_group_metadata) = get_test_metadata(metadata);
+            let (iceberg_schema, field_id_map) =
+                build_single_field_schema_and_field_map(field_type)?;
+
+            for filter in [
+                Reference::new("col").equal_to(datum.clone()),
+                Reference::new("col").less_than(datum.clone()),
+                Reference::new("col").greater_than(datum.clone()),
+                Reference::new("col").is_in([datum.clone(), other.clone()]),
+            ] {
+                let filter = filter.bind(iceberg_schema.clone(), false)?;
+
+                let result = PageIndexEvaluator::eval(
+                    &filter,
+                    std::slice::from_ref(column_index),
+                    &offset_index,
+                    row_group_metadata,
+                    &field_id_map,
+                    iceberg_schema.as_ref(),
+                )?;
+
+                assert_eq!(result, vec![RowSelector::select(2048)], "{filter}");
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn drop_nan_bounds_drops_both_bounds() {
+        assert_eq!(
+            PageIndexEvaluator::drop_nan_bounds(
+                Some(Datum::double(f64::NAN)),
+                Some(Datum::double(1.0)),
+            ),
+            (None, None)
+        );
+        assert_eq!(
+            PageIndexEvaluator::drop_nan_bounds(
+                Some(PageIndexEvaluator::float_bound_to_datum(
+                    &PrimitiveType::Double,
+                    1.0
+                )),
+                Some(PageIndexEvaluator::float_bound_to_datum(
+                    &PrimitiveType::Double,
+                    f32::NAN
+                )),
+            ),
+            (None, None)
+        );
+        assert_eq!(
+            PageIndexEvaluator::drop_nan_bounds(Some(Datum::double(1.0)), Some(Datum::double(2.0)),),
+            (Some(Datum::double(1.0)), Some(Datum::double(2.0)))
+        );
     }
 
     #[test]
