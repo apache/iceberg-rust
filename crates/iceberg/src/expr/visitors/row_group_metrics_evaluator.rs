@@ -1735,13 +1735,13 @@ mod tests {
     // exercises the `>` / `>=` side of the NaN check as well.
     const NAN_BOUNDS: [f32; 2] = [f32::NAN, f32::from_bits(0xffc0_0000)];
 
-    fn eval_nan_bounds_inequality(filter: &Predicate, nan: f32) -> Result<bool> {
+    fn eval_float_bounds(filter: &Predicate, min: f32, max: f32) -> Result<bool> {
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
             Some(Statistics::float(
-                Some(nan),
-                Some(nan),
+                Some(min),
+                Some(max),
                 None,
                 Some(0),
                 false,
@@ -1765,7 +1765,7 @@ mod tests {
     fn eval_true_for_nan_lower_bound_less_than() -> Result<()> {
         let filter = Reference::new("col_float").less_than(Datum::float(5.0_f32));
         for nan in NAN_BOUNDS {
-            assert!(eval_nan_bounds_inequality(&filter, nan)?);
+            assert!(eval_float_bounds(&filter, nan, nan)?);
         }
         Ok(())
     }
@@ -1774,7 +1774,18 @@ mod tests {
     fn eval_true_for_nan_lower_bound_less_than_or_eq() -> Result<()> {
         let filter = Reference::new("col_float").less_than_or_equal_to(Datum::float(5.0_f32));
         for nan in NAN_BOUNDS {
-            assert!(eval_nan_bounds_inequality(&filter, nan)?);
+            assert!(eval_float_bounds(&filter, nan, nan)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_lower_bound_finite_upper_bound_less_than() -> Result<()> {
+        let lt = Reference::new("col_float").less_than(Datum::float(5.0_f32));
+        let lt_eq = Reference::new("col_float").less_than_or_equal_to(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&lt, nan, 2.0)?);
+            assert!(eval_float_bounds(&lt_eq, nan, 2.0)?);
         }
         Ok(())
     }
@@ -1783,7 +1794,7 @@ mod tests {
     fn eval_true_for_nan_upper_bound_greater_than() -> Result<()> {
         let filter = Reference::new("col_float").greater_than(Datum::float(5.0_f32));
         for nan in NAN_BOUNDS {
-            assert!(eval_nan_bounds_inequality(&filter, nan)?);
+            assert!(eval_float_bounds(&filter, nan, nan)?);
         }
         Ok(())
     }
@@ -1792,7 +1803,7 @@ mod tests {
     fn eval_true_for_nan_upper_bound_greater_than_or_eq() -> Result<()> {
         let filter = Reference::new("col_float").greater_than_or_equal_to(Datum::float(5.0_f32));
         for nan in NAN_BOUNDS {
-            assert!(eval_nan_bounds_inequality(&filter, nan)?);
+            assert!(eval_float_bounds(&filter, nan, nan)?);
         }
         Ok(())
     }
