@@ -1229,6 +1229,17 @@ impl Datum {
         &self.r#type
     }
 
+    /// Returns a copy whose literal is widened to `target` for the value
+    /// promotions `int` -> `long` and `float` -> `double`, so a value written
+    /// under the narrower type compares against a predicate bound to the wider
+    /// one. Returns `None` when `target` does not widen this value (decimals
+    /// already compare across precisions), so callers can avoid a copy.
+    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Option<Datum> {
+        self.literal
+            .promote_to(target)
+            .map(|literal| Datum::new(target.clone(), literal))
+    }
+
     /// Returns true if the Literal represents a primitive type
     /// that can be a NaN, and that it's value is NaN
     pub fn is_nan(&self) -> bool {
