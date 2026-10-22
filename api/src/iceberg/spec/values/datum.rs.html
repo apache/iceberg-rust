@@ -1229,80 +1229,91 @@
 <a href=#1229 id=1229 data-nosnippet>1229</a>        <span class="kw-2">&amp;</span><span class="self">self</span>.r#type
 <a href=#1230 id=1230 data-nosnippet>1230</a>    }
 <a href=#1231 id=1231 data-nosnippet>1231</a>
-<a href=#1232 id=1232 data-nosnippet>1232</a>    <span class="doccomment">/// Returns true if the Literal represents a primitive type
-<a href=#1233 id=1233 data-nosnippet>1233</a>    /// that can be a NaN, and that it's value is NaN
-<a href=#1234 id=1234 data-nosnippet>1234</a>    </span><span class="kw">pub fn </span>is_nan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
-<a href=#1235 id=1235 data-nosnippet>1235</a>        <span class="kw">match </span><span class="self">self</span>.literal {
-<a href=#1236 id=1236 data-nosnippet>1236</a>            PrimitiveLiteral::Double(val) =&gt; val.is_nan(),
-<a href=#1237 id=1237 data-nosnippet>1237</a>            PrimitiveLiteral::Float(val) =&gt; val.is_nan(),
-<a href=#1238 id=1238 data-nosnippet>1238</a>            <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
-<a href=#1239 id=1239 data-nosnippet>1239</a>        }
-<a href=#1240 id=1240 data-nosnippet>1240</a>    }
-<a href=#1241 id=1241 data-nosnippet>1241</a>
-<a href=#1242 id=1242 data-nosnippet>1242</a>    <span class="doccomment">/// Returns a human-readable string representation of this literal.
-<a href=#1243 id=1243 data-nosnippet>1243</a>    ///
-<a href=#1244 id=1244 data-nosnippet>1244</a>    /// For string literals, this returns the raw string value without quotes.
-<a href=#1245 id=1245 data-nosnippet>1245</a>    /// Float and double literals are formatted like Java's `Float.toString` /
-<a href=#1246 id=1246 data-nosnippet>1246</a>    /// `Double.toString` (JDK 19+).
-<a href=#1247 id=1247 data-nosnippet>1247</a>    /// For all other literals, it falls back to [`to_string()`](ToString::to_string).
-<a href=#1248 id=1248 data-nosnippet>1248</a>    </span><span class="kw">pub fn </span>to_human_string(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
-<a href=#1249 id=1249 data-nosnippet>1249</a>        <span class="kw">match </span><span class="self">self</span>.literal() {
-<a href=#1250 id=1250 data-nosnippet>1250</a>            PrimitiveLiteral::String(s) =&gt; s.to_string(),
-<a href=#1251 id=1251 data-nosnippet>1251</a>            PrimitiveLiteral::Float(val) =&gt; human_float(val.<span class="number">0</span>),
-<a href=#1252 id=1252 data-nosnippet>1252</a>            PrimitiveLiteral::Double(val) =&gt; human_float(val.<span class="number">0</span>),
-<a href=#1253 id=1253 data-nosnippet>1253</a>            <span class="kw">_ </span>=&gt; <span class="self">self</span>.to_string(),
-<a href=#1254 id=1254 data-nosnippet>1254</a>        }
-<a href=#1255 id=1255 data-nosnippet>1255</a>    }
-<a href=#1256 id=1256 data-nosnippet>1256</a>}
-<a href=#1257 id=1257 data-nosnippet>1257</a>
-<a href=#1258 id=1258 data-nosnippet>1258</a><span class="doccomment">/// Formats a float like Java's `Float.toString` / `Double.toString` (JDK 19+):
-<a href=#1259 id=1259 data-nosnippet>1259</a>/// plain decimal when `1e-3 &lt;= |value| &lt; 1e7`, otherwise `&lt;d&gt;.&lt;ddd&gt;E&lt;exp&gt;`,
-<a href=#1260 id=1260 data-nosnippet>1260</a>/// always with at least one digit after the point.
-<a href=#1261 id=1261 data-nosnippet>1261</a></span><span class="kw">fn </span>human_float&lt;T: Float + LowerExp + FromStr&gt;(value: T) -&gt; String {
-<a href=#1262 id=1262 data-nosnippet>1262</a>    <span class="kw">if </span>value.is_nan() {
-<a href=#1263 id=1263 data-nosnippet>1263</a>        <span class="kw">return </span><span class="string">"NaN"</span>.to_string();
-<a href=#1264 id=1264 data-nosnippet>1264</a>    }
-<a href=#1265 id=1265 data-nosnippet>1265</a>    <span class="kw">let </span>sign = <span class="kw">if </span>value.is_sign_negative() { <span class="string">"-" </span>} <span class="kw">else </span>{ <span class="string">"" </span>};
-<a href=#1266 id=1266 data-nosnippet>1266</a>    <span class="kw">if </span>value.is_infinite() {
-<a href=#1267 id=1267 data-nosnippet>1267</a>        <span class="kw">return </span><span class="macro">format!</span>(<span class="string">"{sign}Infinity"</span>);
-<a href=#1268 id=1268 data-nosnippet>1268</a>    }
-<a href=#1269 id=1269 data-nosnippet>1269</a>    <span class="kw">if </span>value.is_zero() {
-<a href=#1270 id=1270 data-nosnippet>1270</a>        <span class="kw">return </span><span class="macro">format!</span>(<span class="string">"{sign}0.0"</span>);
-<a href=#1271 id=1271 data-nosnippet>1271</a>    }
-<a href=#1272 id=1272 data-nosnippet>1272</a>
-<a href=#1273 id=1273 data-nosnippet>1273</a>    <span class="kw">let </span>abs = value.abs();
-<a href=#1274 id=1274 data-nosnippet>1274</a>    <span class="comment">// `{:e}` gives the fewest digits that round-trip. Java uses at least two
-<a href=#1275 id=1275 data-nosnippet>1275</a>    // digits and, among decimals of that length that round-trip, the closest
-<a href=#1276 id=1276 data-nosnippet>1276</a>    // one, preferring an even last digit on ties (2097152.2 for 2097152.25f32,
-<a href=#1277 id=1277 data-nosnippet>1277</a>    // 4.9E-324 for f64::from_bits(1)). Exact formatting picks exactly that.
-<a href=#1278 id=1278 data-nosnippet>1278</a>    </span><span class="kw">let </span>shortest = <span class="macro">format!</span>(<span class="string">"{abs:e}"</span>);
-<a href=#1279 id=1279 data-nosnippet>1279</a>    <span class="kw">let </span>precision = shortest.find(<span class="string">'e'</span>).unwrap().saturating_sub(<span class="number">2</span>).max(<span class="number">1</span>);
-<a href=#1280 id=1280 data-nosnippet>1280</a>    <span class="kw">let </span>closest = <span class="macro">format!</span>(<span class="string">"{abs:.precision$e}"</span>);
-<a href=#1281 id=1281 data-nosnippet>1281</a>    <span class="kw">let </span>scientific = <span class="kw">if </span>closest.parse::&lt;T&gt;().is_ok_and(|v| v == abs) {
-<a href=#1282 id=1282 data-nosnippet>1282</a>        closest
-<a href=#1283 id=1283 data-nosnippet>1283</a>    } <span class="kw">else </span>{
-<a href=#1284 id=1284 data-nosnippet>1284</a>        shortest
-<a href=#1285 id=1285 data-nosnippet>1285</a>    };
-<a href=#1286 id=1286 data-nosnippet>1286</a>    <span class="kw">let </span>(mantissa, exponent) = scientific.split_once(<span class="string">'e'</span>).unwrap();
-<a href=#1287 id=1287 data-nosnippet>1287</a>    <span class="kw">let </span>exponent: i32 = exponent.parse().unwrap();
-<a href=#1288 id=1288 data-nosnippet>1288</a>    <span class="kw">let </span>digits = mantissa.replace(<span class="string">'.'</span>, <span class="string">""</span>);
-<a href=#1289 id=1289 data-nosnippet>1289</a>    <span class="kw">let </span>digits = digits.trim_end_matches(<span class="string">'0'</span>);
-<a href=#1290 id=1290 data-nosnippet>1290</a>
-<a href=#1291 id=1291 data-nosnippet>1291</a>    <span class="kw">if </span>(-<span class="number">3</span>..<span class="number">7</span>).contains(<span class="kw-2">&amp;</span>exponent) {
-<a href=#1292 id=1292 data-nosnippet>1292</a>        <span class="kw">if </span>exponent &lt; <span class="number">0 </span>{
-<a href=#1293 id=1293 data-nosnippet>1293</a>            <span class="kw">let </span>zeros = <span class="string">"0"</span>.repeat((-exponent - <span class="number">1</span>) <span class="kw">as </span>usize);
-<a href=#1294 id=1294 data-nosnippet>1294</a>            <span class="macro">format!</span>(<span class="string">"{sign}0.{zeros}{digits}"</span>)
-<a href=#1295 id=1295 data-nosnippet>1295</a>        } <span class="kw">else </span>{
-<a href=#1296 id=1296 data-nosnippet>1296</a>            <span class="kw">let </span>int_len = exponent <span class="kw">as </span>usize + <span class="number">1</span>;
-<a href=#1297 id=1297 data-nosnippet>1297</a>            <span class="kw">if </span>digits.len() &gt; int_len {
-<a href=#1298 id=1298 data-nosnippet>1298</a>                <span class="macro">format!</span>(<span class="string">"{sign}{}.{}"</span>, <span class="kw-2">&amp;</span>digits[..int_len], <span class="kw-2">&amp;</span>digits[int_len..])
-<a href=#1299 id=1299 data-nosnippet>1299</a>            } <span class="kw">else </span>{
-<a href=#1300 id=1300 data-nosnippet>1300</a>                <span class="macro">format!</span>(<span class="string">"{sign}{digits:0&lt;int_len$}.0"</span>)
-<a href=#1301 id=1301 data-nosnippet>1301</a>            }
-<a href=#1302 id=1302 data-nosnippet>1302</a>        }
-<a href=#1303 id=1303 data-nosnippet>1303</a>    } <span class="kw">else </span>{
-<a href=#1304 id=1304 data-nosnippet>1304</a>        <span class="kw">let </span>fraction = <span class="kw">if </span>digits.len() &gt; <span class="number">1 </span>{ <span class="kw-2">&amp;</span>digits[<span class="number">1</span>..] } <span class="kw">else </span>{ <span class="string">"0" </span>};
-<a href=#1305 id=1305 data-nosnippet>1305</a>        <span class="macro">format!</span>(<span class="string">"{sign}{}.{fraction}E{exponent}"</span>, <span class="kw-2">&amp;</span>digits[..<span class="number">1</span>])
-<a href=#1306 id=1306 data-nosnippet>1306</a>    }
-<a href=#1307 id=1307 data-nosnippet>1307</a>}
+<a href=#1232 id=1232 data-nosnippet>1232</a>    <span class="doccomment">/// Returns a copy whose literal is widened to `target` for the value
+<a href=#1233 id=1233 data-nosnippet>1233</a>    /// promotions `int` -&gt; `long` and `float` -&gt; `double`, so a value written
+<a href=#1234 id=1234 data-nosnippet>1234</a>    /// under the narrower type compares against a predicate bound to the wider
+<a href=#1235 id=1235 data-nosnippet>1235</a>    /// one. Returns `None` when `target` does not widen this value (decimals
+<a href=#1236 id=1236 data-nosnippet>1236</a>    /// already compare across precisions), so callers can avoid a copy.
+<a href=#1237 id=1237 data-nosnippet>1237</a>    </span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>promote_to(<span class="kw-2">&amp;</span><span class="self">self</span>, target: <span class="kw-2">&amp;</span>PrimitiveType) -&gt; <span class="prelude-ty">Option</span>&lt;Datum&gt; {
+<a href=#1238 id=1238 data-nosnippet>1238</a>        <span class="self">self</span>.literal
+<a href=#1239 id=1239 data-nosnippet>1239</a>            .promote_to(target)
+<a href=#1240 id=1240 data-nosnippet>1240</a>            .map(|literal| Datum::new(target.clone(), literal))
+<a href=#1241 id=1241 data-nosnippet>1241</a>    }
+<a href=#1242 id=1242 data-nosnippet>1242</a>
+<a href=#1243 id=1243 data-nosnippet>1243</a>    <span class="doccomment">/// Returns true if the Literal represents a primitive type
+<a href=#1244 id=1244 data-nosnippet>1244</a>    /// that can be a NaN, and that it's value is NaN
+<a href=#1245 id=1245 data-nosnippet>1245</a>    </span><span class="kw">pub fn </span>is_nan(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; bool {
+<a href=#1246 id=1246 data-nosnippet>1246</a>        <span class="kw">match </span><span class="self">self</span>.literal {
+<a href=#1247 id=1247 data-nosnippet>1247</a>            PrimitiveLiteral::Double(val) =&gt; val.is_nan(),
+<a href=#1248 id=1248 data-nosnippet>1248</a>            PrimitiveLiteral::Float(val) =&gt; val.is_nan(),
+<a href=#1249 id=1249 data-nosnippet>1249</a>            <span class="kw">_ </span>=&gt; <span class="bool-val">false</span>,
+<a href=#1250 id=1250 data-nosnippet>1250</a>        }
+<a href=#1251 id=1251 data-nosnippet>1251</a>    }
+<a href=#1252 id=1252 data-nosnippet>1252</a>
+<a href=#1253 id=1253 data-nosnippet>1253</a>    <span class="doccomment">/// Returns a human-readable string representation of this literal.
+<a href=#1254 id=1254 data-nosnippet>1254</a>    ///
+<a href=#1255 id=1255 data-nosnippet>1255</a>    /// For string literals, this returns the raw string value without quotes.
+<a href=#1256 id=1256 data-nosnippet>1256</a>    /// Float and double literals are formatted like Java's `Float.toString` /
+<a href=#1257 id=1257 data-nosnippet>1257</a>    /// `Double.toString` (JDK 19+).
+<a href=#1258 id=1258 data-nosnippet>1258</a>    /// For all other literals, it falls back to [`to_string()`](ToString::to_string).
+<a href=#1259 id=1259 data-nosnippet>1259</a>    </span><span class="kw">pub fn </span>to_human_string(<span class="kw-2">&amp;</span><span class="self">self</span>) -&gt; String {
+<a href=#1260 id=1260 data-nosnippet>1260</a>        <span class="kw">match </span><span class="self">self</span>.literal() {
+<a href=#1261 id=1261 data-nosnippet>1261</a>            PrimitiveLiteral::String(s) =&gt; s.to_string(),
+<a href=#1262 id=1262 data-nosnippet>1262</a>            PrimitiveLiteral::Float(val) =&gt; human_float(val.<span class="number">0</span>),
+<a href=#1263 id=1263 data-nosnippet>1263</a>            PrimitiveLiteral::Double(val) =&gt; human_float(val.<span class="number">0</span>),
+<a href=#1264 id=1264 data-nosnippet>1264</a>            <span class="kw">_ </span>=&gt; <span class="self">self</span>.to_string(),
+<a href=#1265 id=1265 data-nosnippet>1265</a>        }
+<a href=#1266 id=1266 data-nosnippet>1266</a>    }
+<a href=#1267 id=1267 data-nosnippet>1267</a>}
+<a href=#1268 id=1268 data-nosnippet>1268</a>
+<a href=#1269 id=1269 data-nosnippet>1269</a><span class="doccomment">/// Formats a float like Java's `Float.toString` / `Double.toString` (JDK 19+):
+<a href=#1270 id=1270 data-nosnippet>1270</a>/// plain decimal when `1e-3 &lt;= |value| &lt; 1e7`, otherwise `&lt;d&gt;.&lt;ddd&gt;E&lt;exp&gt;`,
+<a href=#1271 id=1271 data-nosnippet>1271</a>/// always with at least one digit after the point.
+<a href=#1272 id=1272 data-nosnippet>1272</a></span><span class="kw">fn </span>human_float&lt;T: Float + LowerExp + FromStr&gt;(value: T) -&gt; String {
+<a href=#1273 id=1273 data-nosnippet>1273</a>    <span class="kw">if </span>value.is_nan() {
+<a href=#1274 id=1274 data-nosnippet>1274</a>        <span class="kw">return </span><span class="string">"NaN"</span>.to_string();
+<a href=#1275 id=1275 data-nosnippet>1275</a>    }
+<a href=#1276 id=1276 data-nosnippet>1276</a>    <span class="kw">let </span>sign = <span class="kw">if </span>value.is_sign_negative() { <span class="string">"-" </span>} <span class="kw">else </span>{ <span class="string">"" </span>};
+<a href=#1277 id=1277 data-nosnippet>1277</a>    <span class="kw">if </span>value.is_infinite() {
+<a href=#1278 id=1278 data-nosnippet>1278</a>        <span class="kw">return </span><span class="macro">format!</span>(<span class="string">"{sign}Infinity"</span>);
+<a href=#1279 id=1279 data-nosnippet>1279</a>    }
+<a href=#1280 id=1280 data-nosnippet>1280</a>    <span class="kw">if </span>value.is_zero() {
+<a href=#1281 id=1281 data-nosnippet>1281</a>        <span class="kw">return </span><span class="macro">format!</span>(<span class="string">"{sign}0.0"</span>);
+<a href=#1282 id=1282 data-nosnippet>1282</a>    }
+<a href=#1283 id=1283 data-nosnippet>1283</a>
+<a href=#1284 id=1284 data-nosnippet>1284</a>    <span class="kw">let </span>abs = value.abs();
+<a href=#1285 id=1285 data-nosnippet>1285</a>    <span class="comment">// `{:e}` gives the fewest digits that round-trip. Java uses at least two
+<a href=#1286 id=1286 data-nosnippet>1286</a>    // digits and, among decimals of that length that round-trip, the closest
+<a href=#1287 id=1287 data-nosnippet>1287</a>    // one, preferring an even last digit on ties (2097152.2 for 2097152.25f32,
+<a href=#1288 id=1288 data-nosnippet>1288</a>    // 4.9E-324 for f64::from_bits(1)). Exact formatting picks exactly that.
+<a href=#1289 id=1289 data-nosnippet>1289</a>    </span><span class="kw">let </span>shortest = <span class="macro">format!</span>(<span class="string">"{abs:e}"</span>);
+<a href=#1290 id=1290 data-nosnippet>1290</a>    <span class="kw">let </span>precision = shortest.find(<span class="string">'e'</span>).unwrap().saturating_sub(<span class="number">2</span>).max(<span class="number">1</span>);
+<a href=#1291 id=1291 data-nosnippet>1291</a>    <span class="kw">let </span>closest = <span class="macro">format!</span>(<span class="string">"{abs:.precision$e}"</span>);
+<a href=#1292 id=1292 data-nosnippet>1292</a>    <span class="kw">let </span>scientific = <span class="kw">if </span>closest.parse::&lt;T&gt;().is_ok_and(|v| v == abs) {
+<a href=#1293 id=1293 data-nosnippet>1293</a>        closest
+<a href=#1294 id=1294 data-nosnippet>1294</a>    } <span class="kw">else </span>{
+<a href=#1295 id=1295 data-nosnippet>1295</a>        shortest
+<a href=#1296 id=1296 data-nosnippet>1296</a>    };
+<a href=#1297 id=1297 data-nosnippet>1297</a>    <span class="kw">let </span>(mantissa, exponent) = scientific.split_once(<span class="string">'e'</span>).unwrap();
+<a href=#1298 id=1298 data-nosnippet>1298</a>    <span class="kw">let </span>exponent: i32 = exponent.parse().unwrap();
+<a href=#1299 id=1299 data-nosnippet>1299</a>    <span class="kw">let </span>digits = mantissa.replace(<span class="string">'.'</span>, <span class="string">""</span>);
+<a href=#1300 id=1300 data-nosnippet>1300</a>    <span class="kw">let </span>digits = digits.trim_end_matches(<span class="string">'0'</span>);
+<a href=#1301 id=1301 data-nosnippet>1301</a>
+<a href=#1302 id=1302 data-nosnippet>1302</a>    <span class="kw">if </span>(-<span class="number">3</span>..<span class="number">7</span>).contains(<span class="kw-2">&amp;</span>exponent) {
+<a href=#1303 id=1303 data-nosnippet>1303</a>        <span class="kw">if </span>exponent &lt; <span class="number">0 </span>{
+<a href=#1304 id=1304 data-nosnippet>1304</a>            <span class="kw">let </span>zeros = <span class="string">"0"</span>.repeat((-exponent - <span class="number">1</span>) <span class="kw">as </span>usize);
+<a href=#1305 id=1305 data-nosnippet>1305</a>            <span class="macro">format!</span>(<span class="string">"{sign}0.{zeros}{digits}"</span>)
+<a href=#1306 id=1306 data-nosnippet>1306</a>        } <span class="kw">else </span>{
+<a href=#1307 id=1307 data-nosnippet>1307</a>            <span class="kw">let </span>int_len = exponent <span class="kw">as </span>usize + <span class="number">1</span>;
+<a href=#1308 id=1308 data-nosnippet>1308</a>            <span class="kw">if </span>digits.len() &gt; int_len {
+<a href=#1309 id=1309 data-nosnippet>1309</a>                <span class="macro">format!</span>(<span class="string">"{sign}{}.{}"</span>, <span class="kw-2">&amp;</span>digits[..int_len], <span class="kw-2">&amp;</span>digits[int_len..])
+<a href=#1310 id=1310 data-nosnippet>1310</a>            } <span class="kw">else </span>{
+<a href=#1311 id=1311 data-nosnippet>1311</a>                <span class="macro">format!</span>(<span class="string">"{sign}{digits:0&lt;int_len$}.0"</span>)
+<a href=#1312 id=1312 data-nosnippet>1312</a>            }
+<a href=#1313 id=1313 data-nosnippet>1313</a>        }
+<a href=#1314 id=1314 data-nosnippet>1314</a>    } <span class="kw">else </span>{
+<a href=#1315 id=1315 data-nosnippet>1315</a>        <span class="kw">let </span>fraction = <span class="kw">if </span>digits.len() &gt; <span class="number">1 </span>{ <span class="kw-2">&amp;</span>digits[<span class="number">1</span>..] } <span class="kw">else </span>{ <span class="string">"0" </span>};
+<a href=#1316 id=1316 data-nosnippet>1316</a>        <span class="macro">format!</span>(<span class="string">"{sign}{}.{fraction}E{exponent}"</span>, <span class="kw-2">&amp;</span>digits[..<span class="number">1</span>])
+<a href=#1317 id=1317 data-nosnippet>1317</a>    }
+<a href=#1318 id=1318 data-nosnippet>1318</a>}
 </code></pre></div></section></main></body></html>
