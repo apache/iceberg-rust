@@ -494,9 +494,8 @@ impl HdfsNativeOperatorCache {
 /// NameNode connections on the runtime current when it is built and panics
 /// once that runtime is gone, so building it here keeps a cached operator
 /// usable from any caller's runtime. Started on first use.
-// TODO: pass a runtime to the client instead of entering this one once
-// opendal's hdfs-native service exposes hdfs-native's
-// `ClientBuilder::with_io_runtime` (Kimahriman/hdfs-native#255).
+// TODO(#3509): build clients on the catalog's runtime once storage factories
+// receive it, and drop this one.
 static HDFS_NATIVE_RUNTIME: LazyLock<Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
