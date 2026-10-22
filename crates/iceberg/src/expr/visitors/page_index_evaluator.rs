@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use fnv::FnvHashSet;
 use ordered_float::OrderedFloat;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
+use parquet::basic::SortOrder;
 use parquet::file::metadata::RowGroupMetaData;
 use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
@@ -179,6 +180,14 @@ impl<'a> PageIndexEvaluator<'a> {
             .filter(|&len| len > 0)
             .map(|len| len as usize);
 
+        // `UINT_32` (and narrower unsigned) columns store their page bounds as
+        // INT32 bits ordered as unsigned values.
+        let unsigned = self
+            .row_group_metadata
+            .columns()
+            .get(parquet_column_index)
+            .is_some_and(|column| column.column_descr().sort_order() == SortOrder::UNSIGNED);
+
         let row_counts = {
             // Caches row count calculations for columns that appear multiple times in
             // the predicate
@@ -207,6 +216,7 @@ impl<'a> PageIndexEvaluator<'a> {
             predicate,
             field_type,
             type_length,
+            unsigned,
             column_index,
             &row_counts,
         )?
@@ -256,6 +266,7 @@ impl<'a> PageIndexEvaluator<'a> {
         predicate: F,
         field_type: &PrimitiveType,
         type_length: Option<usize>,
+        unsigned: bool,
         column_index: &ColumnIndexMetaData,
         row_counts: &[usize],
     ) -> Result<Option<Vec<bool>>>
@@ -289,9 +300,10 @@ impl<'a> PageIndexEvaluator<'a> {
                 .enumerate()
                 .zip(row_counts.iter())
                 .map(|((i, (min, max)), &row_count)| {
+                    let (min, max) = Self::int32_bounds_to_datums(field_type, unsigned, min, max);
                     predicate(
-                        min.map(|&val| Self::int32_bound_to_datum(field_type, val)),
-                        max.map(|&val| Self::int32_bound_to_datum(field_type, val)),
+                        min,
+                        max,
                         PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
@@ -316,18 +328,8 @@ impl<'a> PageIndexEvaluator<'a> {
                 .zip(row_counts.iter())
                 .map(|((i, (min, max)), &row_count)| {
                     predicate(
-                        min.map(|&val| {
-                            Datum::new(
-                                field_type.clone(),
-                                PrimitiveLiteral::Float(OrderedFloat::from(val)),
-                            )
-                        }),
-                        max.map(|&val| {
-                            Datum::new(
-                                field_type.clone(),
-                                PrimitiveLiteral::Float(OrderedFloat::from(val)),
-                            )
-                        }),
+                        min.map(|&val| Self::float_bound_to_datum(field_type, val)),
+                        max.map(|&val| Self::float_bound_to_datum(field_type, val)),
                         PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
@@ -491,16 +493,58 @@ impl<'a> PageIndexEvaluator<'a> {
         Ok(Some(result?))
     }
 
+    /// Converts the `INT32` bounds of a page into [`Datum`]s according to the
+    /// field's primitive type.
+    ///
+    /// Bounds of an unsigned column read as `long` are zero-extended. If they
+    /// come out with `min > max`, the writer ordered them as signed values, so
+    /// both are dropped and the page might match.
+    fn int32_bounds_to_datums(
+        field_type: &PrimitiveType,
+        unsigned: bool,
+        min: Option<&i32>,
+        max: Option<&i32>,
+    ) -> (Option<Datum>, Option<Datum>) {
+        if unsigned && *field_type == PrimitiveType::Long {
+            let min = min.map(|&val| i64::from(val as u32));
+            let max = max.map(|&val| i64::from(val as u32));
+            if let (Some(min), Some(max)) = (min, max)
+                && min > max
+            {
+                return (None, None);
+            }
+            return (min.map(Datum::long), max.map(Datum::long));
+        }
+
+        (
+            min.map(|&val| Self::int32_bound_to_datum(field_type, val)),
+            max.map(|&val| Self::int32_bound_to_datum(field_type, val)),
+        )
+    }
+
     /// Converts an `INT32` page bound into a [`Datum`] according to the field's
-    /// primitive type.
+    /// primitive type, widening it for an `int` -> `long` promotion.
     fn int32_bound_to_datum(field_type: &PrimitiveType, val: i32) -> Datum {
         match field_type {
             PrimitiveType::Decimal { .. } => Datum::new(
                 field_type.clone(),
                 PrimitiveLiteral::Int128(i128::from(val)),
             ),
-            _ => Datum::new(field_type.clone(), PrimitiveLiteral::Int(val)),
+            _ => Datum::int(val)
+                .promote_to(field_type)
+                .unwrap_or_else(|| Datum::new(field_type.clone(), PrimitiveLiteral::Int(val))),
         }
+    }
+
+    /// Converts a `FLOAT` page bound into a [`Datum`] according to the field's
+    /// primitive type, widening it for a `float` -> `double` promotion.
+    fn float_bound_to_datum(field_type: &PrimitiveType, val: f32) -> Datum {
+        Datum::float(val).promote_to(field_type).unwrap_or_else(|| {
+            Datum::new(
+                field_type.clone(),
+                PrimitiveLiteral::Float(OrderedFloat::from(val)),
+            )
+        })
     }
 
     /// Converts an `INT64` page bound into a [`Datum`] according to the field's
@@ -2342,43 +2386,78 @@ mod tests {
     }
 
     #[test]
-    fn eval_keeps_int32_pages_of_promoted_long_field() -> Result<()> {
+    fn eval_prunes_int32_pages_of_promoted_long_field() -> Result<()> {
         // An `int` -> `long` promotion leaves older files with INT32 page
-        // bounds, which can't be compared with a `long` literal.
+        // bounds, which are widened to compare with a `long` literal.
         let (metadata, _temp_file) = create_parquet_file_from_values(&[100, 200, 300, 400], |v| {
             Arc::new(Int32Array::from(v))
         })?;
 
-        assert_keeps_all_pages(&metadata, PrimitiveType::Long, 4096, [
-            Reference::new("col").less_than(Datum::long(250)),
-            Reference::new("col").greater_than_or_equal_to(Datum::long(250)),
-            // A literal outside the `int` range.
-            Reference::new("col").less_than(Datum::long(i64::from(i32::MAX) + 1)),
-            Reference::new("col").is_in([Datum::long(200), Datum::long(400)]),
+        assert_selects(&metadata, PrimitiveType::Long, [
+            (Reference::new("col").less_than(Datum::long(250)), vec![
+                RowSelector::select(2048),
+                RowSelector::skip(2048),
+            ]),
+            (
+                Reference::new("col").greater_than_or_equal_to(Datum::long(250)),
+                vec![RowSelector::skip(2048), RowSelector::select(2048)],
+            ),
+            // Literals outside the `int` range.
+            (
+                Reference::new("col").less_than(Datum::long(i64::from(i32::MAX) + 1)),
+                vec![RowSelector::select(4096)],
+            ),
+            (
+                Reference::new("col").greater_than(Datum::long(i64::from(i32::MAX))),
+                vec![RowSelector::skip(4096)],
+            ),
+            (
+                Reference::new("col").is_in([Datum::long(200), Datum::long(400)]),
+                vec![
+                    RowSelector::skip(1024),
+                    RowSelector::select(1024),
+                    RowSelector::skip(1024),
+                    RowSelector::select(1024),
+                ],
+            ),
         ])
     }
 
     #[test]
-    fn eval_keeps_float_pages_of_promoted_double_field() -> Result<()> {
+    fn eval_prunes_float_pages_of_promoted_double_field() -> Result<()> {
         // A `float` -> `double` promotion leaves older files with FLOAT page
-        // bounds, which can't be compared with a `double` literal.
+        // bounds, which are widened to compare with a `double` literal.
         let (metadata, _temp_file) =
             create_parquet_file_from_values(&[1.0_f32, 2.0, 3.0, 4.0], |v| {
                 Arc::new(Float32Array::from(v))
             })?;
 
-        assert_keeps_all_pages(&metadata, PrimitiveType::Double, 4096, [
-            Reference::new("col").greater_than(Datum::double(2.5)),
-            Reference::new("col").less_than_or_equal_to(Datum::double(2.5)),
-            Reference::new("col").is_in([Datum::double(2.0), Datum::double(4.0)]),
+        assert_selects(&metadata, PrimitiveType::Double, [
+            (
+                Reference::new("col").greater_than(Datum::double(2.5)),
+                vec![RowSelector::skip(2048), RowSelector::select(2048)],
+            ),
+            (
+                Reference::new("col").less_than_or_equal_to(Datum::double(2.5)),
+                vec![RowSelector::select(2048), RowSelector::skip(2048)],
+            ),
+            (
+                Reference::new("col").is_in([Datum::double(2.0), Datum::double(4.0)]),
+                vec![
+                    RowSelector::skip(1024),
+                    RowSelector::select(1024),
+                    RowSelector::skip(1024),
+                    RowSelector::select(1024),
+                ],
+            ),
         ])
     }
 
     #[test]
-    fn eval_keeps_uint32_pages_of_long_field() -> Result<()> {
+    fn eval_prunes_uint32_pages_of_long_field() -> Result<()> {
         // Parquet `UINT_32` columns map to `long` but have INT32 page bounds.
         // The last page mixes both values, so its raw signed max is smaller
-        // than its min and a sign-extending widening would prune it.
+        // than its min and only a zero-extending widening keeps it.
         let mixed: Vec<u32> = [100_u32, 3_000_000_000].repeat(512);
         let (metadata, _temp_file) = create_single_column_parquet_file(&[
             Arc::new(UInt32Array::from(vec![100_u32; 1024])),
@@ -2395,14 +2474,53 @@ mod tests {
         assert_eq!(bounds.len(), 3);
         assert_eq!(bounds[2], (Some(&100), Some(&(3_000_000_000_u32 as i32))));
 
-        assert_keeps_all_pages(&metadata, PrimitiveType::Long, 3072, [
-            Reference::new("col").equal_to(Datum::long(3_000_000_000_i64)),
-            Reference::new("col").greater_than(Datum::long(2_000_000_000)),
-            Reference::new("col").is_in([
-                Datum::long(3_000_000_000_i64),
-                Datum::long(4_000_000_000_i64),
+        assert_selects(&metadata, PrimitiveType::Long, [
+            (
+                Reference::new("col").equal_to(Datum::long(3_000_000_000_i64)),
+                vec![RowSelector::skip(1024), RowSelector::select(2048)],
+            ),
+            (
+                Reference::new("col").greater_than(Datum::long(2_000_000_000)),
+                vec![RowSelector::skip(1024), RowSelector::select(2048)],
+            ),
+            (Reference::new("col").less_than(Datum::long(200)), vec![
+                RowSelector::select(1024),
+                RowSelector::skip(1024),
+                RowSelector::select(1024),
             ]),
+            (
+                Reference::new("col").is_in([
+                    Datum::long(3_000_000_000_i64),
+                    Datum::long(4_000_000_000_i64),
+                ]),
+                vec![RowSelector::skip(1024), RowSelector::select(2048)],
+            ),
         ])
+    }
+
+    #[test]
+    fn int32_bounds_of_unsigned_column_drop_signed_ordered_bounds() {
+        // A writer that ordered `UINT_32` values as signed would report
+        // 3_000_000_000 (negative as INT32) as the min of a page also holding 100.
+        let signed_min = 3_000_000_000_u32 as i32;
+        assert_eq!(
+            PageIndexEvaluator::int32_bounds_to_datums(
+                &PrimitiveType::Long,
+                true,
+                Some(&signed_min),
+                Some(&100),
+            ),
+            (None, None)
+        );
+        assert_eq!(
+            PageIndexEvaluator::int32_bounds_to_datums(
+                &PrimitiveType::Long,
+                true,
+                Some(&100),
+                Some(&signed_min),
+            ),
+            (Some(Datum::long(100)), Some(Datum::long(3_000_000_000_i64)))
+        );
     }
 
     #[test]
@@ -2431,10 +2549,26 @@ mod tests {
         row_count: usize,
         filters: impl IntoIterator<Item = Predicate>,
     ) -> Result<()> {
+        assert_selects(
+            metadata,
+            field_type,
+            filters
+                .into_iter()
+                .map(|filter| (filter, vec![RowSelector::select(row_count)])),
+        )
+    }
+
+    /// Asserts that each filter, bound to a single `field_type` field over the
+    /// column in `metadata`, produces the expected row selection.
+    fn assert_selects(
+        metadata: &ParquetMetaData,
+        field_type: PrimitiveType,
+        cases: impl IntoIterator<Item = (Predicate, Vec<RowSelector>)>,
+    ) -> Result<()> {
         let (column_index, offset_index, row_group_metadata) = get_test_metadata(metadata);
         let (iceberg_schema, field_id_map) = build_single_field_schema_and_field_map(field_type)?;
 
-        for filter in filters {
+        for (filter, expected) in cases {
             let filter = filter.bind(iceberg_schema.clone(), false)?;
 
             let result = PageIndexEvaluator::eval(
@@ -2446,7 +2580,7 @@ mod tests {
                 iceberg_schema.as_ref(),
             )?;
 
-            assert_eq!(result, vec![RowSelector::select(row_count)], "{filter}");
+            assert_eq!(result, expected, "{filter}");
         }
 
         Ok(())
