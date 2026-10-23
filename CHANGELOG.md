@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+* Support timestamp-based time travel through `TableScanBuilder::as_of_time` and `snapshot_id_as_of_time`.
+
 ### Breaking Changes
 
 * `FileWrite::close`, `EncryptedOutputFile::write`, `ManifestListWriter::close`, and `PuffinWriter::close` now return `Result<io::FileMetadata>` instead of `Result<()>`. The returned size is the on-disk size, including encryption overhead. Custom `FileWrite` implementations must return the number of bytes stored.
