@@ -100,8 +100,10 @@ impl ManifestEntryV1 {
         Ok(ManifestEntry {
             status: self.status.try_into()?,
             snapshot_id: Some(self.snapshot_id),
-            sequence_number: Some(0),
-            file_sequence_number: Some(0),
+            // v1 entries carry no sequence numbers; they are inherited from the
+            // manifest list entry on read, like a v2 entry with null fields.
+            sequence_number: None,
+            file_sequence_number: None,
             data_file: self
                 .data_file
                 .project_partition_by_name(partition_type)?
@@ -557,16 +559,15 @@ mod tests {
             )
             .unwrap();
 
-        // Verify that V1→V2 conversion adds the missing V2 sequence number fields
+        // V1 has no sequence number fields; they are left unset so that
+        // `ManifestEntry::inherit_data` fills them from the manifest list.
         assert_eq!(
-            v2_entry.sequence_number,
-            Some(0),
-            "ManifestEntryV1::try_into() should set sequence_number to 0"
+            v2_entry.sequence_number, None,
+            "ManifestEntryV1::try_into() should leave sequence_number unset"
         );
         assert_eq!(
-            v2_entry.file_sequence_number,
-            Some(0),
-            "ManifestEntryV1::try_into() should set file_sequence_number to 0"
+            v2_entry.file_sequence_number, None,
+            "ManifestEntryV1::try_into() should leave file_sequence_number unset"
         );
         assert_eq!(
             v2_entry.snapshot_id,

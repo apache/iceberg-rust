@@ -680,8 +680,8 @@ mod tests {
         let mut entries = vec![ManifestEntry {
                 status: ManifestStatus::Added,
                 snapshot_id: Some(0),
-                sequence_number: Some(0),
-                file_sequence_number: Some(0),
+                sequence_number: None,
+                file_sequence_number: None,
                 data_file: DataFile {
                     content: DataContentType::Data,
                     file_path: "s3://testbucket/iceberg_data/iceberg_ctl/iceberg_db/iceberg_tbl/data/00000-7-45268d71-54eb-476c-b42c-942d880c04a1-00001.parquet".to_string(),
@@ -772,8 +772,8 @@ mod tests {
                 ManifestEntry {
                     status: ManifestStatus::Added,
                     snapshot_id: Some(0),
-                    sequence_number: Some(0),
-                    file_sequence_number: Some(0),
+                    sequence_number: None,
+                    file_sequence_number: None,
                     data_file: DataFile {
                         content: DataContentType::Data,
                         file_path: "s3://testbucket/prod/db/sample/data/category=x/00010-1-d5c93668-1e52-41ac-92a6-bba590cbf249-00001.parquet".to_string(),
@@ -1779,9 +1779,9 @@ mod tests {
             Some(Literal::string("a")),
             Some(Literal::double(2.5)),
         ]));
-        // V1 has no sequence numbers, and every V1 entry reads with 0.
-        full_entry.sequence_number = Some(0);
-        full_entry.file_sequence_number = Some(0);
+        // V1 has no sequence numbers; they are inherited from the manifest list on read.
+        full_entry.sequence_number = None;
+        full_entry.file_sequence_number = None;
         let data_file = &mut full_entry.data_file;
         data_file.column_sizes = HashMap::from([(1, 40)]);
         data_file.value_counts = HashMap::from([(1, 10)]);

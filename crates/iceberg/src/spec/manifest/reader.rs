@@ -178,6 +178,35 @@ mod tests {
         );
     }
 
+    /// A v1 manifest has no sequence number fields. When a v2 manifest list
+    /// references it (a table upgraded between a writer's attempts), the entries
+    /// must inherit the list's sequence number rather than default to 0.
+    #[tokio::test]
+    async fn test_read_v1_manifest_inherits_sequence_number() {
+        let schema = test_schema();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        let io = FileIO::new_with_memory();
+        let path = "memory:///table/metadata/v1.avro";
+        let mut writer = ManifestWriterBuilder::new(
+            io.new_output(path).unwrap(),
+            Some(1),
+            schema.clone(),
+            partition_spec,
+        )
+        .build_v1();
+        writer.add_entry(test_entry()).unwrap();
+        let mut manifest_file = writer.write_manifest_file().await.unwrap();
+        manifest_file.sequence_number = 36;
+
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        assert_eq!(manifest.entries()[0].sequence_number(), Some(36));
+        assert_eq!(manifest.entries()[0].file_sequence_number, Some(36));
+    }
+
     #[tokio::test]
     async fn test_read_encrypted_manifest_roundtrip() {
         let schema = test_schema();
