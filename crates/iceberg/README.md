@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
         .scan()
         .select(["name", "id"])
         .build()?
-        .to_arrow()
+        .to_arrow(Default::default())
         .await?;
 
     // Consume this stream like arrow record batch stream.
@@ -64,6 +64,28 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+### Reader settings
+
+Pass reader settings separately from file planning:
+
+```rust
+let options = iceberg::arrow::ArrowReaderOptions::builder()
+    .with_batch_size(Some(1024))
+    .with_row_selection_enabled(true)
+    .build();
+let stream = table.scan().build()?.to_arrow(options).await?;
+```
+
+When upgrading, move reader-setting calls from `TableScanBuilder` to
+`ArrowReaderOptions::builder()` and pass the result to `to_arrow(options)`.
+Use `to_arrow(Default::default())` for default settings. Scan
+`with_concurrency_limit()` controls manifest planning only; set
+`with_data_file_concurrency_limit(Some(limit))` on the reader options to also
+limit data-file reads. An unset data-file limit uses execution-host parallelism.
+
+Locally constructed readers accept the same options through
+`ArrowReaderBuilder::with_options(options)`.
 
 ## Storage Backends
 

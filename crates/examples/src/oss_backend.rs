@@ -81,7 +81,7 @@ async fn main() {
     println!("Table {TABLE_NAME} loaded!");
 
     let scan = table.scan().select_all().build().unwrap();
-    let reader = scan.to_arrow().await.unwrap();
+    let reader = scan.to_arrow(Default::default()).await.unwrap();
     let buf = reader.collect::<Vec<_>>().await;
 
     println!("Table {TABLE_NAME} has {} batches.", buf.len());
