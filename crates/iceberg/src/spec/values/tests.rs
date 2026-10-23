@@ -235,6 +235,28 @@ fn raw_literal_double_without_exact_float_narrows_to_nearest() {
 }
 
 #[test]
+fn raw_literal_avro_non_finite_and_negative_zero_double_to_float() {
+    for (double, expected) in [
+        (f64::NAN, f32::NAN),
+        (f64::INFINITY, f32::INFINITY),
+        (f64::NEG_INFINITY, f32::NEG_INFINITY),
+        (-0.0, -0.0_f32),
+    ] {
+        let raw: RawLiteral = apache_avro::from_value(&Value::Double(double)).unwrap();
+        let value = match raw.try_into(&Primitive(PrimitiveType::Float)).unwrap() {
+            Some(Literal::Primitive(PrimitiveLiteral::Float(value))) => value.0,
+            _ => panic!("unexpected literal type"),
+        };
+
+        if expected.is_nan() {
+            assert!(value.is_nan());
+        } else {
+            assert_eq!(value.to_bits(), expected.to_bits());
+        }
+    }
+}
+
+#[test]
 fn json_date() {
     let record = r#""2017-11-16""#;
 
