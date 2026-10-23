@@ -20,6 +20,7 @@
 //! predicates, row-group / row selection, and delete handling into a stream
 //! of transformed Arrow `RecordBatch`es.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -108,8 +109,9 @@ impl ArrowReader {
 }
 
 // Metadata columns synthesized without reading any data column, so a projection of only
-// these can be pruned to zero data columns. Narrower than `is_metadata_field`, which also
-// matches `_deleted` -- excluded here because it has no synthesis handler.
+// these (including the empty projection, e.g. `COUNT(*)`) can be pruned to zero data
+// columns. Narrower than `is_metadata_field`, which also matches `_deleted` -- excluded here
+// because it has no synthesis handler.
 const PRUNABLE_METADATA_FIELDS: &[i32] = &[
     RESERVED_FIELD_ID_FILE,
     RESERVED_FIELD_ID_SPEC_ID,
@@ -131,6 +133,17 @@ struct FileScanTaskReader {
     bloom_filter_enabled: bool,
     parquet_read_options: ParquetReadOptions,
     scan_metrics: ScanMetrics,
+}
+
+// Borrow an existing selection, or enumerate all groups for a whole-file scan.
+fn candidate_row_groups(
+    selected_row_groups: Option<&[usize]>,
+    num_row_groups: usize,
+) -> Cow<'_, [usize]> {
+    match selected_row_groups {
+        Some(indices) => Cow::Borrowed(indices),
+        None => Cow::Owned((0..num_row_groups).collect()),
+    }
 }
 
 impl FileScanTaskReader {
@@ -181,12 +194,12 @@ impl FileScanTaskReader {
         let need_row_number = project_pos || (project_row_id && task.first_row_id().is_some());
 
         let field_ids = task.project_field_ids();
-        let metadata_only_projection = !field_ids.is_empty()
-            && field_ids
-                .iter()
-                .all(|id| PRUNABLE_METADATA_FIELDS.contains(id));
+        // Vacuously true for an empty projection (e.g. `COUNT(*)`), so no `is_empty()` guard.
+        let no_data_columns_projected = field_ids
+            .iter()
+            .all(|id| PRUNABLE_METADATA_FIELDS.contains(id));
 
-        let install_row_number = need_row_number || metadata_only_projection;
+        let install_row_number = need_row_number || no_data_columns_projected;
 
         let arrow_metadata = Self::configure_arrow_reader_metadata(
             arrow_metadata,
@@ -285,13 +298,11 @@ impl FileScanTaskReader {
             use_position_fallback, // Whether to use position-based (true) or field-ID-based (false) projection
         )?;
 
-        // A metadata-only projection leaves `project_field_ids_without_metadata` empty,
-        // which `get_arrow_projection_mask` maps to "read all columns" (so `COUNT(*)` still
-        // gets a row count). Downgrade that to "read no data columns": `install_row_number`
-        // put the RowNumber virtual column on every metadata-only projection as a row-count
-        // source independent of the data columns, so the count survives with zero data
-        // columns read. `COUNT(*)` (an empty projection) has no RowNumber and keeps reading
-        // all columns to preserve the row count.
+        // A projection with no data columns leaves `project_field_ids_without_metadata`
+        // empty, which `get_arrow_projection_mask` maps to "read all columns". Downgrade that
+        // to "read no data columns": `install_row_number` put the RowNumber virtual column on
+        // every such projection as a row-count source independent of the data columns, so the
+        // count survives with zero data columns read.
         //
         // This runs BEFORE the union so any physical metadata leaf is added onto a `none`
         // base, pruning the read to just that leaf (`union` with an `all` base stays `all`).
@@ -509,6 +520,14 @@ impl FileScanTaskReader {
         }
 
         if let Some(predicate) = final_predicate {
+            // Normalize NOT out of the predicate once for every consumer below. The
+            // conservative row-group and page-index evaluators cannot soundly negate
+            // a NOT node (negating a "might match" bound can prune matching rows, and
+            // the page-index evaluator rejects NOT outright). A FileScanTask built or
+            // deserialized outside TableScan carries an un-normalized predicate, so
+            // rewrite it here. Matches TableScan::with_filter.
+            let predicate = predicate.rewrite_not();
+
             let (iceberg_field_ids, field_id_map) = ArrowReader::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
                 record_batch_stream_builder.schema(),
@@ -525,48 +544,35 @@ impl FileScanTaskReader {
             record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
 
             if self.row_group_filtering_enabled {
-                let predicate_filtered_row_groups = ArrowReader::get_selected_row_group_indices(
+                let candidates = candidate_row_groups(
+                    selected_row_group_indices.as_deref(),
+                    record_batch_stream_builder.metadata().num_row_groups(),
+                );
+
+                selected_row_group_indices = Some(ArrowReader::get_selected_row_group_indices(
                     &predicate,
                     record_batch_stream_builder.metadata(),
                     &field_id_map,
                     task.schema(),
-                )?;
-
-                // Merge predicate-based filtering with byte range filtering (if present)
-                // by taking the intersection of both filters
-                selected_row_group_indices = match selected_row_group_indices {
-                    Some(byte_range_filtered) => {
-                        // Keep only row groups that are in both filters
-                        let intersection: Vec<usize> = byte_range_filtered
-                            .into_iter()
-                            .filter(|idx| predicate_filtered_row_groups.contains(idx))
-                            .collect();
-                        Some(intersection)
-                    }
-                    None => Some(predicate_filtered_row_groups),
-                };
+                    candidates.as_ref(),
+                )?);
             }
 
             if self.bloom_filter_enabled {
-                let all_rgs;
-                let candidate_rgs = match &selected_row_group_indices {
-                    Some(indices) => indices.as_slice(),
-                    None => {
-                        all_rgs = (0..record_batch_stream_builder.metadata().num_row_groups())
-                            .collect::<Vec<_>>();
-                        &all_rgs
-                    }
-                };
+                let candidates = candidate_row_groups(
+                    selected_row_group_indices.as_deref(),
+                    record_batch_stream_builder.metadata().num_row_groups(),
+                );
 
                 let bloom_filtered = Self::filter_row_groups_by_bloom_filter(
                     &predicate,
                     &mut record_batch_stream_builder,
-                    candidate_rgs,
+                    candidates.as_ref(),
                     &field_id_map,
                 )
                 .await?;
 
-                if bloom_filtered.len() < candidate_rgs.len() {
+                if bloom_filtered.len() < candidates.len() {
                     selected_row_group_indices = Some(bloom_filtered);
                 }
             }
@@ -3367,6 +3373,102 @@ mod tests {
             "_pos-only scan should read fewer bytes than a scan of the wide column: \
              {pos_only_bytes} vs {with_data_bytes}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_empty_projection_reads_no_data_columns() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+
+        let empty = metadata_projection_task(
+            write_parquet_with_wide_column(dir, "empty.parquet", vec![], vec![]),
+            id_and_wide_schema(),
+            vec![],
+        );
+        let (batches, empty_bytes) = scan_task(empty).await;
+
+        // No data columns come out, but the fixture's 3 rows are still counted.
+        assert!(batches.iter().all(|b| b.num_columns() == 0));
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+
+        let with_data = metadata_projection_task(
+            write_parquet_with_wide_column(dir, "empty_ref.parquet", vec![], vec![]),
+            id_and_wide_schema(),
+            vec![2],
+        );
+        let (_, with_data_bytes) = scan_task(with_data).await;
+
+        assert!(
+            empty_bytes < with_data_bytes,
+            "empty projection should read fewer bytes than the wide column: \
+             {empty_bytes} vs {with_data_bytes}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_empty_projection_counts_rows_after_positional_delete() {
+        use crate::spec::DataContentType;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        let data_path = write_plain_parquet(dir, "empty_posdel_data.parquet", vec![], vec![]);
+        let del_path = write_positional_delete(dir, "empty_posdel.parquet", &data_path, &[1]);
+        let delete = FileScanTaskDeleteFile::builder()
+            .with_file_path(del_path.clone())
+            .with_file_size_in_bytes(std::fs::metadata(&del_path).unwrap().len())
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
+            .with_partition_spec_id(0)
+            .build()
+            .unwrap();
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&data_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(data_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(id_and_wide_schema())
+            .with_project_field_ids(vec![])
+            .with_deletes(vec![delete])
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+
+        let (batches, _) = scan_task(task).await;
+
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_empty_projection_counts_rows_after_predicate() {
+        use crate::expr::{Bind, Reference};
+        use crate::spec::Datum;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+        let file_path = write_plain_parquet(dir, "empty_predicate.parquet", vec![], vec![]);
+        let schema = id_and_wide_schema();
+        // `id` is filtered on but not projected, so the row filter reads it on its own mask.
+        let bound = Reference::new("id")
+            .not_equal_to(Datum::int(2))
+            .bind(Arc::clone(&schema), false)
+            .unwrap();
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(file_path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![])
+            .with_predicate(Some(bound))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+
+        let (batches, _) = scan_task(task).await;
+
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
     }
 
     #[tokio::test]
