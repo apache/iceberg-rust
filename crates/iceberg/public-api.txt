@@ -1,6 +1,13 @@
 pub mod iceberg
 pub mod iceberg::arrow
 pub mod iceberg::arrow::delete_file_loader
+pub struct iceberg::arrow::delete_file_loader::PositionDeleteIndex
+impl iceberg::arrow::delete_file_loader::PositionDeleteIndex
+pub fn iceberg::arrow::delete_file_loader::PositionDeleteIndex::iter(&self) -> impl core::iter::traits::iterator::Iterator<Item = i64> + '_
+pub struct iceberg::arrow::delete_file_loader::PositionDeleteIndexLoader
+impl iceberg::arrow::delete_file_loader::PositionDeleteIndexLoader
+pub async fn iceberg::arrow::delete_file_loader::PositionDeleteIndexLoader::load_file_scoped_positions(&self, delete_file: &iceberg::scan::FileScanTaskDeleteFile, expected_data_file: &str) -> iceberg::Result<iceberg::arrow::delete_file_loader::PositionDeleteIndex>
+pub fn iceberg::arrow::delete_file_loader::PositionDeleteIndexLoader::new(file_io: iceberg::io::FileIO) -> Self
 pub trait iceberg::arrow::delete_file_loader::DeleteFileLoader
 pub fn iceberg::arrow::delete_file_loader::DeleteFileLoader::read_delete_file<'life0, 'life1, 'async_trait>(&'life0 self, task: &'life1 iceberg::scan::FileScanTaskDeleteFile, schema: iceberg::spec::SchemaRef) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::scan::ArrowRecordBatchStream>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub mod iceberg::arrow::partition_value_calculator
