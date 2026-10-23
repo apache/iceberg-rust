@@ -294,6 +294,14 @@ pub struct CommitTableRequest {
     pub updates: Vec<TableUpdate>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+/// Request to commit updates to multiple tables atomically.
+pub struct CommitTransactionRequest {
+    /// Changes for each table, applied all together or not at all
+    pub table_changes: Vec<CommitTableRequest>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 /// Response returned when a table is successfully updated.
