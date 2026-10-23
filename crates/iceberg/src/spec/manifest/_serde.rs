@@ -100,9 +100,6 @@ impl ManifestEntryV1 {
         Ok(ManifestEntry {
             status: self.status.try_into()?,
             snapshot_id: Some(self.snapshot_id),
-            // Per spec, inheritance does not apply to v1: "When reading v1
-            // manifests with no sequence number column, sequence numbers for
-            // all files must default to 0."
             sequence_number: Some(0),
             file_sequence_number: Some(0),
             data_file: self
