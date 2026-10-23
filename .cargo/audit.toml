@@ -25,6 +25,30 @@ ignore = [
   #
   # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
   "RUSTSEC-2024-0436",
+  # `webpki-roots` < 1.0.10 bundles a distrusted emSign root.
+  #
+  # sqlx-core 0.8.6 pulls in webpki-roots 0.26.11, the final 0.26.x release.
+  # It only re-exports webpki-roots 1.x, which the lockfile pins to the fixed
+  # 1.0.10, but cargo-audit flags it by version number. Remove once sqlx moves
+  # to webpki-roots 1.x directly.
+  "RUSTSEC-2026-0381",
+  # `zstd` < 0.14.3 / `zstd-safe` < 8.2.0 memory-safety bugs.
+  #
+  # Fixed only in zstd 0.14, but parquet 59 and apache-avro 0.22 require
+  # zstd 0.13. Remove once on parquet >= 60
+  # (https://github.com/apache/iceberg-rust/pull/3257), an apache-avro release
+  # after 0.22, and workspace `zstd` >= 0.14.3.
+  #
+  # None of the affected code is reachable here. To re-check, run
+  # `cargo tree --workspace --all-features --target all -e features -i zstd-safe`
+  # and confirm only `std` is enabled.
+  #
+  # Affects only zstd's `with_context` constructors, which nothing calls.
+  "RUSTSEC-2026-0391",
+  # Requires the `seekable` feature, which is off.
+  "RUSTSEC-2026-0398",
+  # Requires the `legacy` feature, which is off.
+  "RUSTSEC-2026-0403",
   # `quick-xml` < 0.41.0 has quadratic duplicate-attribute validation and
   # unbounded namespace-declaration allocation (parser DoS).
   #

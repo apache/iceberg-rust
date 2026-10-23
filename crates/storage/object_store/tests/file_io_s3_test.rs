@@ -32,9 +32,9 @@ mod tests {
     };
     use iceberg_storage_object_store::ObjectStoreStorageFactory;
     use iceberg_test_utils::{get_object_store_endpoint, normalize_test_name_with_parts, set_up};
+    use object_store::ObjectStore;
     use object_store::aws::AmazonS3Builder;
     use object_store::path::Path as ObjectStorePath;
-    use object_store::ObjectStore;
 
     async fn get_file_io() -> FileIO {
         set_up();
@@ -316,7 +316,9 @@ mod tests {
                 || err_str.contains("NotImplemented")
                 || err_str.contains("KMS is not configured")
                 || err_str.contains("ServerNotInitialized")
-                || err_str.contains("A header you provided implies functionality that is not implemented"),
+                || err_str.contains(
+                    "A header you provided implies functionality that is not implemented"
+                ),
             "Expected KMS rejection from KES-less MinIO confirming SSE header was sent, got: {err_str}"
         );
     }

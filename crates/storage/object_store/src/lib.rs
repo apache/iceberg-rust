@@ -36,12 +36,12 @@ use bytes::{Bytes, BytesMut};
 use dashmap::DashMap;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-#[cfg(feature = "object_store-s3")]
-use iceberg::io::{S3Config, S3_DELETE_BATCH_SIZE, S3_MULTIPART_PART_SIZE_BYTES};
 use iceberg::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
     StorageFactory,
 };
+#[cfg(feature = "object_store-s3")]
+use iceberg::io::{S3_DELETE_BATCH_SIZE, S3_MULTIPART_PART_SIZE_BYTES, S3Config};
 use iceberg::{Error, ErrorKind, Result};
 use object_store::path::Path as ObjectStorePath;
 use object_store::{MultipartUpload, ObjectStore, ObjectStoreExt, PutPayload};
@@ -244,13 +244,14 @@ impl ObjectStoreStorage {
                     .value()
                     .clone();
 
-                let object_path = ObjectStorePath::parse(parsed.relative.as_str()).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid relative path: {}", parsed.relative),
-                    )
-                    .with_source(e)
-                })?;
+                let object_path =
+                    ObjectStorePath::parse(parsed.relative.as_str()).map_err(|e| {
+                        Error::new(
+                            ErrorKind::DataInvalid,
+                            format!("Invalid relative path: {}", parsed.relative),
+                        )
+                        .with_source(e)
+                    })?;
 
                 Ok(StoreAndPath {
                     bucket: parsed.bucket,
@@ -476,7 +477,9 @@ impl ObjectStoreWriter {
             if let Some(res) = tasks.join_next().await {
                 match res {
                     Ok(Err(e)) => {
-                        return Err(Self::abort_and_wrap(tasks, upload, e, "part upload failure").await);
+                        return Err(
+                            Self::abort_and_wrap(tasks, upload, e, "part upload failure").await,
+                        );
                     }
                     Err(join_err) => {
                         Self::drain_and_abort(tasks, upload, "task panic").await;
@@ -493,13 +496,15 @@ impl ObjectStoreWriter {
     }
 
     fn check_tokio_runtime() -> Result<()> {
-        tokio::runtime::Handle::try_current().map(|_| ()).map_err(|e| {
-            Error::new(
-                ErrorKind::Unexpected,
-                "Tokio runtime not found for async task execution",
-            )
-            .with_source(e)
-        })
+        tokio::runtime::Handle::try_current()
+            .map(|_| ())
+            .map_err(|e| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Tokio runtime not found for async task execution",
+                )
+                .with_source(e)
+            })
     }
 
     /// Flushes any buffered bytes as an in-flight part upload to S3,
@@ -627,7 +632,9 @@ impl FileWrite for ObjectStoreWriter {
         while let Some(res) = self.tasks.join_next().await {
             match res {
                 Ok(Err(e)) => {
-                    let err = Self::abort_and_wrap(&mut self.tasks, upload, e, "part upload failure").await;
+                    let err =
+                        Self::abort_and_wrap(&mut self.tasks, upload, e, "part upload failure")
+                            .await;
                     let _ = self.upload.take();
                     return Err(err);
                 }
@@ -1317,7 +1324,8 @@ mod tests {
 
             async fn abort(&mut self) -> object_store::Result<()> {
                 if self.active_tasks.load(Ordering::SeqCst) > 0 {
-                    self.aborted_while_tasks_active.store(true, Ordering::SeqCst);
+                    self.aborted_while_tasks_active
+                        .store(true, Ordering::SeqCst);
                 }
                 Ok(())
             }
