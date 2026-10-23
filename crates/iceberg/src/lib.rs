@@ -51,7 +51,7 @@
 //!         .scan()
 //!         .select(["name", "id"])
 //!         .build()?
-//!         .to_arrow()
+//!         .to_arrow(Default::default())
 //!         .await?;
 //!
 //!     // Consume this stream like arrow record batch stream.
