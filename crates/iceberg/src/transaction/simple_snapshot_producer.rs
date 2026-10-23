@@ -70,10 +70,10 @@ pub(crate) struct SimpleSnapshotProducer {
 ///
 /// Reusable across attempts as long as the format version is unchanged: a v1
 /// manifest entry has no sequence number of its own and cannot inherit the one
-/// a v2 manifest list assigns after an upgrade. The added files and their
-/// partition specs are fixed by the action, and a manifest's embedded schema
-/// is only used to bind its partition spec, so neither needs a guard (matching
-/// Java's `FastAppend`).
+/// a v2 manifest list assigns after an upgrade. The schema is not a guard: the
+/// one embedded in the manifest describes the files it was written for, and
+/// they do not change when the table's current schema does (matching Java's
+/// `FastAppend`).
 struct AddedManifests {
     /// One manifest today. Several once added files are grouped by partition
     /// spec (#3500) or rolled over at a target size (#3499).
@@ -416,8 +416,8 @@ mod tests {
     }
 
     #[tokio::test]
-    /// A manifest's embedded schema only binds its partition spec, so a
-    /// concurrent schema change does not invalidate it (as in Java).
+    /// The manifest's embedded schema still describes the same files after a
+    /// concurrent schema change, so the manifest stays valid (as in Java).
     async fn test_added_manifest_is_reused_across_schema_change() {
         let table = make_v2_minimal_table();
         let mut producer = SimpleSnapshotProducer::new(None);
