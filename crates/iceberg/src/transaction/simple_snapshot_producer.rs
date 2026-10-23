@@ -56,19 +56,28 @@ pub(crate) struct SimpleSnapshotProducer {
     /// Numbers this producer's manifests. Never reset, so reused manifests keep
     /// their paths and new ones never collide with earlier attempts.
     manifest_counter: u64,
-    /// Manifests written for the added files, reused on every later attempt.
-    /// Their content depends only on the added files, which the action holds
-    /// fixed; attempt-specific values (snapshot id, sequence number) are
-    /// inherited from the manifest list on read. One manifest today, several
-    /// once files are grouped by partition spec (#3500) or rolled over at a
-    /// target size (#3499).
-    added_manifests: Option<Vec<ManifestFile>>,
+    /// Manifests written for the added files, reused across attempts.
+    added_manifests: Option<AddedManifests>,
     /// Metadata files written by this producer (manifests and every attempt's
     /// manifest list).
     // TODO(#3417): cleanup is not implemented yet; terminal cleanup consumes
     // this set.
     #[allow(dead_code)]
     owned_artifacts: HashSet<String>,
+}
+
+/// The manifests written for one append's added files.
+///
+/// Reusable while the table's format version is unchanged. Per spec, sequence
+/// number inheritance does not apply to v1 manifests, so one written before a
+/// concurrent upgrade cannot carry the v2 sequence number a retry assigns and
+/// must be rewritten. The schema is not a guard: the manifest's embedded schema
+/// describes the files it was written for, which do not change.
+struct AddedManifests {
+    /// One manifest today. Several once added files are grouped by partition
+    /// spec (#3500) or rolled over at a target size (#3499).
+    manifests: Vec<ManifestFile>,
+    format_version: FormatVersion,
 }
 
 impl SimpleSnapshotProducer {
@@ -220,16 +229,20 @@ impl SimpleSnapshotProducer {
         Ok(path)
     }
 
-    /// Returns the manifests for the added files, writing them on the first
-    /// attempt and reusing them afterwards.
+    /// Returns the manifests for the added files, writing them only if no
+    /// reusable set exists for the current format version.
     async fn added_manifests(
         &mut self,
         table: &Table,
         snapshot_id: i64,
         data_files: &[DataFile],
     ) -> Result<Vec<ManifestFile>> {
-        if let Some(cached) = &self.added_manifests {
-            return Ok(cached.clone());
+        let format_version = table.metadata().format_version();
+
+        if let Some(cached) = &self.added_manifests
+            && cached.format_version == format_version
+        {
+            return Ok(cached.manifests.clone());
         }
 
         // Allocate every path before writing, so each is recorded as owned
@@ -255,7 +268,10 @@ impl SimpleSnapshotProducer {
             .await?,
         ];
 
-        self.added_manifests = Some(manifests.clone());
+        self.added_manifests = Some(AddedManifests {
+            manifests: manifests.clone(),
+            format_version,
+        });
         Ok(manifests)
     }
 }
@@ -457,11 +473,12 @@ mod tests {
         assert_eq!(producer.manifest_counter, 1);
     }
 
-    /// A v1 manifest written before a concurrent format upgrade is still
-    /// reused: its entries carry no sequence number and inherit the v2 manifest
-    /// list's on read, so the added files get the retry's sequence number.
+    /// Per spec, a v1 manifest's entries always read with sequence number 0, so
+    /// a v1 manifest written before a concurrent format upgrade cannot carry the
+    /// sequence number the retry's v2 manifest list assigns. The upgrade must
+    /// invalidate the cached manifest.
     #[tokio::test]
-    async fn test_added_manifest_is_reused_across_format_upgrade() {
+    async fn test_added_manifest_is_rewritten_when_format_version_changes() {
         let table = make_v1_table();
         let mut producer = SimpleSnapshotProducer::new(None);
         let files = vec![data_file(&table, "test/1.parquet")];
@@ -514,10 +531,10 @@ mod tests {
             .iter()
             .find(|m| m.added_snapshot_id == second_snapshot.snapshot_id())
             .unwrap();
-        assert_eq!(first_added.manifest_path, second_added.manifest_path);
-        assert_eq!(producer.manifest_counter, 1);
+        assert_ne!(first_added.manifest_path, second_added.manifest_path);
+        assert_eq!(producer.manifest_counter, 2);
 
-        // Read under the v2 manifest list, the v1 entries inherit its sequence number.
+        // The rewritten v2 manifest's entries inherit the v2 sequence number.
         let manifest = upgraded.manifest_reader().read(second_added).await.unwrap();
         assert_eq!(
             manifest.entries()[0].sequence_number(),

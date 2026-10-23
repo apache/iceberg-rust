@@ -178,11 +178,11 @@ mod tests {
         );
     }
 
-    /// A v1 manifest has no sequence number fields. When a v2 manifest list
-    /// references it (a table upgraded between a writer's attempts), the entries
-    /// must inherit the list's sequence number rather than default to 0.
+    /// Per spec, inheritance does not apply to v1: a v1 manifest's entries read
+    /// with sequence number 0 even when the manifest list entry referencing them
+    /// carries a nonzero one.
     #[tokio::test]
-    async fn test_read_v1_manifest_inherits_sequence_number() {
+    async fn test_read_v1_manifest_defaults_sequence_number_to_zero() {
         let schema = test_schema();
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
@@ -203,8 +203,8 @@ mod tests {
         manifest_file.sequence_number = 36;
 
         let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
-        assert_eq!(manifest.entries()[0].sequence_number(), Some(36));
-        assert_eq!(manifest.entries()[0].file_sequence_number, Some(36));
+        assert_eq!(manifest.entries()[0].sequence_number(), Some(0));
+        assert_eq!(manifest.entries()[0].file_sequence_number, Some(0));
     }
 
     #[tokio::test]
