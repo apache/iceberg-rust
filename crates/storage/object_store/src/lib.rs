@@ -437,19 +437,33 @@ struct ObjectStoreWriter {
 }
 
 impl ObjectStoreWriter {
-    /// Best-effort abort on upload error, converting the underlying
-    /// object_store error to an iceberg Error while logging abort failures.
-    async fn abort_and_wrap(
+    /// Aborts all in-flight task uploads, drains the join set to ensure no
+    /// requests race the abort call, and then aborts the multipart upload session.
+    async fn drain_and_abort(
+        tasks: &mut JoinSet<object_store::Result<()>>,
         upload: &mut Box<dyn MultipartUpload>,
-        e: object_store::Error,
         context: &'static str,
-    ) -> Error {
+    ) {
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+
         if let Err(abort_err) = upload.abort().await {
             tracing::warn!(
                 error = %abort_err,
                 "Failed to abort multipart upload after {context}"
             );
         }
+    }
+
+    /// Best-effort abort on upload error, converting the underlying
+    /// object_store error to an iceberg Error while logging abort failures.
+    async fn abort_and_wrap(
+        tasks: &mut JoinSet<object_store::Result<()>>,
+        upload: &mut Box<dyn MultipartUpload>,
+        e: object_store::Error,
+        context: &'static str,
+    ) -> Error {
+        Self::drain_and_abort(tasks, upload, context).await;
         from_object_store_error(e)
     }
 
@@ -462,15 +476,10 @@ impl ObjectStoreWriter {
             if let Some(res) = tasks.join_next().await {
                 match res {
                     Ok(Err(e)) => {
-                        return Err(Self::abort_and_wrap(upload, e, "part upload failure").await);
+                        return Err(Self::abort_and_wrap(tasks, upload, e, "part upload failure").await);
                     }
                     Err(join_err) => {
-                        if let Err(abort_err) = upload.abort().await {
-                            tracing::warn!(
-                                error = %abort_err,
-                                "Failed to abort multipart upload after task panic"
-                            );
-                        }
+                        Self::drain_and_abort(tasks, upload, "task panic").await;
                         return Err(
                             Error::new(ErrorKind::Unexpected, "Part upload task panicked")
                                 .with_source(join_err),
@@ -481,6 +490,16 @@ impl ObjectStoreWriter {
             }
         }
         Ok(())
+    }
+
+    fn check_tokio_runtime() -> Result<()> {
+        tokio::runtime::Handle::try_current().map(|_| ()).map_err(|e| {
+            Error::new(
+                ErrorKind::Unexpected,
+                "Tokio runtime not found for async task execution",
+            )
+            .with_source(e)
+        })
     }
 
     /// Flushes any buffered bytes as an in-flight part upload to S3,
@@ -495,6 +514,7 @@ impl ObjectStoreWriter {
         if !buffer.is_empty() {
             Self::drain_capacity(tasks, upload).await?;
 
+            Self::check_tokio_runtime()?;
             let part_data = std::mem::take(buffer).freeze();
             let part_fut = upload.put_part(PutPayload::from_bytes(part_data));
             tasks.spawn(part_fut);
@@ -534,8 +554,8 @@ impl ObjectStoreWriter {
 impl Drop for ObjectStoreWriter {
     fn drop(&mut self) {
         if let Some(mut upload) = self.upload.take() {
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
+            if Self::check_tokio_runtime().is_ok() {
+                tokio::runtime::Handle::current().spawn(async move {
                     if let Err(e) = upload.abort().await {
                         tracing::warn!(
                             error = %e,
@@ -593,6 +613,10 @@ impl FileWrite for ObjectStoreWriter {
                 let _ = self.upload.take();
                 return Err(e);
             }
+            if let Err(e) = Self::check_tokio_runtime() {
+                let _ = self.upload.take();
+                return Err(e);
+            }
             let part_data = std::mem::take(&mut self.buffer).freeze();
             let part_fut = upload.put_part(PutPayload::from_bytes(part_data));
             self.tasks.spawn(part_fut);
@@ -603,17 +627,12 @@ impl FileWrite for ObjectStoreWriter {
         while let Some(res) = self.tasks.join_next().await {
             match res {
                 Ok(Err(e)) => {
-                    let err = Self::abort_and_wrap(upload, e, "part upload failure").await;
+                    let err = Self::abort_and_wrap(&mut self.tasks, upload, e, "part upload failure").await;
                     let _ = self.upload.take();
                     return Err(err);
                 }
                 Err(join_err) => {
-                    if let Err(abort_err) = upload.abort().await {
-                        tracing::warn!(
-                            error = %abort_err,
-                            "Failed to abort multipart upload after task panic"
-                        );
-                    }
+                    Self::drain_and_abort(&mut self.tasks, upload, "task panic").await;
                     let _ = self.upload.take();
                     return Err(
                         Error::new(ErrorKind::Unexpected, "Part upload task panicked")
@@ -626,7 +645,7 @@ impl FileWrite for ObjectStoreWriter {
 
         // Complete multipart upload; abort if S3 rejects completion.
         if let Err(e) = upload.complete().await {
-            let err = Self::abort_and_wrap(upload, e, "complete failure").await;
+            let err = Self::abort_and_wrap(&mut self.tasks, upload, e, "complete failure").await;
             let _ = self.upload.take();
             return Err(err);
         }
@@ -1241,5 +1260,94 @@ mod tests {
             1,
             "abort() MUST be called exactly once when part upload task panics during write drain"
         );
+    }
+
+    #[test]
+    fn test_runtime_guard_missing() {
+        let err = ObjectStoreWriter::check_tokio_runtime().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+    }
+
+    #[tokio::test]
+    async fn test_runtime_guard_active() {
+        assert!(ObjectStoreWriter::check_tokio_runtime().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_writer_part_failure_drains_siblings_before_abort() {
+        #[derive(Debug)]
+        struct OrderingMockUpload {
+            active_tasks: Arc<AtomicUsize>,
+            aborted_while_tasks_active: Arc<AtomicBool>,
+            part_index: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl MultipartUpload for OrderingMockUpload {
+            fn put_part(&mut self, _data: PutPayload) -> UploadPart {
+                let idx = self.part_index.fetch_add(1, Ordering::SeqCst);
+                let active = self.active_tasks.clone();
+                Box::pin(async move {
+                    active.fetch_add(1, Ordering::SeqCst);
+                    struct TaskGuard(Arc<AtomicUsize>);
+                    impl Drop for TaskGuard {
+                        fn drop(&mut self) {
+                            self.0.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    }
+                    let _guard = TaskGuard(active);
+                    if idx == 0 {
+                        Err(object_store::Error::Generic {
+                            store: "mock",
+                            source: "part 0 failed".into(),
+                        })
+                    } else {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        Ok(())
+                    }
+                })
+            }
+
+            async fn complete(&mut self) -> object_store::Result<PutResult> {
+                Ok(PutResult {
+                    e_tag: None,
+                    version: None,
+                })
+            }
+
+            async fn abort(&mut self) -> object_store::Result<()> {
+                if self.active_tasks.load(Ordering::SeqCst) > 0 {
+                    self.aborted_while_tasks_active.store(true, Ordering::SeqCst);
+                }
+                Ok(())
+            }
+        }
+
+        let active_tasks = Arc::new(AtomicUsize::new(0));
+        let aborted_while_tasks_active = Arc::new(AtomicBool::new(false));
+        let upload = Box::new(OrderingMockUpload {
+            active_tasks: active_tasks.clone(),
+            aborted_while_tasks_active: aborted_while_tasks_active.clone(),
+            part_index: Arc::new(AtomicUsize::new(0)),
+        });
+
+        let mut writer = ObjectStoreWriter {
+            upload: Some(upload),
+            buffer: BytesMut::new(),
+            tasks: JoinSet::new(),
+            parts_submitted: 0,
+            bytes_written: 0,
+            part_size_bytes: MIN_PART_SIZE_BYTES,
+        };
+
+        // Write 2 parts: part 0 fails, sibling part 1 is live in-flight
+        let _ = writer.write(Bytes::from(vec![0u8; 11 * 1024 * 1024])).await;
+        let _ = writer.close().await;
+
+        assert!(
+            !aborted_while_tasks_active.load(Ordering::SeqCst),
+            "upload.abort() MUST NOT be called while sibling tasks are still active"
+        );
+        assert_eq!(active_tasks.load(Ordering::SeqCst), 0);
     }
 }

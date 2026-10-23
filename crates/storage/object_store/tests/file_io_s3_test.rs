@@ -27,8 +27,8 @@ mod tests {
     use bytes::Bytes;
     use futures::{StreamExt, TryStreamExt};
     use iceberg::io::{
-        FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION,
-        S3_SECRET_ACCESS_KEY, S3_SSE_KEY, S3_SSE_TYPE,
+        FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_MULTIPART_PART_SIZE_BYTES,
+        S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY, S3_SSE_KEY, S3_SSE_TYPE,
     };
     use iceberg_storage_object_store::ObjectStoreStorageFactory;
     use iceberg_test_utils::{get_object_store_endpoint, normalize_test_name_with_parts, set_up};
@@ -396,12 +396,22 @@ mod tests {
         assert_minio_kms_rejection(&err);
     }
 
-    /// Writes 12 MiB (3 × 4 MiB chunks) to exercise real S3 multipart uploads
-    /// past the 10 MiB `WriteMultipart` buffer threshold, then reads back and
-    /// verifies byte-for-byte integrity.
+    /// Writes 12 MiB (3 × 4 MiB chunks) with 5 MiB part size to exercise real S3
+    /// multipart uploads with multiple parts (>= 2 parts) and verify byte-for-byte integrity.
     #[tokio::test]
     async fn test_file_io_s3_multipart_writer_past_threshold() {
-        let file_io = get_file_io().await;
+        set_up();
+        let endpoint = get_object_store_endpoint();
+        let file_io = FileIOBuilder::new(Arc::new(ObjectStoreStorageFactory::S3))
+            .with_props(vec![
+                (S3_ENDPOINT, endpoint),
+                (S3_ACCESS_KEY_ID, "admin".to_string()),
+                (S3_SECRET_ACCESS_KEY, "password".to_string()),
+                (S3_REGION, "us-east-1".to_string()),
+                (S3_PATH_STYLE_ACCESS, "true".to_string()),
+                (S3_MULTIPART_PART_SIZE_BYTES, (5 * 1024 * 1024).to_string()),
+            ])
+            .build();
         let file_path = format!(
             "s3://bucket1/{}",
             normalize_test_name_with_parts!("test_file_io_s3_multipart_writer_past_threshold")
@@ -416,7 +426,7 @@ mod tests {
         let output_file = file_io.new_output(&file_path).unwrap();
         let mut writer = output_file.writer().await.unwrap();
 
-        // Write 3 chunks = 12 MiB total (past 10 MiB threshold)
+        // Write 3 chunks = 12 MiB total across 5 MiB parts (flushes 2 parts during write, 1 on close)
         for _ in 0..3 {
             writer.write(chunk.clone()).await.unwrap();
         }
