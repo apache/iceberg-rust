@@ -253,6 +253,19 @@ jobs:
         if: matrix.test-suite.name == 'default'
         run: make docker-up
 
+      # `opendal-hdfs` links libjvm into every test binary. Its tests run
+      # Hadoop's Java client from the HDFS fixture's jars.
+      - name: Set up the JVM for libhdfs
+        shell: bash
+        run: |
+          echo "LD_LIBRARY_PATH=$JAVA_HOME/lib/server${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          if [ "${{ matrix.test-suite.name }}" = "default" ]; then
+            docker compose -f dev/docker-compose.yaml cp hdfs-namenode:/opt/hadoop/share/hadoop "$RUNNER_TEMP/hadoop"
+            # libhdfs does not expand wildcards, so list each jar.
+            jars=$(find "$RUNNER_TEMP/hadoop/common" "$RUNNER_TEMP/hadoop/hdfs" -name '*.jar' ! -name '*-tests.jar' ! -name '*-sources.jar' | sort | paste -sd: -)
+            echo "CLASSPATH=$PWD/dev/hdfs/client:$jars" >> "$GITHUB_ENV"
+          fi
+
       - name: Run tests
         shell: bash
         env:

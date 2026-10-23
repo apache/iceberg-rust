@@ -33,12 +33,15 @@ OpenDAL-based storage backend implementations for [Apache Iceberg Rust](https://
 | Alibaba Cloud OSS    | `opendal-oss`    | 🧪 Experimental | Alibaba Cloud Object Storage Service          |
 | Azure Datalake       | `opendal-azdls`  | 🧪 Experimental | Azure Datalake Storage v2                     |
 | HDFS                 | `opendal-hdfs-native` | 🧪 Experimental | HDFS via the native Rust client (`hdfs-native`) |
+| HDFS (libhdfs)       | `opendal-hdfs`   | 🧪 Experimental | HDFS via libhdfs and Hadoop's Java client (JNI) |
 
 You can enable all stable storage backends at once using the `opendal-all` feature flag.
 
 > Note that `opendal-oss` and `opendal-azdls` are currently experimental and not included in `opendal-all`.
 
 > `opendal-hdfs-native` is experimental and not included in `opendal-all`. A portless path authority such as `hdfs://nameservice1/warehouse` must be declared in properties, e.g. `hdfs.name-node.nameservice1 = nn1:8020,nn2:8020`: unlike Hadoop, nameservices defined only in `$HADOOP_CONF_DIR` are not resolved, and a portless host is not dialed on the default port 8020.
+
+> `opendal-hdfs` is experimental and not included in `opendal-all`. Use it through `OpenDalStorageFactory::Hdfs`, since `OpenDalResolvingStorageFactory` does not route to it. Hadoop's Java client reads its configuration from `CLASSPATH`, so nameservices, HA and Kerberos work as in Hadoop, and no `hdfs.*` or `hadoop.*` property applies. Building needs a JDK, and binaries need `$JAVA_HOME/lib/server` on the library path. Unless the process already runs a JVM, `CLASSPATH` must list the Hadoop configuration directory and each Hadoop jar, e.g. from `hadoop classpath --glob`.
 
 ## Usage
 
