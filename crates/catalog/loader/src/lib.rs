@@ -28,11 +28,11 @@ use iceberg_catalog_rest::RestCatalogBuilder;
 use iceberg_catalog_s3tables::S3TablesCatalogBuilder;
 use iceberg_catalog_sql::SqlCatalogBuilder;
 
-/// A CatalogBuilderFactory creating a new catalog builder.
-type CatalogBuilderFactory = fn() -> Box<dyn BoxedCatalogBuilder>;
+/// Creates a new catalog builder, boxed as a [`BoxedCatalogBuilder`].
+type BoxedCatalogBuilderFactory = fn() -> Box<dyn BoxedCatalogBuilder>;
 
-/// A registry of catalog builders.
-static CATALOG_REGISTRY: &[(&str, CatalogBuilderFactory)] = &[
+/// Maps each catalog type to the factory for its builder.
+static CATALOG_REGISTRY: &[(&str, BoxedCatalogBuilderFactory)] = &[
     ("rest", || Box::new(RestCatalogBuilder::default())),
     ("glue", || Box::new(GlueCatalogBuilder::default())),
     ("s3tables", || Box::new(S3TablesCatalogBuilder::default())),
