@@ -1,0 +1,91 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! A cached HDFS operator must keep working after the runtime that first
+//! used it is dropped. Needs no HDFS: the NameNode is a local listener that
+//! only counts dials.
+
+#[cfg(feature = "opendal-hdfs-native")]
+mod tests {
+    use std::io::Read;
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use iceberg::io::{FileIO, FileIOBuilder, HDFS_NAME_NODE};
+    use iceberg_storage_opendal::OpenDalStorageFactory;
+
+    /// Accepts and immediately closes connections, counting them. A failed
+    /// accept (a dial reset while queued) is skipped so the listener lives on.
+    fn fake_name_node() -> (u16, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let dials = Arc::new(AtomicUsize::new(0));
+        let counter = dials.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(_stream) = stream else { continue };
+                counter.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        (port, dials)
+    }
+
+    fn stat(runtime: &tokio::runtime::Runtime, file_io: &FileIO) {
+        runtime.block_on(async {
+            let input = file_io.new_input("hdfs:///f").unwrap();
+            // The fake NameNode never answers, so this fails; only the dial matters.
+            let _ = tokio::time::timeout(Duration::from_secs(10), input.metadata()).await;
+        });
+    }
+
+    #[test]
+    fn test_hdfs_operator_outlives_the_runtime_that_first_used_it() {
+        let (port, dials) = fake_name_node();
+        let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::HdfsNative))
+            .with_prop(HDFS_NAME_NODE, format!("hdfs://127.0.0.1:{port}"))
+            .with_prop("hadoop.dfs.client.failover.max.attempts", "1")
+            .build();
+
+        let first = tokio::runtime::Runtime::new().unwrap();
+        stat(&first, &file_io);
+        assert!(
+            dials.load(Ordering::SeqCst) >= 1,
+            "the NameNode was never dialed"
+        );
+        drop(first);
+
+        // The listener accepts in order, so once it has closed this marker
+        // connection, every dial from the first runtime has been counted.
+        let mut marker = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        marker
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        assert_eq!(marker.read(&mut [0]).unwrap(), 0);
+        let after_first = dials.load(Ordering::SeqCst);
+
+        // Reusing the FileIO from another runtime used to panic inside
+        // hdfs-native, whose client was bound to the dropped runtime.
+        let second = tokio::runtime::Runtime::new().unwrap();
+        stat(&second, &file_io);
+        assert!(
+            dials.load(Ordering::SeqCst) > after_first,
+            "no dial from the second runtime"
+        );
+    }
+}
