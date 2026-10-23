@@ -716,8 +716,9 @@ impl TableMetadataBuilder {
 
                 if schema_field.id != partition_field.source_id {
                     return Err(invalid_data!(
-                        "Cannot add schema field '{}' with id {}: partition spec {} has a field of \
-                         that name sourced from field id {}",
+                        "Cannot set current schema {}: field '{}' with id {} conflicts with a \
+                         partition field of that name in spec {} sourced from field id {}",
+                        schema.schema_id(),
                         partition_field.name,
                         schema_field.id,
                         spec_id,
@@ -2829,7 +2830,7 @@ mod tests {
         assert!(result.is_err());
         let error = result.unwrap_err();
         let error_message = error.message();
-        assert!(error_message.contains("Cannot add schema field 'bucket_data'"));
+        assert!(error_message.contains("Cannot set current schema"));
         assert!(error_message.contains("sourced from field id 1"));
     }
 
@@ -3053,11 +3054,7 @@ mod tests {
         // source column `data` is still in the schema
         assert!(result2.is_err());
         let error = result2.unwrap_err();
-        assert!(
-            error
-                .message()
-                .contains("Cannot add schema field 'bucket_data'")
-        );
+        assert!(error.message().contains("Cannot set current schema"));
         assert!(error.message().contains("sourced from field id 1"));
     }
 
@@ -3396,11 +3393,7 @@ mod tests {
         // source column `data` is still in the schema
         assert!(result.is_err());
         let error = result.unwrap_err();
-        assert!(
-            error
-                .message()
-                .contains("Cannot add schema field 'bucket_data'")
-        );
+        assert!(error.message().contains("Cannot set current schema"));
         assert!(error.message().contains("sourced from field id 1"));
     }
 
