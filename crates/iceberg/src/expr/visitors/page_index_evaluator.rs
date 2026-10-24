@@ -2370,8 +2370,10 @@ mod tests {
             })?;
 
         assert_keeps_all_pages(&metadata, PrimitiveType::Double, 4096, [
-            Reference::new("col").greater_than(Datum::double(2.5)),
+            Reference::new("col").less_than(Datum::double(2.5)),
             Reference::new("col").less_than_or_equal_to(Datum::double(2.5)),
+            Reference::new("col").greater_than(Datum::double(2.5)),
+            Reference::new("col").greater_than_or_equal_to(Datum::double(2.5)),
             Reference::new("col").is_in([Datum::double(2.0), Datum::double(4.0)]),
         ])
     }
@@ -2417,6 +2419,8 @@ mod tests {
 
         assert_keeps_all_pages(&metadata, PrimitiveType::Timestamp, 4096, [
             Reference::new("col").less_than(Datum::timestamp_micros(250)),
+            Reference::new("col").less_than_or_equal_to(Datum::timestamp_micros(250)),
+            Reference::new("col").greater_than(Datum::timestamp_micros(250)),
             Reference::new("col").greater_than_or_equal_to(Datum::timestamp_micros(250)),
             Reference::new("col").equal_to(Datum::timestamp_micros(250)),
             Reference::new("col")
