@@ -32,11 +32,12 @@ pub(crate) mod row_group_metrics_evaluator;
 pub(crate) mod strict_metrics_evaluator;
 pub(crate) mod strict_projection;
 
-/// Returns true if any literal could match the inclusive `[lower, upper]` range.
-/// Missing bounds are treated as unbounded on that side.
+/// Returns true if every literal is provably outside the inclusive `[lower, upper]`
+/// range, so rows cannot match. Missing bounds are treated as unbounded on that side.
 ///
-/// `(None, None)` returns true because no bound is available to prune against.
-pub(crate) fn any_literal_in_bounds(
+/// Returns false when there are no bounds, or when a literal does not compare
+/// with a bound. Incomparable values must not be pruned.
+pub(crate) fn all_literals_outside_bounds(
     lower: Option<&Datum>,
     upper: Option<&Datum>,
     literals: &FnvHashSet<Datum>,
@@ -44,10 +45,10 @@ pub(crate) fn any_literal_in_bounds(
     match (lower, upper) {
         (Some(lower), Some(upper)) => literals
             .iter()
-            .any(|datum| datum.ge(lower) && datum.le(upper)),
-        (Some(lower), None) => literals.iter().any(|datum| datum.ge(lower)),
-        (None, Some(upper)) => literals.iter().any(|datum| datum.le(upper)),
-        (None, None) => true,
+            .all(|datum| datum.lt(lower) || datum.gt(upper)),
+        (Some(lower), None) => literals.iter().all(|datum| datum.lt(lower)),
+        (None, Some(upper)) => literals.iter().all(|datum| datum.gt(upper)),
+        (None, None) => false,
     }
 }
 
@@ -74,12 +75,12 @@ mod tests {
     fn both_bounds_require_a_literal_inside_the_range() {
         let lower = Datum::float(4.0_f32);
         let upper = Datum::float(6.0_f32);
-        assert!(!any_literal_in_bounds(
+        assert!(all_literals_outside_bounds(
             Some(&lower),
             Some(&upper),
             &floats(&[2.0, 8.0])
         ));
-        assert!(any_literal_in_bounds(
+        assert!(!all_literals_outside_bounds(
             Some(&lower),
             Some(&upper),
             &floats(&[2.0, 5.0])
@@ -89,12 +90,12 @@ mod tests {
     #[test]
     fn lower_only_prunes_literals_below_the_bound() {
         let lower = Datum::float(4.0_f32);
-        assert!(!any_literal_in_bounds(
+        assert!(all_literals_outside_bounds(
             Some(&lower),
             None,
             &floats(&[2.0, 3.0])
         ));
-        assert!(any_literal_in_bounds(
+        assert!(!all_literals_outside_bounds(
             Some(&lower),
             None,
             &floats(&[2.0, 4.0])
@@ -104,12 +105,12 @@ mod tests {
     #[test]
     fn upper_only_prunes_literals_above_the_bound() {
         let upper = Datum::float(1.0_f32);
-        assert!(!any_literal_in_bounds(
+        assert!(all_literals_outside_bounds(
             None,
             Some(&upper),
             &floats(&[2.0, 3.0])
         ));
-        assert!(any_literal_in_bounds(
+        assert!(!all_literals_outside_bounds(
             None,
             Some(&upper),
             &floats(&[0.5, 3.0])
@@ -118,7 +119,30 @@ mod tests {
 
     #[test]
     fn neither_bound_cannot_prune() {
-        assert!(any_literal_in_bounds(None, None, &floats(&[2.0, 3.0])));
+        assert!(!all_literals_outside_bounds(
+            None,
+            None,
+            &floats(&[2.0, 3.0])
+        ));
+    }
+
+    #[test]
+    fn incomparable_literal_blocks_pruning() {
+        let lower = Datum::int(1);
+        let upper = Datum::int(3);
+        let string_only: FnvHashSet<Datum> = [Datum::string("a")].into_iter().collect();
+        assert!(!all_literals_outside_bounds(
+            Some(&lower),
+            Some(&upper),
+            &string_only
+        ));
+
+        let mixed: FnvHashSet<Datum> = [Datum::int(0), Datum::string("a")].into_iter().collect();
+        assert!(!all_literals_outside_bounds(
+            Some(&lower),
+            Some(&upper),
+            &mixed
+        ));
     }
 
     #[test]

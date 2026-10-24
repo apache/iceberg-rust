@@ -464,7 +464,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
 
         // A NaN bound is unreliable on that side only. Drop it to unbounded
         // so a valid bound can still prune.
-        if !super::any_literal_in_bounds(
+        if super::all_literals_outside_bounds(
             super::finite_bound(lower_bound.as_deref()),
             super::finite_bound(upper_bound.as_deref()),
             literals,

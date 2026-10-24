@@ -403,7 +403,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         let field = self.field_summary_for_reference(reference);
         // A missing lower_bound covers all-null, all-NaN, and mixed null+NaN
         // summaries (Iceberg spec). Those cases prune here and never reach
-        // any_literal_in_bounds.
+        // all_literals_outside_bounds.
         if field.lower_bound.is_none() {
             return ROWS_CANNOT_MATCH;
         }
@@ -419,7 +419,8 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             ManifestFilterVisitor::bytes_to_datum(bound, reference.field().field_type.as_ref())
         });
 
-        if !super::any_literal_in_bounds(lower_bound.as_ref(), upper_bound.as_ref(), literals) {
+        if super::all_literals_outside_bounds(lower_bound.as_ref(), upper_bound.as_ref(), literals)
+        {
             return ROWS_CANNOT_MATCH;
         }
 
