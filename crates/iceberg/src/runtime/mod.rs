@@ -57,9 +57,9 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
 
 /// A [`JoinHandle`] that aborts its task when dropped.
 ///
-/// Dropping a plain `JoinHandle` detaches the task, which then runs on with
-/// nobody waiting for its result. Use this instead wherever the result is
-/// private to the caller, so that dropping the caller stops the work.
+/// Dropping a plain `JoinHandle` leaves the task running with nobody waiting for
+/// its result. Use this instead when only the caller wants that result, so that
+/// dropping the caller stops the work.
 pub(crate) struct AbortOnDropHandle<T>(JoinHandle<T>);
 
 impl<T> Drop for AbortOnDropHandle<T> {
@@ -67,8 +67,6 @@ impl<T> Drop for AbortOnDropHandle<T> {
         self.0.0.abort();
     }
 }
-
-impl<T> Unpin for AbortOnDropHandle<T> {}
 
 impl<T: Send + 'static> Future for AbortOnDropHandle<T> {
     type Output = Result<T>;
