@@ -53,6 +53,8 @@ pub(crate) static ONE_MINUTE_MS: i64 = 60_000;
 /// this value is normalized to `None`.
 pub(crate) static EMPTY_SNAPSHOT_ID: i64 = -1;
 pub(crate) static INITIAL_SEQUENCE_NUMBER: i64 = 0;
+/// Highest field id a table schema may use. Higher ids are reserved for metadata columns.
+const MAX_TABLE_FIELD_ID: i32 = i32::MAX - 200;
 
 /// Initial row id for row lineage for new v3 tables and older tables upgrading to v3.
 pub const INITIAL_ROW_ID: u64 = 0;
@@ -544,6 +546,9 @@ impl TableMetadata {
     /// should return normalized `TableMetadata`.
     pub(super) fn try_normalize(&mut self) -> Result<&mut Self> {
         self.validate_current_schema()?;
+        for schema in self.schemas.values() {
+            Self::validate_schema_field_ids(schema)?;
+        }
         self.normalize_current_snapshot()?;
         self.construct_refs();
         self.validate_refs()?;
@@ -626,6 +631,18 @@ impl TableMetadata {
             return Err(invalid_data!(
                 "No schema exists with the current schema id {}.",
                 self.current_schema_id
+            ));
+        }
+        Ok(())
+    }
+
+    /// Validate that the schema does not use field ids reserved for metadata columns.
+    pub(super) fn validate_schema_field_ids(schema: &Schema) -> Result<()> {
+        if schema.highest_field_id() > MAX_TABLE_FIELD_ID {
+            return Err(invalid_data!(
+                "Schema {} uses field id {}, but table field ids must not exceed {MAX_TABLE_FIELD_ID}; higher ids are reserved for metadata columns",
+                schema.schema_id(),
+                schema.highest_field_id()
             ));
         }
         Ok(())
@@ -4274,6 +4291,39 @@ mod tests {
             table_properties.write_target_file_size_bytes().unwrap(),
             1024
         );
+    }
+
+    #[test]
+    fn test_deserialize_rejects_field_ids_in_reserved_range() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        for format_version in [FormatVersion::V2, FormatVersion::V3] {
+            let metadata = TableMetadataBuilder::new(
+                schema.clone(),
+                PartitionSpec::unpartition_spec().into_unbound(),
+                SortOrder::unsorted_order(),
+                "s3://test/location".to_string(),
+                format_version,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+            let mut json = serde_json::to_value(&metadata).unwrap();
+
+            json["schemas"][0]["fields"][0]["id"] = serde_json::json!(2147483447);
+            serde_json::from_value::<TableMetadata>(json.clone()).unwrap();
+
+            json["schemas"][0]["fields"][0]["id"] = serde_json::json!(2147483448);
+            let err = serde_json::from_value::<TableMetadata>(json).unwrap_err();
+            assert!(err.to_string().contains("2147483447"), "{err}");
+        }
     }
 
     #[test]
