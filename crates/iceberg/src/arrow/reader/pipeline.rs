@@ -56,6 +56,7 @@ use crate::metadata_columns::{
     RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER, RESERVED_FIELD_ID_PARTITION,
     RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_ROW_ID, RESERVED_FIELD_ID_SPEC_ID, is_metadata_field,
 };
+use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
 use crate::spec::{Datum, PartitionSpec, Struct};
 use crate::{Error, ErrorKind};
@@ -78,6 +79,7 @@ impl ArrowReader {
             bloom_filter_enabled: self.bloom_filter_enabled,
             parquet_read_options: self.parquet_read_options,
             scan_metrics: scan_metrics.clone(),
+            runtime: self.runtime,
         };
 
         // Fast-path for single concurrency to avoid overhead of try_flatten_unordered
@@ -133,6 +135,7 @@ struct FileScanTaskReader {
     bloom_filter_enabled: bool,
     parquet_read_options: ParquetReadOptions,
     scan_metrics: ScanMetrics,
+    runtime: Runtime,
 }
 
 // Borrow an existing selection, or enumerate all groups for a whole-file scan.
@@ -157,16 +160,30 @@ impl FileScanTaskReader {
             .delete_file_loader
             .load_deletes(task.deletes(), task.schema_ref());
 
-        // Open the Parquet file once, loading its metadata
-        let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
-            task.data_file_path(),
-            &self.file_io,
-            task.file_size_in_bytes(),
-            parquet_read_options,
-            self.scan_metrics.bytes_read_counter(),
-            task.key_metadata(),
-        )
-        .await?;
+        // `try_flatten_unordered` stops polling the buffered opens once it holds
+        // `concurrency_limit_data_files` streams, so spawn the open (#3276).
+        // Aborts on drop.
+        let path = task.data_file_path().to_string();
+        let file_io = self.file_io.clone();
+        let file_size_in_bytes = task.file_size_in_bytes();
+        let bytes_read = Arc::clone(self.scan_metrics.bytes_read_counter());
+        let key_metadata = task.key_metadata().map(|km| km.to_vec());
+        let opening = self
+            .runtime
+            .io()
+            .spawn(async move {
+                ArrowReader::open_parquet_file(
+                    &path,
+                    &file_io,
+                    file_size_in_bytes,
+                    parquet_read_options,
+                    &bytes_read,
+                    key_metadata.as_deref(),
+                )
+                .await
+            })
+            .abort_on_drop();
+        let (parquet_file_reader, arrow_metadata) = opening.await??;
 
         // Check if Parquet file has embedded field IDs
         // Corresponds to Java's ParquetSchemaUtil.hasIds()
@@ -3897,5 +3914,227 @@ mod tests {
         // A bare COUNT(*)-style empty projection must still report the row count.
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
         assert_eq!(total_rows, 3);
+    }
+
+    /// A data file must finish opening even when nothing polls the scan, and a
+    /// dropped scan must stop opening files (#3276).
+    mod open_progress {
+        use std::ops::Range;
+
+        use async_trait::async_trait;
+        use bytes::Bytes;
+        use futures::StreamExt;
+        use futures::stream::BoxStream;
+        use serde::{Deserialize, Serialize};
+
+        use super::*;
+        use crate::Result;
+        use crate::arrow::scan_metrics::ScanMetrics;
+        use crate::io::{
+            FileIOBuilder, FileMetadata, FileRead, FileWrite, InputFile, MemoryStorage, OutputFile,
+            Storage, StorageConfig, StorageFactory,
+        };
+        use crate::scan::ArrowRecordBatchStream;
+
+        const CONCURRENCY: usize = 2;
+        /// Smaller than a footer, so one open takes more than one request.
+        const METADATA_SIZE_HINT: usize = 64;
+        /// Bytes one open reads: the hint, then the footer and its indexes.
+        /// A constant because `write_plain_parquet` always writes the same file.
+        const OPEN_BYTES: u64 = 547;
+        /// Scheduler turns, far more than a request needs. A bound only because
+        /// `#[tokio::test]` runs the test and the spawned opens on one thread.
+        const YIELDS: usize = 100;
+
+        /// In-memory files whose reads take a scheduler turn to answer.
+        #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+        struct DeferredStorage {
+            #[serde(skip)]
+            files: MemoryStorage,
+        }
+
+        struct DeferredRead {
+            contents: Bytes,
+        }
+
+        #[async_trait]
+        impl FileRead for DeferredRead {
+            async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+                // The yield stands in for a request in flight: it finishes only
+                // if something still drives the read.
+                tokio::task::yield_now().await;
+                Ok(self
+                    .contents
+                    .slice(range.start as usize..range.end as usize))
+            }
+        }
+
+        #[async_trait]
+        #[typetag::serde]
+        impl Storage for DeferredStorage {
+            async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
+                Ok(Box::new(DeferredRead {
+                    contents: self.files.read(path).await?,
+                }))
+            }
+
+            fn new_input(&self, path: &str) -> Result<InputFile> {
+                Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
+            }
+
+            async fn exists(&self, path: &str) -> Result<bool> {
+                self.files.exists(path).await
+            }
+
+            async fn metadata(&self, path: &str) -> Result<FileMetadata> {
+                self.files.metadata(path).await
+            }
+
+            async fn read(&self, path: &str) -> Result<Bytes> {
+                self.files.read(path).await
+            }
+
+            async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
+                self.files.write(path, bs).await
+            }
+
+            async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
+                self.files.writer(path).await
+            }
+
+            async fn delete(&self, path: &str) -> Result<()> {
+                self.files.delete(path).await
+            }
+
+            async fn delete_prefix(&self, path: &str) -> Result<()> {
+                self.files.delete_prefix(path).await
+            }
+
+            async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()> {
+                self.files.delete_stream(paths).await
+            }
+
+            fn new_output(&self, path: &str) -> Result<OutputFile> {
+                Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
+            }
+        }
+
+        #[derive(Debug, Default, Serialize, Deserialize)]
+        struct DeferredStorageFactory {
+            #[serde(skip)]
+            storage: DeferredStorage,
+        }
+
+        #[typetag::serde]
+        impl StorageFactory for DeferredStorageFactory {
+            fn build(&self, _config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+                Ok(Arc::new(self.storage.clone()))
+            }
+        }
+
+        /// A scan of `CONCURRENCY` identical Parquet files, and the metrics that
+        /// count the bytes it has read.
+        async fn deferred_scan() -> (ScanMetrics, ArrowRecordBatchStream) {
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_schema_id(1)
+                    .with_fields(vec![
+                        NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let tmp_dir = TempDir::new().unwrap();
+            let on_disk = write_plain_parquet(
+                tmp_dir.path().to_str().unwrap(),
+                "data.parquet",
+                vec![],
+                vec![],
+            );
+            let contents = Bytes::from(std::fs::read(on_disk).unwrap());
+
+            let storage = DeferredStorage::default();
+            let mut tasks = Vec::with_capacity(CONCURRENCY);
+            for file_num in 0..CONCURRENCY {
+                let path = format!("memory:/data/file_{file_num}.parquet");
+                storage.write(&path, contents.clone()).await.unwrap();
+                tasks.push(
+                    FileScanTask::builder()
+                        .with_data_file_path(path)
+                        .with_file_size_in_bytes(contents.len() as u64)
+                        .with_start(0)
+                        .with_length(0)
+                        .with_data_file_format(DataFileFormat::Parquet)
+                        .with_schema(Arc::clone(&schema))
+                        .with_project_field_ids(vec![1])
+                        .with_case_sensitive(false)
+                        .build()
+                        .unwrap(),
+                );
+            }
+
+            let file_io = FileIOBuilder::new(Arc::new(DeferredStorageFactory { storage })).build();
+
+            let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
+                .with_data_file_concurrency_limit(CONCURRENCY)
+                .with_metadata_size_hint(METADATA_SIZE_HINT)
+                .build();
+            let tasks =
+                Box::pin(futures::stream::iter(tasks.into_iter().map(Ok))) as FileScanTaskStream;
+            let result = reader.read(tasks).unwrap();
+            (result.metrics().clone(), result.stream())
+        }
+
+        /// Gives the scheduler turns until `done` is true, or `YIELDS` turns pass.
+        async fn spin(done: impl Fn() -> bool) {
+            for _ in 0..YIELDS {
+                if done() {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        }
+
+        /// An open must finish its requests even when the scan is never polled again.
+        #[tokio::test]
+        async fn test_open_proceeds_without_the_scan_being_polled() {
+            let (metrics, scan) = deferred_scan().await;
+            let mut scan = Box::pin(scan);
+            let every_open = OPEN_BYTES * CONCURRENCY as u64;
+
+            // One poll starts an open per concurrency slot. Nothing polls the
+            // scan after this, so only a spawned open can read any further.
+            let _ = futures::poll!(scan.next());
+            spin(|| metrics.bytes_read() >= every_open).await;
+            assert_eq!(
+                metrics.bytes_read(),
+                every_open,
+                "the opens stopped where the scan stopped polling"
+            );
+        }
+
+        /// A dropped scan must stop opening files.
+        #[tokio::test]
+        async fn test_dropped_scan_stops_opening_files() {
+            let (metrics, scan) = deferred_scan().await;
+            let mut scan = Box::pin(scan);
+            let every_open = OPEN_BYTES * CONCURRENCY as u64;
+
+            // Drop while the opens are part way through, or there is nothing to abort.
+            let _ = futures::poll!(scan.next());
+            spin(|| metrics.bytes_read() > 0).await;
+            let in_flight = metrics.bytes_read();
+            assert!(in_flight > 0, "no open reached the storage");
+            assert!(in_flight < every_open, "the opens finished before the drop");
+
+            drop(scan);
+            spin(|| false).await;
+            assert_eq!(
+                metrics.bytes_read(),
+                in_flight,
+                "a dropped scan read {} more bytes",
+                metrics.bytes_read() - in_flight
+            );
+        }
     }
 }

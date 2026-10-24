@@ -36,6 +36,13 @@ use crate::{Error, ErrorKind, Result};
 /// [`tokio::task::JoinError`] preserved as the source.
 pub struct JoinHandle<T>(TokioJoinHandle<T>);
 
+impl<T> JoinHandle<T> {
+    /// Ties the task's lifetime to this handle: see [`AbortOnDropHandle`].
+    pub(crate) fn abort_on_drop(self) -> AbortOnDropHandle<T> {
+        AbortOnDropHandle(self)
+    }
+}
+
 impl<T> Unpin for JoinHandle<T> {}
 
 impl<T: Send + 'static> Future for JoinHandle<T> {
@@ -45,6 +52,27 @@ impl<T: Send + 'static> Future for JoinHandle<T> {
         Pin::new(&mut self.get_mut().0).poll(cx).map(|r| {
             r.map_err(|e| Error::new(ErrorKind::Unexpected, "spawned task failed").with_source(e))
         })
+    }
+}
+
+/// A [`JoinHandle`] that aborts its task when dropped.
+///
+/// Dropping a plain `JoinHandle` leaves the task running with nobody waiting for
+/// its result. Use this instead when only the caller wants that result, so that
+/// dropping the caller stops the work.
+pub(crate) struct AbortOnDropHandle<T>(JoinHandle<T>);
+
+impl<T> Drop for AbortOnDropHandle<T> {
+    fn drop(&mut self) {
+        self.0.0.abort();
+    }
+}
+
+impl<T: Send + 'static> Future for AbortOnDropHandle<T> {
+    type Output = Result<T>;
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.get_mut().0).poll(cx)
     }
 }
 
