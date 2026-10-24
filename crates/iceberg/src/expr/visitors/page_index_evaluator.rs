@@ -2351,6 +2351,8 @@ mod tests {
 
         assert_keeps_all_pages(&metadata, PrimitiveType::Long, 4096, [
             Reference::new("col").less_than(Datum::long(250)),
+            Reference::new("col").less_than_or_equal_to(Datum::long(250)),
+            Reference::new("col").greater_than(Datum::long(250)),
             Reference::new("col").greater_than_or_equal_to(Datum::long(250)),
             // A literal outside the `int` range.
             Reference::new("col").less_than(Datum::long(i64::from(i32::MAX) + 1)),
