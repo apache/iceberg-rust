@@ -23,7 +23,7 @@ use typed_builder::TypedBuilder;
 
 use crate::spec::{
     ListType, Literal, MapType, NestedField, NestedFieldRef, SCHEMA_NAME_DELIMITER, Schema,
-    StructType, Type,
+    StructType, Type, index_by_id,
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, StatelessAction};
@@ -52,6 +52,10 @@ pub struct AddColumn {
     initial_default: Option<Literal>,
     #[builder(default = None, setter(strip_option))]
     write_default: Option<Literal>,
+    /// Explicit field ID. When set, this field and any fields nested in its type keep the IDs
+    /// they were given instead of being assigned fresh ones at commit time.
+    #[builder(default = None, setter(strip_option))]
+    id: Option<i32>,
 }
 
 impl AddColumn {
@@ -77,7 +81,7 @@ impl AddColumn {
 
     fn to_nested_field(&self) -> NestedFieldRef {
         let mut field = NestedField::new(
-            DEFAULT_FIELD_ID,
+            self.id.unwrap_or(DEFAULT_FIELD_ID),
             self.name.clone(),
             self.field_type.clone(),
             self.required,
@@ -94,8 +98,8 @@ impl AddColumn {
 ///
 /// This action accumulates schema modifications (column additions and deletions)
 /// via builder methods. At commit time, it validates all operations against the
-/// current table schema, auto-assigns field IDs from `table.metadata().last_column_id()`,
-/// builds a new schema, and emits `AddSchema` + `SetCurrentSchema` updates with a
+/// current table schema, auto-assigns field IDs from `table.metadata().last_column_id()`
+/// (unless a column was given an explicit ID via the `AddColumn` builder's `id`), builds a new schema, and emits `AddSchema` + `SetCurrentSchema` updates with a
 /// `CurrentSchemaIdMatch` requirement.
 ///
 /// # Example
@@ -338,6 +342,28 @@ impl StatelessAction for UpdateSchemaAction {
         let base_schema = table.metadata().current_schema();
         let mut last_column_id = table.metadata().last_column_id();
 
+        // Explicit IDs must be new: anything at or below `last_column_id` may belong to a
+        // dropped column, and reusing it would make old data files read as the new column.
+        let explicit_ids = index_by_id(&StructType::new(
+            self.additions
+                .iter()
+                .filter(|add| add.id.is_some())
+                .map(|add| add.to_nested_field())
+                .collect(),
+        ))?;
+        if let Some(&id) = explicit_ids.keys().find(|&&id| id <= last_column_id) {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                format!(
+                    "Cannot add column with explicit field id {id}: ids must be greater than the last assigned column id {last_column_id}"
+                ),
+            ));
+        }
+        // Fresh IDs start above any explicit ID so the two can be mixed in one update.
+        if let Some(&max_explicit_id) = explicit_ids.keys().max() {
+            last_column_id = max_explicit_id;
+        }
+
         // --- 1. Validate deletes ---
         let delete_ids = self
             .deletes
@@ -436,7 +462,11 @@ impl StatelessAction for UpdateSchemaAction {
             };
 
             // Assign fresh IDs immediately, preserving insertion order.
-            let field = assign_fresh_ids(&pending_field, &mut last_column_id);
+            let field = if add.id.is_some() {
+                pending_field
+            } else {
+                assign_fresh_ids(&pending_field, &mut last_column_id)
+            };
 
             additions_by_parent
                 .entry(parent_id)
@@ -478,8 +508,8 @@ mod tests {
     use as_any::Downcast;
 
     use crate::spec::{
-        DEFAULT_SCHEMA_ID, Literal, NestedField, PrimitiveType, StructType, TableMetadata, Type,
-        VariantType,
+        DEFAULT_SCHEMA_ID, ListType, Literal, NestedField, PrimitiveType, StructType,
+        TableMetadata, Type, VariantType,
     };
     use crate::table::Table;
     use crate::test_utils::commit_with_fresh_state;
@@ -1161,5 +1191,197 @@ mod tests {
             .field_by_name("address.city")
             .expect("address.city should exist");
         assert_eq!(city.id, 6);
+    }
+
+    // -----------------------------------------------------------------------
+    // Explicit field ID tests
+    // -----------------------------------------------------------------------
+
+    fn new_schema_from(updates: &[TableUpdate]) -> &crate::spec::Schema {
+        match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_column_with_explicit_id_keeps_nested_ids() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        // Children numbered before their parent, which fresh assignment would never produce.
+        let address = Type::Struct(StructType::new(vec![
+            NestedField::optional(10, "city", Type::Primitive(PrimitiveType::String)).into(),
+            NestedField::optional(11, "zip", Type::Primitive(PrimitiveType::String)).into(),
+        ]));
+        let action = tx.update_schema().add_column(
+            AddColumn::builder()
+                .name("address")
+                .field_type(address)
+                .id(12)
+                .build(),
+        );
+
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
+        let updates = action_commit.take_updates();
+        let new_schema = new_schema_from(&updates);
+
+        assert_eq!(new_schema.field_by_name("address").unwrap().id, 12);
+        assert_eq!(new_schema.field_by_name("address.city").unwrap().id, 10);
+        assert_eq!(new_schema.field_by_name("address.zip").unwrap().id, 11);
+        assert_eq!(new_schema.highest_field_id(), 12);
+    }
+
+    #[tokio::test]
+    async fn test_add_column_to_parent_with_explicit_id() {
+        let table = make_v2_table_with_nested();
+        let tx = Transaction::new(&table);
+
+        let action = tx.update_schema().add_column(
+            AddColumn::builder()
+                .parent("person")
+                .name("email")
+                .field_type(Type::Primitive(PrimitiveType::String))
+                .id(20)
+                .build(),
+        );
+
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
+        let updates = action_commit.take_updates();
+        let new_schema = new_schema_from(&updates);
+
+        assert_eq!(new_schema.field_by_name("person.email").unwrap().id, 20);
+    }
+
+    #[tokio::test]
+    async fn test_fresh_ids_are_assigned_after_explicit_ids() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        // The auto-assigned column comes first but must not collide with the later explicit ID.
+        let action = tx
+            .update_schema()
+            .add_column(AddColumn::optional(
+                "auto",
+                Type::Primitive(PrimitiveType::Int),
+            ))
+            .add_column(
+                AddColumn::builder()
+                    .name("explicit")
+                    .field_type(Type::Primitive(PrimitiveType::Int))
+                    .id(4)
+                    .build(),
+            );
+
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
+        let updates = action_commit.take_updates();
+        let new_schema = new_schema_from(&updates);
+
+        assert_eq!(new_schema.field_by_name("explicit").unwrap().id, 4);
+        assert_eq!(new_schema.field_by_name("auto").unwrap().id, 5);
+    }
+
+    #[tokio::test]
+    async fn test_add_column_with_existing_explicit_id_fails() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx.update_schema().add_column(
+            AddColumn::builder()
+                .name("dup")
+                .field_type(Type::Primitive(PrimitiveType::Int))
+                .id(3)
+                .build(),
+        );
+
+        assert!(commit_with_fresh_state(action, &table).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_add_column_with_explicit_id_keeps_list_element_ids() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let items = Type::List(ListType {
+            element_field: NestedField::required(
+                11,
+                "element",
+                Type::Struct(StructType::new(vec![
+                    NestedField::optional(10, "sku", Type::Primitive(PrimitiveType::String)).into(),
+                ])),
+            )
+            .into(),
+        });
+        let action = tx.update_schema().add_column(
+            AddColumn::builder()
+                .name("items")
+                .field_type(items)
+                .id(12)
+                .build(),
+        );
+
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
+        let updates = action_commit.take_updates();
+        let new_schema = new_schema_from(&updates);
+
+        assert_eq!(new_schema.field_by_name("items").unwrap().id, 12);
+        assert_eq!(new_schema.field_by_name("items.element").unwrap().id, 11);
+        assert_eq!(
+            new_schema.field_by_name("items.element.sku").unwrap().id,
+            10
+        );
+    }
+
+    #[tokio::test]
+    async fn test_add_column_with_explicit_id_not_above_last_column_id_fails() {
+        let table = make_v2_table();
+
+        // A nested ID at or below last_column_id (3) could reuse a dropped column's ID.
+        let nested = Type::Struct(StructType::new(vec![
+            NestedField::optional(2, "child", Type::Primitive(PrimitiveType::String)).into(),
+        ]));
+        for (id, field_type) in [
+            (0, Type::Primitive(PrimitiveType::Int)),
+            (-1, Type::Primitive(PrimitiveType::Int)),
+            (3, Type::Primitive(PrimitiveType::Int)),
+            (10, nested),
+        ] {
+            let action = Transaction::new(&table).update_schema().add_column(
+                AddColumn::builder()
+                    .name("bad")
+                    .field_type(field_type)
+                    .id(id)
+                    .build(),
+            );
+            let Err(err) = commit_with_fresh_state(action, &table).await else {
+                panic!("explicit id {id} should be rejected");
+            };
+            assert_eq!(err.kind(), ErrorKind::PreconditionFailed, "id {id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_columns_with_same_explicit_id_fails() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+
+        let action = tx
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("a")
+                    .field_type(Type::Primitive(PrimitiveType::Int))
+                    .id(10)
+                    .build(),
+            )
+            .add_column(
+                AddColumn::builder()
+                    .name("b")
+                    .field_type(Type::Primitive(PrimitiveType::Int))
+                    .id(10)
+                    .build(),
+            );
+
+        assert!(commit_with_fresh_state(action, &table).await.is_err());
     }
 }
