@@ -134,6 +134,18 @@ impl TransformFunction for Truncate {
                 );
                 Ok(Arc::new(res))
             }
+            DataType::LargeBinary => {
+                let len = self.width as usize;
+                let res: arrow_array::LargeBinaryArray = arrow_array::LargeBinaryArray::from_iter(
+                    input
+                        .as_any()
+                        .downcast_ref::<arrow_array::LargeBinaryArray>()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.map(|v| Self::truncate_binary(v, len))),
+                );
+                Ok(Arc::new(res))
+            }
             _ => Err(Error::new(
                 crate::ErrorKind::FeatureUnsupported,
                 format!(
@@ -1043,5 +1055,44 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(res, Datum::string("ice".to_string()),);
+    }
+
+    #[test]
+    fn test_binary_truncate() {
+        let fixture = super::Truncate::new(3);
+
+        let input = Arc::new(arrow_array::BinaryArray::from_iter_values([
+            b"\x01\x02\x03\x04\x05".as_slice(),
+            b"\x01\x02".as_slice(),
+            b"".as_slice(),
+        ]));
+        let res = fixture.transform(input).unwrap();
+        let res = res
+            .as_any()
+            .downcast_ref::<arrow_array::BinaryArray>()
+            .unwrap();
+        assert_eq!(res.value(0), b"\x01\x02\x03");
+        assert_eq!(res.value(1), b"\x01\x02");
+        assert_eq!(res.value(2), b"");
+    }
+
+    /// `schema_to_arrow_schema` maps an Iceberg `binary` column to `LargeBinary`.
+    #[test]
+    fn test_large_binary_truncate() {
+        let fixture = super::Truncate::new(3);
+
+        let input = Arc::new(arrow_array::LargeBinaryArray::from_iter_values([
+            b"\x01\x02\x03\x04\x05".as_slice(),
+            b"\x01\x02".as_slice(),
+            b"".as_slice(),
+        ]));
+        let res = fixture.transform(input).unwrap();
+        let res = res
+            .as_any()
+            .downcast_ref::<arrow_array::LargeBinaryArray>()
+            .unwrap();
+        assert_eq!(res.value(0), b"\x01\x02\x03");
+        assert_eq!(res.value(1), b"\x01\x02");
+        assert_eq!(res.value(2), b"");
     }
 }
