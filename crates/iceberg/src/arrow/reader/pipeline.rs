@@ -160,8 +160,9 @@ impl FileScanTaskReader {
             .delete_file_loader
             .load_deletes(task.deletes(), task.schema_ref());
 
-        // Spawned so the open finishes even when the caller stops polling (#3276).
-        // Aborts on drop, so a dropped scan stops opening files.
+        // `try_flatten_unordered` stops polling the buffered opens once it holds
+        // `concurrency_limit_data_files` streams, so spawn the open (#3276).
+        // Aborts on drop.
         let path = task.data_file_path().to_string();
         let file_io = self.file_io.clone();
         let file_size_in_bytes = task.file_size_in_bytes();
@@ -3915,10 +3916,8 @@ mod tests {
         assert_eq!(total_rows, 3);
     }
 
-    /// A data file must be opened even when nothing polls the scan. The stream
-    /// stops polling the opens once it holds `concurrency_limit_data_files` of
-    /// them, and on a shared HTTP/2 connection an open stopped mid-request holds
-    /// part of the connection window, which stalls every other read (#3276).
+    /// A data file must finish opening even when nothing polls the scan, and a
+    /// dropped scan must stop opening files (#3276).
     mod open_progress {
         use std::ops::Range;
 
@@ -3940,25 +3939,29 @@ mod tests {
         const CONCURRENCY: usize = 2;
         /// Smaller than a footer, so one open takes more than one request.
         const METADATA_SIZE_HINT: usize = 64;
-        /// Scheduler turns, far more than a request needs to finish.
+        /// Bytes one open reads: the hint, then the footer and its indexes.
+        /// A constant because `write_plain_parquet` always writes the same file.
+        const OPEN_BYTES: u64 = 547;
+        /// Scheduler turns, far more than a request needs. A bound only because
+        /// `#[tokio::test]` runs the test and the spawned opens on one thread.
         const YIELDS: usize = 100;
 
         /// In-memory files whose reads take a scheduler turn to answer.
         #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-        struct CountedStorage {
+        struct DeferredStorage {
             #[serde(skip)]
             files: MemoryStorage,
         }
 
-        struct CountedRead {
+        struct DeferredRead {
             contents: Bytes,
         }
 
         #[async_trait]
-        impl FileRead for CountedRead {
+        impl FileRead for DeferredRead {
             async fn read(&self, range: Range<u64>) -> Result<Bytes> {
-                // A request in flight when the scan stops being polled finishes
-                // only if something else drives it.
+                // The yield stands in for a request in flight: it finishes only
+                // if something still drives the read.
                 tokio::task::yield_now().await;
                 Ok(self
                     .contents
@@ -3968,9 +3971,9 @@ mod tests {
 
         #[async_trait]
         #[typetag::serde]
-        impl Storage for CountedStorage {
+        impl Storage for DeferredStorage {
             async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
-                Ok(Box::new(CountedRead {
+                Ok(Box::new(DeferredRead {
                     contents: self.files.read(path).await?,
                 }))
             }
@@ -4017,13 +4020,13 @@ mod tests {
         }
 
         #[derive(Debug, Default, Serialize, Deserialize)]
-        struct CountedStorageFactory {
+        struct DeferredStorageFactory {
             #[serde(skip)]
-            storage: CountedStorage,
+            storage: DeferredStorage,
         }
 
         #[typetag::serde]
-        impl StorageFactory for CountedStorageFactory {
+        impl StorageFactory for DeferredStorageFactory {
             fn build(&self, _config: &StorageConfig) -> Result<Arc<dyn Storage>> {
                 Ok(Arc::new(self.storage.clone()))
             }
@@ -4031,7 +4034,7 @@ mod tests {
 
         /// A scan of `CONCURRENCY` identical Parquet files, and the metrics that
         /// count the bytes it has read.
-        async fn counted_scan() -> (ScanMetrics, ArrowRecordBatchStream) {
+        async fn deferred_scan() -> (ScanMetrics, ArrowRecordBatchStream) {
             let schema = Arc::new(
                 Schema::builder()
                     .with_schema_id(1)
@@ -4050,7 +4053,7 @@ mod tests {
             );
             let contents = Bytes::from(std::fs::read(on_disk).unwrap());
 
-            let storage = CountedStorage::default();
+            let storage = DeferredStorage::default();
             let mut tasks = Vec::with_capacity(CONCURRENCY);
             for file_num in 0..CONCURRENCY {
                 let path = format!("memory:/data/file_{file_num}.parquet");
@@ -4070,7 +4073,8 @@ mod tests {
                 );
             }
 
-            let file_io = FileIOBuilder::new(Arc::new(CountedStorageFactory { storage })).build();
+            let file_io = FileIOBuilder::new(Arc::new(DeferredStorageFactory { storage })).build();
+
             let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
                 .with_data_file_concurrency_limit(CONCURRENCY)
                 .with_metadata_size_hint(METADATA_SIZE_HINT)
@@ -4081,7 +4085,7 @@ mod tests {
             (result.metrics().clone(), result.stream())
         }
 
-        /// Gives the scheduler turns until `done` holds, or `YIELDS` pass.
+        /// Gives the scheduler turns until `done` is true, or `YIELDS` turns pass.
         async fn spin(done: impl Fn() -> bool) {
             for _ in 0..YIELDS {
                 if done() {
@@ -4091,34 +4095,37 @@ mod tests {
             }
         }
 
-        /// An open must carry on through its requests although the scan is never
-        /// polled again.
+        /// An open must finish its requests even when the scan is never polled again.
         #[tokio::test]
         async fn test_open_proceeds_without_the_scan_being_polled() {
-            let (metrics, scan) = counted_scan().await;
+            let (metrics, scan) = deferred_scan().await;
             let mut scan = Box::pin(scan);
+            let every_open = OPEN_BYTES * CONCURRENCY as u64;
 
             // One poll starts an open per concurrency slot. Nothing polls the
             // scan after this, so only a spawned open can read any further.
             let _ = futures::poll!(scan.next());
-            let on_the_first_poll = metrics.bytes_read();
-            spin(|| metrics.bytes_read() > on_the_first_poll).await;
-            assert!(
-                metrics.bytes_read() > on_the_first_poll,
-                "the opens stopped at {on_the_first_poll} bytes, where the scan stopped polling"
+            spin(|| metrics.bytes_read() >= every_open).await;
+            assert_eq!(
+                metrics.bytes_read(),
+                every_open,
+                "the opens stopped where the scan stopped polling"
             );
         }
 
         /// A dropped scan must stop opening files.
         #[tokio::test]
         async fn test_dropped_scan_stops_opening_files() {
-            let (metrics, scan) = counted_scan().await;
+            let (metrics, scan) = deferred_scan().await;
             let mut scan = Box::pin(scan);
+            let every_open = OPEN_BYTES * CONCURRENCY as u64;
 
+            // Drop while the opens are part way through, or there is nothing to abort.
             let _ = futures::poll!(scan.next());
             spin(|| metrics.bytes_read() > 0).await;
             let in_flight = metrics.bytes_read();
             assert!(in_flight > 0, "no open reached the storage");
+            assert!(in_flight < every_open, "the opens finished before the drop");
 
             drop(scan);
             spin(|| false).await;
