@@ -535,6 +535,24 @@ fn data_file_fields_v3(partition_type: &StructType) -> Vec<NestedFieldRef> {
     ]
 }
 
+/// Fields of the `manifest_entry` struct in the latest format version. A
+/// [`ManifestEntry`] of any version fits them: earlier versions lack only
+/// optional fields, apart from the deprecated v1 `block_size_in_bytes`, which
+/// [`DataFile`] doesn't keep.
+pub(crate) fn manifest_entry_fields(partition_type: &StructType) -> Vec<NestedFieldRef> {
+    vec![
+        STATUS.clone(),
+        SNAPSHOT_ID_V2.clone(),
+        SEQUENCE_NUMBER.clone(),
+        FILE_SEQUENCE_NUMBER.clone(),
+        Arc::new(NestedField::required(
+            2,
+            "data_file",
+            Type::Struct(StructType::new(data_file_fields_v3(partition_type))),
+        )),
+    ]
+}
+
 pub(super) fn data_file_schema_v3(partition_type: &StructType) -> Result<AvroSchema> {
     let schema = Schema::builder()
         .with_fields(data_file_fields_v3(partition_type))
