@@ -26,7 +26,7 @@ use serde::Deserialize;
 /// [SchemaV1] and [SchemaV2] are internal struct that are only used for serialization and deserialization.
 use serde::Serialize;
 
-use super::{DEFAULT_SCHEMA_ID, Schema};
+use super::{DEFAULT_SCHEMA_ID, Schema, SchemaId};
 use crate::spec::StructType;
 use crate::{Error, Result};
 
@@ -42,7 +42,7 @@ pub(super) enum SchemaEnum {
 #[serde(rename_all = "kebab-case")]
 /// Defines the structure of a v2 schema for serialization/deserialization
 pub(crate) struct SchemaV2 {
-    pub schema_id: i32,
+    pub schema_id: SchemaId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identifier_field_ids: Option<Vec<i32>>,
     #[serde(flatten)]
@@ -54,7 +54,7 @@ pub(crate) struct SchemaV2 {
 /// Defines the structure of a v1 schema for serialization/deserialization
 pub(crate) struct SchemaV1 {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema_id: Option<i32>,
+    pub schema_id: Option<SchemaId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identifier_field_ids: Option<Vec<i32>>,
     #[serde(flatten)]

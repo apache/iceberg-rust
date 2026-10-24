@@ -81,9 +81,9 @@ pub struct TableMetadata {
     /// An integer; the highest assigned column ID for the table.
     pub(crate) last_column_id: i32,
     /// A list of schemas, stored as objects with schema-id.
-    pub(crate) schemas: HashMap<i32, SchemaRef>,
+    pub(crate) schemas: HashMap<SchemaId, SchemaRef>,
     /// ID of the table’s current schema.
-    pub(crate) current_schema_id: i32,
+    pub(crate) current_schema_id: SchemaId,
     /// A list of partition specs, stored as full partition spec objects.
     pub(crate) partition_specs: HashMap<i32, PartitionSpecRef>,
     /// ID of the “current” spec that writers should use by default.
@@ -784,8 +784,8 @@ pub(super) mod _serde {
     use crate::spec::snapshot::_serde::{SnapshotV1, SnapshotV2, SnapshotV3};
     use crate::spec::{
         EncryptedKey, INITIAL_ROW_ID, PartitionField, PartitionSpec, PartitionSpecRef,
-        PartitionStatisticsFile, Schema, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
-        SortOrder, StatisticsFile, UnboundPartitionSpec,
+        PartitionStatisticsFile, Schema, SchemaId, SchemaRef, Snapshot, SnapshotReference,
+        SnapshotRetention, SortOrder, StatisticsFile, UnboundPartitionSpec,
     };
     use crate::{Error, ErrorKind};
 
@@ -821,7 +821,7 @@ pub(super) mod _serde {
         pub last_updated_ms: i64,
         pub last_column_id: i32,
         pub schemas: Vec<SchemaV2>,
-        pub current_schema_id: i32,
+        pub current_schema_id: SchemaId,
         pub partition_specs: Vec<PartitionSpec>,
         pub default_spec_id: i32,
         pub last_partition_id: i32,
@@ -869,7 +869,7 @@ pub(super) mod _serde {
         #[serde(skip_serializing_if = "Option::is_none")]
         pub schemas: Option<Vec<SchemaV1>>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        pub current_schema_id: Option<i32>,
+        pub current_schema_id: Option<SchemaId>,
         /// `partition_spec` is optional to prioritize `partition_specs`, aligning with liberal reading of potentially invalid V1 metadata.
         pub partition_spec: Option<Vec<PartitionField>>,
         #[serde(skip_serializing_if = "Option::is_none")]
