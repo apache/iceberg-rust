@@ -148,5 +148,6 @@ url = "2.5.7"
 uuid = { version = "1.18", features = ["v7"] }
 volo = "0.10.6"
 volo-thrift = "0.10.8"
+vortex = { version = "0.86.1", features = ["tokio"] }
 zeroize = "1.7"
 zstd = { version = "0.13.3", default-features = false }
