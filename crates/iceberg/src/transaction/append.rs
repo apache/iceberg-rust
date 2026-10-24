@@ -21,19 +21,17 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::Result;
-use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
+use crate::spec::DataFile;
 use crate::table::Table;
 use crate::transaction::action::CommitStatus;
-use crate::transaction::snapshot::{
-    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
-};
+use crate::transaction::simple_snapshot_producer::SimpleSnapshotProducer;
 use crate::transaction::{ActionCommit, TransactionAction};
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
 #[derive(Clone)]
 pub struct FastAppendAction {
     check_duplicate: bool,
-    // below are properties used to create SnapshotProducer when commit
+    /// Overrides the commit UUID of the producer created in `new_state`.
     commit_uuid: Option<Uuid>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
@@ -88,79 +86,28 @@ impl FastAppendAction {
 
 #[async_trait]
 impl TransactionAction for FastAppendAction {
-    // TODO: replace with a persistent `SimpleSnapshotProducer` once snapshot
-    // production is migrated (stateful transaction RFC, milestone 2).
-    type State = ();
+    type State = SimpleSnapshotProducer;
 
-    fn new_state(&self) -> Self::State {}
+    fn new_state(&self) -> Self::State {
+        SimpleSnapshotProducer::new(self.commit_uuid)
+    }
 
-    async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
-        let snapshot_producer = SnapshotProducer::new(
-            table,
-            self.commit_uuid.unwrap_or_else(Uuid::now_v7),
-            self.snapshot_properties.clone(),
-            self.dedupe_added_files(),
-            vec![],
-        );
+    async fn commit(&self, state: &mut Self::State, table: &Table) -> Result<ActionCommit> {
+        let data_files = self.dedupe_added_files();
 
-        // validate added files
-        snapshot_producer.validate_added_data_files()?;
-
-        // Checks duplicate files
+        state.validate_added_data_files(table, &data_files)?;
         if self.check_duplicate {
-            snapshot_producer.validate_duplicate_files().await?;
+            state.validate_duplicate_files(table, &data_files).await?;
         }
 
-        snapshot_producer
-            .commit(FastAppendOperation, DefaultManifestProcess)
+        state
+            .apply(table, self.snapshot_properties.clone(), &data_files)
             .await
     }
 
-    async fn cleanup(self, _state: (), _table: &Table, _status: CommitStatus) {
-        // Stateless for now: generated manifests are not yet tracked for
-        // terminal cleanup (stateful transaction RFC, milestone 2/3).
-    }
-}
-
-struct FastAppendOperation;
-
-impl SnapshotProduceOperation for FastAppendOperation {
-    fn operation(&self) -> Operation {
-        Operation::Append
-    }
-
-    async fn delete_entries(
-        &self,
-        _snapshot_produce: &SnapshotProducer<'_>,
-    ) -> Result<Vec<ManifestEntry>> {
-        Ok(vec![])
-    }
-
-    async fn existing_manifest(
-        &self,
-        snapshot_produce: &SnapshotProducer<'_>,
-    ) -> Result<Vec<ManifestFile>> {
-        let Some(snapshot) = snapshot_produce.table.metadata().current_snapshot() else {
-            return Ok(vec![]);
-        };
-
-        let manifest_list = snapshot_produce
-            .table
-            .manifest_list_reader(snapshot)
-            .load()
-            .await?;
-
-        Ok(manifest_list
-            .entries()
-            .iter()
-            .filter(|entry| {
-                // Keep delete-only manifests too: they record which files were removed and
-                // must persist across snapshots until `expire_snapshots` cleans them up.
-                // Dropping them lets the removed files reappear as live data (see #2148).
-                entry.has_added_files() || entry.has_existing_files() || entry.has_deleted_files()
-            })
-            .cloned()
-            .collect())
+    async fn cleanup(self, _state: SimpleSnapshotProducer, _table: &Table, _status: CommitStatus) {
+        // TODO(#3417): remove the producer's uncommitted artifacts once terminal
+        // cleanup is wired up.
     }
 }
 
@@ -169,11 +116,13 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     use minijinja::{AutoEscape, Environment, Value, context};
     use tempfile::TempDir;
     use uuid::Uuid;
 
+    use crate::catalog::MockCatalog;
     use crate::encryption::kms::MemoryKeyManagementClient;
     use crate::encryption::{SensitiveBytes, StandardKeyMetadata};
     use crate::io::FileIO;
@@ -184,9 +133,11 @@ mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::{commit_with_fresh_state, make_encrypted_table, test_runtime};
-    use crate::transaction::Transaction;
-    use crate::transaction::tests::make_v2_minimal_table;
-    use crate::{TableIdent, TableRequirement, TableUpdate};
+    use crate::transaction::tests::{
+        make_v2_minimal_table, make_v3_minimal_table, with_retry_properties,
+    };
+    use crate::transaction::{ApplyTransactionAction, FastAppendAction, Transaction};
+    use crate::{TableCommit, TableIdent, TableRequirement, TableUpdate};
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
@@ -994,5 +945,157 @@ mod tests {
             manifest.entries()[0].snapshot_id().unwrap()
         );
         assert_eq!(data_file, *manifest.entries()[0].data_file());
+    }
+
+    /// Two writers append concurrently. Writer A starts from S0, but writer B
+    /// commits S1 first, so A's first attempt fails the `RefSnapshotIdMatch`
+    /// requirement and A rebases onto S1 to commit S2.
+    ///
+    /// The producer state survives the retry: A's manifest is written once and
+    /// reused, while parent, sequence number, manifest list and summary are
+    /// recomputed against S1 (see #3418).
+    #[tokio::test]
+    async fn test_fast_append_retry_rebases_onto_concurrent_commit() {
+        let (s1, s2) = rebase_onto_concurrent_commit(make_v2_minimal_table()).await;
+        assert_eq!(s1.first_row_id(), None);
+        assert_eq!(s2.first_row_id(), None);
+    }
+
+    /// On a v3 table the retry must also move the row range: S2's first row id
+    /// is S1's `next_row_id`, not S0's.
+    #[tokio::test]
+    async fn test_fast_append_retry_rebases_row_range_onto_concurrent_commit() {
+        let (s1, s2) = rebase_onto_concurrent_commit(make_v3_minimal_table()).await;
+
+        // B's single-row file takes row 0 in S1, so A's file starts at row 1.
+        assert_eq!(s1.row_range(), Some((0, 1)));
+        assert_eq!(s2.row_range(), Some((1, 1)));
+    }
+
+    /// Runs the concurrent-append rebase scenario on `s0` and returns the
+    /// snapshots committed by writer B (S1) and writer A (S2).
+    async fn rebase_onto_concurrent_commit(s0: Table) -> (SnapshotRef, SnapshotRef) {
+        // `TableCommit::apply` derives the next metadata location from the
+        // current one, so it needs a well-formed name.
+        let s0 = with_retry_properties(s0, "3").with_metadata_location(
+            "memory:///table/metadata/00000-9c12d441-03fe-4693-9a96-a0705ddf69c1.metadata.json"
+                .to_string(),
+        );
+        let data_file = |path: &str| {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path(path.to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(100)
+                .record_count(1)
+                .partition_spec_id(s0.metadata().default_partition_spec_id())
+                .partition(Struct::from_iter([Some(Literal::long(300))]))
+                .build()
+                .unwrap()
+        };
+
+        // Writer B commits S1 on top of S0.
+        let mut b_commit = commit_with_fresh_state(
+            FastAppendAction::new().add_data_files(vec![data_file("test/b.parquet")]),
+            &s0,
+        )
+        .await
+        .unwrap();
+        let s1 = TableCommit::builder()
+            .ident(s0.identifier().clone())
+            .updates(b_commit.take_updates())
+            .requirements(b_commit.take_requirements())
+            .build()
+            .apply(s0.clone())
+            .unwrap();
+        let s1_snapshot = s1.metadata().current_snapshot().unwrap().clone();
+
+        // The catalog serves S0 to A's first attempt and S1 afterwards; every
+        // update is validated against S1, so the first attempt's
+        // `RefSnapshotIdMatch { snapshot_id: None }` fails with a real conflict.
+        let mut mock_catalog = MockCatalog::new();
+        let loads = AtomicU32::new(0);
+        let (load_s0, load_s1) = (s0.clone(), s1.clone());
+        mock_catalog
+            .expect_load_table()
+            .times(2)
+            .returning_st(move |_| {
+                let table = if loads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    load_s0.clone()
+                } else {
+                    load_s1.clone()
+                };
+                Box::pin(async move { Ok(table) })
+            });
+        let apply_s1 = s1.clone();
+        mock_catalog
+            .expect_update_table()
+            .times(2)
+            .returning_st(move |commit| {
+                let s1 = apply_s1.clone();
+                Box::pin(async move { commit.apply(s1) })
+            });
+
+        // Writer A starts from S0.
+        let a_uuid = Uuid::now_v7();
+        let tx = Transaction::new(&s0);
+        let tx = tx
+            .fast_append()
+            .set_commit_uuid(a_uuid)
+            .add_data_files(vec![data_file("test/a.parquet")])
+            .apply(tx)
+            .unwrap();
+        let s2 = tx.commit(&mock_catalog).await.unwrap();
+        let s2_snapshot = s2.metadata().current_snapshot().unwrap().clone();
+
+        // S2 is rebased onto S1, not S0.
+        assert_eq!(
+            s2_snapshot.parent_snapshot_id(),
+            Some(s1_snapshot.snapshot_id())
+        );
+        assert_eq!(
+            s2_snapshot.sequence_number(),
+            s1_snapshot.sequence_number() + 1
+        );
+        // The committed manifest list is A's second attempt.
+        assert!(
+            s2_snapshot
+                .manifest_list()
+                .ends_with(&format!("-1-{a_uuid}.avro")),
+            "unexpected manifest list path {}",
+            s2_snapshot.manifest_list()
+        );
+
+        // S2 carries B's manifest forward and adds A's. A's manifest is the one
+        // written during the first attempt (counter 0), reused after rebase.
+        let manifest_list = s2.manifest_list_reader(&s2_snapshot).load().await.unwrap();
+        assert_eq!(manifest_list.entries().len(), 2);
+        let b_manifest = manifest_list
+            .entries()
+            .iter()
+            .find(|m| m.added_snapshot_id == s1_snapshot.snapshot_id())
+            .expect("S2 should carry B's manifest forward");
+        let a_manifest = manifest_list
+            .entries()
+            .iter()
+            .find(|m| m.added_snapshot_id == s2_snapshot.snapshot_id())
+            .expect("S2 should add A's manifest");
+        assert!(
+            a_manifest
+                .manifest_path
+                .ends_with(&format!("{a_uuid}-m0.avro")),
+            "unexpected manifest path {}",
+            a_manifest.manifest_path
+        );
+        assert_eq!(a_manifest.sequence_number, s2_snapshot.sequence_number());
+        assert_eq!(b_manifest.sequence_number, s1_snapshot.sequence_number());
+
+        // Summary totals are computed against S1, not S0.
+        let summary = &s2_snapshot.summary().additional_properties;
+        assert_eq!(summary.get("added-data-files").unwrap(), "1");
+        assert_eq!(summary.get("total-data-files").unwrap(), "2");
+        assert_eq!(summary.get("total-records").unwrap(), "2");
+
+        (s1_snapshot, s2_snapshot)
     }
 }
