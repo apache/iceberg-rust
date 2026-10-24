@@ -3008,7 +3008,6 @@ dependencies = [
 name = "iceberg-catalog-s3tables"
 version = "0.10.1"
 dependencies = [
- "anyhow",
  "arrow-array",
  "arrow-schema",
  "async-trait",
