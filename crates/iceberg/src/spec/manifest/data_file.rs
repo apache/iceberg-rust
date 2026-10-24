@@ -190,7 +190,7 @@ fn promote_partition_value(
     value: Option<&Literal>,
     current_field: &NestedFieldRef,
     written_field: &NestedFieldRef,
-) -> Option<Literal> {
+) -> Result<Option<Literal>> {
     match value {
         Some(Literal::Primitive(primitive)) => {
             let promoted = match current_field.field_type.as_primitive_type() {
@@ -204,18 +204,19 @@ fn promote_partition_value(
                         _ => None,
                     }
                 }
-                Some(target) => primitive.promote_to(target),
+                Some(target) => primitive.promote_to(target)?,
                 None => None,
             };
-            promoted.map(Literal::Primitive).or_else(|| value.cloned())
+            Ok(promoted.map(Literal::Primitive).or_else(|| value.cloned()))
         }
-        other => other.cloned(),
+        other => Ok(other.cloned()),
     }
 }
 
 impl DataFile {
     /// Returns this file's partition tuple normalized to the current schema: a field
-    /// promoted (`int` -> `long`, `float` -> `double`) since the manifest was written is
+    /// promoted (`int` -> `long`, `float` -> `double`, `date` -> `timestamp` /
+    /// `timestamp_ns`) since the manifest was written is
     /// widened to its `current` type; a dropped numeric source, which has no `current`
     /// type, is widened to its promotion ceiling by its `written` type; all other values
     /// are copied through. Column bounds are widened separately, lazily, where they are
@@ -225,8 +226,9 @@ impl DataFile {
     /// against the manifest's schema, so they match the stored tuple in length.
     ///
     /// # Errors
-    /// Returns `DataInvalid` if the stored tuple and `current` have different lengths; the
-    /// lengths should always match, since both come from the same spec.
+    /// Returns `DataInvalid` if the stored tuple and `current` have different lengths (the
+    /// lengths should always match, since both come from the same spec), or if a promoted
+    /// `date` value is outside the range of its timestamp type.
     pub(crate) fn promoted_partition(
         &self,
         current: &StructType,
@@ -240,15 +242,14 @@ impl DataFile {
             ));
         }
 
-        Ok(self
-            .partition
+        self.partition
             .iter()
             .zip(current.fields())
             .zip(written.fields())
             .map(|((value, current_field), written_field)| {
                 promote_partition_value(value, current_field, written_field)
             })
-            .collect())
+            .collect()
     }
 
     /// Get the content type of the data file (data, equality deletes, or position deletes)
@@ -485,8 +486,8 @@ impl std::fmt::Display for DataFileFormat {
 mod test {
     use crate::ErrorKind;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, NestedField, PrimitiveType,
-        Struct, StructType, Type,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, NestedField, PrimitiveLiteral,
+        PrimitiveType, Struct, StructType, Type,
     };
 
     #[test]
@@ -530,6 +531,71 @@ mod test {
             data_file.promoted_partition(&current, &written).unwrap(),
             Struct::from_iter([Some(Literal::long(7)), Some(Literal::double(1.5))])
         );
+    }
+
+    #[test]
+    fn promoted_partition_converts_date_to_timestamp() {
+        // Partition sources promoted date -> timestamp and date -> timestamp_ns; a file
+        // written before the promotion still carries day counts, which must become the
+        // midnight timestamp of each day to match predicates and newer delete files.
+        let current = StructType::new(vec![
+            NestedField::required(1000, "t", Type::Primitive(PrimitiveType::Timestamp)).into(),
+            NestedField::required(1001, "n", Type::Primitive(PrimitiveType::TimestampNs)).into(),
+        ]);
+        let written = StructType::new(vec![
+            NestedField::required(1000, "t", Type::Primitive(PrimitiveType::Date)).into(),
+            NestedField::required(1001, "n", Type::Primitive(PrimitiveType::Date)).into(),
+        ]);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("x.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([
+                Some(Literal::date(19_723)),
+                Some(Literal::date(-1)),
+            ]))
+            .record_count(1)
+            .file_size_in_bytes(1)
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            data_file.promoted_partition(&current, &written).unwrap(),
+            Struct::from_iter([
+                Some(Literal::timestamp(19_723 * 86_400_000_000)),
+                Some(Literal::Primitive(PrimitiveLiteral::Long(
+                    -86_400_000_000_000
+                ))),
+            ])
+        );
+    }
+
+    #[test]
+    fn promoted_partition_rejects_date_out_of_timestamp_ns_range() {
+        let current = StructType::new(vec![
+            NestedField::required(1000, "n", Type::Primitive(PrimitiveType::TimestampNs)).into(),
+        ]);
+        let written = StructType::new(vec![
+            NestedField::required(1000, "n", Type::Primitive(PrimitiveType::Date)).into(),
+        ]);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("x.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::date(376_200))]))
+            .record_count(1)
+            .file_size_in_bytes(1)
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        let err = data_file
+            .promoted_partition(&current, &written)
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[test]

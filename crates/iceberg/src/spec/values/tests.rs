@@ -2149,3 +2149,54 @@ fn test_datum_to_human_string_float_matches_java() {
     // 2097152.25, halfway between 2097152.2 and 2097152.3.
     assert_eq!(float(f32::from_bits(0x4a00_0001)), "2097152.2");
 }
+
+#[test]
+fn test_datum_promote_date_to_timestamp() {
+    // 2024-01-02 is 19_724 days after the epoch.
+    assert_eq!(
+        Datum::date(19_724)
+            .promote_to(&PrimitiveType::Timestamp)
+            .unwrap(),
+        Some(Datum::timestamp_micros(19_724 * 86_400_000_000))
+    );
+    assert_eq!(
+        Datum::date(19_724)
+            .promote_to(&PrimitiveType::TimestampNs)
+            .unwrap(),
+        Some(Datum::timestamp_nanos(19_724 * 86_400_000_000_000))
+    );
+    assert_eq!(
+        Datum::date(-1)
+            .promote_to(&PrimitiveType::Timestamp)
+            .unwrap(),
+        Some(Datum::timestamp_micros(-86_400_000_000))
+    );
+    // Timestamps with a zone are not a valid promotion target for a date.
+    assert_eq!(
+        Datum::date(19_724)
+            .promote_to(&PrimitiveType::Timestamptz)
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
+fn test_datum_promote_date_out_of_timestamp_range_errors() {
+    // `timestamp_ns` only covers about 292 years either side of the epoch, so a date
+    // in year 3000 does not fit and must not wrap.
+    let err = Datum::date(376_200)
+        .promote_to(&PrimitiveType::TimestampNs)
+        .unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    assert!(
+        Datum::date(i32::MAX)
+            .promote_to(&PrimitiveType::Timestamp)
+            .is_err()
+    );
+    assert!(
+        Datum::date(376_200)
+            .promote_to(&PrimitiveType::Timestamp)
+            .unwrap()
+            .is_some()
+    );
+}
