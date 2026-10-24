@@ -376,7 +376,7 @@ pub fn write_data_files_to_avro<W: Write>(
         let value = to_value(DataFileSerde::try_from(
             data_file,
             &partition_struct_type,
-            FormatVersion::V1,
+            version,
         )?)?
         .resolve(&avro_schema)?;
         writer.append_value(value)?;
