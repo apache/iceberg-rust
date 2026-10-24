@@ -122,7 +122,7 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
         };
 
         if let Some(bound) = bound {
-            let bound = &*Self::promote_bound(bound, reference);
+            let bound = &*Self::promote_bound(bound, reference)?;
             if cmp_fn(bound, datum) {
                 return ROWS_MIGHT_MATCH;
             }
@@ -137,13 +137,17 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
     /// narrower type (e.g. an `int` column later promoted to `long`) compares
     /// against a predicate bound to the wider type. Borrows the bound when nothing
     /// is promoted, so unpromoted bounds (e.g. strings/binaries) are not copied.
-    fn promote_bound<'b>(bound: &'b Datum, reference: &BoundReference) -> Cow<'b, Datum> {
-        reference
-            .field()
-            .field_type
-            .as_primitive_type()
-            .and_then(|primitive_type| bound.promote_to(primitive_type))
-            .map_or(Cow::Borrowed(bound), Cow::Owned)
+    /// A `date` bound read for a column promoted to `timestamp` / `timestamp_ns` is
+    /// converted to midnight of that day; one outside the timestamp range is an error.
+    fn promote_bound<'b>(
+        bound: &'b Datum,
+        reference: &BoundReference,
+    ) -> crate::Result<Cow<'b, Datum>> {
+        let promoted = match reference.field().field_type.as_primitive_type() {
+            Some(primitive_type) => bound.promote_to(primitive_type)?,
+            None => None,
+        };
+        Ok(promoted.map_or(Cow::Borrowed(bound), Cow::Owned))
     }
 }
 
@@ -275,7 +279,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(lower_bound) = self.lower_bound(field_id) {
-            let lower_bound = &*Self::promote_bound(lower_bound, reference);
+            let lower_bound = &*Self::promote_bound(lower_bound, reference)?;
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -286,7 +290,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
-            let upper_bound = &*Self::promote_bound(upper_bound, reference);
+            let upper_bound = &*Self::promote_bound(upper_bound, reference)?;
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -456,7 +460,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(lower_bound) = self.lower_bound(field_id) {
-            let lower_bound = &*Self::promote_bound(lower_bound, reference);
+            let lower_bound = &*Self::promote_bound(lower_bound, reference)?;
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
@@ -469,7 +473,7 @@ impl BoundPredicateVisitor for InclusiveMetricsEvaluator<'_> {
         }
 
         if let Some(upper_bound) = self.upper_bound(field_id) {
-            let upper_bound = &*Self::promote_bound(upper_bound, reference);
+            let upper_bound = &*Self::promote_bound(upper_bound, reference)?;
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROWS_MIGHT_MATCH;
@@ -625,6 +629,92 @@ mod test {
         .unwrap();
 
         assert!(InclusiveMetricsEvaluator::eval(&predicate, &data_file, true).unwrap());
+    }
+
+    // 19_723 days after the epoch is 2024-01-01.
+    const MICROS_PER_DAY: i64 = 86_400_000_000;
+
+    #[test]
+    fn eval_promotes_date_bounds_for_inequality() {
+        // A column promoted date->timestamp keeps date-typed (day count) bounds in
+        // pre-promotion manifests. Compared as raw numbers, a day count is far below
+        // any timestamp in micros, so `>` would wrongly prune the file.
+        let schema = promotion_schema(PrimitiveType::Timestamp);
+        let data_file = data_file_with_bounds(Datum::date(19_723), Datum::date(19_730));
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            GreaterThan,
+            Reference::new("a"),
+            Datum::timestamp_micros(19_725 * MICROS_PER_DAY),
+        ))
+        .bind(schema, true)
+        .unwrap();
+
+        assert!(InclusiveMetricsEvaluator::eval(&predicate, &data_file, true).unwrap());
+    }
+
+    #[test]
+    fn eval_promotes_date_bounds_for_eq() {
+        // With the bounds converted to midnight of each day, `==` prunes a file whose
+        // dates all come after the predicate value, and keeps one that covers it.
+        let schema = promotion_schema(PrimitiveType::Timestamp);
+        let data_file = data_file_with_bounds(Datum::date(19_723), Datum::date(19_730));
+        let eq = |days: i64| {
+            Predicate::Binary(BinaryExpression::new(
+                Eq,
+                Reference::new("a"),
+                Datum::timestamp_micros(days * MICROS_PER_DAY),
+            ))
+            .bind(schema.clone(), true)
+            .unwrap()
+        };
+
+        assert!(!InclusiveMetricsEvaluator::eval(&eq(19_722), &data_file, true).unwrap());
+        assert!(InclusiveMetricsEvaluator::eval(&eq(19_725), &data_file, true).unwrap());
+        assert!(!InclusiveMetricsEvaluator::eval(&eq(19_731), &data_file, true).unwrap());
+    }
+
+    #[test]
+    fn eval_promotes_date_bounds_to_timestamp_ns() {
+        let schema = promotion_schema(PrimitiveType::TimestampNs);
+        let data_file = data_file_with_bounds(Datum::date(19_723), Datum::date(19_730));
+        let predicate = Predicate::Set(SetExpression::new(
+            In,
+            Reference::new("a"),
+            FnvHashSet::from_iter([
+                Datum::timestamp_nanos(19_700 * MICROS_PER_DAY * 1000),
+                Datum::timestamp_nanos(19_730 * MICROS_PER_DAY * 1000),
+            ]),
+        ))
+        .bind(schema, true)
+        .unwrap();
+
+        assert!(InclusiveMetricsEvaluator::eval(&predicate, &data_file, true).unwrap());
+    }
+
+    #[test]
+    fn eval_errors_on_date_bound_out_of_timestamp_ns_range() {
+        // A date in year 3000 has no `timestamp_ns` value; evaluating must fail rather
+        // than compare a wrapped bound.
+        let schema = promotion_schema(PrimitiveType::TimestampNs);
+        let data_file = data_file_with_bounds(Datum::date(19_723), Datum::date(376_200));
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            LessThan,
+            Reference::new("a"),
+            Datum::timestamp_nanos(19_725 * MICROS_PER_DAY * 1000),
+        ))
+        .bind(schema.clone(), true)
+        .unwrap();
+        // `<` only reads the lower bound, which is in range.
+        assert!(InclusiveMetricsEvaluator::eval(&predicate, &data_file, true).unwrap());
+
+        let predicate = Predicate::Binary(BinaryExpression::new(
+            GreaterThan,
+            Reference::new("a"),
+            Datum::timestamp_nanos(19_725 * MICROS_PER_DAY * 1000),
+        ))
+        .bind(schema, true)
+        .unwrap();
+        assert!(InclusiveMetricsEvaluator::eval(&predicate, &data_file, true).is_err());
     }
 
     #[test]

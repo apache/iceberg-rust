@@ -22,6 +22,7 @@ use std::cmp::Ordering;
 use ordered_float::{FloatCore, OrderedFloat};
 
 use crate::spec::PrimitiveType;
+use crate::{Error, ErrorKind, Result};
 
 /// Values present in iceberg type
 ///
@@ -121,13 +122,29 @@ impl PrimitiveLiteral {
         }
     }
 
-    /// Widens this literal to `target` for the value promotions `int` -> `long`
-    /// and `float` -> `double`, returning `None` when `target` does not promote it.
-    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Option<PrimitiveLiteral> {
+    /// Widens this literal to `target` for the value promotions `int` -> `long`,
+    /// `float` -> `double`, and `date` -> `timestamp` / `timestamp_ns`, returning
+    /// `Ok(None)` when `target` does not promote it.
+    ///
+    /// A `date` is stored as an `int` literal (days from the epoch), and `int` itself
+    /// never promotes to a timestamp, so an `int` literal read for a timestamp target
+    /// is a date written before the column was promoted; it is converted to the
+    /// timestamp of midnight on that day.
+    ///
+    /// # Errors
+    /// Returns `DataInvalid` if a date is outside the range of the target timestamp
+    /// type, rather than wrapping it.
+    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Result<Option<PrimitiveLiteral>> {
         match (self, target) {
             (PrimitiveLiteral::Int(_), PrimitiveType::Long)
-            | (PrimitiveLiteral::Float(_), PrimitiveType::Double) => self.widen(),
-            _ => None,
+            | (PrimitiveLiteral::Float(_), PrimitiveType::Double) => Ok(self.widen()),
+            (PrimitiveLiteral::Int(days), PrimitiveType::Timestamp) => {
+                date_to_timestamp(*days, MICROSECONDS_PER_DAY, target).map(Some)
+            }
+            (PrimitiveLiteral::Int(days), PrimitiveType::TimestampNs) => {
+                date_to_timestamp(*days, NANOSECONDS_PER_DAY, target).map(Some)
+            }
+            _ => Ok(None),
         }
     }
 
@@ -158,4 +175,24 @@ impl PrimitiveLiteral {
             _ => false,
         }
     }
+}
+
+const MICROSECONDS_PER_DAY: i64 = 86_400_000_000;
+const NANOSECONDS_PER_DAY: i64 = 86_400_000_000_000;
+
+/// Converts `days` from the epoch to a timestamp literal in units of `units_per_day`.
+fn date_to_timestamp(
+    days: i32,
+    units_per_day: i64,
+    target: &PrimitiveType,
+) -> Result<PrimitiveLiteral> {
+    i64::from(days)
+        .checked_mul(units_per_day)
+        .map(PrimitiveLiteral::Long)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Date {days} (days from epoch) is out of range for {target}"),
+            )
+        })
 }

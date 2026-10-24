@@ -1230,14 +1230,20 @@ impl Datum {
     }
 
     /// Returns a copy whose literal is widened to `target` for the value
-    /// promotions `int` -> `long` and `float` -> `double`, so a value written
-    /// under the narrower type compares against a predicate bound to the wider
-    /// one. Returns `None` when `target` does not widen this value (decimals
-    /// already compare across precisions), so callers can avoid a copy.
-    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Option<Datum> {
-        self.literal
-            .promote_to(target)
-            .map(|literal| Datum::new(target.clone(), literal))
+    /// promotions `int` -> `long`, `float` -> `double`, and `date` -> `timestamp` /
+    /// `timestamp_ns`, so a value written under the narrower type compares against
+    /// a predicate bound to the wider one. Returns `Ok(None)` when `target` does not
+    /// widen this value (decimals already compare across precisions), so callers
+    /// can avoid a copy.
+    ///
+    /// # Errors
+    /// Returns `DataInvalid` if a date is outside the range of the target timestamp
+    /// type.
+    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Result<Option<Datum>> {
+        Ok(self
+            .literal
+            .promote_to(target)?
+            .map(|literal| Datum::new(target.clone(), literal)))
     }
 
     /// Returns true if the Literal represents a primitive type

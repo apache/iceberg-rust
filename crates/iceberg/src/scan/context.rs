@@ -75,7 +75,8 @@ pub(crate) struct ManifestEntryContext {
 }
 
 /// Returns whether any `int` or `float` field of `written` is widened in `current`, to
-/// `long`/`double` or to `unknown` once its source column is dropped, i.e. partition
+/// `long`/`double` or to `unknown` once its source column is dropped, or any `date`
+/// field is promoted to `timestamp`/`timestamp_ns`, i.e. partition
 /// values written with `written` need normalizing before they compare against predicates
 /// bound to the current schema or against delete-file partitions.
 fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
@@ -91,6 +92,9 @@ fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
             ) | (
                 Some(PrimitiveType::Float),
                 Some(PrimitiveType::Double | PrimitiveType::Unknown)
+            ) | (
+                Some(PrimitiveType::Date),
+                Some(PrimitiveType::Timestamp | PrimitiveType::TimestampNs)
             )
         )
     })
