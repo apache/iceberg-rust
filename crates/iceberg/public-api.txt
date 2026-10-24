@@ -2644,7 +2644,7 @@ pub fn iceberg::spec::SchemaBuilder::build(self) -> iceberg::Result<iceberg::spe
 pub fn iceberg::spec::SchemaBuilder::with_alias(self, alias_to_id: bimap::hash::BiHashMap<alloc::string::String, i32>) -> Self
 pub fn iceberg::spec::SchemaBuilder::with_fields(self, fields: impl core::iter::traits::collect::IntoIterator<Item = iceberg::spec::NestedFieldRef>) -> Self
 pub fn iceberg::spec::SchemaBuilder::with_identifier_field_ids(self, ids: impl core::iter::traits::collect::IntoIterator<Item = i32>) -> Self
-pub fn iceberg::spec::SchemaBuilder::with_schema_id(self, schema_id: i32) -> Self
+pub fn iceberg::spec::SchemaBuilder::with_schema_id(self, schema_id: iceberg::spec::SchemaId) -> Self
 impl core::fmt::Debug for iceberg::spec::SchemaBuilder
 pub fn iceberg::spec::SchemaBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::spec::Snapshot
@@ -2982,11 +2982,11 @@ pub fn iceberg::spec::TableMetadataBuilder::remove_partition_specs(self, spec_id
 pub fn iceberg::spec::TableMetadataBuilder::remove_partition_statistics(self, snapshot_id: i64) -> Self
 pub fn iceberg::spec::TableMetadataBuilder::remove_properties(self, properties: &[alloc::string::String]) -> iceberg::Result<Self>
 pub fn iceberg::spec::TableMetadataBuilder::remove_ref(self, ref_name: &str) -> Self
-pub fn iceberg::spec::TableMetadataBuilder::remove_schemas(self, schema_id_to_remove: &[i32]) -> iceberg::Result<Self>
+pub fn iceberg::spec::TableMetadataBuilder::remove_schemas(self, schema_id_to_remove: &[iceberg::spec::SchemaId]) -> iceberg::Result<Self>
 pub fn iceberg::spec::TableMetadataBuilder::remove_snapshots(self, snapshot_ids: &[i64]) -> Self
 pub fn iceberg::spec::TableMetadataBuilder::remove_statistics(self, snapshot_id: i64) -> Self
 pub fn iceberg::spec::TableMetadataBuilder::set_branch_snapshot(self, snapshot: iceberg::spec::Snapshot, branch: &str) -> iceberg::Result<Self>
-pub fn iceberg::spec::TableMetadataBuilder::set_current_schema(self, schema_id: i32) -> iceberg::Result<Self>
+pub fn iceberg::spec::TableMetadataBuilder::set_current_schema(self, schema_id: iceberg::spec::SchemaId) -> iceberg::Result<Self>
 pub fn iceberg::spec::TableMetadataBuilder::set_default_partition_spec(self, spec_id: i32) -> iceberg::Result<Self>
 pub fn iceberg::spec::TableMetadataBuilder::set_default_sort_order(self, sort_order_id: i64) -> iceberg::Result<Self>
 pub fn iceberg::spec::TableMetadataBuilder::set_location(self, location: alloc::string::String) -> Self
@@ -3820,7 +3820,7 @@ pub iceberg::TableUpdate::RemovePartitionStatistics::snapshot_id: i64
 pub iceberg::TableUpdate::RemoveProperties
 pub iceberg::TableUpdate::RemoveProperties::removals: alloc::vec::Vec<alloc::string::String>
 pub iceberg::TableUpdate::RemoveSchemas
-pub iceberg::TableUpdate::RemoveSchemas::schema_ids: alloc::vec::Vec<i32>
+pub iceberg::TableUpdate::RemoveSchemas::schema_ids: alloc::vec::Vec<iceberg::spec::SchemaId>
 pub iceberg::TableUpdate::RemoveSnapshotRef
 pub iceberg::TableUpdate::RemoveSnapshotRef::ref_name: alloc::string::String
 pub iceberg::TableUpdate::RemoveSnapshots
@@ -3828,7 +3828,7 @@ pub iceberg::TableUpdate::RemoveSnapshots::snapshot_ids: alloc::vec::Vec<i64>
 pub iceberg::TableUpdate::RemoveStatistics
 pub iceberg::TableUpdate::RemoveStatistics::snapshot_id: i64
 pub iceberg::TableUpdate::SetCurrentSchema
-pub iceberg::TableUpdate::SetCurrentSchema::schema_id: i32
+pub iceberg::TableUpdate::SetCurrentSchema::schema_id: iceberg::spec::SchemaId
 pub iceberg::TableUpdate::SetDefaultSortOrder
 pub iceberg::TableUpdate::SetDefaultSortOrder::sort_order_id: i64
 pub iceberg::TableUpdate::SetDefaultSpec

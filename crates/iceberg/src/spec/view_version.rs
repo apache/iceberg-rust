@@ -216,7 +216,7 @@ pub(super) mod _serde {
     /// [ViewVersionV1] are internal struct that are only used for serialization and deserialization.
     use serde::{Deserialize, Serialize};
 
-    use super::{ViewRepresentation, ViewRepresentations, ViewVersion};
+    use super::{SchemaId, ViewRepresentation, ViewRepresentations, ViewVersion};
     use crate::catalog::NamespaceIdent;
 
     #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -224,7 +224,7 @@ pub(super) mod _serde {
     /// Defines the structure of a v1 view version for serialization/deserialization
     pub(crate) struct ViewVersionV1 {
         pub version_id: i32,
-        pub schema_id: i32,
+        pub schema_id: SchemaId,
         pub timestamp_ms: i64,
         pub summary: std::collections::HashMap<String, String>,
         pub representations: Vec<ViewRepresentation>,

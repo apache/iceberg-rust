@@ -51,7 +51,7 @@ impl ManifestMetadata {
                 invalid_data!("Fail to parse schema in manifest metadata").with_source(err)
             })?
         });
-        let schema_id: i32 = meta
+        let schema_id: SchemaId = meta
             .get("schema-id")
             .map(|bs| {
                 String::from_utf8_lossy(bs).parse().map_err(|err| {
