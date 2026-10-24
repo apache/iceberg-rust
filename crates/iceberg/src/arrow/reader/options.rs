@@ -15,70 +15,118 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Tunables for Parquet file I/O used by `ArrowReader`.
-
+use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-use super::{
-    DEFAULT_METADATA_SIZE_HINT, DEFAULT_RANGE_COALESCE_BYTES, DEFAULT_RANGE_FETCH_CONCURRENCY,
-};
+use super::ArrowReaderBuilder;
 
-/// Options for tuning Parquet file I/O.
-#[derive(Clone, Copy, Debug, TypedBuilder)]
-#[builder(field_defaults(setter(prefix = "with_")))]
-pub(crate) struct ParquetReadOptions {
-    /// Number of bytes to prefetch for parsing the Parquet metadata.
-    ///
-    /// This hint can help reduce the number of fetch requests. For more details see the
-    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
-    ///
-    /// Defaults to 512 KiB, matching DataFusion's default `ParquetOptions::metadata_size_hint`.
-    #[builder(default = Some(DEFAULT_METADATA_SIZE_HINT))]
-    pub(crate) metadata_size_hint: Option<usize>,
-    /// Gap threshold for merging nearby byte ranges into a single request.
-    /// Ranges with gaps smaller than this value will be coalesced.
-    ///
-    /// Defaults to 1 MiB, matching object_store's `OBJECT_STORE_COALESCE_DEFAULT`.
-    #[builder(default = DEFAULT_RANGE_COALESCE_BYTES)]
-    pub(crate) range_coalesce_bytes: u64,
-    /// Maximum number of merged byte ranges to fetch concurrently.
-    ///
-    /// Defaults to 10, matching object_store's `OBJECT_STORE_COALESCE_PARALLEL`.
-    #[builder(default = DEFAULT_RANGE_FETCH_CONCURRENCY)]
-    pub(crate) range_fetch_concurrency: usize,
-    /// Whether to preload the column index when reading Parquet metadata.
+/// Configures Arrow reads independently of file planning and local I/O resources.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[serde(default)]
+#[builder(field_defaults(default, setter(prefix = "with_")))]
+pub struct ArrowReaderOptions {
+    /// Desired batch size, or the reader default when unset.
+    batch_size: Option<usize>,
+    /// Maximum in-flight data files, or execution-host parallelism when unset.
+    data_file_concurrency_limit: Option<usize>,
+    /// Whether to prune row groups using their statistics.
     #[builder(default = true)]
-    pub(crate) preload_column_index: bool,
-    /// Whether to preload the offset index when reading Parquet metadata.
-    #[builder(default = true)]
-    pub(crate) preload_offset_index: bool,
-    /// Whether to preload the page index when reading Parquet metadata.
-    #[builder(default = false)]
-    pub(crate) preload_page_index: bool,
+    row_group_filtering_enabled: bool,
+    /// Whether to use page indexes for row selection.
+    row_selection_enabled: bool,
+    /// Whether to use bloom filters for row-group pruning.
+    bloom_filter_enabled: bool,
 }
 
-impl ParquetReadOptions {
-    pub(crate) fn metadata_size_hint(&self) -> Option<usize> {
-        self.metadata_size_hint
+impl Default for ArrowReaderOptions {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+impl ArrowReaderBuilder {
+    /// Replaces reader settings while preserving local resources and Parquet I/O tuning.
+    /// Unset batch size and concurrency restore the defaults used at reader construction.
+    pub fn with_options(mut self, options: ArrowReaderOptions) -> Self {
+        self.batch_size = options.batch_size;
+        self.concurrency_limit_data_files = options.data_file_concurrency_limit;
+        self.row_group_filtering_enabled = options.row_group_filtering_enabled;
+        self.row_selection_enabled = options.row_selection_enabled;
+        self.bloom_filter_enabled = options.bloom_filter_enabled;
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::io::FileIO;
+    use crate::test_utils::test_runtime;
+    use crate::util::available_parallelism;
+
+    #[test]
+    fn missing_options_use_defaults_and_unknown_options_are_ignored() {
+        let decoded: ArrowReaderOptions =
+            serde_json::from_str(r#"{"future_option":true}"#).unwrap();
+        assert_eq!(decoded, ArrowReaderOptions::default());
+        let decoded: ArrowReaderOptions = serde_json::from_str(r#"{"batch_size":17}"#).unwrap();
+        assert_eq!(
+            decoded,
+            ArrowReaderOptions::builder()
+                .with_batch_size(Some(17))
+                .build()
+        );
+        assert_eq!(
+            serde_json::to_value(ArrowReaderOptions::default()).unwrap()["data_file_concurrency_limit"],
+            serde_json::Value::Null
+        );
     }
 
-    pub(crate) fn range_coalesce_bytes(&self) -> u64 {
-        self.range_coalesce_bytes
-    }
-
-    pub(crate) fn range_fetch_concurrency(&self) -> usize {
-        self.range_fetch_concurrency
-    }
-
-    pub(crate) fn preload_column_index(&self) -> bool {
-        self.preload_column_index
-    }
-
-    pub(crate) fn preload_offset_index(&self) -> bool {
-        self.preload_offset_index
-    }
-
-    pub(crate) fn preload_page_index(&self) -> bool {
-        self.preload_page_index
+    #[test]
+    fn options_restore_local_defaults_or_apply_explicit_settings() {
+        for explicit in [false, true] {
+            let options = if explicit {
+                ArrowReaderOptions::builder()
+                    .with_batch_size(Some(17))
+                    .with_data_file_concurrency_limit(Some(3))
+                    .with_row_group_filtering_enabled(false)
+                    .with_row_selection_enabled(true)
+                    .with_bloom_filter_enabled(true)
+                    .build()
+            } else {
+                ArrowReaderOptions::default()
+            };
+            let reader = ArrowReaderBuilder::new(FileIO::new_with_memory(), test_runtime())
+                .with_batch_size(1024)
+                .with_data_file_concurrency_limit(99)
+                .with_metadata_size_hint(4096)
+                .with_range_coalesce_bytes(8192)
+                .with_range_fetch_concurrency(2)
+                .with_options(options)
+                .build();
+            let expected = if explicit {
+                (Some(17), 3, false, true, true)
+            } else {
+                (None, available_parallelism().get(), true, false, false)
+            };
+            assert_eq!(
+                (
+                    reader.batch_size,
+                    reader.concurrency_limit_data_files,
+                    reader.row_group_filtering_enabled,
+                    reader.row_selection_enabled,
+                    reader.bloom_filter_enabled
+                ),
+                expected
+            );
+            assert_eq!(
+                (
+                    reader.parquet_read_options.metadata_size_hint(),
+                    reader.parquet_read_options.range_coalesce_bytes(),
+                    reader.parquet_read_options.range_fetch_concurrency()
+                ),
+                (Some(4096), 8192, 2)
+            );
+        }
     }
 }
