@@ -23,15 +23,14 @@ mod manifest_file;
 mod reader;
 mod writer;
 
-use apache_avro::types::Value;
-use apache_avro::{Reader, from_value};
+use apache_avro::Reader;
 pub use manifest_file::*;
 pub use reader::*;
 pub use serde_bytes::ByteBuf;
 pub use writer::*;
 
-use self::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V1;
 use super::FormatVersion;
+use crate::avro::Resolved;
 use crate::error::Result;
 
 /// Placeholder for sequence number. The field with this value must be replaced with the actual sequence number before it write.
@@ -59,25 +58,22 @@ pub struct ManifestList {
 impl ManifestList {
     /// Parse manifest list from bytes.
     pub fn parse_with_version(bs: &[u8], version: FormatVersion) -> Result<ManifestList> {
-        match version {
-            FormatVersion::V1 => {
-                let reader = Reader::builder(bs)
-                    .reader_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1)
-                    .build()?;
-                let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV1>(&values)?.try_into()
-            }
-            FormatVersion::V2 => {
-                let reader = Reader::new(bs)?;
-                let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV2>(&values)?.try_into()
-            }
-            FormatVersion::V3 => {
-                let reader = Reader::new(bs)?;
-                let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
-                from_value::<_serde::ManifestListV3>(&values)?.try_into()
-            }
-        }
+        let reader = Reader::new(bs)?;
+        let entries = match version {
+            FormatVersion::V1 => reader
+                .into_deser_iter::<Resolved<_serde::ManifestFileV1>>()
+                .map(|entry| entry?.0.try_into())
+                .collect::<Result<Vec<_>>>()?,
+            FormatVersion::V2 => reader
+                .into_deser_iter::<Resolved<_serde::ManifestFileV2>>()
+                .map(|entry| entry?.0.try_into())
+                .collect::<Result<Vec<_>>>()?,
+            FormatVersion::V3 => reader
+                .into_deser_iter::<Resolved<_serde::ManifestFileV3>>()
+                .map(|entry| entry?.0.try_into())
+                .collect::<Result<Vec<_>>>()?,
+        };
+        Ok(ManifestList { entries })
     }
 
     /// Get the entries in the manifest list.
@@ -123,7 +119,7 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: Some(vec![]),
-                    key_metadata: None,
+                    key_metadata: Some(vec![1, 2, 3]),
                     first_row_id: None,
                 }
             ]
@@ -157,6 +153,71 @@ mod test {
             ManifestList::parse_with_version(&bs, FormatVersion::V1).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
+    }
+
+    const VERSIONS: [FormatVersion; 3] = [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3];
+
+    fn entry(version: FormatVersion) -> ManifestFile {
+        ManifestFile {
+            manifest_path: "s3://test/metadata/manifest.avro".to_string(),
+            manifest_length: 1234,
+            partition_spec_id: 0,
+            content: ManifestContentType::Data,
+            sequence_number: if version == FormatVersion::V1 { 0 } else { 7 },
+            min_sequence_number: if version == FormatVersion::V1 { 0 } else { 3 },
+            added_snapshot_id: 42,
+            added_files_count: Some(1),
+            existing_files_count: Some(0),
+            deleted_files_count: Some(0),
+            added_rows_count: Some(9),
+            existing_rows_count: Some(0),
+            deleted_rows_count: Some(0),
+            partitions: Some(vec![FieldSummary {
+                contains_null: true,
+                contains_nan: None,
+                lower_bound: Some(vec![1, 0, 0, 0].into()),
+                upper_bound: None,
+            }]),
+            key_metadata: Some(vec![1, 2, 3]),
+            first_row_id: (version == FormatVersion::V3).then_some(100),
+        }
+    }
+
+    async fn encode(version: FormatVersion, entries: Vec<ManifestFile>) -> Vec<u8> {
+        let io = FileIO::new_with_memory();
+        let output = io.new_output("memory:///manifest-list.avro").unwrap();
+        let writer = output.writer().await.unwrap();
+        let mut writer = match version {
+            FormatVersion::V1 => ManifestListWriter::v1(writer, 42, None),
+            FormatVersion::V2 => ManifestListWriter::v2(writer, 42, None, 7),
+            FormatVersion::V3 => ManifestListWriter::v3(writer, 42, None, 7, Some(100)),
+        };
+        writer.add_manifests(entries.into_iter()).unwrap();
+        writer.close().await.unwrap();
+        io.new_input("memory:///manifest-list.avro")
+            .unwrap()
+            .read()
+            .await
+            .unwrap()
+            .to_vec()
+    }
+
+    #[tokio::test]
+    async fn test_parse_empty_manifest_list() {
+        for version in VERSIONS {
+            let bs = encode(version, vec![]).await;
+            let parsed = ManifestList::parse_with_version(&bs, version).unwrap();
+            assert!(parsed.entries().is_empty(), "{version:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parse_truncated_manifest_list() {
+        for version in VERSIONS {
+            let bs = encode(version, vec![entry(version)]).await;
+            let result = ManifestList::parse_with_version(&bs[..bs.len() - 1], version);
+            assert!(result.is_err(), "{version:?}");
+        }
     }
 
     #[tokio::test]
@@ -198,9 +259,9 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: Some(
-                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1_f32).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1_f32).to_bytes().unwrap())}]
+                        vec![FieldSummary { contains_null: false, contains_nan: None, lower_bound: Some(Datum::float(1.1_f32).to_bytes().unwrap()), upper_bound: None}]
                     ),
-                    key_metadata: None,
+                    key_metadata: Some(vec![1, 2, 3]),
                     first_row_id: None,
                 }
             ]
@@ -316,9 +377,9 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: Some(
-                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1_f32).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1_f32).to_bytes().unwrap())}]
+                        vec![FieldSummary { contains_null: false, contains_nan: None, lower_bound: Some(Datum::float(1.1_f32).to_bytes().unwrap()), upper_bound: None}]
                     ),
-                    key_metadata: None,
+                    key_metadata: Some(vec![1, 2, 3]),
                     first_row_id: Some(13),
                 }
             ]
