@@ -2877,6 +2877,7 @@ dependencies = [
  "iceberg-property-macro",
  "iceberg_test_utils",
  "itertools 0.13.0",
+ "lz4_flex 0.14.0",
  "minijinja",
  "mockall",
  "moka",
