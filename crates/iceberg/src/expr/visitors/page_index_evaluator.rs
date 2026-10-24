@@ -596,7 +596,9 @@ impl<'a> PageIndexEvaluator<'a> {
                 let bound = if use_lower_bound { min } else { max };
 
                 if let Some(bound) = bound {
-                    if cmp_fn(&bound, datum) {
+                    // A bound that can't be compared with the literal (e.g. a
+                    // file column narrower than the field type) might match.
+                    if bound.partial_cmp(datum).is_none() || cmp_fn(&bound, datum) {
                         return Ok(true);
                     }
 
@@ -937,11 +939,13 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
                         // if all values are outside the bounds, no rows can match
                         return Ok(false);
                     }
-                    (Some(min), _) if !literals.iter().any(|datum| datum.ge(&min)) => {
+                    // `all(lt)` rather than `!any(ge)`, so that a bound that
+                    // can't be compared with the literals keeps the page.
+                    (Some(min), _) if literals.iter().all(|datum| datum.lt(&min)) => {
                         // if no values are within the min bound, no rows can match
                         return Ok(false);
                     }
-                    (_, Some(max)) if !literals.iter().any(|datum| datum.le(&max)) => {
+                    (_, Some(max)) if literals.iter().all(|datum| datum.gt(&max)) => {
                         // if no values are within the max bound, no rows can match
                         return Ok(false);
                     }
@@ -973,8 +977,8 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::{
-        ArrayRef, Decimal128Array, FixedSizeBinaryArray, Float32Array, LargeBinaryArray,
-        RecordBatch, StringArray,
+        ArrayRef, Decimal128Array, FixedSizeBinaryArray, Float32Array, Int32Array,
+        LargeBinaryArray, RecordBatch, StringArray, UInt32Array,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use parquet::arrow::ArrowWriter;
@@ -987,7 +991,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::PageIndexEvaluator;
-    use crate::expr::{Bind, Reference};
+    use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::decimal_utils::decimal_from_i128_with_scale;
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
     use crate::{ErrorKind, Result};
@@ -1248,9 +1252,34 @@ mod tests {
         scale: i8,
         pages: &[Option<i128>],
     ) -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
+        let pages: Vec<ArrayRef> = pages
+            .iter()
+            .map(|page| {
+                Arc::new(
+                    match page {
+                        Some(unscaled) => {
+                            Decimal128Array::from_iter_values(std::iter::repeat_n(*unscaled, 1024))
+                        }
+                        None => Decimal128Array::from(vec![None; 1024]),
+                    }
+                    .with_precision_and_scale(precision, scale)
+                    .unwrap(),
+                ) as ArrayRef
+            })
+            .collect();
+        create_single_column_parquet_file(&pages)
+    }
+
+    /// Creates a single-column parquet file named `col` with one page per
+    /// 1024-row array in `pages`. Used to back an Iceberg field with a
+    /// narrower physical column, e.g. a `long` field with an `INT32` column
+    /// written before an `int` -> `long` promotion.
+    fn create_single_column_parquet_file(
+        pages: &[ArrayRef],
+    ) -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
         let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
-            "col_decimal",
-            DataType::Decimal128(precision, scale),
+            "col",
+            pages[0].data_type().clone(),
             true,
         )]));
 
@@ -1265,17 +1294,7 @@ mod tests {
         let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
 
         for page in pages {
-            let array = Arc::new(
-                match page {
-                    Some(unscaled) => {
-                        Decimal128Array::from_iter_values(std::iter::repeat_n(*unscaled, 1024))
-                    }
-                    None => Decimal128Array::from(vec![None; 1024]),
-                }
-                .with_precision_and_scale(precision, scale)
-                .unwrap(),
-            ) as ArrayRef;
-            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![array]).unwrap();
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![page.clone()]).unwrap();
             // Write rows one at a time so the writer splits into per-value pages.
             for i in 0..batch.num_rows() {
                 writer.write(&batch.slice(i, 1)).unwrap();
@@ -1290,6 +1309,16 @@ mod tests {
         let metadata = reader.metadata().clone();
 
         Ok((metadata, temp_file))
+    }
+
+    /// Creates a single-column parquet file with one 1024-row page per value,
+    /// using `to_array` to build each page.
+    fn create_parquet_file_from_values<T: Copy>(
+        values: &[T],
+        to_array: impl Fn(Vec<T>) -> ArrayRef,
+    ) -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
+        let pages: Vec<ArrayRef> = values.iter().map(|&v| to_array(vec![v; 1024])).collect();
+        create_single_column_parquet_file(&pages)
     }
 
     /// Get the test metadata components for testing
@@ -2310,6 +2339,142 @@ mod tests {
         ]);
 
         Ok(())
+    }
+
+    #[test]
+    fn eval_keeps_int32_pages_of_promoted_long_field() -> Result<()> {
+        // An `int` -> `long` promotion leaves older files with INT32 page
+        // bounds, which can't be compared with a `long` literal.
+        let (metadata, _temp_file) = create_parquet_file_from_values(&[100, 200, 300, 400], |v| {
+            Arc::new(Int32Array::from(v))
+        })?;
+
+        assert_keeps_all_pages(&metadata, PrimitiveType::Long, 4096, [
+            Reference::new("col").less_than(Datum::long(250)),
+            Reference::new("col").less_than_or_equal_to(Datum::long(250)),
+            Reference::new("col").greater_than(Datum::long(250)),
+            Reference::new("col").greater_than_or_equal_to(Datum::long(250)),
+            // A literal outside the `int` range.
+            Reference::new("col").less_than(Datum::long(i64::from(i32::MAX) + 1)),
+            Reference::new("col").is_in([Datum::long(200), Datum::long(400)]),
+        ])
+    }
+
+    #[test]
+    fn eval_keeps_float_pages_of_promoted_double_field() -> Result<()> {
+        // A `float` -> `double` promotion leaves older files with FLOAT page
+        // bounds, which can't be compared with a `double` literal.
+        let (metadata, _temp_file) =
+            create_parquet_file_from_values(&[1.0_f32, 2.0, 3.0, 4.0], |v| {
+                Arc::new(Float32Array::from(v))
+            })?;
+
+        assert_keeps_all_pages(&metadata, PrimitiveType::Double, 4096, [
+            Reference::new("col").less_than(Datum::double(2.5)),
+            Reference::new("col").less_than_or_equal_to(Datum::double(2.5)),
+            Reference::new("col").greater_than(Datum::double(2.5)),
+            Reference::new("col").greater_than_or_equal_to(Datum::double(2.5)),
+            Reference::new("col").is_in([Datum::double(2.0), Datum::double(4.0)]),
+        ])
+    }
+
+    #[test]
+    fn eval_keeps_uint32_pages_of_long_field() -> Result<()> {
+        // Parquet `UINT_32` columns map to `long` but have INT32 page bounds.
+        // The last page mixes both values, so its raw signed max is smaller
+        // than its min and a sign-extending widening would prune it.
+        let mixed: Vec<u32> = [100_u32, 3_000_000_000].repeat(512);
+        let (metadata, _temp_file) = create_single_column_parquet_file(&[
+            Arc::new(UInt32Array::from(vec![100_u32; 1024])),
+            Arc::new(UInt32Array::from(vec![3_000_000_000_u32; 1024])),
+            Arc::new(UInt32Array::from(mixed)),
+        ])?;
+
+        let column_index = &metadata.column_index().unwrap()[0][0];
+        let parquet::file::page_index::column_index::ColumnIndexMetaData::INT32(idx) = column_index
+        else {
+            panic!("expected INT32 column index, got {column_index:?}");
+        };
+        let bounds: Vec<_> = idx.min_values_iter().zip(idx.max_values_iter()).collect();
+        assert_eq!(bounds.len(), 3);
+        assert_eq!(bounds[2], (Some(&100), Some(&(3_000_000_000_u32 as i32))));
+
+        assert_keeps_all_pages(&metadata, PrimitiveType::Long, 3072, [
+            Reference::new("col").equal_to(Datum::long(3_000_000_000_i64)),
+            Reference::new("col").greater_than(Datum::long(2_000_000_000)),
+            Reference::new("col").is_in([
+                Datum::long(3_000_000_000_i64),
+                Datum::long(4_000_000_000_i64),
+            ]),
+        ])
+    }
+
+    #[test]
+    fn eval_keeps_pages_with_bounds_incomparable_to_predicate() -> Result<()> {
+        // INT32 bounds on a `timestamp` field (e.g. a file whose column was
+        // written as `date`) can't be compared with the predicate literal.
+        let (metadata, _temp_file) = create_parquet_file_from_values(&[100, 200, 300, 400], |v| {
+            Arc::new(Int32Array::from(v))
+        })?;
+
+        assert_keeps_all_pages(&metadata, PrimitiveType::Timestamp, 4096, [
+            Reference::new("col").less_than(Datum::timestamp_micros(250)),
+            Reference::new("col").less_than_or_equal_to(Datum::timestamp_micros(250)),
+            Reference::new("col").greater_than(Datum::timestamp_micros(250)),
+            Reference::new("col").greater_than_or_equal_to(Datum::timestamp_micros(250)),
+            Reference::new("col").equal_to(Datum::timestamp_micros(250)),
+            Reference::new("col")
+                .is_in([Datum::timestamp_micros(200), Datum::timestamp_micros(400)]),
+        ])
+    }
+
+    /// Asserts that each of `filters`, bound to a single `field_type` field
+    /// over the column in `metadata`, selects all `row_count` rows. Pages
+    /// whose bounds can't be compared with the predicate might match.
+    fn assert_keeps_all_pages(
+        metadata: &ParquetMetaData,
+        field_type: PrimitiveType,
+        row_count: usize,
+        filters: impl IntoIterator<Item = Predicate>,
+    ) -> Result<()> {
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(metadata);
+        let (iceberg_schema, field_id_map) = build_single_field_schema_and_field_map(field_type)?;
+
+        for filter in filters {
+            let filter = filter.bind(iceberg_schema.clone(), false)?;
+
+            let result = PageIndexEvaluator::eval(
+                &filter,
+                &column_index,
+                &offset_index,
+                row_group_metadata,
+                &field_id_map,
+                iceberg_schema.as_ref(),
+            )?;
+
+            assert_eq!(result, vec![RowSelector::select(row_count)], "{filter}");
+        }
+
+        Ok(())
+    }
+
+    /// Builds a schema holding a single optional field `col` (id 1) of
+    /// `field_type`, mapped to parquet column 0.
+    fn build_single_field_schema_and_field_map(
+        field_type: PrimitiveType,
+    ) -> Result<(Arc<Schema>, HashMap<i32, usize>)> {
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_fields([Arc::new(NestedField::new(
+                    1,
+                    "col",
+                    Type::Primitive(field_type),
+                    false,
+                ))])
+                .build()?,
+        );
+
+        Ok((iceberg_schema, HashMap::from_iter([(1, 0)])))
     }
 
     /// Builds a decimal query [`Datum`] from an `unscaled` mantissa, matching
