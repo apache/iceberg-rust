@@ -1617,7 +1617,7 @@ mod tests {
     use tempfile::TempDir;
     use uuid::Uuid;
 
-    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder};
+    use super::{FormatVersion, MetadataLog, SnapshotLog, TableMetadataBuilder, TableMetadataEnum};
     use crate::catalog::MetadataLocation;
     use crate::compression::CompressionCodec;
     use crate::io::FileIO;
@@ -4321,8 +4321,13 @@ mod tests {
             serde_json::from_value::<TableMetadata>(json.clone()).unwrap();
 
             json["schemas"][0]["fields"][0]["id"] = serde_json::json!(2147483448);
-            let err = serde_json::from_value::<TableMetadata>(json).unwrap_err();
-            assert!(err.to_string().contains("2147483447"), "{err}");
+            let parsed = serde_json::from_value::<TableMetadataEnum>(json).unwrap();
+            let err = TableMetadata::try_from(parsed).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert_eq!(
+                err.message(),
+                "Schema 0 uses field id 2147483448, but table field ids must not exceed 2147483447; higher ids are reserved for metadata columns"
+            );
         }
     }
 

@@ -3848,7 +3848,10 @@ mod tests {
                     .add_schema(schema)
                     .unwrap_err();
                 assert_eq!(err.kind(), ErrorKind::DataInvalid);
-                assert!(err.message().contains("2147483447"), "{err}");
+                assert_eq!(
+                    err.message(),
+                    "Schema 0 uses field id 2147483448, but table field ids must not exceed 2147483447; higher ids are reserved for metadata columns"
+                );
             }
         }
     }
