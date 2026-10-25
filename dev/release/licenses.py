@@ -20,11 +20,17 @@ CLI for assisting maintenance of the project's license checks.
 """
 
 import argparse
+import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# Every distributed artifact must ship its own copy of these files.
+REQUIRED_CRATE_FILES = ("LICENSE", "NOTICE")
 
 
 class Failure(Exception):
@@ -37,6 +43,122 @@ def step(message: str) -> None:
 
 def ok(message: str) -> None:
     print(f"OK: {message}", flush=True)
+
+
+def report_error(message: str) -> None:
+    # GitHub Actions turns `::error::` lines into annotations on the job summary.
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        print(f"::error::{message}", flush=True)
+    else:
+        print(f"ERROR: {message}", file=sys.stderr, flush=True)
+
+
+def require_cargo() -> None:
+    """Assert cargo is installed."""
+    if shutil.which("cargo") is None:
+        raise Failure("This script requires 'cargo', but it is not installed.")
+
+
+def is_non_empty_file(path: Path) -> bool:
+    """Whether the path resolves, following symlinks, to a non-empty regular file."""
+    return path.is_file() and path.stat().st_size > 0
+
+
+def publishable_crates() -> list[tuple[str, Path]]:
+    """Name and directory of every crate that would be published in a release."""
+    result = subprocess.run(
+        ["cargo", "metadata", "--no-deps", "--format-version", "1"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr)
+        raise Failure("Could not list the publishable crates.")
+
+    # `publish` is an empty list for `publish = false` crates and null when the
+    # crate may be published to any registry.
+    return [
+        (package["name"], Path(package["manifest_path"]).parent)
+        for package in json.loads(result.stdout)["packages"]
+        if package["publish"] != []
+    ]
+
+
+def check_crate_files(crate: str, crate_dir: Path) -> bool:
+    """Check the packaged crate ships LICENSE and NOTICE resolving to the root files."""
+    print(f"Checking {crate}...", flush=True)
+    # --no-verify: nothing is built, only the packaged files are listed.
+    # --allow-dirty: allows `make check` during development.
+    result = subprocess.run(
+        [
+            "cargo",
+            "package",
+            "--package",
+            crate,
+            "--list",
+            "--locked",
+            "--no-verify",
+            "--allow-dirty",
+        ],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        report_error(f"{crate} could not be listed by cargo; see the error above")
+        return False
+
+    packaged_paths = set(result.stdout.splitlines())
+    passed = True
+    for file_name in REQUIRED_CRATE_FILES:
+        repo_path = crate_dir / file_name
+        if file_name not in packaged_paths:
+            report_error(f"{crate} crate is missing {file_name} in packaged file list")
+            passed = False
+        elif not is_non_empty_file(repo_path):
+            report_error(f"{crate} {file_name} does not resolve to a non-empty file: {repo_path}")
+            passed = False
+        elif not repo_path.samefile(REPO_ROOT / file_name):
+            report_error(
+                f"{crate} {file_name} does not resolve to the repository root {file_name}: {repo_path}"
+            )
+            passed = False
+    return passed
+
+
+def command_check_crates(_args: argparse.Namespace) -> None:
+    # Checking the packaged file list, rather than the crate directory, also
+    # catches files that exist on disk but are excluded from the published crate.
+    # Each crate's copy must be the repository root file itself, so the license
+    # text cannot drift from one crate to the next.
+    step("Check crate LICENSE and NOTICE files")
+    require_cargo()
+
+    passed = True
+    for file_name in REQUIRED_CRATE_FILES:
+        if not is_non_empty_file(REPO_ROOT / file_name):
+            report_error(
+                f"Repository root {file_name} does not resolve to a non-empty file: {REPO_ROOT / file_name}"
+            )
+            passed = False
+
+    crates = publishable_crates()
+    if not crates:
+        raise Failure("No publishable crates found in the workspace, expected at least one.")
+
+    for crate, crate_dir in crates:
+        passed = check_crate_files(crate, crate_dir) and passed
+
+    if not passed:
+        raise Failure(
+            "Every publishable crate must package a top-level LICENSE and NOTICE "
+            "resolving to the repository root copies."
+        )
+
+    ok("Check crate LICENSE and NOTICE files")
 
 
 def require_cargo_deny() -> None:
@@ -86,6 +208,18 @@ def main() -> int:
         help="assert every dependency's license is one deny.toml allows",
     )
     check.set_defaults(func=command_check_dependencies)
+
+    crates = cmd_groups.add_parser(
+        "crates",
+        help="LICENSE and NOTICE files shipped by every publishable crate",
+    )
+    crates_commands = crates.add_subparsers(dest="command", required=True)
+
+    check = crates_commands.add_parser(
+        "check",
+        help="assert every publishable crate packages the repository root LICENSE and NOTICE",
+    )
+    check.set_defaults(func=command_check_crates)
 
     args = parser.parse_args()
     try:
