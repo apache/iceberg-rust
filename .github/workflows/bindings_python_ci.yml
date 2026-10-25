@@ -73,7 +73,7 @@ jobs:
       max-parallel: 15
       matrix:
         os:
-          - ubuntu-latest
+          - ubuntu-24.04
           - macos-latest
           - windows-latest
     steps:

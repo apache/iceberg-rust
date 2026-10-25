@@ -148,6 +148,10 @@ impl SchemaVisitor for GlueSchemaBuilder {
     }
 
     fn primitive(&mut self, p: &PrimitiveType) -> Result<Self::T> {
+        // Glue column types are informational for Iceberg tables; readers use Iceberg metadata as
+        // the source of truth. Keep the existing Glue-compatible spellings and use the Iceberg
+        // display representation for geospatial types. A non-failing fallback for all other types
+        // is tracked in https://github.com/apache/iceberg-rust/issues/3375.
         let glue_type = match p {
             PrimitiveType::Unknown => {
                 return Err(Error::new(
@@ -173,6 +177,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
                 "string".to_string()
             }
             PrimitiveType::Binary | PrimitiveType::Fixed(_) => "binary".to_string(),
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => p.to_string(),
             PrimitiveType::Decimal { precision, scale } => {
                 format!("decimal({precision},{scale})")
             }
@@ -189,7 +194,9 @@ impl SchemaVisitor for GlueSchemaBuilder {
 #[cfg(test)]
 mod tests {
     use iceberg::TableCreation;
-    use iceberg::spec::{FormatVersion, Schema, TableMetadataBuilder};
+    use iceberg::spec::{
+        FormatVersion, GeometryType, NestedField, PrimitiveType, Schema, TableMetadataBuilder, Type,
+    };
 
     use super::*;
 
@@ -559,5 +566,27 @@ mod tests {
 
         assert_eq!(result, expected);
         Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_geospatial_type() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let metadata = create_metadata_with_format_version(schema, FormatVersion::V3).unwrap();
+
+        let result = GlueSchemaBuilder::from_iceberg(&metadata).unwrap().build();
+
+        assert_eq!(result, vec![
+            create_column("geom", "geometry(OGC:CRS84)", "1", false,).unwrap()
+        ]);
     }
 }
