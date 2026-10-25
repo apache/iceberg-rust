@@ -62,7 +62,7 @@ use crate::types::{
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 /// REST catalog warehouse location
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
-/// Requested maximum number of results per list response (a positive `u32`).
+/// Requested maximum number of results per list response (a positive `i32`).
 /// When unset, no `pageSize` query parameter is sent.
 pub const REST_CATALOG_PROP_PAGE_SIZE: &str = "rest-page-size";
 /// Disable header redaction in error logs and `Debug` output (defaults to
@@ -272,13 +272,20 @@ impl RestCatalogConfig {
         self.props
             .get(REST_CATALOG_PROP_PAGE_SIZE)
             .map(|value| {
-                value.parse::<NonZeroU32>().map_err(|err| {
+                let page_size = value.parse::<NonZeroU32>().map_err(|err| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("{REST_CATALOG_PROP_PAGE_SIZE} must be a positive u32"),
+                        format!("Invalid {REST_CATALOG_PROP_PAGE_SIZE}: {value}"),
                     )
                     .with_source(err)
-                })
+                })?;
+                if page_size.get() > i32::MAX as u32 {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid {REST_CATALOG_PROP_PAGE_SIZE}: {value}"),
+                    ));
+                }
+                Ok(page_size)
             })
             .transpose()
     }
@@ -1721,7 +1728,7 @@ impl RestSessionCatalogBuilder {
     /// [`load`](Self::load) takes precedence over this value, and server overrides
     /// take precedence over both. There is no client-side default.
     ///
-    /// The effective value must be a positive `u32`; an invalid value produces
+    /// The effective value must be a positive `i32`; an invalid value produces
     /// [`ErrorKind::DataInvalid`] when the catalog is first used, after the server
     /// configuration is fetched. List operations continue to return all results,
     /// fetching as many pages as necessary.
@@ -2026,10 +2033,11 @@ mod tests {
             (Some("10"), Some(20), Some("30"), Some("40"), 40),
             (None, None, None, Some("40"), 40),
             (None, Some(1), None, None, 1),
-            (None, Some(u32::MAX), None, None, u32::MAX),
+            (None, Some(i32::MAX as u32), None, None, i32::MAX as u32),
             // Invalid lower-priority values must not reject a valid effective value.
             (Some("invalid"), Some(20), None, None, 20),
             (None, Some(0), Some("invalid"), Some("40"), 40),
+            (None, Some(u32::MAX), None, Some("40"), 40),
         ] {
             let mut server = Server::new_async().await;
             let page_size_props = |value: Option<&str>| -> HashMap<String, String> {
@@ -2248,7 +2256,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_page_size() {
-        for value in ["", "0", "-1", "abc", "1.5", "4294967296"] {
+        for value in [
+            "",
+            "0",
+            "-1",
+            "abc",
+            "1.5",
+            "2147483648",
+            "4294967295",
+            "4294967296",
+        ] {
             for source in ["defaults", "client", "overrides"] {
                 let mut server = Server::new_async().await;
                 let mut config = json!({"defaults": {}, "overrides": {}});
@@ -2275,7 +2292,10 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert_eq!(err.kind(), ErrorKind::DataInvalid);
-                assert!(err.to_string().contains(REST_CATALOG_PROP_PAGE_SIZE));
+                assert_eq!(
+                    err.message(),
+                    format!("Invalid {REST_CATALOG_PROP_PAGE_SIZE}: {value}")
+                );
                 config_mock.assert_async().await;
             }
         }
