@@ -1252,7 +1252,17 @@ impl SessionCatalog for RestSessionCatalog {
                     name: creation.name,
                     location: creation.location,
                     schema: creation.schema,
-                    partition_spec: creation.partition_spec,
+                    // Servers that parse the request with Iceberg Java's
+                    // `PartitionSpecParser` (e.g. Polaris) require `spec-id`, and
+                    // reject the request when it is omitted. A new table's first
+                    // spec always has id 0, which is what the Java client sends.
+                    partition_spec: creation.partition_spec.map(|spec| {
+                        if spec.spec_id().is_some() {
+                            spec
+                        } else {
+                            spec.with_spec_id(0)
+                        }
+                    }),
                     write_order: creation.sort_order,
                     stage_create: Some(false),
                     properties: creation.properties,
@@ -4514,6 +4524,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_table_keeps_explicit_partition_spec_id() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = create_config_mock(&mut server).await;
+
+        let create_table_mock = server
+            .mock("POST", "/v1/namespaces/ns1/tables")
+            .match_body(Matcher::PartialJson(json!({
+                "partition-spec": {"spec-id": 3}
+            })))
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "create_table_response.json"
+            ))
+            .create_async()
+            .await;
+
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        let table_creation = TableCreation::builder()
+            .name("test1".to_string())
+            .schema(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(1, "foo", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+            .partition_spec(UnboundPartitionSpec::builder().with_spec_id(3).build())
+            .build();
+
+        catalog
+            .create_table(
+                &SessionContext::empty(),
+                &NamespaceIdent::from_strs(["ns1"]).unwrap(),
+                table_creation,
+            )
+            .await
+            .unwrap();
+
+        config_mock.assert_async().await;
+        create_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_create_table() {
         let mut server = Server::new_async().await;
 
@@ -4521,6 +4580,9 @@ mod tests {
 
         let create_table_mock = server
             .mock("POST", "/v1/namespaces/ns1/tables")
+            .match_body(Matcher::PartialJson(json!({
+                "partition-spec": {"spec-id": 0}
+            })))
             .with_status(200)
             .with_body_from_file(format!(
                 "{}/testdata/{}",
