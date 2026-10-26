@@ -31,7 +31,11 @@ keywords = ["iceberg", "opendal", "storage"]
 default = ["opendal-memory", "opendal-fs", "opendal-s3", "aws-lc-rs"]
 
 aws-lc-rs = ["opendal/http-transport-reqwest-rustls"]
-ring = ["opendal/http-transport-reqwest-rustls-no-provider", "dep:rustls", "rustls/ring"]
+ring = [
+  "opendal/http-transport-reqwest-rustls-no-provider",
+  "dep:rustls",
+  "rustls/ring",
+]
 
 opendal-all = [
   "opendal-memory",
