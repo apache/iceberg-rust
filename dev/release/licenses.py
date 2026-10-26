@@ -22,7 +22,6 @@ CLI for assisting maintenance of the project's license checks.
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -55,8 +54,31 @@ def report_error(message: str) -> None:
 
 def require_cargo() -> None:
     """Assert cargo is installed."""
-    if shutil.which("cargo") is None:
+    try:
+        subprocess.run(
+            ["cargo", "--version"],
+            capture_output=True,
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
         raise Failure("This script requires 'cargo', but it is not installed.")
+
+
+def require_cargo_deny() -> None:
+    """Assert cargo-deny is installed."""
+    try:
+        subprocess.run(
+            ["cargo", "deny", "--version"],
+            capture_output=True,
+            check=True,
+        )
+    except FileNotFoundError:
+        raise Failure("This script requires 'cargo', but it is not installed.")
+    except subprocess.CalledProcessError:
+        raise Failure(
+            "This script requires 'cargo-deny' for dependency license checks.\n"
+            "Install it with: make install-cargo-deny"
+        )
 
 
 def is_non_empty_file(path: Path) -> bool:
@@ -64,17 +86,24 @@ def is_non_empty_file(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 0
 
 
+def is_same_file(path: Path, other: Path) -> bool:
+    """Whether both paths exist and resolve to the same file; False if either is missing."""
+    try:
+        return path.samefile(other)
+    except OSError:
+        return False
+
+
 def publishable_crates() -> list[tuple[str, Path]]:
     """Name and directory of every crate that would be published in a release."""
     result = subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1"],
         cwd=REPO_ROOT,
-        capture_output=True,
+        stdout=subprocess.PIPE,
         text=True,
         check=False,
     )
     if result.returncode != 0:
-        sys.stderr.write(result.stderr)
         raise Failure("Could not list the publishable crates.")
 
     # `publish` is an empty list for `publish = false` crates and null when the
@@ -89,8 +118,6 @@ def publishable_crates() -> list[tuple[str, Path]]:
 def check_crate_files(crate: str, crate_dir: Path) -> bool:
     """Check the packaged crate ships LICENSE and NOTICE resolving to the root files."""
     print(f"Checking {crate}...", flush=True)
-    # --no-verify: nothing is built, only the packaged files are listed.
-    # --allow-dirty: allows `make check` during development.
     result = subprocess.run(
         [
             "cargo",
@@ -99,7 +126,7 @@ def check_crate_files(crate: str, crate_dir: Path) -> bool:
             crate,
             "--list",
             "--locked",
-            "--no-verify",
+            # allows `make check` during development.
             "--allow-dirty",
         ],
         cwd=REPO_ROOT,
@@ -121,7 +148,7 @@ def check_crate_files(crate: str, crate_dir: Path) -> bool:
         elif not is_non_empty_file(repo_path):
             report_error(f"{crate} {file_name} does not resolve to a non-empty file: {repo_path}")
             passed = False
-        elif not repo_path.samefile(REPO_ROOT / file_name):
+        elif not is_same_file(repo_path, REPO_ROOT / file_name):
             report_error(
                 f"{crate} {file_name} does not resolve to the repository root {file_name}: {repo_path}"
             )
@@ -161,23 +188,6 @@ def command_check_crates(_args: argparse.Namespace) -> None:
     ok("Check crate LICENSE and NOTICE files")
 
 
-def require_cargo_deny() -> None:
-    """Assert cargo-deny is installed."""
-    try:
-        subprocess.run(
-            ["cargo", "deny", "--version"],
-            capture_output=True,
-            check=True,
-        )
-    except FileNotFoundError:
-        raise Failure("This script requires 'cargo', but it is not installed.")
-    except subprocess.CalledProcessError:
-        raise Failure(
-            "This script requires 'cargo-deny' for dependency license checks.\n"
-            "Install it with: make install-cargo-deny"
-        )
-
-
 def command_check_dependencies(_args: argparse.Namespace) -> None:
     step("Check dependency licenses")
     require_cargo_deny()
@@ -211,7 +221,7 @@ def main() -> int:
 
     crates = cmd_groups.add_parser(
         "crates",
-        help="LICENSE and NOTICE files shipped by every publishable crate",
+        help="Sub-commands for working with licensing on crates",
     )
     crates_commands = crates.add_subparsers(dest="command", required=True)
 
