@@ -272,18 +272,17 @@ impl RestCatalogConfig {
         self.props
             .get(REST_CATALOG_PROP_PAGE_SIZE)
             .map(|value| {
-                let page_size = value.parse::<NonZeroU32>().map_err(|err| {
+                let invalid_page_size = || {
                     Error::new(
                         ErrorKind::DataInvalid,
                         format!("Invalid {REST_CATALOG_PROP_PAGE_SIZE}: {value}"),
                     )
-                    .with_source(err)
-                })?;
+                };
+                let page_size = value
+                    .parse::<NonZeroU32>()
+                    .map_err(|err| invalid_page_size().with_source(err))?;
                 if page_size.get() > i32::MAX as u32 {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid {REST_CATALOG_PROP_PAGE_SIZE}: {value}"),
-                    ));
+                    return Err(invalid_page_size());
                 }
                 Ok(page_size)
             })
