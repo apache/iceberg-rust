@@ -17,17 +17,15 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 
-use crate::auth::{AuthSession, NoopSession};
-use crate::catalog::{
-    RestCatalogConfig, disable_header_redaction_from_props, explicit_headers_from_props,
-};
+use crate::RestCatalogConfig;
+use crate::auth::AuthSession;
+use crate::catalog::{disable_header_redaction_from_props, explicit_headers_from_props};
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
 
@@ -43,12 +41,6 @@ pub struct HttpClient {
     extra_headers: HeaderMap,
     /// Whether to disable header redaction in error logs (defaults to false for security).
     disable_header_redaction: bool,
-    /// Authenticates everything this client sends. A client handed to an
-    /// [`AuthManager`] carries no authentication, since that is what the
-    /// manager is about to create.
-    ///
-    /// [`AuthManager`]: crate::auth::AuthManager
-    auth_session: Arc<dyn AuthSession>,
 }
 
 impl Debug for HttpClient {
@@ -66,30 +58,13 @@ impl Debug for HttpClient {
 }
 
 impl HttpClient {
-    /// The same client authenticating with `auth_session` instead: a derived
-    /// auth session reuses the connection pool and headers of the client it
-    /// came from, carrying its own authentication.
-    pub fn with_auth_session(&self, auth_session: Arc<dyn AuthSession>) -> Self {
-        Self {
-            auth_session,
-            ..self.clone()
-        }
-    }
-
-    /// The same client with no authentication, for the requests that must not
-    /// carry it — a session refreshing its own token over the client it
-    /// authenticates would otherwise recurse.
-    pub fn without_auth_session(&self) -> Self {
-        self.with_auth_session(Arc::new(NoopSession))
-    }
-
-    /// Sends a form-encoded POST and returns the response status and body,
+    /// Sends an unauthenticated form-encoded POST and returns the response,
     /// which is what an [`AuthManager`] needs to exchange a credential for a
-    /// token. Only `headers` are sent; the catalog's own extra headers are
-    /// not merged in.
+    /// token.
     ///
-    /// Like every request, it carries this client's session; call
-    /// [`Self::without_auth_session`] first to send it unauthenticated.
+    /// Only `headers` are sent: neither the catalog's extra headers nor
+    /// any session's authentication is applied, so a token request carries
+    /// exactly the credentials its caller puts into `headers` or `form`.
     ///
     /// [`AuthManager`]: crate::auth::AuthManager
     pub async fn post_form(
@@ -110,7 +85,7 @@ impl HttpClient {
             reqwest::header::CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/x-www-form-urlencoded"),
         );
-        self.auth_session.authenticate(&mut request).await?;
+
         let response = self.client.execute(request.into_inner()).await?;
         HttpResponse::read(response).await
     }
@@ -121,7 +96,6 @@ impl HttpClient {
             client: cfg.client(),
             extra_headers: cfg.extra_headers()?,
             disable_header_redaction: cfg.disable_header_redaction(),
-            auth_session: Arc::new(NoopSession),
         })
     }
 
@@ -139,21 +113,16 @@ impl HttpClient {
             client: cfg.client(),
             extra_headers,
             disable_header_redaction: cfg.disable_header_redaction(),
-            auth_session: self.auth_session,
         })
     }
 
     /// Derives a client for table-scoped requests.
     ///
-    /// The connection pool and catalog headers are inherited, headers in the
-    /// effective table properties override them, and `auth_session` replaces
-    /// the catalog session. As in Java, an explicit `header.Authorization`
-    /// takes precedence over the session's authentication.
-    pub(crate) fn for_table(
-        &self,
-        props: &HashMap<String, String>,
-        auth_session: Arc<dyn AuthSession>,
-    ) -> Result<Self> {
+    /// The connection pool and catalog headers are inherited, and headers in
+    /// the effective table properties override them. As in Java, an explicit
+    /// `header.Authorization` takes precedence over the session that
+    /// authenticates a request.
+    pub(crate) fn for_table(&self, props: &HashMap<String, String>) -> Result<Self> {
         let mut extra_headers = self.extra_headers.clone();
         extra_headers.extend(explicit_headers_from_props(props)?);
 
@@ -162,13 +131,7 @@ impl HttpClient {
             extra_headers,
             disable_header_redaction: disable_header_redaction_from_props(props)
                 .unwrap_or(self.disable_header_redaction),
-            auth_session,
         })
-    }
-
-    /// Returns the session authenticating this client's requests.
-    pub(crate) fn auth_session(&self) -> Arc<dyn AuthSession> {
-        Arc::clone(&self.auth_session)
     }
 
     /// Testing only: the bearer token `session` would attach.
@@ -176,13 +139,13 @@ impl HttpClient {
     /// Authenticates a throwaway request (never sent) and reads the header
     /// back, so it works for any [`AuthSession`].
     #[cfg(test)]
-    pub(crate) async fn token(&self) -> Option<String> {
+    pub(crate) async fn token(&self, auth_session: &dyn AuthSession) -> Option<String> {
         let mut request = HttpRequest::build(
             self.client
                 .request(Method::GET, "http://localhost/token-probe"),
         )
         .ok()?;
-        self.auth_session.authenticate(&mut request).await.ok()?;
+        auth_session.authenticate(&mut request).await.ok()?;
         let request = request.into_inner();
         request
             .headers()
@@ -202,10 +165,15 @@ impl HttpClient {
 
     /// Sends `request` to the Iceberg REST catalog, authenticated by this
     /// client's session.
-    pub(crate) async fn query_catalog(&self, mut request: HttpRequest) -> Result<HttpResponse> {
+    pub(crate) async fn query_catalog(
+        &self,
+        auth_session: &dyn AuthSession,
+        mut request: HttpRequest,
+    ) -> Result<HttpResponse> {
         // Authenticate first, then apply extra headers, so a configured
         // `header.authorization` keeps overriding a token (unchanged behavior).
-        self.auth_session.authenticate(&mut request).await?;
+        auth_session.authenticate(&mut request).await?;
+
         let mut request = request.into_inner();
         request.headers_mut().extend(self.extra_headers.clone());
         HttpResponse::read(self.client.execute(request).await?).await
@@ -324,19 +292,6 @@ mod tests {
     use crate::catalog::REST_CATALOG_PROP_DISABLE_HEADER_REDACTION;
 
     #[derive(Debug)]
-    struct StaticSession;
-
-    #[async_trait::async_trait]
-    impl AuthSession for StaticSession {
-        async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
-            request
-                .headers_mut()
-                .insert("authorization", "Bearer tok".parse().unwrap());
-            Ok(())
-        }
-    }
-
-    #[derive(Debug)]
     struct TableSession;
 
     #[async_trait::async_trait]
@@ -447,40 +402,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_post_form_carries_the_session_until_it_is_removed() {
-        // Every request a client sends carries its session; a caller that
-        // needs an unauthenticated one removes the session first.
+    async fn test_post_form_is_never_authenticated() {
+        // A token request carries no authentication, not even a
+        // user-configured `header.authorization` meant for the catalog.
         let mut server = mockito::Server::new_async().await;
-        let signed = server
-            .mock("POST", "/token")
-            .match_header("authorization", "Bearer tok")
-            .with_status(200)
-            .create_async()
-            .await;
-        let unsigned = server
+        let mock = server
             .mock("POST", "/token")
             .match_header("authorization", mockito::Matcher::Missing)
             .with_status(200)
             .create_async()
             .await;
 
-        let client = HttpClient::new(&RestCatalogConfig::builder().uri(server.url()).build())
-            .unwrap()
-            .with_auth_session(Arc::new(StaticSession));
-        let url = format!("{}/token", server.url());
+        HttpClient::new(
+            &RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(HashMap::from([(
+                    "header.authorization".to_string(),
+                    "Basic xyz".to_string(),
+                )]))
+                .build(),
+        )
+        .unwrap()
+        .post_form(
+            &format!("{}/token", server.url()),
+            &HeaderMap::new(),
+            &HashMap::new(),
+        )
+        .await
+        .unwrap();
 
-        client
-            .post_form(&url, &HeaderMap::new(), &HashMap::new())
-            .await
-            .unwrap();
-        signed.assert_async().await;
-
-        client
-            .without_auth_session()
-            .post_form(&url, &HeaderMap::new(), &HashMap::new())
-            .await
-            .unwrap();
-        unsigned.assert_async().await;
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -514,11 +465,9 @@ mod tests {
         };
 
         // The table session authenticates, and catalog headers are inherited.
-        let session_client = catalog_client
-            .for_table(&HashMap::new(), Arc::new(TableSession))
-            .unwrap();
+        let session_client = catalog_client.for_table(&HashMap::new()).unwrap();
         session_client
-            .query_catalog(get(&session_client, "/session"))
+            .query_catalog(&TableSession, get(&session_client, "/session"))
             .await
             .unwrap();
         table_session.assert_async().await;
@@ -526,16 +475,13 @@ mod tests {
         // An explicit Authorization header in the effective properties wins
         // over the session, as in Java.
         let header_client = catalog_client
-            .for_table(
-                &HashMap::from([(
-                    "header.Authorization".to_string(),
-                    "Bearer explicit-header".to_string(),
-                )]),
-                Arc::new(TableSession),
-            )
+            .for_table(&HashMap::from([(
+                "header.Authorization".to_string(),
+                "Bearer explicit-header".to_string(),
+            )]))
             .unwrap();
         header_client
-            .query_catalog(get(&header_client, "/header"))
+            .query_catalog(&TableSession, get(&header_client, "/header"))
             .await
             .unwrap();
         explicit_header.assert_async().await;
@@ -551,18 +497,13 @@ mod tests {
         .unwrap();
         assert!(!catalog_client.disable_header_redaction());
 
-        let inherited = catalog_client
-            .for_table(&HashMap::new(), Arc::new(TableSession))
-            .unwrap();
+        let inherited = catalog_client.for_table(&HashMap::new()).unwrap();
         assert!(!inherited.disable_header_redaction());
         let disabled = catalog_client
-            .for_table(
-                &HashMap::from([(
-                    REST_CATALOG_PROP_DISABLE_HEADER_REDACTION.to_string(),
-                    "true".to_string(),
-                )]),
-                Arc::new(TableSession),
-            )
+            .for_table(&HashMap::from([(
+                REST_CATALOG_PROP_DISABLE_HEADER_REDACTION.to_string(),
+                "true".to_string(),
+            )]))
             .unwrap();
         assert!(disabled.disable_header_redaction());
     }

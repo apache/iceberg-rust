@@ -66,13 +66,16 @@ use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OnceCell};
 
-use crate::auth::{AUTH_TYPE_NONE, AuthManager, load_auth_manager, static_token_session};
+use crate::auth::{
+    AUTH_TYPE_NONE, AuthManager, AuthSession, load_auth_manager, static_token_session,
+};
 use crate::catalog::{
     REST_CATALOG_PROP_AUTH_TYPE, REST_CATALOG_PROP_REFERENCED_BY, REST_CATALOG_PROP_SCAN_PLAN_ID,
     RestCatalogConfig,
 };
 use crate::client::{HttpClient, unexpected_catalog_error_without_body};
 use crate::request::HttpRequest;
+use crate::response::HttpResponse;
 use crate::types::LoadCredentialsResponse;
 
 type CredentialParser =
@@ -499,7 +502,7 @@ impl RestVendedCredentialProviderFactory {
     }
 
     /// Connect to the catalog from the FileIO properties, as the catalog would.
-    async fn connect(&self, props: &HashMap<String, String>) -> Result<HttpClient> {
+    async fn connect(&self, props: &HashMap<String, String>) -> Result<TableClient> {
         let mut config_props = props.clone();
         config_props.insert(
             REST_CATALOG_PROP_AUTH_TYPE.to_string(),
@@ -510,13 +513,14 @@ impl RestVendedCredentialProviderFactory {
             .props(config_props)
             .build();
         let auth_manager = load_auth_manager(&config)?;
-        let client = HttpClient::new(&config)?;
-        let session = auth_manager
-            .catalog_session(&client.without_auth_session(), &config.auth_props())
+        let http_client = HttpClient::new(&config)?;
+        let catalog_session = auth_manager
+            .catalog_session(&http_client, &config.auth_props())
             .await?;
         table_client(
-            &client.with_auth_session(session),
+            &http_client,
             auth_manager.as_ref(),
+            catalog_session,
             &self.table,
             props,
             &self.table_auth,
@@ -552,32 +556,55 @@ impl StorageCredentialProviderFactory for RestVendedCredentialProviderFactory {
     }
 }
 
+/// A table-scoped catalog client and the session that authenticates it.
+pub(crate) struct TableClient {
+    http_client: HttpClient,
+    session: Arc<dyn AuthSession>,
+}
+
+impl TableClient {
+    /// Sends `request`, authenticated by the table session.
+    async fn query_catalog(&self, request: HttpRequest) -> Result<HttpResponse> {
+        self.http_client
+            .query_catalog(self.session.as_ref(), request)
+            .await
+    }
+}
+
+impl std::fmt::Debug for TableClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Sessions may hold secrets.
+        f.debug_struct("TableClient")
+            .field("http_client", &self.http_client)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Derive the table-scoped client used for credential requests.
 ///
-/// A `bearer_table_token` authenticates instead of a session from the auth
-/// manager.
+/// The auth manager derives the table session from `parent`, unless a
+/// `bearer_table_token` authenticates instead.
 async fn table_client(
-    catalog_client: &HttpClient,
+    http_client: &HttpClient,
     auth_manager: &dyn AuthManager,
+    parent: Arc<dyn AuthSession>,
     table: &TableIdent,
     props: &HashMap<String, String>,
     table_config: &HashMap<String, String>,
     bearer_table_token: Option<&str>,
-) -> Result<HttpClient> {
+) -> Result<TableClient> {
     let session = match bearer_table_token {
         Some(token) => static_token_session(token),
         None => {
             auth_manager
-                .table_session(
-                    &catalog_client.without_auth_session(),
-                    table,
-                    table_config,
-                    catalog_client.auth_session(),
-                )
+                .table_session(http_client, table, table_config, parent)
                 .await?
         }
     };
-    catalog_client.for_table(props, session)
+    Ok(TableClient {
+        http_client: http_client.for_table(props)?,
+        session,
+    })
 }
 
 /// Serves vended credentials for a table, refreshing them from the REST
@@ -589,7 +616,7 @@ async fn table_client(
 pub(crate) struct RestVendedCredentialProvider {
     /// Table-scoped catalog client. Set when the catalog builds the provider,
     /// and connected on first refresh after deserialization.
-    client: OnceCell<HttpClient>,
+    client: OnceCell<TableClient>,
     /// Rebuilds this provider in another process. `None` when the catalog
     /// authentication cannot be rebuilt from properties.
     factory: Option<RestVendedCredentialProviderFactory>,
@@ -627,7 +654,7 @@ impl RestVendedCredentialProvider {
             .find(|configured| configured.cloud.matches_location(location))
     }
 
-    async fn client(&self) -> Result<&HttpClient> {
+    async fn client(&self) -> Result<&TableClient> {
         self.client
             .get_or_try_init(|| async {
                 let factory = self.factory.as_ref().ok_or_else(|| {
@@ -646,13 +673,13 @@ impl RestVendedCredentialProvider {
         let cloud = configured.cloud;
         let client = self.client().await?;
         let url = credentials_url(&configured.endpoint, &self.query_params)?;
-        let request = HttpRequest::build(client.request(Method::GET, url))?;
+        let request = HttpRequest::build(client.http_client.request(Method::GET, url))?;
         let response = client.query_catalog(request).await?;
 
         if !response.status().is_success() {
             return Err(unexpected_catalog_error_without_body(
                 response,
-                client.disable_header_redaction(),
+                client.http_client.disable_header_redaction(),
             ));
         }
 
@@ -981,8 +1008,9 @@ fn failure_backoff(consecutive_failures: u32) -> Duration {
 /// states whether the catalog authentication can be rebuilt from `props` in
 /// another process, which makes the provider serializable.
 pub(crate) async fn build_vended_credential_provider(
-    catalog_client: &HttpClient,
+    http_client: &HttpClient,
     auth_manager: &dyn AuthManager,
+    parent_session: Arc<dyn AuthSession>,
     factory: RestVendedCredentialProviderFactory,
     props: &HashMap<String, String>,
     table_config: &HashMap<String, String>,
@@ -995,8 +1023,9 @@ pub(crate) async fn build_vended_credential_provider(
     // An injected auth manager decides on table sessions itself, given the
     // whole table config.
     let client = table_client(
-        catalog_client,
+        http_client,
         auth_manager,
+        parent_session,
         &factory.table,
         props,
         table_config,
@@ -1295,7 +1324,9 @@ mod tests {
     use mockito::{Matcher, Server};
 
     use super::*;
-    use crate::auth::{AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, NoopAuthManager, OAuth2Manager};
+    use crate::auth::{
+        AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, NoopAuthManager, NoopSession, OAuth2Manager,
+    };
 
     fn epoch_millis(time: SystemTime) -> String {
         time.duration_since(UNIX_EPOCH)
@@ -1346,6 +1377,14 @@ mod tests {
         CachedEntry::seed(s3_vended(prefix, access_key_id, expires_at), false)
     }
 
+    /// A table client for `base_uri` without authentication.
+    fn test_table_client(base_uri: &str) -> TableClient {
+        TableClient {
+            http_client: test_client(base_uri),
+            session: Arc::new(NoopSession),
+        }
+    }
+
     fn test_client(base_uri: &str) -> HttpClient {
         let config = RestCatalogConfig::builder()
             .uri(base_uri.to_string())
@@ -1372,7 +1411,7 @@ mod tests {
         entries: Vec<CachedEntry>,
     ) -> RestVendedCredentialProvider {
         RestVendedCredentialProvider {
-            client: OnceCell::new_with(Some(test_client(base_uri))),
+            client: OnceCell::new_with(Some(test_table_client(base_uri))),
             factory: None,
             props: HashMap::new(),
             query_params: Vec::new(),
@@ -1422,6 +1461,7 @@ mod tests {
         build_vended_credential_provider(
             &client,
             &NoopAuthManager,
+            Arc::new(NoopSession),
             test_factory(base_uri, table_auth_props),
             props,
             table_auth_props.unwrap_or(&HashMap::new()),
@@ -1913,7 +1953,7 @@ mod tests {
             HashMap::from([(host.to_string(), seed)]),
         );
         let provider = RestVendedCredentialProvider {
-            client: OnceCell::new_with(Some(test_client(&server.url()))),
+            client: OnceCell::new_with(Some(test_table_client(&server.url()))),
             factory: None,
             props: HashMap::new(),
             query_params: Vec::new(),
@@ -3020,6 +3060,7 @@ mod tests {
         let provider = build_vended_credential_provider(
             &client,
             &auth_manager,
+            Arc::new(NoopSession),
             test_factory(&server.url(), Some(&table_auth)),
             &props,
             &table_auth,
@@ -3072,6 +3113,7 @@ mod tests {
         let provider = build_vended_credential_provider(
             &client,
             &auth_manager,
+            Arc::new(NoopSession),
             test_factory(&server.url(), Some(&table_auth)),
             &props,
             &table_auth,
@@ -3405,6 +3447,7 @@ mod tests {
         let provider = build_vended_credential_provider(
             &test_client(&server.url()),
             &OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url())),
+            Arc::new(NoopSession),
             test_factory(&server.url(), Some(&table_auth)),
             &props,
             &table_auth,
@@ -3462,6 +3505,7 @@ mod tests {
         let provider = build_vended_credential_provider(
             &test_client(&server.url()),
             &NoopAuthManager,
+            Arc::new(NoopSession),
             factory.clone(),
             &props,
             &HashMap::from([("token".to_string(), "table-token".to_string())]),
@@ -3509,6 +3553,7 @@ mod tests {
         let provider = build_vended_credential_provider(
             &test_client(&server.url()),
             &NoopAuthManager,
+            Arc::new(NoopSession),
             factory.clone(),
             &props,
             &table_config,
@@ -3536,7 +3581,7 @@ mod tests {
                 &self,
                 _client: &HttpClient,
                 _props: &HashMap<String, String>,
-            ) -> Result<Box<dyn crate::auth::AuthSession>> {
+            ) -> Result<Box<dyn AuthSession>> {
                 unreachable!("only table sessions are created")
             }
 
@@ -3544,7 +3589,7 @@ mod tests {
                 &self,
                 _client: &HttpClient,
                 _props: &HashMap<String, String>,
-            ) -> Result<Arc<dyn crate::auth::AuthSession>> {
+            ) -> Result<Arc<dyn AuthSession>> {
                 unreachable!("only table sessions are created")
             }
 
@@ -3553,8 +3598,8 @@ mod tests {
                 _client: &HttpClient,
                 _table: &TableIdent,
                 props: &HashMap<String, String>,
-                parent: Arc<dyn crate::auth::AuthSession>,
-            ) -> Result<Arc<dyn crate::auth::AuthSession>> {
+                parent: Arc<dyn AuthSession>,
+            ) -> Result<Arc<dyn AuthSession>> {
                 let mut keys = props.keys().cloned().collect::<Vec<_>>();
                 keys.sort();
                 *self.0.lock().unwrap() = keys;
@@ -3570,6 +3615,7 @@ mod tests {
         build_vended_credential_provider(
             &test_client("http://cat"),
             &manager,
+            Arc::new(NoopSession),
             test_factory("http://cat", Some(&table_config)),
             &aws_refresh_props("/v1/creds"),
             &table_config,
@@ -3604,6 +3650,7 @@ mod tests {
         let provider = build_vended_credential_provider(
             &test_client(&server.url()),
             &NoopAuthManager,
+            Arc::new(NoopSession),
             RestVendedCredentialProviderFactory::new(
                 server.url(),
                 test_table(),
@@ -3646,6 +3693,7 @@ mod tests {
         let provider = build_vended_credential_provider(
             &test_client("http://cat"),
             &NoopAuthManager,
+            Arc::new(NoopSession),
             test_factory("http://cat", None),
             &aws_refresh_props("/v1/creds"),
             &HashMap::new(),

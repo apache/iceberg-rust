@@ -72,7 +72,7 @@ pub use update_schema::AddColumn;
 use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
-use crate::transaction::action::BoxedTransactionAction;
+use crate::transaction::action::TransactionActionEntry;
 pub use crate::transaction::append::FastAppendAction;
 pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
@@ -81,13 +81,12 @@ pub use crate::transaction::update_properties::UpdatePropertiesAction;
 pub use crate::transaction::update_schema::UpdateSchemaAction;
 pub use crate::transaction::update_statistics::UpdateStatisticsAction;
 pub use crate::transaction::upgrade_format_version::UpgradeFormatVersionAction;
-use crate::{Catalog, TableCommit, TableRequirement, TableUpdate};
+use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdate};
 
 /// Table transaction.
-#[derive(Clone)]
 pub struct Transaction {
     table: Table,
-    actions: Vec<BoxedTransactionAction>,
+    actions: Vec<TransactionActionEntry>,
 }
 
 impl Transaction {
@@ -172,7 +171,18 @@ impl Transaction {
     }
 
     /// Commit transaction.
+    ///
+    /// Returns `ErrorKind::PreconditionFailed` if the table is read-only
+    /// (`Table::readonly()`), even when the transaction has no actions.
     pub async fn commit(self, catalog: &dyn Catalog) -> Result<Table> {
+        if self.table.readonly() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "Cannot modify a read-only table",
+            )
+            .with_context("table", self.table.identifier().to_string()));
+        }
+
         if self.actions.is_empty() {
             // nothing to commit
             return Ok(self.table);
@@ -221,8 +231,8 @@ impl Transaction {
         let mut existing_updates: Vec<TableUpdate> = vec![];
         let mut existing_requirements: Vec<TableRequirement> = vec![];
 
-        for action in &self.actions {
-            let action_commit = Arc::clone(action).commit(&current_table).await?;
+        for entry in self.actions.iter_mut() {
+            let action_commit = entry.commit(&current_table).await?;
             // apply action commit to current_table
             current_table = Self::apply(
                 current_table,
@@ -257,7 +267,7 @@ mod tests {
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
         TableProperties,
     };
-    use crate::table::Table;
+    use crate::table::{StaticTable, Table};
     use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
@@ -320,6 +330,18 @@ mod tests {
             .runtime(test_runtime())
             .build()
             .unwrap()
+    }
+
+    async fn make_v2_minimal_readonly_table() -> Table {
+        let table = make_v2_minimal_table();
+        StaticTable::from_metadata(
+            table.metadata().clone(),
+            table.identifier().clone(),
+            FileIO::new_with_memory(),
+        )
+        .await
+        .unwrap()
+        .into_table()
     }
 
     pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
@@ -618,6 +640,42 @@ mod tests {
             Some("test.value")
         );
         assert!(updated_table.encryption_manager().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_commit_readonly_table_fails() {
+        let table = make_v2_minimal_readonly_table().await;
+        let catalog = MockCatalog::new();
+
+        // make sure even empty transactions fail
+        let err = Transaction::new(&table).commit(&catalog).await.unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+        assert_eq!(err.message(), "Cannot modify a read-only table");
+        assert!(!err.retryable(), "Error should not be retryable");
+    }
+
+    #[tokio::test]
+    async fn test_commit_readonly_table_with_actions_fails() {
+        let table = make_v2_minimal_readonly_table().await;
+        let catalog = MockCatalog::new();
+
+        let err = create_test_transaction(&table)
+            .commit(&catalog)
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
+    }
+
+    #[tokio::test]
+    async fn test_commit_empty_transaction_is_noop() {
+        let table = make_v2_minimal_table();
+        let catalog = MockCatalog::new();
+
+        let result = Transaction::new(&table).commit(&catalog).await.unwrap();
+
+        assert_eq!(result.metadata(), table.metadata());
     }
 }
 

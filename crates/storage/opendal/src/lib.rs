@@ -79,6 +79,14 @@ cfg_if! {
 }
 
 cfg_if! {
+    if #[cfg(feature = "opendal-hdfs-native")] {
+        mod hdfs_native;
+        use hdfs_native::*;
+        pub use hdfs_native::HdfsNativeStorage;
+    }
+}
+
+cfg_if! {
     if #[cfg(feature = "opendal-memory")] {
         mod memory;
         use memory::*;
@@ -187,6 +195,9 @@ pub enum OpenDalStorageFactory {
     /// GCS storage factory.
     #[cfg(feature = "opendal-gcs")]
     Gcs,
+    /// HDFS storage factory.
+    #[cfg(feature = "opendal-hdfs-native")]
+    HdfsNative,
     /// OSS storage factory.
     #[cfg(feature = "opendal-oss")]
     Oss,
@@ -269,6 +280,13 @@ impl StorageFactory for OpenDalStorageFactory {
                 credential_provider,
                 client_config,
             })),
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorageFactory::HdfsNative => Ok(Arc::new(OpenDalStorage::HdfsNative(
+                HdfsNativeStorage::new(
+                    hdfs_native_config_parse(config.props().clone())?,
+                    client_config,
+                ),
+            ))),
             #[cfg(feature = "opendal-oss")]
             OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
                 config: oss_config_parse(config.props().clone())?.into(),
@@ -294,6 +312,7 @@ impl StorageFactory for OpenDalStorageFactory {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -372,6 +391,9 @@ pub enum OpenDalStorage {
         #[serde(default)]
         client_config: OpenDalClientConfig,
     },
+    /// HDFS storage variant; see [`HdfsNativeStorage`].
+    #[cfg(feature = "opendal-hdfs-native")]
+    HdfsNative(HdfsNativeStorage),
     /// OSS storage variant.
     #[non_exhaustive]
     #[cfg(feature = "opendal-oss")]
@@ -587,6 +609,10 @@ impl OpenDalStorage {
                     ));
                 }
             }
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::HdfsNative(storage) => {
+                hdfs_native_create_operator(path, &storage.config, &storage.operators)?
+            }
             #[cfg(feature = "opendal-oss")]
             OpenDalStorage::Oss { config, .. } => {
                 let op = oss_config_build(config, path)?;
@@ -622,6 +648,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => {
                 return Err(Error::new(
@@ -663,6 +690,8 @@ impl OpenDalStorage {
             OpenDalStorage::Azdls { client_config, .. } => client_config,
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { client_config, .. } => client_config,
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::HdfsNative(storage) => &storage.client_config,
             #[cfg(all(
                 not(feature = "opendal-memory"),
                 not(feature = "opendal-s3"),
@@ -671,6 +700,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => unreachable!(),
         }
@@ -687,6 +717,10 @@ impl OpenDalStorage {
             OpenDalStorage::Hf { .. } => Ok(hf_batch_key(path)),
             #[cfg(feature = "opendal-azdls")]
             OpenDalStorage::Azdls { .. } => azdls_batch_key(path),
+            // The URL host alone would merge distinct NameNodes that differ
+            // only by port; key by the effective NameNode instead.
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::HdfsNative(storage) => Ok(hdfs_native_batch_key(&storage.config, path)),
             _ => Ok(url::Url::parse(path)
                 .ok()
                 .and_then(|u| u.host_str().map(|s| s.to_string()))
@@ -814,6 +848,11 @@ impl OpenDalStorage {
                     ))
                 }
             }
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::HdfsNative(storage) => {
+                let (_, relative_path) = hdfs_native_effective_name_node(&storage.config, path)?;
+                Ok(relative_path)
+            }
             #[cfg(feature = "opendal-oss")]
             OpenDalStorage::Oss { .. } => {
                 let url = url::Url::parse(path)?;
@@ -837,8 +876,7 @@ impl OpenDalStorage {
             OpenDalStorage::Azdls { config, .. } => {
                 let azure_path = path.parse::<AzureStoragePath>()?;
                 match_path_with_config(&azure_path, config)?;
-                let relative_path_len = azure_path.path.len();
-                Ok(&path[path.len() - relative_path_len..])
+                Ok(azure_path.relative_path(path))
             }
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { .. } => {
@@ -854,6 +892,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -1229,6 +1268,8 @@ mod tests {
             OpenDalStorageFactory::Azdls,
             #[cfg(feature = "opendal-hf")]
             OpenDalStorageFactory::Hf,
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorageFactory::HdfsNative,
         ];
         for factory in factories {
             // `build` returns `dyn Storage`, so read the config back from its serialized form.
@@ -1871,7 +1912,7 @@ mod tests {
             storage
                 .relativize_path("abfss://myfs@myaccount.dfs.core.windows.net/path/to/file.parquet")
                 .unwrap(),
-            "/path/to/file.parquet"
+            "path/to/file.parquet"
         );
     }
 }

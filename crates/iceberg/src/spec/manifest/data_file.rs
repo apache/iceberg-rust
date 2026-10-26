@@ -29,7 +29,9 @@ use super::{
 };
 use crate::Error;
 use crate::error::{Result, invalid_data};
-use crate::spec::{DEFAULT_PARTITION_SPEC_ID, Struct, StructType, Type};
+use crate::spec::{
+    DEFAULT_PARTITION_SPEC_ID, Literal, NestedFieldRef, PrimitiveType, Struct, StructType, Type,
+};
 
 /// Data file carries data file path, partition tuple, metrics, …
 #[derive(Debug, PartialEq, Clone, Eq, Builder)]
@@ -184,7 +186,71 @@ pub struct DataFile {
     pub(crate) content_size_in_bytes: Option<i64>,
 }
 
+fn promote_partition_value(
+    value: Option<&Literal>,
+    current_field: &NestedFieldRef,
+    written_field: &NestedFieldRef,
+) -> Option<Literal> {
+    match value {
+        Some(Literal::Primitive(primitive)) => {
+            let promoted = match current_field.field_type.as_primitive_type() {
+                // The source column was dropped, so there is no current type to widen to.
+                // Widen a numeric to its promotion ceiling so this value and its deletes
+                // normalize the same way; keep every other type (e.g. a `date`, stored as
+                // an `int`) at its written type so deletes that skip normalization match.
+                Some(PrimitiveType::Unknown) => {
+                    match written_field.field_type.as_primitive_type() {
+                        Some(PrimitiveType::Int | PrimitiveType::Float) => primitive.widen(),
+                        _ => None,
+                    }
+                }
+                Some(target) => primitive.promote_to(target),
+                None => None,
+            };
+            promoted.map(Literal::Primitive).or_else(|| value.cloned())
+        }
+        other => other.cloned(),
+    }
+}
+
 impl DataFile {
+    /// Returns this file's partition tuple normalized to the current schema: a field
+    /// promoted (`int` -> `long`, `float` -> `double`) since the manifest was written is
+    /// widened to its `current` type; a dropped numeric source, which has no `current`
+    /// type, is widened to its promotion ceiling by its `written` type; all other values
+    /// are copied through. Column bounds are widened separately, lazily, where they are
+    /// compared.
+    ///
+    /// `current` and `written` are the file's spec resolved against the current schema and
+    /// against the manifest's schema, so they match the stored tuple in length.
+    ///
+    /// # Errors
+    /// Returns `DataInvalid` if the stored tuple and `current` have different lengths; the
+    /// lengths should always match, since both come from the same spec.
+    pub(crate) fn promoted_partition(
+        &self,
+        current: &StructType,
+        written: &StructType,
+    ) -> Result<Struct> {
+        if self.partition.fields().len() != current.fields().len() {
+            return Err(invalid_data!(
+                "Partition tuple has {} values but the spec partition type has {} fields",
+                self.partition.fields().len(),
+                current.fields().len()
+            ));
+        }
+
+        Ok(self
+            .partition
+            .iter()
+            .zip(current.fields())
+            .zip(written.fields())
+            .map(|((value, current_field), written_field)| {
+                promote_partition_value(value, current_field, written_field)
+            })
+            .collect())
+    }
+
     /// Get the content type of the data file (data, equality deletes, or position deletes)
     pub fn content_type(&self) -> DataContentType {
         self.content
@@ -301,7 +367,7 @@ pub fn write_data_files_to_avro<W: Write>(
         FormatVersion::V2 => data_file_schema_v2(partition_type).unwrap(),
         FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
-    let mut writer = AvroWriter::new(&avro_schema, writer);
+    let mut writer = AvroWriter::new(&avro_schema, writer)?;
 
     // Wrap once and reuse across files so the field-name lookup is not rebuilt
     // for each data file.
@@ -313,7 +379,7 @@ pub fn write_data_files_to_avro<W: Write>(
             FormatVersion::V1,
         )?)?
         .resolve(&avro_schema)?;
-        writer.append(value)?;
+        writer.append_value(value)?;
     }
 
     Ok(writer.flush()?)
@@ -333,7 +399,9 @@ pub fn read_data_files_from_avro<R: Read>(
         FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
 
-    let reader = AvroReader::with_schema(&avro_schema, reader)?;
+    let reader = AvroReader::builder(reader)
+        .reader_schema(&avro_schema)
+        .build()?;
     // Wrap once and reuse across files so the field-name lookup is not rebuilt
     // for each data file.
     let partition_struct_type = Type::Struct(partition_type.clone());
@@ -415,7 +483,12 @@ impl std::fmt::Display for DataFileFormat {
 
 #[cfg(test)]
 mod test {
-    use crate::spec::DataContentType;
+    use crate::ErrorKind;
+    use crate::spec::{
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, NestedField, PrimitiveType,
+        Struct, StructType, Type,
+    };
+
     #[test]
     fn test_data_content_type_default() {
         assert_eq!(DataContentType::default(), DataContentType::Data);
@@ -424,5 +497,162 @@ mod test {
     #[test]
     fn test_data_content_type_default_value() {
         assert_eq!(DataContentType::default() as i32, 0);
+    }
+
+    #[test]
+    fn promoted_partition_widens_int_and_float() {
+        // Partition columns promoted int -> long and float -> double; a file
+        // written before the promotion still carries the narrower types.
+        let current = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Long)).into(),
+            NestedField::required(1001, "c", Type::Primitive(PrimitiveType::Double)).into(),
+        ]);
+        let written = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::required(1001, "c", Type::Primitive(PrimitiveType::Float)).into(),
+        ]);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("x.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([
+                Some(Literal::int(7)),
+                Some(Literal::float(1.5_f32)),
+            ]))
+            .record_count(1)
+            .file_size_in_bytes(1)
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            data_file.promoted_partition(&current, &written).unwrap(),
+            Struct::from_iter([Some(Literal::long(7)), Some(Literal::double(1.5))])
+        );
+    }
+
+    #[test]
+    fn promoted_partition_widens_dropped_numeric_source() {
+        // A dropped partition source resolves to `Unknown`, so there is no current
+        // type; a numeric still widens to its ceiling by its written type, keeping it
+        // aligned with deletes written while the source still existed.
+        let current = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Unknown)).into(),
+        ]);
+        let written = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Int)).into(),
+        ]);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("x.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::int(7))]))
+            .record_count(1)
+            .file_size_in_bytes(1)
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            data_file.promoted_partition(&current, &written).unwrap(),
+            Struct::from_iter([Some(Literal::long(7))])
+        );
+    }
+
+    #[test]
+    fn promoted_partition_preserves_dropped_date_source() {
+        // A `date` is stored as an `int`, so widening a dropped date the way a dropped
+        // int widens would turn it into a `long` and diverge from delete manifests that
+        // skip normalization. A dropped non-numeric source is copied through unchanged.
+        let current = StructType::new(vec![
+            NestedField::required(1000, "d", Type::Primitive(PrimitiveType::Unknown)).into(),
+        ]);
+        let written = StructType::new(vec![
+            NestedField::required(1000, "d", Type::Primitive(PrimitiveType::Date)).into(),
+        ]);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("x.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::date(20_000))]))
+            .record_count(1)
+            .file_size_in_bytes(1)
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            data_file.promoted_partition(&current, &written).unwrap(),
+            data_file.partition
+        );
+    }
+
+    #[test]
+    fn promoted_partition_leaves_matching_types_unchanged() {
+        let partition_type = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Long)).into(),
+        ]);
+
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("x.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::long(7))]))
+            .record_count(1)
+            .file_size_in_bytes(1)
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(
+            data_file
+                .promoted_partition(&partition_type, &partition_type)
+                .unwrap(),
+            data_file.partition
+        );
+    }
+
+    #[test]
+    fn promoted_partition_rejects_tuple_length_mismatch() {
+        let data_file = |values: Vec<Option<Literal>>| {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path("x.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .partition(Struct::from_iter(values))
+                .record_count(1)
+                .file_size_in_bytes(1)
+                .partition_spec_id(0)
+                .build()
+                .unwrap()
+        };
+        let one_field = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Long)).into(),
+        ]);
+        let two_fields = StructType::new(vec![
+            NestedField::required(1000, "b", Type::Primitive(PrimitiveType::Long)).into(),
+            NestedField::required(1001, "c", Type::Primitive(PrimitiveType::Long)).into(),
+        ]);
+
+        let longer = data_file(vec![Some(Literal::int(7)), Some(Literal::int(8))]);
+        assert_eq!(
+            longer
+                .promoted_partition(&one_field, &one_field)
+                .unwrap_err()
+                .kind(),
+            ErrorKind::DataInvalid
+        );
+
+        let shorter = data_file(vec![Some(Literal::int(7))]);
+        assert_eq!(
+            shorter
+                .promoted_partition(&two_fields, &two_fields)
+                .unwrap_err()
+                .kind(),
+            ErrorKind::DataInvalid
+        );
     }
 }

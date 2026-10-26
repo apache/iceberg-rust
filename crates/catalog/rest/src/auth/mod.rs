@@ -19,15 +19,21 @@
 //! `AuthManager`/`AuthSession` API.
 
 mod oauth2;
+#[cfg(feature = "sigv4")]
+mod sigv4;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use iceberg::{Error, ErrorKind, Result, TableIdent};
+#[cfg(feature = "sigv4")]
+pub use aws_credential_types::Credentials;
+use iceberg::{Error, ErrorKind, Result, SessionContext, TableIdent};
 pub use oauth2::OAuth2Manager;
 pub(crate) use oauth2::static_token_session;
+#[cfg(feature = "sigv4")]
+pub use sigv4::{PayloadHashMode, SigV4Signer};
 
 use crate::catalog::{REST_CATALOG_PROP_AUTH_TYPE, RestCatalogConfig};
 use crate::client::HttpClient;
@@ -72,11 +78,13 @@ pub(crate) fn load_auth_manager(config: &RestCatalogConfig) -> Result<Arc<dyn Au
 /// [`RestCatalogBuilder::with_auth_manager`](crate::RestCatalogBuilder::with_auth_manager) or
 /// [`RestSessionCatalogBuilder::with_auth_manager`](crate::RestSessionCatalogBuilder::with_auth_manager).
 /// Catalog initialization calls [`AuthManager::catalog_session`] exactly once;
-/// later sessions may rely on the state established by that call.
+/// the context-specific sessions that [`AuthManager::contextual_session`]
+/// derives from it may rely on the state established by that call.
 ///
-/// Session-construction methods are handed the catalog's [`HttpClient`], which
-/// an implementation may reuse for its own requests (e.g. a token exchange)
-/// so that they share the catalog's connection pool and configuration.
+/// [`Self::init_session`], [`Self::catalog_session`] and [`Self::table_session`]
+/// are handed the catalog's [`HttpClient`], which an implementation may clone
+/// and store for its own requests (e.g. a token exchange) so that they share
+/// the catalog's connection pool and configuration.
 #[async_trait]
 pub trait AuthManager: Debug + Send + Sync {
     /// Session used for the initial `/v1/config` handshake, given the
@@ -102,14 +110,42 @@ pub trait AuthManager: Debug + Send + Sync {
         props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>>;
 
+    /// Returns the authentication session for a specific context.
+    ///
+    /// The catalog calls this method only after [`Self::catalog_session`] has
+    /// succeeded. `catalog_session` is the catalog session returned by this
+    /// manager. If the context does not require different authentication,
+    /// implementations should return `catalog_session` unchanged.
+    ///
+    /// The catalog does not cache the returned session. Implementations should
+    /// cache context-specific sessions internally using [`SessionContext::session_id`]
+    /// and are responsible for eviction. Reusing a session ID with different
+    /// context may therefore return the previously cached session.
+    ///
+    /// The catalog calls this method for every request without serializing
+    /// calls that share a session ID. Caching implementations must guard
+    /// against concurrently creating multiple sessions for the same context.
+    ///
+    /// No [`HttpClient`] is passed. Implementations that need one, e.g. for a
+    /// token exchange, should store the client handed to [`Self::catalog_session`].
+    async fn contextual_session(
+        &self,
+        context: &SessionContext,
+        catalog_session: Arc<dyn AuthSession>,
+    ) -> Result<Arc<dyn AuthSession>> {
+        let _ = context;
+        Ok(catalog_session)
+    }
+
     /// Returns a session for requests associated with `table`.
     ///
     /// Currently only requests for the table's vended storage credentials use
-    /// it; other table operations use the catalog session.
+    /// it; other table operations use the contextual session.
     ///
-    /// `props` are the unmerged properties returned by the table endpoint.
-    /// The default preserves the catalog session; managers should return a
-    /// child session only when the table properties contain an authentication
+    /// `props` are the unmerged properties returned by the table endpoint, and
+    /// `parent` is the contextual session of the operation that loaded the
+    /// table. The default preserves `parent`; managers should return a child
+    /// session only when the table properties contain an authentication
     /// override.
     async fn table_session(
         &self,
