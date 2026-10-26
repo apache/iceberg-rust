@@ -32,4 +32,15 @@ ignore = [
   # 1.0.10, but cargo-audit flags it by version number. Remove once sqlx moves
   # to webpki-roots 1.x directly.
   "RUSTSEC-2026-0381",
+  # `zstd` < 0.14.3 / `zstd-safe` < 8.2.0 memory-safety fixes.
+  #
+  # The fixes are only in zstd 0.14 / zstd-safe 8, but the latest
+  # apache-avro (0.22) and parquet 59.x still require zstd ^0.13. The affected
+  # paths are not reachable here: nothing calls `with_context`
+  # (RUSTSEC-2026-0391), and the `seekable` (RUSTSEC-2026-0398) and `legacy`
+  # (RUSTSEC-2026-0403) features are disabled. Remove once apache-avro and
+  # parquet move to zstd 0.14.
+  "RUSTSEC-2026-0391",
+  "RUSTSEC-2026-0398",
+  "RUSTSEC-2026-0403",
 ]
