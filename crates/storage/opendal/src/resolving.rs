@@ -229,7 +229,14 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
         self.build_with_credential_provider(config, None)
     }
 
-    #[allow(unused_variables)]
+    #[cfg_attr(
+        not(any(
+            feature = "opendal-s3",
+            feature = "opendal-gcs",
+            feature = "opendal-azdls"
+        )),
+        allow(unused_variables)
+    )]
     fn build_with_credential_provider(
         &self,
         config: &StorageConfig,
@@ -436,37 +443,23 @@ impl Storage for OpenDalResolvingStorage {
 mod tests {
     use std::time::Duration;
 
+    use iceberg::io::StorageCredential;
+
     #[allow(unused_imports)]
     use super::*;
     use crate::OPENDAL_IO_TIMEOUT_MS;
 
-    #[cfg(any(
-        feature = "opendal-azdls",
-        not(any(feature = "opendal-s3", feature = "opendal-gcs")),
-        all(
-            feature = "opendal-memory",
-            any(feature = "opendal-s3", feature = "opendal-gcs")
-        )
-    ))]
     #[derive(Debug)]
     struct AllPathsCredentialProvider;
 
-    #[cfg(any(
-        feature = "opendal-azdls",
-        not(any(feature = "opendal-s3", feature = "opendal-gcs")),
-        all(
-            feature = "opendal-memory",
-            any(feature = "opendal-s3", feature = "opendal-gcs")
-        )
-    ))]
     #[async_trait]
     impl StorageCredentialProvider for AllPathsCredentialProvider {
         fn supports_path(&self, _path: &str) -> bool {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<iceberg::io::StorageCredential> {
-            unreachable!("unsupported backends must ignore the provider")
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
+            unreachable!("resolving a storage never loads credentials")
         }
     }
 
@@ -624,6 +617,37 @@ mod tests {
             Arc::ptr_eq(&a, &b),
             "different authorities should share the OpenDalStorage::HdfsNative instance (operator cache is internal)"
         );
+    }
+
+    #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
+    #[test]
+    #[allow(unreachable_patterns)]
+    fn test_resolve_passes_the_credential_provider_to_s3_and_gcs() {
+        let mut storage = empty_resolving_storage();
+        storage.credential_provider = Some(Arc::new(AllPathsCredentialProvider));
+
+        let paths: &[&str] = &[
+            #[cfg(feature = "opendal-s3")]
+            "s3://bucket/key",
+            #[cfg(feature = "opendal-gcs")]
+            "gs://bucket/key",
+        ];
+        for path in paths {
+            let has_provider = match storage.resolve(path).unwrap().as_ref() {
+                #[cfg(feature = "opendal-s3")]
+                OpenDalStorage::S3 {
+                    credential_provider,
+                    ..
+                } => credential_provider.is_some(),
+                #[cfg(feature = "opendal-gcs")]
+                OpenDalStorage::Gcs {
+                    credential_provider,
+                    ..
+                } => credential_provider.is_some(),
+                _ => false,
+            };
+            assert!(has_provider, "{path}");
+        }
     }
 
     #[cfg(feature = "opendal-azdls")]

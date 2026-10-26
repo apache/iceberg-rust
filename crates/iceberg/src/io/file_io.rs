@@ -16,7 +16,7 @@
 // under the License.
 
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Once, OnceLock};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
@@ -101,7 +101,7 @@ mod _serde {
 /// Warns that a `FileIO` crossing a process boundary loses its credential
 /// provider. Engines may serialize a `FileIO` per task, so each cause, tracked
 /// by its own `warned`, is reported once.
-fn warn_once_without_provider(warned: &'static std::sync::Once, reason: impl FnOnce() -> String) {
+fn warn_once_without_provider(warned: &'static Once, reason: impl FnOnce() -> String) {
     warned.call_once(|| {
         tracing::warn!(
             "{}; its credentials will not be refreshed after deserialization",
@@ -166,7 +166,7 @@ impl FileIO {
                 .factory()
                 .and_then(|factory| Ok(serde_json::to_value(factory)?))
                 .inspect_err(|error| {
-                    static WARNED: std::sync::Once = std::sync::Once::new();
+                    static WARNED: Once = Once::new();
                     warn_once_without_provider(&WARNED, || {
                         format!("serializing FileIO without its credential provider: {error}")
                     })
@@ -188,7 +188,7 @@ impl FileIO {
     /// documented by each storage factory implementation.
     ///
     /// A credential provider is rebuilt when the binary links its factory implementation, such as
-    /// the REST catalog's. Otherwise, or when rebuilding fails, the `FileIO` is deserialized without
+    /// a catalog's. Otherwise, or when rebuilding fails, the `FileIO` is deserialized without
     /// it and logs a warning, as [`FileIO::serialize_all`] does.
     pub fn deserialize_all(bytes: &[u8]) -> Result<Self> {
         let _serde::DeserializedFileIO {
@@ -210,7 +210,7 @@ impl FileIO {
                 Ok(provider_factory) => provider_factory
                     .build(&config)
                     .inspect_err(|error| {
-                        static WARNED: std::sync::Once = std::sync::Once::new();
+                        static WARNED: Once = Once::new();
                         warn_once_without_provider(&WARNED, || {
                             format!(
                                 "deserializing FileIO without its credential provider, which \
@@ -220,7 +220,7 @@ impl FileIO {
                     })
                     .ok(),
                 Err(_) => {
-                    static WARNED: std::sync::Once = std::sync::Once::new();
+                    static WARNED: Once = Once::new();
                     warn_once_without_provider(&WARNED, || {
                         format!(
                             "deserializing FileIO without its credential provider, whose \
@@ -237,6 +237,14 @@ impl FileIO {
             credential_provider,
             storage: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Returns whether this `FileIO` has a credential provider to refresh its storage credentials.
+    ///
+    /// A deserialized `FileIO` has none when its provider could not be serialized or rebuilt; see
+    /// [`FileIO::serialize_all`] and [`FileIO::deserialize_all`].
+    pub fn has_credential_provider(&self) -> bool {
+        self.credential_provider.is_some()
     }
 
     /// Returns a copy of this `FileIO` without its credential provider.
@@ -394,7 +402,8 @@ impl FileIOBuilder {
     /// Attach a provider of refreshable, backend-specific credentials.
     ///
     /// Storage factories that cannot use the provider ignore it and use the
-    /// credentials in the configuration.
+    /// credentials in the configuration; the default implementation logs a
+    /// warning when it does.
     pub fn with_credential_provider(
         mut self,
         provider: Arc<dyn StorageCredentialProvider>,
@@ -566,33 +575,38 @@ impl OutputFile {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::fs::{File, create_dir_all};
     use std::io::Write;
     use std::path::Path;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
+    use async_trait::async_trait;
     use bytes::Bytes;
     use futures::AsyncReadExt;
     use futures::io::AllowStdIo;
+    use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
     use crate::Result;
     use crate::io::{
-        GCS_TOKEN, LocalFsStorageFactory, MemoryStorageFactory, StorageConfig, StorageCredential,
-        StorageCredentialProvider, StorageCredentialProviderFactory,
+        GCS_TOKEN, LocalFsStorageFactory, MemoryStorageFactory, Storage, StorageConfig,
+        StorageCredential, StorageCredentialProvider, StorageCredentialProviderFactory,
+        StorageFactory,
     };
 
     #[derive(Debug)]
     struct TestCredentialProvider;
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl StorageCredentialProvider for TestCredentialProvider {
         fn supports_path(&self, _path: &str) -> bool {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
             unreachable!("unsupported factories must ignore the provider")
         }
     }
@@ -603,20 +617,20 @@ mod tests {
         endpoint: Option<String>,
     }
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl StorageCredentialProvider for PortableCredentialProvider {
         fn supports_path(&self, _path: &str) -> bool {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
-            Ok(StorageCredential::new(
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
+            Ok(Arc::new(StorageCredential::new(
                 "gs",
-                std::collections::HashMap::from([(
+                HashMap::from([(
                     GCS_TOKEN.to_string(),
                     self.endpoint.clone().unwrap_or_default(),
                 )]),
-            ))
+            )))
         }
 
         fn factory(&self) -> Result<Arc<dyn StorageCredentialProviderFactory>> {
@@ -624,7 +638,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, Serialize, Deserialize)]
     struct PortableCredentialProviderFactory;
 
     #[typetag::serde]
@@ -782,9 +796,58 @@ mod tests {
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
     }
 
+    /// Memory storage that records whether it was given a credential provider.
+    #[derive(Debug, Default, Serialize, Deserialize)]
+    struct ProviderRecordingFactory {
+        #[serde(skip)]
+        received_provider: Arc<AtomicBool>,
+    }
+
+    #[typetag::serde]
+    impl StorageFactory for ProviderRecordingFactory {
+        fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+            self.build_with_credential_provider(config, None)
+        }
+
+        fn build_with_credential_provider(
+            &self,
+            config: &StorageConfig,
+            credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
+        ) -> Result<Arc<dyn Storage>> {
+            self.received_provider
+                .store(credential_provider.is_some(), Ordering::SeqCst);
+            MemoryStorageFactory.build(config)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_file_io_passes_credential_provider_to_factory() {
+        let received_provider = Arc::new(AtomicBool::new(false));
+        let file_io = FileIOBuilder::new(Arc::new(ProviderRecordingFactory {
+            received_provider: Arc::clone(&received_provider),
+        }))
+        .with_credential_provider(Arc::new(TestCredentialProvider))
+        .build();
+
+        file_io.exists("memory://file").await.unwrap();
+        assert!(received_provider.load(Ordering::SeqCst));
+    }
+
+    /// Memory storage from a factory that implements only `build`, so it uses
+    /// the default `build_with_credential_provider`.
+    #[derive(Debug, Serialize, Deserialize)]
+    struct BuildOnlyFactory;
+
+    #[typetag::serde]
+    impl StorageFactory for BuildOnlyFactory {
+        fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+            MemoryStorageFactory.build(config)
+        }
+    }
+
     #[tokio::test]
     async fn test_file_io_ignores_credentials_for_unsupported_factory() {
-        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+        let file_io = FileIOBuilder::new(Arc::new(BuildOnlyFactory))
             .with_credential_provider(Arc::new(TestCredentialProvider))
             .build();
 
@@ -805,7 +868,7 @@ mod tests {
             .build();
 
         let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
-        assert!(deserialized.credential_provider.is_none());
+        assert!(!deserialized.has_credential_provider());
         assert_eq!(
             deserialized.config().get("s3.access-key-id"),
             Some(&"static-key".to_string())
@@ -823,13 +886,13 @@ mod tests {
     #[derive(Debug)]
     struct UnserializableFactoryProvider;
 
-    #[async_trait::async_trait]
+    #[async_trait]
     impl StorageCredentialProvider for UnserializableFactoryProvider {
         fn supports_path(&self, _path: &str) -> bool {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
             unreachable!("serialization tests never load credentials")
         }
 
@@ -838,10 +901,10 @@ mod tests {
         }
     }
 
-    #[derive(Debug, serde::Deserialize)]
+    #[derive(Debug, Deserialize)]
     struct UnserializableFactory;
 
-    impl serde::Serialize for UnserializableFactory {
+    impl Serialize for UnserializableFactory {
         fn serialize<S: serde::Serializer>(
             &self,
             _serializer: S,
@@ -864,7 +927,7 @@ mod tests {
             .build();
 
         let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
-        assert!(deserialized.credential_provider.is_none());
+        assert!(!deserialized.has_credential_provider());
     }
 
     #[test]
@@ -880,7 +943,7 @@ mod tests {
 
         let deserialized =
             FileIO::deserialize_all(&serde_json::to_vec(&serialized).unwrap()).unwrap();
-        assert!(deserialized.credential_provider.is_none());
+        assert!(!deserialized.has_credential_provider());
         assert_eq!(
             deserialized.config().get("s3.access-key-id"),
             Some(&"static-key".to_string())
@@ -895,6 +958,7 @@ mod tests {
             .build();
 
         let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
+        assert!(deserialized.has_credential_provider());
         let credential = deserialized
             .credential_provider
             .unwrap()

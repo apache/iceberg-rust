@@ -117,7 +117,7 @@ pub(crate) fn gcs_config_build(
 
     let mut builder = cfg.into_builder();
 
-    // A catalog-supplied provider re-fetches the vended OAuth2 token as it nears expiry
+    // The provider re-fetches the vended OAuth2 token as it nears expiry.
     if let Some(provider) = credential_provider {
         builder =
             builder.credential_provider(VendedGcsCredentialProvider(VendedCredentialSource::new(
@@ -184,8 +184,8 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
-            Ok(self.0.clone())
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
+            Ok(Arc::new(self.0.clone()))
         }
     }
 
@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vended_adapter_returns_expiring_oauth2_token() {
+    async fn test_vended_adapter_returns_expiring_oauth2_token() {
         let credential = credential(&[(GCS_TOKEN, "ya29.token"), (GCS_TOKEN_EXPIRES_AT, "1500")]);
 
         let google = adapter(credential)
@@ -224,7 +224,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vended_adapter_rejects_other_credentials() {
+    async fn test_vended_adapter_rejects_other_credentials() {
         assert!(
             adapter(credential(&[(S3_ACCESS_KEY_ID, "AK")]))
                 .provide_credential(&Context::new())
@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn vended_credentials_disable_every_other_source() {
+    fn test_vended_credentials_disable_every_other_source() {
         let mut cfg = gcs_config_parse(HashMap::from([
             (GCS_TOKEN.to_string(), "static-token".to_string()),
             (GCS_CREDENTIALS_JSON.to_string(), "e30=".to_string()),

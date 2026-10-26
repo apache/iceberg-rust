@@ -15,6 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use cfg_if::cfg_if;
+use iceberg::io::StorageCredential;
+
+cfg_if! {
+    if #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs", feature = "opendal-azdls"))] {
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        use iceberg::io::StorageCredentialProvider;
+        use reqsign_core::time::Timestamp;
+        use reqsign_core::{Error as ReqsignError, Result as ReqsignResult};
+    }
+}
+
 #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
 pub(crate) fn is_truthy(value: &str) -> bool {
     ["true", "t", "1", "on"].contains(&value.to_lowercase().as_str())
@@ -36,16 +50,14 @@ pub(crate) fn from_opendal_error(e: opendal::Error) -> iceberg::Error {
     feature = "opendal-azdls"
 ))]
 pub(crate) fn required_credential_property<'a>(
-    config: &'a std::collections::HashMap<String, String>,
+    config: &'a HashMap<String, String>,
     key: &str,
-) -> reqsign_core::Result<&'a str> {
+) -> ReqsignResult<&'a str> {
     config
         .get(key)
         .map(String::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            reqsign_core::Error::unexpected(format!("vended credential is missing {key}"))
-        })
+        .ok_or_else(|| ReqsignError::unexpected(format!("vended credential is missing {key}")))
 }
 
 /// The latest epoch millisecond `reqsign` timestamps can represent,
@@ -67,9 +79,9 @@ const MAX_TIMESTAMP_MILLIS: i64 = 253_402_207_200_000;
     feature = "opendal-azdls"
 ))]
 pub(crate) fn credential_expiry(
-    config: &std::collections::HashMap<String, String>,
+    config: &HashMap<String, String>,
     key: &str,
-) -> reqsign_core::Result<Option<reqsign_core::time::Timestamp>> {
+) -> ReqsignResult<Option<Timestamp>> {
     config
         .get(key)
         .filter(|value| !value.is_empty())
@@ -78,15 +90,10 @@ pub(crate) fn credential_expiry(
                 .parse::<i64>()
                 .ok()
                 .and_then(|millis| {
-                    reqsign_core::time::Timestamp::from_millisecond(
-                        millis.min(MAX_TIMESTAMP_MILLIS),
-                    )
-                    .ok()
+                    Timestamp::from_millisecond(millis.min(MAX_TIMESTAMP_MILLIS)).ok()
                 })
                 .ok_or_else(|| {
-                    reqsign_core::Error::unexpected(format!(
-                        "vended credential has an invalid {key}"
-                    ))
+                    ReqsignError::unexpected(format!("vended credential has an invalid {key}"))
                 })
         })
         .transpose()
@@ -101,22 +108,19 @@ pub(crate) fn credential_expiry(
 ))]
 pub(crate) fn validate_credential_prefix(
     location: &str,
-    credential: &iceberg::io::StorageCredential,
-) -> reqsign_core::Result<()> {
+    credential: &StorageCredential,
+) -> ReqsignResult<()> {
     if credential.covers(location) {
         Ok(())
     } else {
-        Err(reqsign_core::Error::unexpected(uncovered_location_message(
+        Err(ReqsignError::unexpected(uncovered_location_message(
             location, credential,
         )))
     }
 }
 
 /// The error message for a vended credential that does not cover `location`.
-pub(crate) fn uncovered_location_message(
-    location: &str,
-    credential: &iceberg::io::StorageCredential,
-) -> String {
+pub(crate) fn uncovered_location_message(location: &str, credential: &StorageCredential) -> String {
     format!(
         "vended credential prefix {:?} does not cover storage location {location:?}",
         credential.prefix()
@@ -137,7 +141,7 @@ pub(crate) fn storage_root(path: &str) -> iceberg::Result<String> {
     feature = "opendal-azdls"
 ))]
 pub(crate) struct VendedCredentialSource {
-    provider: std::sync::Arc<dyn iceberg::io::StorageCredentialProvider>,
+    provider: Arc<dyn StorageCredentialProvider>,
     /// Location handed to the provider: the path an operator serves, or the
     /// scope shared by a bulk-delete batch.
     location: String,
@@ -149,10 +153,7 @@ pub(crate) struct VendedCredentialSource {
     feature = "opendal-azdls"
 ))]
 impl VendedCredentialSource {
-    pub(crate) fn new(
-        provider: std::sync::Arc<dyn iceberg::io::StorageCredentialProvider>,
-        location: String,
-    ) -> Self {
+    pub(crate) fn new(provider: Arc<dyn StorageCredentialProvider>, location: String) -> Self {
         Self { provider, location }
     }
 
@@ -161,14 +162,16 @@ impl VendedCredentialSource {
     ///
     /// Errors are logged here: reqsign's credential chain replaces them with an
     /// error that only says no credential could be loaded, and reports the
-    /// cause only through the `log` crate.
+    /// cause only through the `log` crate. They are logged at debug level, as
+    /// a failing provider fails every request; providers log their own
+    /// failures.
     pub(crate) async fn load<T>(
         &self,
         backend: &str,
-        extract: impl FnOnce(&std::collections::HashMap<String, String>) -> reqsign_core::Result<T>,
-    ) -> reqsign_core::Result<T> {
+        extract: impl FnOnce(&HashMap<String, String>) -> ReqsignResult<T>,
+    ) -> ReqsignResult<T> {
         self.try_load(backend, extract).await.inspect_err(|error| {
-            tracing::warn!(
+            tracing::debug!(
                 "cannot use vended {backend} credentials for {}: {error}",
                 self.location
             )
@@ -178,14 +181,14 @@ impl VendedCredentialSource {
     async fn try_load<T>(
         &self,
         backend: &str,
-        extract: impl FnOnce(&std::collections::HashMap<String, String>) -> reqsign_core::Result<T>,
-    ) -> reqsign_core::Result<T> {
+        extract: impl FnOnce(&HashMap<String, String>) -> ReqsignResult<T>,
+    ) -> ReqsignResult<T> {
         let credential = self
             .provider
             .load_credential(&self.location)
             .await
             .map_err(|e| {
-                reqsign_core::Error::unexpected(format!(
+                ReqsignError::unexpected(format!(
                     "failed to load vended {backend} credential for {}: {e}",
                     self.location
                 ))
@@ -218,13 +221,10 @@ impl std::fmt::Debug for VendedCredentialSource {
     )
 ))]
 mod tests {
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use iceberg::io::{
-        GCS_TOKEN, GCS_TOKEN_EXPIRES_AT, StorageCredential, StorageCredentialProvider,
-    };
+    use iceberg::io::{GCS_TOKEN, GCS_TOKEN_EXPIRES_AT};
 
     use super::*;
 
@@ -241,16 +241,16 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, path: &str) -> iceberg::Result<StorageCredential> {
+        async fn load_credential(&self, path: &str) -> iceberg::Result<Arc<StorageCredential>> {
             self.requested.lock().unwrap().push(path.to_string());
-            Ok(StorageCredential::new(
+            Ok(Arc::new(StorageCredential::new(
                 self.prefix,
                 HashMap::from([(GCS_TOKEN.to_string(), "token".to_string())]),
-            ))
+            )))
         }
     }
 
-    async fn load(prefix: &'static str, location: &str) -> reqsign_core::Result<()> {
+    async fn load(prefix: &'static str, location: &str) -> ReqsignResult<()> {
         let provider = Arc::new(RecordingProvider {
             prefix,
             requested: Mutex::new(Vec::new()),
@@ -266,7 +266,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vended_source_requires_a_covering_credential() {
+    async fn test_vended_source_requires_a_covering_credential() {
         let location = "gs://bucket/table/data/file.parquet";
         assert!(load("gs", location).await.is_ok());
         assert!(load("gs://bucket/table", location).await.is_ok());
@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn credential_properties_are_parsed() {
+    fn test_credential_properties_are_parsed() {
         let config = HashMap::from([
             (GCS_TOKEN.to_string(), "token".to_string()),
             (GCS_TOKEN_EXPIRES_AT.to_string(), "1500".to_string()),
@@ -293,7 +293,7 @@ mod tests {
         assert!(required_credential_property(&config, "missing").is_err());
         assert_eq!(
             credential_expiry(&config, GCS_TOKEN_EXPIRES_AT).unwrap(),
-            Some(reqsign_core::time::Timestamp::from_millisecond(1500).unwrap())
+            Some(Timestamp::from_millisecond(1500).unwrap())
         );
         assert_eq!(credential_expiry(&config, "missing").unwrap(), None);
         // An expiry beyond year 9999, such as Java's `Long.MAX_VALUE`, is
@@ -301,9 +301,10 @@ mod tests {
         let never = HashMap::from([(GCS_TOKEN_EXPIRES_AT.to_string(), i64::MAX.to_string())]);
         assert_eq!(
             credential_expiry(&never, GCS_TOKEN_EXPIRES_AT).unwrap(),
-            Some(reqsign_core::time::Timestamp::from_millisecond(MAX_TIMESTAMP_MILLIS).unwrap())
+            Some(Timestamp::from_millisecond(MAX_TIMESTAMP_MILLIS).unwrap())
         );
-        assert!(reqsign_core::time::Timestamp::from_millisecond(MAX_TIMESTAMP_MILLIS + 1).is_err());
+        // Pins the constant to the latest timestamp reqsign accepts.
+        assert!(Timestamp::from_millisecond(MAX_TIMESTAMP_MILLIS + 1).is_err());
         // The value is never quoted in the error.
         let invalid = HashMap::from([(GCS_TOKEN_EXPIRES_AT.to_string(), "secret".to_string())]);
         let error = credential_expiry(&invalid, GCS_TOKEN_EXPIRES_AT)
@@ -313,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_root_keeps_scheme_and_authority() {
+    fn test_storage_root_keeps_scheme_and_authority() {
         assert_eq!(
             storage_root("s3a://bucket/table/file.parquet").unwrap(),
             "s3a://bucket/"
@@ -334,7 +335,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> iceberg::Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> iceberg::Result<Arc<StorageCredential>> {
             Err(iceberg::Error::new(
                 iceberg::ErrorKind::Unexpected,
                 "catalog returned 503",
@@ -343,7 +344,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vended_source_errors_carry_the_cause() {
+    async fn test_vended_source_errors_carry_the_cause() {
         let source = VendedCredentialSource::new(
             Arc::new(FailingProvider),
             "gs://bucket/file.parquet".to_string(),

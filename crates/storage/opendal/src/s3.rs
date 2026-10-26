@@ -148,7 +148,7 @@ pub(crate) fn s3_config_build(
     })?;
 
     // Preserve the existing custom-loader precedence: an explicitly configured loader
-    // is the sole source, otherwise install the catalog provider as a replacement chain so
+    // is the sole source, otherwise install the credential provider as a replacement chain so
     // refresh failures cannot fall through to broader ambient AWS credentials.
     let credential_provider = credential_provider
         .as_ref()
@@ -235,7 +235,7 @@ impl std::fmt::Debug for CustomAwsCredentialLoader {
 impl CustomAwsCredentialLoader {
     /// Create a new custom AWS credential loader from any [`ProvideCredential`] implementation.
     pub fn new(provider: impl ProvideCredential<Credential = AwsCredential> + 'static) -> Self {
-        Self(Arc::new(provider))
+        Self(Arc::new(provider) as Arc<dyn ProvideCredentialDyn<Credential = AwsCredential>>)
     }
 }
 
@@ -259,8 +259,8 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
-            Ok(self.0.clone())
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
+            Ok(Arc::new(self.0.clone()))
         }
     }
 
@@ -282,7 +282,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vended_adapter_returns_expiring_aws_credential() {
+    async fn test_vended_adapter_returns_expiring_aws_credential() {
         let credential = credential("s3://bucket/table", &[
             (S3_ACCESS_KEY_ID, "AK"),
             (S3_SECRET_ACCESS_KEY, "SK"),
@@ -305,7 +305,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn vended_adapter_rejects_incomplete_or_uncovering_credentials() {
+    async fn test_vended_adapter_rejects_incomplete_or_uncovering_credentials() {
         for credential in [
             // A credential for another backend.
             credential("s3", &[(GCS_TOKEN, "token")]),

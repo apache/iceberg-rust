@@ -43,9 +43,9 @@ pub const GCS_CREDENTIALS_JSON: &str = "gcs.credentials-json";
 pub const GCS_TOKEN: &str = "gcs.oauth2.token";
 /// Epoch-millisecond timestamp at which the vended GCS OAuth2 token expires.
 pub const GCS_TOKEN_EXPIRES_AT: &str = "gcs.oauth2.token-expires-at";
-/// Endpoint used to fetch and refresh vended GCS OAuth2 credentials.
+/// Table property naming the endpoint a catalog serves to refresh vended GCS OAuth2 credentials.
 pub const GCS_REFRESH_CREDENTIALS_ENDPOINT: &str = "gcs.oauth2.refresh-credentials-endpoint";
-/// Whether vended GCS OAuth2 credentials should be refreshed. Defaults to `true`.
+/// Table property enabling refresh of vended GCS OAuth2 credentials. Defaults to `true`.
 pub const GCS_REFRESH_CREDENTIALS_ENABLED: &str = "gcs.oauth2.refresh-credentials-enabled";
 /// Option to skip signing requests (e.g. for public buckets/folders).
 pub const GCS_ALLOW_ANONYMOUS: &str = "gcs.allow-anonymous";

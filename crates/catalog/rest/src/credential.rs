@@ -87,7 +87,7 @@ type KeyedSeedPathResolver = fn(path: &str) -> Result<KeyedSeedPath>;
 /// A credential vended by the catalog, with the expiry its config declares.
 #[derive(Clone)]
 struct VendedCredential {
-    credential: StorageCredential,
+    credential: Arc<StorageCredential>,
     expires_at: SystemTime,
 }
 
@@ -201,7 +201,7 @@ const MAX_FAILURE_BACKOFF: Duration = Duration::from_secs(30);
 /// A cached vended credential and its refresh schedule.
 #[derive(Clone)]
 struct CachedEntry {
-    credential: StorageCredential,
+    credential: Arc<StorageCredential>,
     expires_at: SystemTime,
     /// When this entry becomes eligible for prefetch.
     refresh_at: SystemTime,
@@ -319,9 +319,16 @@ impl CacheState {
 
     fn record_failure(&mut self, error: &Error) {
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
-        self.retry_not_before =
-            Instant::now().checked_add(failure_backoff(self.consecutive_failures));
+        let backoff = failure_backoff(self.consecutive_failures);
+        self.retry_not_before = Instant::now().checked_add(backoff);
         self.last_failure = Some(error.to_string());
+        // Backends log failed loads only at debug level, as they recur on every
+        // request, so each failed refresh is reported here.
+        tracing::warn!(
+            "failed to refresh vended credentials ({} consecutive failures), \
+             retrying in {backoff:?}: {error}",
+            self.consecutive_failures
+        );
     }
 
     /// Replace cached credentials with the fetched ones, prefix by prefix,
@@ -441,7 +448,7 @@ impl ConfiguredCloud {
         // The scope is normalized, e.g. with a lowercase scheme, so it may not
         // cover the path as written; the path then fetches its credential.
         Ok(credential.covers(path).then_some(CachedEntry {
-            credential,
+            credential: Arc::new(credential),
             expires_at: seed.expires_at,
             refresh_at: seed.refresh_at,
         }))
@@ -733,7 +740,7 @@ impl RestVendedCredentialProvider {
         configured: &ConfiguredCloud,
         path: &str,
         fallback: Option<CachedEntry>,
-    ) -> Result<StorageCredential> {
+    ) -> Result<Arc<StorageCredential>> {
         let fetched = self.fetch(configured).await;
         let mut cache = configured.cache.lock().await;
         let now = SystemTime::now();
@@ -764,8 +771,8 @@ impl RestVendedCredentialProvider {
             })
             .flatten();
         let candidate = selected
-            .map(|index| &cache.entries[index].credential)
-            .or(seed.as_ref().map(|seed| &seed.credential));
+            .map(|index| &*cache.entries[index].credential)
+            .or(seed.as_ref().map(|seed| &*seed.credential));
         if cache.masks(path, candidate) {
             let error = failure.unwrap_or_else(|| masked_credential_error(path));
             cache.record_failure(&error);
@@ -832,7 +839,7 @@ impl std::fmt::Debug for RestVendedCredentialProvider {
 }
 
 enum CacheDecision {
-    Use(StorageCredential),
+    Use(Arc<StorageCredential>),
     Refresh(Option<CachedEntry>),
     /// Refresh is backed off after the failure described, if known.
     Backoff(Option<String>),
@@ -864,7 +871,7 @@ async fn cache_decision(configured: &ConfiguredCloud, path: &str) -> Result<Cach
         .unexpired_match(path, now)
         .map(|index| cache.entries[index].clone())
         .or(keyed_seed)
-        .filter(|entry| !cache.masks(path, Some(&entry.credential)));
+        .filter(|entry| !cache.masks(path, Some(&*entry.credential)));
 
     if let Some(entry) = current.as_ref().filter(|entry| entry.is_fresh(now)) {
         return Ok(CacheDecision::Use(entry.credential.clone()));
@@ -889,7 +896,7 @@ impl StorageCredentialProvider for RestVendedCredentialProvider {
         self.configured_cloud_for_location(path).is_some()
     }
 
-    async fn load_credential(&self, path: &str) -> Result<StorageCredential> {
+    async fn load_credential(&self, path: &str) -> Result<Arc<StorageCredential>> {
         let configured = self.configured_cloud_for_location(path).ok_or_else(|| {
             Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -1126,7 +1133,7 @@ fn parse_s3_credential(
     ])?;
     Ok(VendedCredential {
         expires_at: required_epoch_millis(config, S3_SESSION_TOKEN_EXPIRES_AT_MS)?,
-        credential: StorageCredential::new(prefix, credential_config),
+        credential: Arc::new(StorageCredential::new(prefix, credential_config)),
     })
 }
 
@@ -1138,7 +1145,7 @@ fn parse_gcs_credential(
     let credential_config = copy_required(config, &[GCS_TOKEN, GCS_TOKEN_EXPIRES_AT])?;
     Ok(VendedCredential {
         expires_at: required_epoch_millis(config, GCS_TOKEN_EXPIRES_AT)?,
-        credential: StorageCredential::new(prefix, credential_config),
+        credential: Arc::new(StorageCredential::new(prefix, credential_config)),
     })
 }
 
@@ -1193,7 +1200,7 @@ fn azdls_vended_credential(
         (expiry_key, expires_at_ms),
     ]);
     Ok(VendedCredential {
-        credential: StorageCredential::new(prefix, credential_config),
+        credential: Arc::new(StorageCredential::new(prefix, credential_config)),
         expires_at,
     })
 }
@@ -1337,13 +1344,13 @@ mod tests {
 
     fn s3_vended(prefix: &str, access_key_id: &str, expires_at: SystemTime) -> VendedCredential {
         VendedCredential {
-            credential: StorageCredential::new(
+            credential: Arc::new(StorageCredential::new(
                 prefix,
                 HashMap::from([
                     (S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string()),
                     (S3_SECRET_ACCESS_KEY.to_string(), "secret".to_string()),
                 ]),
-            ),
+            )),
             expires_at,
         }
     }
@@ -1924,10 +1931,10 @@ mod tests {
             .await;
         let host = "acct.dfs.core.windows.net";
         let azdls = |prefix: String, token: &str, expires_at: SystemTime| VendedCredential {
-            credential: StorageCredential::new(
+            credential: Arc::new(StorageCredential::new(
                 prefix,
                 HashMap::from([(format!("{ADLS_SAS_TOKEN_PREFIX}{host}"), token.to_string())]),
-            ),
+            )),
             expires_at,
         };
         let seed = CachedEntry::seed(
@@ -2919,7 +2926,7 @@ mod tests {
             ),
         ]);
         let provider = test_provider(&server.url(), &props).await;
-        let sas_token = |credential: StorageCredential| sas_token(&credential).to_string();
+        let sas_token = |credential: Arc<StorageCredential>| sas_token(&credential).to_string();
 
         let root = format!("abfss://container@{host}/");
         for _ in 0..2 {
@@ -3218,7 +3225,7 @@ mod tests {
             ),
         ]);
         let provider = test_provider(&server.url(), &props).await;
-        let sas_token = |credential: StorageCredential| sas_token(&credential).to_string();
+        let sas_token = |credential: Arc<StorageCredential>| sas_token(&credential).to_string();
 
         // The host-keyed seed serves the account without fetching.
         let seeded = provider
