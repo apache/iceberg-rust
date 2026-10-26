@@ -379,7 +379,12 @@ impl MinMaxColAggregator {
                 ));
             };
 
-            self.update_state_min(field_id, min_datum);
+            // Iceberg does not allow NaN as a bound, and Parquet 60 writes NaN min/max for a column
+            // chunk whose values are all NaN. Record no bound for such a chunk, as iceberg-java
+            // does: NaN is unordered, so a NaN bound would also stay whatever later chunks hold.
+            if !min_datum.is_nan() {
+                self.update_state_min(field_id, min_datum);
+            }
         }
 
         if value.max_is_exact() {
@@ -390,7 +395,9 @@ impl MinMaxColAggregator {
                 ));
             };
 
-            self.update_state_max(field_id, max_datum);
+            if !max_datum.is_nan() {
+                self.update_state_max(field_id, max_datum);
+            }
         }
 
         Ok(())
@@ -2603,6 +2610,42 @@ mod tests {
 
         assert_eq!(lower_bounds, HashMap::from([(0, Datum::int(i32::MIN))]));
         assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
+    }
+
+    #[test]
+    fn test_min_max_aggregator_skips_nan_bounds() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, "f", Type::Primitive(PrimitiveType::Float)).into(),
+                    NestedField::required(1, "d", Type::Primitive(PrimitiveType::Double)).into(),
+                ])
+                .build()
+                .expect("Failed to create schema"),
+        );
+        let mut min_max_agg = MinMaxColAggregator::new(schema);
+        let float_stats =
+            |min, max| Statistics::Float(ValueStatistics::new(min, max, None, None, false));
+        let double_stats =
+            |min, max| Statistics::Double(ValueStatistics::new(min, max, None, None, false));
+
+        // An all-NaN chunk records no bound, and does not hide the bounds of a later chunk.
+        min_max_agg
+            .update(0, &float_stats(Some(f32::NAN), Some(f32::NAN)))
+            .unwrap();
+        min_max_agg
+            .update(0, &float_stats(Some(1.5), Some(2.5)))
+            .unwrap();
+        // A column whose only chunk is all NaN records no bounds at all.
+        min_max_agg
+            .update(1, &double_stats(Some(f64::NAN), Some(f64::NAN)))
+            .unwrap();
+
+        let (lower_bounds, upper_bounds) = min_max_agg.produce();
+
+        assert_eq!(lower_bounds, HashMap::from([(0, Datum::float(1.5_f32))]));
+        assert_eq!(upper_bounds, HashMap::from([(0, Datum::float(2.5_f32))]));
     }
 
     fn cdc_test_schema() -> SchemaRef {
