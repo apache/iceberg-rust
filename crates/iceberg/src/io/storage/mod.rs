@@ -191,7 +191,8 @@ pub trait StorageFactory: Debug + Send + Sync {
 /// [`load_credential`](Self::load_credential) may be called very frequently.
 /// Implementations must cache internally and only re-fetch when the current
 /// credential is at or near expiry; otherwise every object-store request could
-/// trigger a call back to the catalog.
+/// trigger a call back to the catalog. Returning the cached [`Arc`] keeps each
+/// call from copying the credential.
 ///
 /// Backends may treat a credential as stale before it expires, and load
 /// another on every request until they get a fresher one. The OpenDAL S3 and
@@ -224,8 +225,11 @@ pub trait StorageCredentialProvider: Debug + Send + Sync {
     /// A credential without an expiry is used for as long as the backend lives.
     ///
     /// An error, or a credential that does not cover `path`, fails the request:
-    /// backends do not fall back to other credentials.
-    async fn load_credential(&self, path: &str) -> Result<StorageCredential>;
+    /// backends do not fall back to other credentials. Backends log such
+    /// failures only at debug level, since they recur on every request while a
+    /// provider is failing, so implementations should log their own, such as
+    /// once per failed refresh.
+    async fn load_credential(&self, path: &str) -> Result<Arc<StorageCredential>>;
 
     /// Return a factory that rebuilds an equivalent provider in another process.
     ///

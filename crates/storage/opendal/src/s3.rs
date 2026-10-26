@@ -259,8 +259,8 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
-            Ok(self.0.clone())
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
+            Ok(Arc::new(self.0.clone()))
         }
     }
 

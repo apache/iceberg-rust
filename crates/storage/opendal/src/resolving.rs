@@ -428,7 +428,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
             unreachable!("resolving a storage never loads credentials")
         }
     }

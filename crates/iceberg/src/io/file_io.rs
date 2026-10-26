@@ -239,6 +239,14 @@ impl FileIO {
         })
     }
 
+    /// Returns whether this `FileIO` has a credential provider to refresh its storage credentials.
+    ///
+    /// A deserialized `FileIO` has none when its provider could not be serialized or rebuilt; see
+    /// [`FileIO::serialize_all`] and [`FileIO::deserialize_all`].
+    pub fn has_credential_provider(&self) -> bool {
+        self.credential_provider.is_some()
+    }
+
     /// Returns a copy of this `FileIO` without its credential provider.
     ///
     /// The copy uses only the credentials in its storage configuration, which are not refreshed.
@@ -598,7 +606,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
             unreachable!("unsupported factories must ignore the provider")
         }
     }
@@ -615,14 +623,14 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
-            Ok(StorageCredential::new(
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
+            Ok(Arc::new(StorageCredential::new(
                 "gs",
                 HashMap::from([(
                     GCS_TOKEN.to_string(),
                     self.endpoint.clone().unwrap_or_default(),
                 )]),
-            ))
+            )))
         }
 
         fn factory(&self) -> Result<Arc<dyn StorageCredentialProviderFactory>> {
@@ -860,7 +868,7 @@ mod tests {
             .build();
 
         let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
-        assert!(deserialized.credential_provider.is_none());
+        assert!(!deserialized.has_credential_provider());
         assert_eq!(
             deserialized.config().get("s3.access-key-id"),
             Some(&"static-key".to_string())
@@ -884,7 +892,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
             unreachable!("serialization tests never load credentials")
         }
 
@@ -919,7 +927,7 @@ mod tests {
             .build();
 
         let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
-        assert!(deserialized.credential_provider.is_none());
+        assert!(!deserialized.has_credential_provider());
     }
 
     #[test]
@@ -935,7 +943,7 @@ mod tests {
 
         let deserialized =
             FileIO::deserialize_all(&serde_json::to_vec(&serialized).unwrap()).unwrap();
-        assert!(deserialized.credential_provider.is_none());
+        assert!(!deserialized.has_credential_provider());
         assert_eq!(
             deserialized.config().get("s3.access-key-id"),
             Some(&"static-key".to_string())
@@ -950,6 +958,7 @@ mod tests {
             .build();
 
         let deserialized = FileIO::deserialize_all(&file_io.serialize_all().unwrap()).unwrap();
+        assert!(deserialized.has_credential_provider());
         let credential = deserialized
             .credential_provider
             .unwrap()

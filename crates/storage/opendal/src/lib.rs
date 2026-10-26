@@ -1076,13 +1076,13 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, path: &str) -> Result<Arc<StorageCredential>> {
             let prefix = if path.contains("/table-a/") {
                 "s3://bucket/table-a"
             } else {
                 "s3://bucket/table-b"
             };
-            Ok(s3_credential(prefix, "access-key"))
+            Ok(Arc::new(s3_credential(prefix, "access-key")))
         }
     }
 
@@ -1428,7 +1428,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, path: &str) -> Result<Arc<StorageCredential>> {
             if path == "s3://bucket/" {
                 self.scheme_wide_signed.store(true, Ordering::SeqCst);
             }
@@ -1442,13 +1442,16 @@ mod tests {
             match path.strip_prefix("s3://bucket/") {
                 Some(rest) if self.scoped.load(Ordering::SeqCst) && !rest.is_empty() => {
                     let table = rest.split('/').next().unwrap_or_default();
-                    Ok(s3_credential(format!("s3://bucket/{table}"), "SCOPED_AK"))
+                    Ok(Arc::new(s3_credential(
+                        format!("s3://bucket/{table}"),
+                        "SCOPED_AK",
+                    )))
                 }
                 _ if self.scheme_wide_expired.load(Ordering::SeqCst) => Err(Error::new(
                     ErrorKind::Unexpected,
                     "the scheme-wide credential expired",
                 )),
-                _ => Ok(s3_credential("s3", "SCHEME_AK")),
+                _ => Ok(Arc::new(s3_credential("s3", "SCHEME_AK"))),
             }
         }
     }
@@ -1541,7 +1544,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
             let (access_key, lifetime) = match self.loads.fetch_add(1, Ordering::SeqCst) {
                 0 => ("EXPIRING_AK", EXPIRING_LIFETIME),
                 _ => ("FRESH_AK", Duration::from_secs(3600)),
@@ -1551,7 +1554,7 @@ mod tests {
                 S3_SESSION_TOKEN_EXPIRES_AT_MS.to_string(),
                 epoch_millis_after(lifetime),
             );
-            Ok(StorageCredential::new("s3", config))
+            Ok(Arc::new(StorageCredential::new("s3", config)))
         }
     }
 
@@ -1606,7 +1609,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
             Err(Error::new(ErrorKind::Unexpected, "refresh failed"))
         }
     }
@@ -1642,12 +1645,12 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
             let (token, lifetime) = match self.loads.fetch_add(1, Ordering::SeqCst) {
                 0 => ("expiring-token", EXPIRING_LIFETIME),
                 _ => ("fresh-token", Duration::from_secs(3600)),
             };
-            Ok(StorageCredential::new(
+            Ok(Arc::new(StorageCredential::new(
                 "gs",
                 HashMap::from([
                     (GCS_TOKEN.to_string(), token.to_string()),
@@ -1656,7 +1659,7 @@ mod tests {
                         epoch_millis_after(lifetime),
                     ),
                 ]),
-            ))
+            )))
         }
     }
 
@@ -1764,9 +1767,9 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
             self.loads.fetch_add(1, Ordering::SeqCst);
-            Ok(s3_credential("s3://bucket/table", "SCOPED_AK"))
+            Ok(Arc::new(s3_credential("s3://bucket/table", "SCOPED_AK")))
         }
     }
 
@@ -1851,8 +1854,8 @@ mod tests {
                 true
             }
 
-            async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
-                Ok(s3_credential("s3", "access-key"))
+            async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
+                Ok(Arc::new(s3_credential("s3", "access-key")))
             }
         }
 

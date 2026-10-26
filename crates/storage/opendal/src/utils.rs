@@ -138,14 +138,16 @@ impl VendedCredentialSource {
     ///
     /// Errors are logged here: reqsign's credential chain replaces them with an
     /// error that only says no credential could be loaded, and reports the
-    /// cause only through the `log` crate.
+    /// cause only through the `log` crate. They are logged at debug level, as
+    /// a failing provider fails every request; providers log their own
+    /// failures.
     pub(crate) async fn load<T>(
         &self,
         backend: &str,
         extract: impl FnOnce(&HashMap<String, String>) -> ReqsignResult<T>,
     ) -> ReqsignResult<T> {
         self.try_load(backend, extract).await.inspect_err(|error| {
-            tracing::warn!(
+            tracing::debug!(
                 "cannot use vended {backend} credentials for {}: {error}",
                 self.location
             )
@@ -204,12 +206,12 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, path: &str) -> iceberg::Result<StorageCredential> {
+        async fn load_credential(&self, path: &str) -> iceberg::Result<Arc<StorageCredential>> {
             self.requested.lock().unwrap().push(path.to_string());
-            Ok(StorageCredential::new(
+            Ok(Arc::new(StorageCredential::new(
                 self.prefix,
                 HashMap::from([(GCS_TOKEN.to_string(), "token".to_string())]),
-            ))
+            )))
         }
     }
 
@@ -298,7 +300,7 @@ mod tests {
             true
         }
 
-        async fn load_credential(&self, _path: &str) -> iceberg::Result<StorageCredential> {
+        async fn load_credential(&self, _path: &str) -> iceberg::Result<Arc<StorageCredential>> {
             Err(iceberg::Error::new(
                 iceberg::ErrorKind::Unexpected,
                 "catalog returned 503",

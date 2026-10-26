@@ -810,6 +810,7 @@ pub async fn iceberg::io::FileIO::delete_prefix(&self, path: impl core::convert:
 pub async fn iceberg::io::FileIO::delete_stream(&self, paths: impl futures_core::stream::Stream<Item = alloc::string::String> + core::marker::Send + 'static) -> iceberg::Result<()>
 pub fn iceberg::io::FileIO::deserialize_all(bytes: &[u8]) -> iceberg::Result<Self>
 pub async fn iceberg::io::FileIO::exists(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<bool>
+pub fn iceberg::io::FileIO::has_credential_provider(&self) -> bool
 pub fn iceberg::io::FileIO::new_input(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::io::InputFile>
 pub fn iceberg::io::FileIO::new_output(&self, path: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::io::OutputFile>
 pub fn iceberg::io::FileIO::new_with_fs() -> Self
@@ -1191,7 +1192,7 @@ pub fn iceberg::io::MemoryStorage::write<'life0, 'life1, 'async_trait>(&'life0 s
 pub fn iceberg::io::MemoryStorage::writer<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::boxed::Box<dyn iceberg::io::FileWrite>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub trait iceberg::io::StorageCredentialProvider: core::fmt::Debug + core::marker::Send + core::marker::Sync
 pub fn iceberg::io::StorageCredentialProvider::factory(&self) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProviderFactory>>
-pub fn iceberg::io::StorageCredentialProvider::load_credential<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::io::StorageCredential>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg::io::StorageCredentialProvider::load_credential<'life0, 'life1, 'async_trait>(&'life0 self, path: &'life1 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<alloc::sync::Arc<iceberg::io::StorageCredential>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg::io::StorageCredentialProvider::supports_path(&self, path: &str) -> bool
 pub trait iceberg::io::StorageCredentialProviderFactory: core::fmt::Debug + core::marker::Send + core::marker::Sync + typetag::Serialize + typetag::Deserialize
 pub fn iceberg::io::StorageCredentialProviderFactory::build(&self, config: &iceberg::io::StorageConfig) -> iceberg::Result<alloc::sync::Arc<dyn iceberg::io::StorageCredentialProvider>>
