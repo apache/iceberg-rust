@@ -55,49 +55,54 @@
 <a href=#55 id=55 data-nosnippet>55</a>//! }
 <a href=#56 id=56 data-nosnippet>56</a>//! ```
 <a href=#57 id=57 data-nosnippet>57</a>//!
-<a href=#58 id=58 data-nosnippet>58</a>//! # Session catalog API
+<a href=#58 id=58 data-nosnippet>58</a>//! # Pagination
 <a href=#59 id=59 data-nosnippet>59</a>//!
-<a href=#60 id=60 data-nosnippet>60</a>//! ```rust, no_run
-<a href=#61 id=61 data-nosnippet>61</a>//! use std::collections::HashMap;
+<a href=#60 id=60 data-nosnippet>60</a>//! Set a page size for namespace and table listings with
+<a href=#61 id=61 data-nosnippet>61</a>//! [`RestSessionCatalogBuilder::with_page_size`] or [`REST_CATALOG_PROP_PAGE_SIZE`].
 <a href=#62 id=62 data-nosnippet>62</a>//!
-<a href=#63 id=63 data-nosnippet>63</a>//! use iceberg::{SessionCatalog, SessionContext};
-<a href=#64 id=64 data-nosnippet>64</a>//! use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestSessionCatalogBuilder};
-<a href=#65 id=65 data-nosnippet>65</a>//!
-<a href=#66 id=66 data-nosnippet>66</a>//! #[tokio::main]
-<a href=#67 id=67 data-nosnippet>67</a>//! async fn main() {
-<a href=#68 id=68 data-nosnippet>68</a>//!     let catalog = RestSessionCatalogBuilder::default()
-<a href=#69 id=69 data-nosnippet>69</a>//!         .load(
-<a href=#70 id=70 data-nosnippet>70</a>//!             "rest",
-<a href=#71 id=71 data-nosnippet>71</a>//!             HashMap::from([(
-<a href=#72 id=72 data-nosnippet>72</a>//!                 REST_CATALOG_PROP_URI.to_string(),
-<a href=#73 id=73 data-nosnippet>73</a>//!                 "http://localhost:8181".to_string(),
-<a href=#74 id=74 data-nosnippet>74</a>//!             )]),
-<a href=#75 id=75 data-nosnippet>75</a>//!         )
-<a href=#76 id=76 data-nosnippet>76</a>//!         .await
-<a href=#77 id=77 data-nosnippet>77</a>//!         .unwrap();
-<a href=#78 id=78 data-nosnippet>78</a>//!     let context = SessionContext::builder()
-<a href=#79 id=79 data-nosnippet>79</a>//!         .identity("user123".to_string())
-<a href=#80 id=80 data-nosnippet>80</a>//!         .build();
-<a href=#81 id=81 data-nosnippet>81</a>//!
-<a href=#82 id=82 data-nosnippet>82</a>//!     let namespaces = catalog.list_namespaces(&amp;context, None).await.unwrap();
-<a href=#83 id=83 data-nosnippet>83</a>//! }
-<a href=#84 id=84 data-nosnippet>84</a>//! ```
-<a href=#85 id=85 data-nosnippet>85</a>
-<a href=#86 id=86 data-nosnippet>86</a></span><span class="attr">#![deny(missing_docs)]
-<a href=#87 id=87 data-nosnippet>87</a>
-<a href=#88 id=88 data-nosnippet>88</a></span><span class="kw">mod </span>auth;
-<a href=#89 id=89 data-nosnippet>89</a><span class="kw">mod </span>catalog;
-<a href=#90 id=90 data-nosnippet>90</a><span class="kw">mod </span>client;
-<a href=#91 id=91 data-nosnippet>91</a><span class="kw">pub use </span>client::HttpClient;
-<a href=#92 id=92 data-nosnippet>92</a><span class="kw">mod </span>request;
-<a href=#93 id=93 data-nosnippet>93</a><span class="kw">pub use </span>request::{HttpRequest, HttpRequestBody};
-<a href=#94 id=94 data-nosnippet>94</a><span class="kw">mod </span>response;
-<a href=#95 id=95 data-nosnippet>95</a><span class="kw">pub use </span>response::HttpResponse;
-<a href=#96 id=96 data-nosnippet>96</a><span class="kw">mod </span>endpoint;
-<a href=#97 id=97 data-nosnippet>97</a><span class="kw">mod </span>types;
-<a href=#98 id=98 data-nosnippet>98</a>
-<a href=#99 id=99 data-nosnippet>99</a><span class="kw">pub use </span>auth::<span class="kw-2">*</span>;
-<a href=#100 id=100 data-nosnippet>100</a><span class="kw">pub use </span>catalog::<span class="kw-2">*</span>;
-<a href=#101 id=101 data-nosnippet>101</a><span class="kw">pub use </span>endpoint::Endpoint;
-<a href=#102 id=102 data-nosnippet>102</a><span class="kw">pub use </span>types::<span class="kw-2">*</span>;
+<a href=#63 id=63 data-nosnippet>63</a>//! # Session catalog API
+<a href=#64 id=64 data-nosnippet>64</a>//!
+<a href=#65 id=65 data-nosnippet>65</a>//! ```rust, no_run
+<a href=#66 id=66 data-nosnippet>66</a>//! use std::collections::HashMap;
+<a href=#67 id=67 data-nosnippet>67</a>//!
+<a href=#68 id=68 data-nosnippet>68</a>//! use iceberg::{SessionCatalog, SessionContext};
+<a href=#69 id=69 data-nosnippet>69</a>//! use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestSessionCatalogBuilder};
+<a href=#70 id=70 data-nosnippet>70</a>//!
+<a href=#71 id=71 data-nosnippet>71</a>//! #[tokio::main]
+<a href=#72 id=72 data-nosnippet>72</a>//! async fn main() {
+<a href=#73 id=73 data-nosnippet>73</a>//!     let catalog = RestSessionCatalogBuilder::default()
+<a href=#74 id=74 data-nosnippet>74</a>//!         .load(
+<a href=#75 id=75 data-nosnippet>75</a>//!             "rest",
+<a href=#76 id=76 data-nosnippet>76</a>//!             HashMap::from([(
+<a href=#77 id=77 data-nosnippet>77</a>//!                 REST_CATALOG_PROP_URI.to_string(),
+<a href=#78 id=78 data-nosnippet>78</a>//!                 "http://localhost:8181".to_string(),
+<a href=#79 id=79 data-nosnippet>79</a>//!             )]),
+<a href=#80 id=80 data-nosnippet>80</a>//!         )
+<a href=#81 id=81 data-nosnippet>81</a>//!         .await
+<a href=#82 id=82 data-nosnippet>82</a>//!         .unwrap();
+<a href=#83 id=83 data-nosnippet>83</a>//!     let context = SessionContext::builder()
+<a href=#84 id=84 data-nosnippet>84</a>//!         .identity("user123".to_string())
+<a href=#85 id=85 data-nosnippet>85</a>//!         .build();
+<a href=#86 id=86 data-nosnippet>86</a>//!
+<a href=#87 id=87 data-nosnippet>87</a>//!     let namespaces = catalog.list_namespaces(&amp;context, None).await.unwrap();
+<a href=#88 id=88 data-nosnippet>88</a>//! }
+<a href=#89 id=89 data-nosnippet>89</a>//! ```
+<a href=#90 id=90 data-nosnippet>90</a>
+<a href=#91 id=91 data-nosnippet>91</a></span><span class="attr">#![deny(missing_docs)]
+<a href=#92 id=92 data-nosnippet>92</a>
+<a href=#93 id=93 data-nosnippet>93</a></span><span class="kw">mod </span>auth;
+<a href=#94 id=94 data-nosnippet>94</a><span class="kw">mod </span>catalog;
+<a href=#95 id=95 data-nosnippet>95</a><span class="kw">mod </span>client;
+<a href=#96 id=96 data-nosnippet>96</a><span class="kw">pub use </span>client::HttpClient;
+<a href=#97 id=97 data-nosnippet>97</a><span class="kw">mod </span>request;
+<a href=#98 id=98 data-nosnippet>98</a><span class="kw">pub use </span>request::{HttpRequest, HttpRequestBody};
+<a href=#99 id=99 data-nosnippet>99</a><span class="kw">mod </span>response;
+<a href=#100 id=100 data-nosnippet>100</a><span class="kw">pub use </span>response::HttpResponse;
+<a href=#101 id=101 data-nosnippet>101</a><span class="kw">mod </span>endpoint;
+<a href=#102 id=102 data-nosnippet>102</a><span class="kw">mod </span>types;
+<a href=#103 id=103 data-nosnippet>103</a>
+<a href=#104 id=104 data-nosnippet>104</a><span class="kw">pub use </span>auth::<span class="kw-2">*</span>;
+<a href=#105 id=105 data-nosnippet>105</a><span class="kw">pub use </span>catalog::<span class="kw-2">*</span>;
+<a href=#106 id=106 data-nosnippet>106</a><span class="kw">pub use </span>endpoint::Endpoint;
+<a href=#107 id=107 data-nosnippet>107</a><span class="kw">pub use </span>types::<span class="kw-2">*</span>;
 </code></pre></div></section></main></body></html>
