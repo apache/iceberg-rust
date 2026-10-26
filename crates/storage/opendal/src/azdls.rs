@@ -898,6 +898,129 @@ mod tests {
         mock.assert_async().await;
     }
 
+    /// Fails every credential load.
+    #[derive(Debug)]
+    struct FailingCredentialProvider;
+
+    #[async_trait]
+    impl StorageCredentialProvider for FailingCredentialProvider {
+        fn supports_path(&self, _path: &str) -> bool {
+            true
+        }
+
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
+            Err(iceberg::Error::new(
+                iceberg::ErrorKind::Unexpected,
+                "refresh failed",
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn operator_does_not_fall_back_when_the_provider_fails() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("HEAD", mockito::Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let path = "abfss://container@account.dfs.core.windows.net/table/data.parquet";
+        // An account key and a static SAS token sit next to the provider.
+        let config = AzdlsConfig {
+            endpoint: Some(server.url()),
+            account_name: Some("account".to_string()),
+            account_key: Some("a2V5".to_string()),
+            ..Default::default()
+        };
+        let static_tokens = AzdlsSasTokens::from_properties(&HashMap::from([(
+            format!("{ADLS_SAS_TOKEN_PREFIX}account.dfs.core.windows.net"),
+            "sv=2026&sig=static".to_string(),
+        )]));
+        let provider: Option<Arc<dyn StorageCredentialProvider>> =
+            Some(Arc::new(FailingCredentialProvider));
+        let operator = super::azdls_config_build(
+            &config,
+            &path.parse().unwrap(),
+            &static_tokens,
+            &provider,
+            path,
+            None,
+        )
+        .unwrap();
+
+        assert!(operator.stat("table/data.parquet").await.is_err());
+        mock.assert_async().await;
+    }
+
+    /// Vends `sig=expiring`, which is about to expire, and then `sig=fresh`.
+    #[derive(Debug, Default)]
+    struct ExpiringSasProvider {
+        loads: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl StorageCredentialProvider for ExpiringSasProvider {
+        fn supports_path(&self, _path: &str) -> bool {
+            true
+        }
+
+        async fn load_credential(&self, _path: &str) -> Result<Arc<StorageCredential>> {
+            let (signature, lifetime) =
+                match self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+                    // Usable for one request, but inside the 20 seconds before
+                    // expiry in which reqsign reloads a cached SAS token.
+                    0 => ("expiring", std::time::Duration::from_secs(10)),
+                    _ => ("fresh", std::time::Duration::from_secs(3600)),
+                };
+            let expires_at_ms = (std::time::SystemTime::now() + lifetime)
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            let host = "account.dfs.core.windows.net";
+            Ok(Arc::new(StorageCredential::new(
+                "abfss://container@account.dfs.core.windows.net",
+                HashMap::from([
+                    (
+                        format!("{ADLS_SAS_TOKEN_PREFIX}{host}"),
+                        format!("sv=2026&sig={signature}"),
+                    ),
+                    (
+                        format!("{ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX}{host}"),
+                        expires_at_ms.to_string(),
+                    ),
+                ]),
+            )))
+        }
+    }
+
+    #[tokio::test]
+    async fn operator_reloads_an_expiring_sas_token() {
+        let mut server = mockito::Server::new_async().await;
+        let mut stat = |signature: &str| {
+            server
+                .mock("HEAD", mockito::Matcher::Any)
+                .match_query(mockito::Matcher::Regex(format!("sig={signature}")))
+                .expect(1)
+                .with_status(404)
+        };
+        let expiring = stat("expiring").create_async().await;
+        let fresh = stat("fresh").create_async().await;
+        let path = "abfss://container@account.dfs.core.windows.net/table/data.parquet";
+
+        let operator = operator_for(
+            &server,
+            path,
+            &AzdlsSasTokens::default(),
+            Some(Arc::new(ExpiringSasProvider::default())),
+        );
+        for _ in 0..2 {
+            assert!(operator.stat("table/data.parquet").await.is_err());
+        }
+
+        expiring.assert_async().await;
+        fresh.assert_async().await;
+    }
+
     #[tokio::test]
     async fn operator_signs_with_the_static_account_sas_token() {
         let mut server = mockito::Server::new_async().await;

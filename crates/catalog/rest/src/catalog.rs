@@ -983,16 +983,19 @@ impl RestSessionCatalog {
         // attach a provider so the backend re-fetches them before they expire.
         // Credential requests are authenticated for the operation's context.
         // Only catalog authentication resolved from the properties can be
-        // rebuilt after FileIO serialization.
+        // rebuilt after FileIO serialization: the built-in auth managers
+        // derive no contextual session, so a rebuilt provider authenticates
+        // the same way.
         let table_config = table_config.unwrap_or_default();
-        let contextual_session = client
-            .auth_manager
-            .contextual_session(context, Arc::clone(&client.catalog_session))
-            .await?;
         let credential_provider = build_vended_credential_provider(
             &client.http_client,
             client.auth_manager.as_ref(),
-            contextual_session,
+            async || {
+                client
+                    .auth_manager
+                    .contextual_session(context, Arc::clone(&client.catalog_session))
+                    .await
+            },
             RestVendedCredentialProviderFactory::new(
                 &client.config.uri,
                 table.clone(),
@@ -5044,6 +5047,80 @@ mod tests {
                 context.identity().unwrap_or_default()
             ))))
         }
+    }
+
+    /// Counts the contextual sessions it derives.
+    #[derive(Debug, Default)]
+    struct CountingAuthManager {
+        contextual_sessions: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl AuthManager for CountingAuthManager {
+        async fn init_session(
+            &self,
+            _client: &HttpClient,
+            _props: &HashMap<String, String>,
+        ) -> Result<Box<dyn AuthSession>> {
+            Ok(Box::new(NoopSession))
+        }
+
+        async fn catalog_session(
+            &self,
+            _client: &HttpClient,
+            _props: &HashMap<String, String>,
+        ) -> Result<Arc<dyn AuthSession>> {
+            Ok(Arc::new(NoopSession))
+        }
+
+        async fn contextual_session(
+            &self,
+            _context: &SessionContext,
+            catalog_session: Arc<dyn AuthSession>,
+        ) -> Result<Arc<dyn AuthSession>> {
+            self.contextual_sessions
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(catalog_session)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_load_table_without_refresh_endpoint_derives_no_extra_session() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/load_table_response.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .create_async()
+            .await;
+
+        let auth_manager = CountingAuthManager::default();
+        let contextual_sessions = Arc::clone(&auth_manager.contextual_sessions);
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Box::new(auth_manager)),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        catalog
+            .load_table(&TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .await
+            .unwrap();
+
+        // Only the load request is authenticated: without refreshable
+        // credentials, building the table's FileIO makes no auth calls.
+        assert_eq!(
+            contextual_sessions.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        config_mock.assert_async().await;
+        load_table_mock.assert_async().await;
     }
 
     /// Memory storage that keeps the credential provider `FileIO` hands it.

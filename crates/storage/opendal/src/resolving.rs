@@ -18,7 +18,7 @@
 //! Resolving storage that auto-detects the scheme from a path and delegates
 //! to the appropriate [`OpenDalStorage`] variant.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
@@ -294,7 +294,7 @@ impl std::fmt::Debug for OpenDalResolvingStorage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `props` can contain storage secrets
         f.debug_struct("OpenDalResolvingStorage")
-            .field("property_keys", &self.props.keys().collect::<Vec<_>>())
+            .field("property_keys", &self.props.keys().collect::<BTreeSet<_>>())
             .finish_non_exhaustive()
     }
 }

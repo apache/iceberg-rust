@@ -264,16 +264,16 @@ impl std::fmt::Debug for StorageCredential {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 /// Response from the table credentials endpoint
 /// (`GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials`).
 ///
 /// Returns freshly vended storage credentials so clients can refresh temporary
 /// credentials before they expire.
-pub struct LoadCredentialsResponse {
+pub(crate) struct LoadCredentialsResponse {
     /// Storage credentials, one entry per location prefix.
-    pub storage_credentials: Vec<StorageCredential>,
+    pub(crate) storage_credentials: Vec<StorageCredential>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

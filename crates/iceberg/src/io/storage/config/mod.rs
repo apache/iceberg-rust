@@ -37,7 +37,7 @@ mod hf;
 mod oss;
 mod s3;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 pub use azdls::*;
 pub use gcs::*;
@@ -63,7 +63,7 @@ impl std::fmt::Debug for StorageConfig {
         // Property values may hold vended credentials (e.g. `s3.secret-access-key`,
         // `s3.session-token`)
         f.debug_struct("StorageConfig")
-            .field("keys", &self.props.keys().collect::<Vec<_>>())
+            .field("keys", &self.props.keys().collect::<BTreeSet<_>>())
             .finish_non_exhaustive()
     }
 }
