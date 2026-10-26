@@ -152,7 +152,7 @@ impl RestCatalogBuilder {
     ///
     /// See [`RestSessionCatalogBuilder::with_page_size`] for configuration
     /// precedence and validation. All pages are still returned by list operations.
-    pub fn with_page_size(mut self, page_size: u32) -> Self {
+    pub fn with_page_size(mut self, page_size: NonZeroU32) -> Self {
         self.inner = self.inner.with_page_size(page_size);
         self
     }
@@ -1731,7 +1731,7 @@ impl RestSessionCatalogBuilder {
     /// [`ErrorKind::DataInvalid`] when the catalog is first used, after the server
     /// configuration is fetched. List operations continue to return all results,
     /// fetching as many pages as necessary.
-    pub fn with_page_size(mut self, page_size: u32) -> Self {
+    pub fn with_page_size(mut self, page_size: NonZeroU32) -> Self {
         self.config.props.insert(
             REST_CATALOG_PROP_PAGE_SIZE.to_string(),
             page_size.to_string(),
@@ -2035,7 +2035,7 @@ mod tests {
             (None, Some(i32::MAX as u32), None, None, i32::MAX as u32),
             // Invalid lower-priority values must not reject a valid effective value.
             (Some("invalid"), Some(20), None, None, 20),
-            (None, Some(0), Some("invalid"), Some("40"), 40),
+            (None, Some(20), Some("0"), Some("40"), 40),
             (None, Some(u32::MAX), None, Some("40"), 40),
         ] {
             let mut server = Server::new_async().await;
@@ -2068,7 +2068,7 @@ mod tests {
 
             let mut builder_config = RestCatalogBuilder::default();
             if let Some(page_size) = builder {
-                builder_config = builder_config.with_page_size(page_size);
+                builder_config = builder_config.with_page_size(NonZeroU32::new(page_size).unwrap());
             }
             let mut props = page_size_props(property);
             props.insert(REST_CATALOG_PROP_URI.to_string(), server.url());
@@ -2090,7 +2090,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let config_mock = create_config_mock(&mut server).await;
         let catalog = RestCatalogBuilder::default()
-            .with_page_size(1)
+            .with_page_size(NonZeroU32::MIN)
             .load(
                 "test",
                 HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.url())]),
@@ -2164,7 +2164,7 @@ mod tests {
         let mut server = Server::new_async().await;
         let config_mock = create_config_mock(&mut server).await;
         let catalog = RestCatalogBuilder::default()
-            .with_page_size(1)
+            .with_page_size(NonZeroU32::MIN)
             .load(
                 "test",
                 HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.url())]),

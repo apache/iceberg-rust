@@ -20,6 +20,7 @@
 mod common;
 
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use common::{cleanup_namespace_dyn, table_creation};
@@ -33,7 +34,7 @@ async fn test_rest_lists_all_namespaces_and_tables_with_page_size() -> Result<()
     set_up();
     let catalog = RestCatalogBuilder::default()
         .with_storage_factory(Arc::new(LocalFsStorageFactory))
-        .with_page_size(1)
+        .with_page_size(NonZeroU32::MIN)
         .load(
             "rest",
             HashMap::from([(
