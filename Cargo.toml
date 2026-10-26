@@ -164,4 +164,4 @@ uuid = { version = "1.18", features = ["v7"] }
 volo = "0.10.6"
 volo-thrift = "0.10.8"
 zeroize = "1.7"
-zstd = "0.13.3"
+zstd = { version = "0.13.3", default-features = false }
