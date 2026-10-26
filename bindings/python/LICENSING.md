@@ -38,7 +38,9 @@ The action is used in these workflows:
 
 - [`release_python.yml`](../../.github/workflows/release_python.yml): the release wheels published to PyPI.
 - [`release_python_nightly.yml`](../../.github/workflows/release_python_nightly.yml): the nightly wheels published to TestPyPI.
-- [`bindings_python_ci.yml`](../../.github/workflows/bindings_python_ci.yml): pull requests. It only checks that generation doesn't fail. The generated files are not published.
+- [`bindings_python_ci.yml`](../../.github/workflows/bindings_python_ci.yml): pull requests. It only checks that generation succeeds and leaves no placeholder text. The generated files are not published.
+
+The publish jobs in the two release workflows also check the `LICENSE` and `NOTICE` inside every built wheel before uploading it, as PyPI files can't be replaced.
 
 Note that in the repository, `bindings/python/LICENSE` and `NOTICE` are symlinks to the root files, so builds outside the release workflows ship the plain root files.
 
@@ -60,13 +62,13 @@ Note that in the repository, `bindings/python/LICENSE` and `NOTICE` are symlinks
 
 ## Keeping entries up to date
 
-Pull request CI runs the action, so it fails when generation fails, for example on a license that isn't in `accepted`.
+Pull request CI runs the action, so it fails when generation fails, for example on a license that isn't in `accepted`, or when a crate's license file isn't matched and `cargo-about` leaves placeholder text (`<year>`, `<owner>` or `<copyright holders>`).
 
 Everything else needs a manual check and update before every release: the clarifications and `targets` in `about.toml`, `third-party-licenses.txt` and `third-party-notices.txt`. They don't change with the dependencies.
 
-Run this from `bindings/python` to check. A `WARN` or `warning:` on stderr means a clarification no longer applies, and `<year>` in the output means no license file was matched:
+Run this from `bindings/python` to check. A `WARN` or `warning:` on stderr means a clarification no longer applies:
 
 ```shell
 cargo install cargo-about --version 0.9.2 --locked --features cli
-cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml about.hbs | grep -nE '<year>|<owner>|<copyright holders>'
+cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml about.hbs > /dev/null
 ```

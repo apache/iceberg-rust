@@ -30,6 +30,11 @@ runs:
       working-directory: bindings/python
       run: |
         cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml about.hbs > cargo-about-output.txt
+        # cargo-about exits 0 and leaves the template placeholders when it can't match a license file.
+        if grep -nE '<year>|<owner>|<copyright holders>' cargo-about-output.txt; then
+          echo "::error::cargo-about left placeholder text in the generated licenses"
+          exit 1
+        fi
         # Both are symlinks to the root files, remove them so the redirects don't write through.
         rm LICENSE NOTICE
         cat ../../LICENSE cargo-about-output.txt third-party-licenses.txt > LICENSE

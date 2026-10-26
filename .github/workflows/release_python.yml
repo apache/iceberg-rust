@@ -231,6 +231,21 @@ jobs:
           pattern: wheels-*
           merge-multiple: true
           path: bindings/python/dist
+      - name: Check wheel LICENSE and NOTICE
+        working-directory: bindings/python/dist
+        shell: bash
+        run: |
+          fail() { echo "::error::$whl: $1"; exit 1; }
+          for whl in *.whl; do
+            license=$(unzip -p "$whl" '*.dist-info/licenses/LICENSE')
+            notice=$(unzip -p "$whl" '*.dist-info/licenses/NOTICE')
+            [[ $license =~ ^[[:space:]]*Apache\ License ]] || fail "LICENSE does not start with the Apache License"
+            [[ $license == *"Used by:"* ]] || fail "LICENSE has no third-party licenses"
+            if grep -qE '<year>|<owner>|<copyright holders>' <<< "$license"; then fail "LICENSE has placeholder text"; fi
+            for name in Arrow Avro moka; do
+              [[ $notice == *"$name"* ]] || fail "NOTICE is missing the $name notice"
+            done
+          done
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
