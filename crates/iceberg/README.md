@@ -73,6 +73,11 @@ Pass reader settings separately from file planning:
 let options = iceberg::arrow::ArrowReaderOptions::builder()
     .with_batch_size(Some(1024))
     .with_row_selection_enabled(true)
+    .with_parquet_options(
+        iceberg::arrow::ParquetReadOptions::builder()
+            .with_metadata_size_hint(Some(512 * 1024))
+            .build(),
+    )
     .build();
 let stream = table.scan().build()?.to_arrow(options).await?;
 ```
@@ -85,7 +90,10 @@ Use `to_arrow(Default::default())` for default settings. Scan
 limit data-file reads. An unset data-file limit uses execution-host parallelism.
 
 Locally constructed readers accept the same options through
-`ArrowReaderBuilder::with_options(options)`.
+`ArrowReaderBuilder::with_options(options)`, including Parquet I/O tuning.
+This replaces the complete configuration; subsequent convenience setters override
+individual settings. `with_parquet_options()` replaces only the nested Parquet
+configuration.
 
 ## Storage Backends
 

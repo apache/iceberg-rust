@@ -661,7 +661,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::resolve_field_id;
-    use crate::arrow::{ArrowReaderBuilder, ArrowReaderOptions};
+    use crate::arrow::{ArrowReaderBuilder, ArrowReaderOptions, ParquetReadOptions};
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::FileIO;
     use crate::metadata_columns::{
@@ -1938,6 +1938,12 @@ mod tests {
         let options = ArrowReaderOptions::builder()
             .with_batch_size(Some(17))
             .with_data_file_concurrency_limit(Some(1))
+            .with_parquet_options(
+                ParquetReadOptions::builder()
+                    .with_metadata_size_hint(Some(4096))
+                    .with_range_fetch_concurrency(2)
+                    .build(),
+            )
             .with_row_selection_enabled(true)
             .build();
         let expected: Vec<_> = scan
@@ -1961,6 +1967,7 @@ mod tests {
                 "batch_size": 17, "data_file_concurrency_limit": 1,
                 "row_group_filtering_enabled": true, "row_selection_enabled": true,
                 "bloom_filter_enabled": false,
+                "parquet_options": { "metadata_size_hint": 4096, "range_coalesce_bytes": 1048576, "range_fetch_concurrency": 2 },
             })
         );
         let options: ArrowReaderOptions = serde_json::from_value(serialized).unwrap();
