@@ -17,6 +17,7 @@
 
 //! Tunables for Parquet file I/O used by `ArrowReader`.
 
+use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
 use super::{
@@ -24,9 +25,10 @@ use super::{
 };
 
 /// Options for tuning Parquet file I/O.
-#[derive(Clone, Copy, Debug, TypedBuilder)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[serde(default)]
 #[builder(field_defaults(setter(prefix = "with_")))]
-pub(crate) struct ParquetReadOptions {
+pub struct ParquetReadOptions {
     /// Number of bytes to prefetch for parsing the Parquet metadata.
     ///
     /// This hint can help reduce the number of fetch requests. For more details see the
@@ -47,14 +49,23 @@ pub(crate) struct ParquetReadOptions {
     #[builder(default = DEFAULT_RANGE_FETCH_CONCURRENCY)]
     pub(crate) range_fetch_concurrency: usize,
     /// Whether to preload the column index when reading Parquet metadata.
-    #[builder(default = true)]
+    #[builder(default = true, setter(skip))]
+    #[serde(skip)]
     pub(crate) preload_column_index: bool,
     /// Whether to preload the offset index when reading Parquet metadata.
-    #[builder(default = true)]
+    #[builder(default = true, setter(skip))]
+    #[serde(skip)]
     pub(crate) preload_offset_index: bool,
     /// Whether to preload the page index when reading Parquet metadata.
-    #[builder(default = false)]
+    #[builder(default = false, setter(skip))]
+    #[serde(skip)]
     pub(crate) preload_page_index: bool,
+}
+
+impl Default for ParquetReadOptions {
+    fn default() -> Self {
+        Self::builder().build()
+    }
 }
 
 impl ParquetReadOptions {

@@ -75,12 +75,12 @@ pub fn iceberg::arrow::ArrowReaderBuilder::with_batch_size(self, batch_size: usi
 pub fn iceberg::arrow::ArrowReaderBuilder::with_bloom_filter_enabled(self, bloom_filter_enabled: bool) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_data_file_concurrency_limit(self, val: usize) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_metadata_size_hint(self, metadata_size_hint: usize) -> Self
+pub fn iceberg::arrow::ArrowReaderBuilder::with_options(self, options: iceberg::arrow::ArrowReaderOptions) -> Self
+pub fn iceberg::arrow::ArrowReaderBuilder::with_parquet_options(self, options: iceberg::arrow::ParquetReadOptions) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_range_coalesce_bytes(self, range_coalesce_bytes: u64) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_range_fetch_concurrency(self, range_fetch_concurrency: usize) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_row_group_filtering_enabled(self, row_group_filtering_enabled: bool) -> Self
 pub fn iceberg::arrow::ArrowReaderBuilder::with_row_selection_enabled(self, row_selection_enabled: bool) -> Self
-impl iceberg::arrow::ArrowReaderBuilder
-pub fn iceberg::arrow::ArrowReaderBuilder::with_options(self, options: iceberg::arrow::ArrowReaderOptions) -> Self
 pub struct iceberg::arrow::ArrowReaderOptions
 impl core::clone::Clone for iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::clone(&self) -> iceberg::arrow::ArrowReaderOptions
@@ -92,11 +92,28 @@ impl core::fmt::Debug for iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::arrow::ArrowReaderOptions
 impl iceberg::arrow::ArrowReaderOptions
-pub fn iceberg::arrow::ArrowReaderOptions::builder() -> ArrowReaderOptionsBuilder<((), (), (), (), ())>
+pub fn iceberg::arrow::ArrowReaderOptions::builder() -> ArrowReaderOptionsBuilder<((), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::arrow::ArrowReaderOptions where iceberg::arrow::ArrowReaderOptions: core::default::Default
 pub fn iceberg::arrow::ArrowReaderOptions::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::arrow::ParquetReadOptions
+impl core::clone::Clone for iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::clone(&self) -> iceberg::arrow::ParquetReadOptions
+impl core::cmp::PartialEq for iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::eq(&self, other: &iceberg::arrow::ParquetReadOptions) -> bool
+impl core::default::Default for iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::default() -> Self
+impl core::fmt::Debug for iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg::arrow::ParquetReadOptions
+impl core::marker::StructuralPartialEq for iceberg::arrow::ParquetReadOptions
+impl iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::builder() -> ParquetReadOptionsBuilder<((), (), ())>
+impl serde_core::ser::Serialize for iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::arrow::ParquetReadOptions where iceberg::arrow::ParquetReadOptions: core::default::Default
+pub fn iceberg::arrow::ParquetReadOptions::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::arrow::PartitionValueCalculator
 impl iceberg::arrow::PartitionValueCalculator
 pub fn iceberg::arrow::PartitionValueCalculator::calculate(&self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<arrow_array::array::ArrayRef>
