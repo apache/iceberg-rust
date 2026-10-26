@@ -431,11 +431,17 @@ impl<'a> SnapshotProducer<'a> {
                 .ok_or_else(|| {
                     invalid_data!("Unknown partition spec id {}", data_file.partition_spec_id)
                 })?;
-            summary_collector.remove_file(
-                data_file,
-                table_metadata.current_schema().clone(),
-                partition_spec.clone(),
-            );
+            // A dropped source column keeps its type, such as a decimal's scale, only in an
+            // older schema.
+            let schema = table_metadata
+                .schemas_iter()
+                .filter(|schema| {
+                    let mut source_ids = partition_spec.fields().iter().map(|f| f.source_id);
+                    source_ids.all(|id| schema.field_by_id(id).is_some())
+                })
+                .max_by_key(|schema| schema.schema_id())
+                .unwrap_or(table_metadata.current_schema());
+            summary_collector.remove_file(data_file, schema.clone(), partition_spec.clone());
         }
 
         let previous_snapshot = table_metadata.current_snapshot();
@@ -656,6 +662,72 @@ mod tests {
         assert_eq!(properties.get("deleted-data-files").unwrap(), "1");
         assert_eq!(properties.get("deleted-records").unwrap(), "2");
         assert_eq!(properties.get("removed-files-size").unwrap(), "100");
+    }
+
+    #[test]
+    fn test_summary_keeps_decimal_scale_of_dropped_partition_source() {
+        let table = make_v2_minimal_table();
+        let without_d = table.metadata().current_schema().as_ref().clone();
+        let d = NestedField::required(
+            4,
+            "d",
+            Type::Primitive(PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            }),
+        );
+        let with_d = Schema::builder()
+            .with_fields(without_d.as_struct().fields().iter().cloned())
+            .with_fields([d.into()])
+            .build()
+            .unwrap();
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .set_properties(HashMap::from([(
+                TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT.to_string(),
+                "10".to_string(),
+            )]))
+            .unwrap()
+            .add_current_schema(with_d.clone())
+            .unwrap()
+            .add_partition_spec(
+                PartitionSpec::builder(with_d)
+                    .add_partition_field("d", "d", Transform::Identity)
+                    .unwrap()
+                    .build()
+                    .unwrap()
+                    .into_unbound(),
+            )
+            .unwrap()
+            .add_current_schema(without_d)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let table = table.with_metadata(Arc::new(metadata));
+        let deleted = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/deleted.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(2)
+            .partition_spec_id(1)
+            .partition(Struct::from_iter([Some(Literal::decimal(123))]))
+            .build()
+            .unwrap();
+
+        let producer = SnapshotProducer::new(&table, Uuid::now_v7(), HashMap::new(), vec![], vec![
+            deleted,
+        ]);
+        let summary = producer.summary(&DeleteOperation).unwrap();
+
+        assert!(
+            summary
+                .additional_properties
+                .contains_key("partitions.d=1.23")
+        );
     }
 
     #[cfg(debug_assertions)]
