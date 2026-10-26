@@ -676,9 +676,10 @@ mod tests {
                 scale: 2,
             }),
         );
+        let x = NestedField::required(1, "x", Type::Primitive(PrimitiveType::Int));
         let with_d = Schema::builder()
-            .with_fields(without_d.as_struct().fields().iter().cloned())
-            .with_fields([d.into()])
+            .with_fields(without_d.as_struct().fields()[1..].iter().cloned())
+            .with_fields([d.into(), x.into()])
             .build()
             .unwrap();
         let metadata = table
@@ -695,6 +696,8 @@ mod tests {
             .add_partition_spec(
                 PartitionSpec::builder(with_d)
                     .add_partition_field("d", "d", Transform::Identity)
+                    .unwrap()
+                    .add_partition_field("x", "x", Transform::Identity)
                     .unwrap()
                     .build()
                     .unwrap()
@@ -714,7 +717,10 @@ mod tests {
             .file_size_in_bytes(100)
             .record_count(2)
             .partition_spec_id(1)
-            .partition(Struct::from_iter([Some(Literal::decimal(123))]))
+            .partition(Struct::from_iter([
+                Some(Literal::decimal(123)),
+                Some(Literal::long(5)),
+            ]))
             .build()
             .unwrap();
 
@@ -726,7 +732,7 @@ mod tests {
         assert!(
             summary
                 .additional_properties
-                .contains_key("partitions.d=1.23")
+                .contains_key("partitions.d=1.23/x=5")
         );
     }
 
