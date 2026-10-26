@@ -38,8 +38,9 @@ ignore = [
   # apache-avro (0.22) and parquet 59.x still require zstd ^0.13. The affected
   # paths are not reachable here: nothing calls `with_context`
   # (RUSTSEC-2026-0391), and the `seekable` (RUSTSEC-2026-0398) and `legacy`
-  # (RUSTSEC-2026-0403) features are disabled. Remove once apache-avro and
-  # parquet move to zstd 0.14.
+  # (RUSTSEC-2026-0403) features are disabled. Remove once we depend on
+  # parquet >= 60 and an apache-avro release after 0.22 (zstd 0.14 landed in
+  # https://github.com/apache/avro-rs/pull/676).
   "RUSTSEC-2026-0391",
   "RUSTSEC-2026-0398",
   "RUSTSEC-2026-0403",
