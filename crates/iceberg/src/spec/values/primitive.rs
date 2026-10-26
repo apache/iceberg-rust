@@ -21,6 +21,8 @@ use std::cmp::Ordering;
 
 use ordered_float::{FloatCore, OrderedFloat};
 
+use crate::spec::PrimitiveType;
+
 /// Values present in iceberg type
 ///
 /// `Float` and `Double` compare as Java's `Float.compare` and `Double.compare` do: `-0.0` is
@@ -105,6 +107,30 @@ fn float_cmp<T: FloatCore>(a: &OrderedFloat<T>, b: &OrderedFloat<T>) -> Ordering
 }
 
 impl PrimitiveLiteral {
+    /// Widens this literal to its promotion ceiling (`int` -> `long`, `float` ->
+    /// `double`), returning `None` for any other literal. Used when the target type
+    /// is unknown (the partition source column was dropped) so a value and its
+    /// deletes still normalize to the same type.
+    pub(crate) fn widen(&self) -> Option<PrimitiveLiteral> {
+        match self {
+            PrimitiveLiteral::Int(value) => Some(PrimitiveLiteral::Long(i64::from(*value))),
+            PrimitiveLiteral::Float(value) => {
+                Some(PrimitiveLiteral::Double(OrderedFloat(f64::from(value.0))))
+            }
+            _ => None,
+        }
+    }
+
+    /// Widens this literal to `target` for the value promotions `int` -> `long`
+    /// and `float` -> `double`, returning `None` when `target` does not promote it.
+    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Option<PrimitiveLiteral> {
+        match (self, target) {
+            (PrimitiveLiteral::Int(_), PrimitiveType::Long)
+            | (PrimitiveLiteral::Float(_), PrimitiveType::Double) => self.widen(),
+            _ => None,
+        }
+    }
+
     /// Must follow the declaration order of the variants: `partial_cmp` uses it to order
     /// different variants the way the derived `PartialOrd` did.
     fn variant_index(&self) -> u8 {
