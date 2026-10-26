@@ -32,16 +32,21 @@ ignore = [
   # 1.0.10, but cargo-audit flags it by version number. Remove once sqlx moves
   # to webpki-roots 1.x directly.
   "RUSTSEC-2026-0381",
-  # `zstd` < 0.14.3 / `zstd-safe` < 8.2.0 memory-safety fixes.
+  # `zstd` < 0.14.3 / `zstd-safe` < 8.2.0 memory-safety bugs.
   #
-  # The fixes are only in zstd 0.14 / zstd-safe 8, but the latest
-  # apache-avro (0.22) and parquet 59.x still require zstd ^0.13. The affected
-  # paths are not reachable here: nothing calls `with_context`
-  # (RUSTSEC-2026-0391), and the `seekable` (RUSTSEC-2026-0398) and `legacy`
-  # (RUSTSEC-2026-0403) features are disabled. Remove once we depend on
-  # parquet >= 60 and an apache-avro release after 0.22 (zstd 0.14 landed in
-  # https://github.com/apache/avro-rs/pull/676).
+  # Fixed only in zstd 0.14, but parquet 59 and apache-avro 0.22 require
+  # zstd 0.13. Remove once on parquet >= 60
+  # (https://github.com/apache/iceberg-rust/pull/3257), an apache-avro release
+  # after 0.22, and workspace `zstd` >= 0.14.3.
+  #
+  # None of the affected code is reachable here. To re-check, run
+  # `cargo tree --workspace --all-features --target all -e features -i zstd-safe`
+  # and confirm only `std` is enabled.
+  #
+  # Affects only zstd's `with_context` constructors, which nothing calls.
   "RUSTSEC-2026-0391",
+  # Requires the `seekable` feature, which is off.
   "RUSTSEC-2026-0398",
+  # Requires the `legacy` feature, which is off.
   "RUSTSEC-2026-0403",
 ]
