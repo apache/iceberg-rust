@@ -309,6 +309,9 @@ The changelog should reflect a summary of each commit in the new release.</p>
 <p>Run the following command to verify the licenses meet the project's policy.</p>
 <pre><code class="language-shell">python3 dev/release/licenses.py dependencies check
 </code></pre>
+<h4 id="check-pyiceberg-core-license-and-notice"><a class="header" href="#check-pyiceberg-core-license-and-notice">Check pyiceberg-core LICENSE and NOTICE</a></h4>
+<p>The <code>pyiceberg-core</code> wheels bundle third-party licenses and notices, and some of the entries are maintained by hand.
+Check and update them following <a href="https://github.com/apache/iceberg-rust/blob/main/bindings/python/LICENSING.md#keeping-entries-up-to-date"><code>bindings/python/LICENSING.md</code></a>.</p>
 <h4 id="open-pull-request"><a class="header" href="#open-pull-request">Open pull request</a></h4>
 <p>Open a pull request with all the changes.
 The release branch should be used as the base for the pull request.</p>
