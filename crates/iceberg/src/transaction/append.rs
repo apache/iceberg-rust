@@ -20,12 +20,14 @@ use std::collections::{HashMap, HashSet};
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::error::Result;
-use crate::spec::DataFile;
+use crate::error::{Result, invalid_data};
+use crate::spec::{DataContentType, DataFile};
 use crate::table::Table;
 use crate::transaction::action::CommitStatus;
-use crate::transaction::simple_snapshot_producer::SimpleSnapshotProducer;
+use crate::transaction::snapshot::simple::{AppendIntent, SimpleSnapshotProducer};
+use crate::transaction::snapshot::validate_files_not_live;
 use crate::transaction::{ActionCommit, TransactionAction};
+use crate::{Error, ErrorKind};
 
 /// FastAppendAction is a transaction action for fast append data files to the table.
 #[derive(Clone)]
@@ -34,7 +36,10 @@ pub struct FastAppendAction {
     /// Overrides the commit UUID of the producer created in `new_state`.
     commit_uuid: Option<Uuid>,
     snapshot_properties: HashMap<String, String>,
+    /// Free of duplicate paths; see [`Self::add_data_files`].
     added_data_files: Vec<DataFile>,
+    /// Paths already in `added_data_files`.
+    added_paths: HashSet<String>,
 }
 
 impl FastAppendAction {
@@ -44,6 +49,7 @@ impl FastAppendAction {
             commit_uuid: None,
             snapshot_properties: HashMap::default(),
             added_data_files: vec![],
+            added_paths: HashSet::new(),
         }
     }
 
@@ -54,8 +60,16 @@ impl FastAppendAction {
     }
 
     /// Add data files to the snapshot.
+    ///
+    /// A path added more than once keeps its first occurrence, so a manifest
+    /// never references the same file twice. This is independent of the
+    /// `check_duplicate`-gated check against files already in the table.
     pub fn add_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
-        self.added_data_files.extend(data_files);
+        for data_file in data_files {
+            if self.added_paths.insert(data_file.file_path.clone()) {
+                self.added_data_files.push(data_file);
+            }
+        }
         self
     }
 
@@ -71,16 +85,29 @@ impl FastAppendAction {
         self
     }
 
-    /// Collapse files sharing a path to their first occurrence, so a single
-    /// manifest never references the same file twice. Always runs (unlike the
-    /// `check_duplicate`-gated cross-snapshot check) since it is in-memory only.
-    fn dedupe_added_files(&self) -> Vec<DataFile> {
-        let mut seen = HashSet::with_capacity(self.added_data_files.len());
-        self.added_data_files
+    /// Checks the parts of this action that do not depend on the table.
+    fn validate(&self) -> Result<()> {
+        // TODO: Allowing snapshot property setup with no added data files is a workaround.
+        // We should clean it up after all necessary actions are supported.
+        // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
+        if self.added_data_files.is_empty() && self.snapshot_properties.is_empty() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No added data files or added snapshot properties found when write a manifest file",
+            ));
+        }
+        if let Some(data_file) = self
+            .added_data_files
             .iter()
-            .filter(|data_file| seen.insert(data_file.file_path.as_str()))
-            .cloned()
-            .collect()
+            .find(|f| f.content_type() != DataContentType::Data)
+        {
+            return Err(invalid_data!(
+                "Only data content type is allowed for fast append, got {:?} for {}",
+                data_file.content_type(),
+                data_file.file_path()
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -88,21 +115,24 @@ impl FastAppendAction {
 impl TransactionAction for FastAppendAction {
     type State = SimpleSnapshotProducer;
 
-    fn new_state(&self) -> Self::State {
-        SimpleSnapshotProducer::new(self.commit_uuid)
+    fn new_state(&self) -> SimpleSnapshotProducer {
+        SimpleSnapshotProducer::new(AppendIntent {
+            commit_uuid: self.commit_uuid,
+            snapshot_properties: self.snapshot_properties.clone(),
+            data_files: self.added_data_files.clone(),
+        })
     }
 
-    async fn commit(&self, state: &mut Self::State, table: &Table) -> Result<ActionCommit> {
-        let data_files = self.dedupe_added_files();
-
-        state.validate_added_data_files(table, &data_files)?;
+    async fn commit(
+        &self,
+        state: &mut SimpleSnapshotProducer,
+        table: &Table,
+    ) -> Result<ActionCommit> {
+        self.validate()?;
         if self.check_duplicate {
-            state.validate_duplicate_files(table, &data_files).await?;
+            validate_files_not_live(table, &self.added_data_files).await?;
         }
-
-        state
-            .apply(table, self.snapshot_properties.clone(), &data_files)
-            .await
+        state.apply(table).await
     }
 
     async fn cleanup(self, _state: SimpleSnapshotProducer, _table: &Table, _status: CommitStatus) {
@@ -137,7 +167,7 @@ mod tests {
         make_v2_minimal_table, make_v3_minimal_table, with_retry_properties,
     };
     use crate::transaction::{ApplyTransactionAction, FastAppendAction, Transaction};
-    use crate::{TableCommit, TableIdent, TableRequirement, TableUpdate};
+    use crate::{ErrorKind, TableCommit, TableIdent, TableRequirement, TableUpdate};
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
@@ -442,6 +472,30 @@ mod tests {
             manifest.entries()[0].data_file().file_path(),
             "memory:///table/data/00000.parquet"
         );
+    }
+
+    #[tokio::test]
+    async fn test_fast_append_rejects_delete_files() {
+        let table = make_v2_minimal_table();
+        let delete_file = DataFileBuilder::default()
+            .content(DataContentType::EqualityDeletes)
+            .file_path("test/1-deletes.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .equality_ids(Some(vec![1]))
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![delete_file]);
+        let err = commit_with_fresh_state(action, &table)
+            .await
+            .err()
+            .expect("delete files must be rejected");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[tokio::test]
@@ -830,12 +884,12 @@ mod tests {
                 .unwrap()
         };
 
-        // Same path three times: the manifest keeps a single entry, the first one.
-        let action = tx.fast_append().add_data_files(vec![
-            make_file(100, 10),
-            make_file(200, 20),
-            make_file(300, 30),
-        ]);
+        // Same path three times, across two `add_data_files` calls: the manifest
+        // keeps a single entry, the first one.
+        let action = tx
+            .fast_append()
+            .add_data_files(vec![make_file(100, 10), make_file(200, 20)])
+            .add_data_files(vec![make_file(300, 30)]);
         let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let files = committed_data_files(&table, &action_commit.take_updates()).await;
         assert_eq!(1, files.len());

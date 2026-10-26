@@ -15,14 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Stateless building blocks shared by snapshot producers.
+//! Snapshot production for transaction actions.
 //!
-//! Producers own retry-persistent state (identity, reusable artifacts); these
-//! helpers only translate explicit inputs into Iceberg metadata and files.
-//! They never select operation policy and never cache across calls.
+//! Producers (see [`simple`]) own retry-persistent state: identity, reusable
+//! artifacts, and the action's intent. The functions in this module are the
+//! stateless building blocks they share: they translate explicit inputs into
+//! Iceberg metadata and files, never select operation policy, and never cache
+//! across calls.
 
-use std::collections::HashMap;
+pub(crate) mod simple;
 
+use std::collections::{HashMap, HashSet};
+
+use futures::TryStreamExt;
+use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
 use crate::error::{Result, invalid_data};
@@ -165,6 +171,58 @@ pub(crate) async fn current_manifests(table: &Table) -> Result<Vec<ManifestFile>
             entry.has_added_files() || entry.has_existing_files() || entry.has_deleted_files()
         })
         .collect())
+}
+
+/// Fails if any of `data_files` is already live in the table's current snapshot.
+///
+/// Must run against each attempt's base, since a concurrent commit may have
+/// added one of these files. Manifest reads go through the table's object
+/// cache, so manifests unchanged by a rebase are not re-read.
+pub(crate) async fn validate_files_not_live(table: &Table, data_files: &[DataFile]) -> Result<()> {
+    let Some(current_snapshot) = table.metadata().current_snapshot() else {
+        return Ok(());
+    };
+
+    let new_files: HashSet<&str> = data_files.iter().map(|df| df.file_path()).collect();
+    if new_files.is_empty() {
+        return Ok(());
+    }
+
+    let manifest_list = table.manifest_list_reader(current_snapshot).load().await?;
+    let runtime = table.runtime();
+    let object_cache = table.object_cache();
+
+    let new_files_ref = &new_files;
+    let referenced_files: Vec<String> = manifest_list
+        .consume_entries()
+        .into_iter()
+        .map(|entry| {
+            let object_cache = object_cache.clone();
+            runtime
+                .io()
+                .spawn(async move { object_cache.get_manifest(&entry).await })
+        })
+        .collect::<FuturesUnordered<_>>()
+        .try_fold(Vec::new(), |mut acc, manifest| async move {
+            acc.extend(
+                manifest?
+                    .entries()
+                    .iter()
+                    .filter(|e| new_files_ref.contains(e.file_path()) && e.is_alive())
+                    .map(|e| e.file_path().to_string()),
+            );
+            Ok(acc)
+        })
+        .await?;
+
+    if !referenced_files.is_empty() {
+        return Err(invalid_data!(
+            "Cannot add files that are already referenced by table, files: {}",
+            referenced_files.join(", ")
+        ));
+    }
+
+    Ok(())
 }
 
 /// Builds a snapshot summary from an explicit set of file changes.
@@ -394,24 +452,91 @@ mod tests {
 
     use uuid::Uuid;
 
+    use super::simple::{AppendIntent, SimpleSnapshotProducer};
     use super::*;
     use crate::spec::{
         DataContentType, DataFileBuilder, Literal, Manifest, NestedField, PartitionSpec,
-        PrimitiveType, Schema, Transform, Type,
+        PrimitiveType, Schema, SnapshotRef, Transform, Type,
     };
     use crate::transaction::tests::make_v2_minimal_table;
+    use crate::{ErrorKind, TableUpdate};
 
-    fn deleted_file(table: &Table) -> DataFile {
+    fn data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
         DataFileBuilder::default()
             .content(DataContentType::Data)
-            .file_path("test/deleted.parquet".to_string())
+            .file_path(path.to_string())
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(100)
-            .record_count(2)
+            .record_count(record_count)
             .partition_spec_id(table.metadata().default_partition_spec_id())
             .partition(Struct::from_iter([Some(Literal::long(300))]))
             .build()
             .unwrap()
+    }
+
+    fn deleted_file(table: &Table) -> DataFile {
+        data_file(table, "test/deleted.parquet", 2)
+    }
+
+    /// Commits `data_files` to `table` through a fresh producer, returning the
+    /// table with that snapshot as current.
+    async fn append_to(table: &Table, data_files: Vec<DataFile>) -> Table {
+        let mut producer = SimpleSnapshotProducer::new(AppendIntent {
+            commit_uuid: None,
+            snapshot_properties: HashMap::new(),
+            data_files,
+        });
+        let snapshot = producer
+            .apply(table)
+            .await
+            .unwrap()
+            .take_updates()
+            .into_iter()
+            .find_map(|u| match u {
+                TableUpdate::AddSnapshot { snapshot } => Some(SnapshotRef::new(snapshot)),
+                _ => None,
+            })
+            .expect("append should add a snapshot");
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .add_snapshot(snapshot.as_ref().clone())
+            .unwrap()
+            .set_ref(
+                MAIN_BRANCH,
+                SnapshotReference::new(
+                    snapshot.snapshot_id(),
+                    SnapshotRetention::branch(None, None, None),
+                ),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        table.clone().with_metadata(Arc::new(metadata))
+    }
+
+    #[tokio::test]
+    async fn test_validate_files_not_live_sees_files_added_by_rebase() {
+        // No current snapshot: nothing is live, so nothing is a duplicate.
+        let table = make_v2_minimal_table();
+        let files = vec![data_file(&table, "test/dup.parquet", 1)];
+        validate_files_not_live(&table, &files).await.unwrap();
+
+        // A concurrent writer commits the same file; validating against that
+        // base must detect it.
+        let rebased = append_to(&table, files.clone()).await;
+        let err = validate_files_not_live(&rebased, &files)
+            .await
+            .expect_err("file committed concurrently must be detected");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("test/dup.parquet"));
+
+        // A different file is not flagged.
+        validate_files_not_live(&rebased, &[data_file(&table, "test/other.parquet", 1)])
+            .await
+            .unwrap();
     }
 
     #[test]

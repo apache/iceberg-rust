@@ -19,22 +19,31 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::TryStreamExt;
-use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
-use crate::error::{Result, invalid_data};
-use crate::spec::{
-    DataContentType, DataFile, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile,
-    ManifestStatus, Operation,
-};
-use crate::table::Table;
-use crate::transaction::ActionCommit;
-use crate::transaction::snapshot_helpers::{
+use super::{
     SnapshotCommitInput, current_manifests, generate_snapshot_id, manifest_list_path,
     manifest_path, new_manifest_writer, validate_partition_value, write_snapshot_commit,
 };
-use crate::{Error, ErrorKind};
+use crate::error::{Result, invalid_data};
+use crate::spec::{
+    DataFile, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile, ManifestStatus,
+    Operation,
+};
+use crate::table::Table;
+use crate::transaction::ActionCommit;
+
+/// What an append-shaped action asks the producer to do.
+///
+/// Fixed for one logical execution; the producer derives everything else from
+/// it and the table of the current attempt.
+pub(crate) struct AppendIntent {
+    /// Overrides the generated commit UUID.
+    pub commit_uuid: Option<Uuid>,
+    pub snapshot_properties: HashMap<String, String>,
+    /// Data files to add. The action validates them before each attempt.
+    pub data_files: Vec<DataFile>,
+}
 
 /// Retry-persistent state for an append-shaped action: added data files go
 /// into new manifests, and the current snapshot's manifests are carried
@@ -47,6 +56,7 @@ use crate::{Error, ErrorKind};
 /// unchanged, and every attempt writes a fresh manifest list under a distinct
 /// path.
 pub(crate) struct SimpleSnapshotProducer {
+    intent: AppendIntent,
     /// Fixed when the producer is created, so every attempt shares one UUID.
     commit_uuid: Uuid,
     /// Resolved against the table on the first attempt, then stable.
@@ -81,10 +91,10 @@ struct AddedManifests {
 }
 
 impl SimpleSnapshotProducer {
-    /// Creates a producer. `commit_uuid` overrides the generated commit UUID.
-    pub(crate) fn new(commit_uuid: Option<Uuid>) -> Self {
+    pub(crate) fn new(intent: AppendIntent) -> Self {
         Self {
-            commit_uuid: commit_uuid.unwrap_or_else(Uuid::now_v7),
+            commit_uuid: intent.commit_uuid.unwrap_or_else(Uuid::now_v7),
+            intent,
             snapshot_id: None,
             attempt: 0,
             manifest_counter: 0,
@@ -93,20 +103,40 @@ impl SimpleSnapshotProducer {
         }
     }
 
-    /// Checks that every file is a data file written under the table's default
-    /// partition spec with a compatible partition value.
-    pub(crate) fn validate_added_data_files(
-        &self,
-        table: &Table,
-        data_files: &[DataFile],
-    ) -> Result<()> {
+    /// Produces the resulting manifest set for the current
+    /// table and writes this attempt's snapshot.
+    pub(crate) async fn apply(&mut self, table: &Table) -> Result<ActionCommit> {
+        let snapshot_id = self.snapshot_id(table);
+
+        let mut manifests = current_manifests(table).await?;
+        if !self.intent.data_files.is_empty() {
+            manifests.extend(self.added_manifests(table, snapshot_id).await?);
+        }
+
+        let manifest_list_path = self.next_manifest_list_path(table, snapshot_id)?;
+
+        write_snapshot_commit(table, SnapshotCommitInput {
+            snapshot_id,
+            manifest_list_path,
+            operation: Operation::Append,
+            properties: self.intent.snapshot_properties.clone(),
+            added_files: &self.intent.data_files,
+            removed_files: &[],
+            manifests,
+            truncate_full_table: false,
+        })
+        .await
+    }
+
+    /// Checks that every file is written under the table's default partition
+    /// spec with a compatible partition value.
+    ///
+    /// Runs against the table the manifests are written for; a later rebase
+    /// does not invalidate manifests already written under a spec the table
+    /// still has.
+    fn validate_added_data_files(&self, table: &Table) -> Result<()> {
         let metadata = table.metadata();
-        for data_file in data_files {
-            if data_file.content_type() != DataContentType::Data {
-                return Err(invalid_data!(
-                    "Only data content type is allowed for fast append"
-                ));
-            }
+        for data_file in &self.intent.data_files {
             // TODO(#3500): accept any spec known to the table and group the
             // files by spec when writing manifests, instead of requiring the
             // default spec.
@@ -118,102 +148,6 @@ impl SimpleSnapshotProducer {
             validate_partition_value(data_file.partition(), metadata.default_partition_type())?;
         }
         Ok(())
-    }
-
-    /// Fails if any of `data_files` is already live in the current snapshot.
-    ///
-    /// This must re-run against each attempt's base, since a concurrent commit
-    /// may have added one of these files. Manifest reads go through the table's
-    /// object cache, so unchanged manifests are not re-read on retry.
-    pub(crate) async fn validate_duplicate_files(
-        &self,
-        table: &Table,
-        data_files: &[DataFile],
-    ) -> Result<()> {
-        let Some(current_snapshot) = table.metadata().current_snapshot() else {
-            return Ok(());
-        };
-
-        let new_files: HashSet<&str> = data_files.iter().map(|df| df.file_path()).collect();
-        if new_files.is_empty() {
-            return Ok(());
-        }
-
-        let manifest_list = table.manifest_list_reader(current_snapshot).load().await?;
-        let runtime = table.runtime();
-        let object_cache = table.object_cache();
-
-        let new_files_ref = &new_files;
-        let referenced_files: Vec<String> = manifest_list
-            .consume_entries()
-            .into_iter()
-            .map(|entry| {
-                let object_cache = object_cache.clone();
-                runtime
-                    .io()
-                    .spawn(async move { object_cache.get_manifest(&entry).await })
-            })
-            .collect::<FuturesUnordered<_>>()
-            .try_fold(Vec::new(), |mut acc, manifest| async move {
-                acc.extend(
-                    manifest?
-                        .entries()
-                        .iter()
-                        .filter(|e| new_files_ref.contains(e.file_path()) && e.is_alive())
-                        .map(|e| e.file_path().to_string()),
-                );
-                Ok(acc)
-            })
-            .await?;
-
-        if !referenced_files.is_empty() {
-            return Err(invalid_data!(
-                "Cannot add files that are already referenced by table, files: {}",
-                referenced_files.join(", ")
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Runs one attempt: produces the resulting manifest set for the current
-    /// table and writes this attempt's snapshot.
-    pub(crate) async fn apply(
-        &mut self,
-        table: &Table,
-        properties: HashMap<String, String>,
-        data_files: &[DataFile],
-    ) -> Result<ActionCommit> {
-        // TODO: Allowing snapshot property setup with no added data files is a workaround.
-        // We should clean it up after all necessary actions are supported.
-        // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
-        if data_files.is_empty() && properties.is_empty() {
-            return Err(Error::new(
-                ErrorKind::PreconditionFailed,
-                "No added data files or added snapshot properties found when write a manifest file",
-            ));
-        }
-
-        let snapshot_id = self.snapshot_id(table);
-
-        let mut manifests = current_manifests(table).await?;
-        if !data_files.is_empty() {
-            manifests.extend(self.added_manifests(table, snapshot_id, data_files).await?);
-        }
-
-        let manifest_list_path = self.next_manifest_list_path(table, snapshot_id)?;
-
-        write_snapshot_commit(table, SnapshotCommitInput {
-            snapshot_id,
-            manifest_list_path,
-            operation: Operation::Append,
-            properties,
-            added_files: data_files,
-            removed_files: &[],
-            manifests,
-            truncate_full_table: false,
-        })
-        .await
     }
 
     fn snapshot_id(&mut self, table: &Table) -> i64 {
@@ -235,7 +169,6 @@ impl SimpleSnapshotProducer {
         &mut self,
         table: &Table,
         snapshot_id: i64,
-        data_files: &[DataFile],
     ) -> Result<Vec<ManifestFile>> {
         let format_version = table.metadata().format_version();
 
@@ -245,11 +178,13 @@ impl SimpleSnapshotProducer {
             return Ok(cached.manifests.clone());
         }
 
+        self.validate_added_data_files(table)?;
+
         // Allocate every path before writing, so each is recorded as owned
         // even if the write fails part-way: the path is write-once and a
         // partial file is an orphan to clean up like any other.
         //
-        // TODO(#3500): group `data_files` by partition spec and write one
+        // TODO(#3500): group the files by partition spec and write one
         // manifest per group.
         // TODO(#3499): roll a group over at the target manifest size, and
         // write the resulting manifests concurrently.
@@ -263,7 +198,7 @@ impl SimpleSnapshotProducer {
                 path,
                 snapshot_id,
                 table.metadata().default_partition_spec_id(),
-                data_files,
+                &self.intent.data_files,
             )
             .await?,
         ];
@@ -322,15 +257,14 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::SimpleSnapshotProducer;
+    use super::{AppendIntent, SimpleSnapshotProducer};
+    use crate::TableUpdate;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, Literal,
-        MAIN_BRANCH, NestedField, PrimitiveType, SnapshotRef, SnapshotReference, SnapshotRetention,
-        Struct, Type,
+        NestedField, PrimitiveType, SnapshotRef, Struct, Type,
     };
     use crate::table::Table;
     use crate::transaction::tests::{make_v1_table, make_v2_minimal_table};
-    use crate::{ErrorKind, TableUpdate};
 
     fn data_file(table: &Table, path: &str) -> DataFile {
         DataFileBuilder::default()
@@ -343,6 +277,21 @@ mod tests {
             .partition(Struct::from_iter([Some(Literal::long(300))]))
             .build()
             .unwrap()
+    }
+
+    fn producer(data_files: Vec<DataFile>) -> SimpleSnapshotProducer {
+        producer_with_uuid(None, data_files)
+    }
+
+    fn producer_with_uuid(
+        commit_uuid: Option<Uuid>,
+        data_files: Vec<DataFile>,
+    ) -> SimpleSnapshotProducer {
+        SimpleSnapshotProducer::new(AppendIntent {
+            commit_uuid,
+            snapshot_properties: HashMap::new(),
+            data_files,
+        })
     }
 
     fn added_snapshot(commit: &mut crate::transaction::ActionCommit) -> SnapshotRef {
@@ -362,17 +311,13 @@ mod tests {
     async fn test_retry_reuses_identity_and_added_manifest() {
         let table = make_v2_minimal_table();
         let requested_uuid = Uuid::now_v7();
-        let mut producer = SimpleSnapshotProducer::new(Some(requested_uuid));
-        let files = vec![data_file(&table, "test/1.parquet")];
+        let mut producer = producer_with_uuid(Some(requested_uuid), vec![data_file(
+            &table,
+            "test/1.parquet",
+        )]);
 
-        let mut first = producer
-            .apply(&table, HashMap::new(), &files)
-            .await
-            .unwrap();
-        let mut second = producer
-            .apply(&table, HashMap::new(), &files)
-            .await
-            .unwrap();
+        let mut first = producer.apply(&table).await.unwrap();
+        let mut second = producer.apply(&table).await.unwrap();
 
         let first_snapshot = added_snapshot(&mut first);
         let second_snapshot = added_snapshot(&mut second);
@@ -413,18 +358,14 @@ mod tests {
         assert_eq!(producer.owned_artifacts.len(), 3);
     }
 
-    #[tokio::test]
     /// The manifest's embedded schema still describes the same files after a
     /// concurrent schema change, so the manifest stays valid (as in Java).
+    #[tokio::test]
     async fn test_added_manifest_is_reused_across_schema_change() {
         let table = make_v2_minimal_table();
-        let mut producer = SimpleSnapshotProducer::new(None);
-        let files = vec![data_file(&table, "test/1.parquet")];
+        let mut producer = producer(vec![data_file(&table, "test/1.parquet")]);
 
-        let mut first = producer
-            .apply(&table, HashMap::new(), &files)
-            .await
-            .unwrap();
+        let mut first = producer.apply(&table).await.unwrap();
         let first_snapshot = added_snapshot(&mut first);
 
         // Rebase onto a table whose current schema changed.
@@ -450,10 +391,7 @@ mod tests {
             .metadata;
         let rebased = table.clone().with_metadata(Arc::new(metadata));
 
-        let mut second = producer
-            .apply(&rebased, HashMap::new(), &files)
-            .await
-            .unwrap();
+        let mut second = producer.apply(&rebased).await.unwrap();
         let second_snapshot = added_snapshot(&mut second);
 
         let first_list = table
@@ -480,13 +418,9 @@ mod tests {
     #[tokio::test]
     async fn test_added_manifest_is_rewritten_when_format_version_changes() {
         let table = make_v1_table();
-        let mut producer = SimpleSnapshotProducer::new(None);
-        let files = vec![data_file(&table, "test/1.parquet")];
+        let mut producer = producer(vec![data_file(&table, "test/1.parquet")]);
 
-        let mut first = producer
-            .apply(&table, HashMap::new(), &files)
-            .await
-            .unwrap();
+        let mut first = producer.apply(&table).await.unwrap();
         let first_snapshot = added_snapshot(&mut first);
 
         // A concurrent commit upgraded the table; schema and spec are unchanged.
@@ -505,10 +439,7 @@ mod tests {
             table.metadata().current_schema_id()
         );
 
-        let mut second = producer
-            .apply(&upgraded, HashMap::new(), &files)
-            .await
-            .unwrap();
+        let mut second = producer.apply(&upgraded).await.unwrap();
         let second_snapshot = added_snapshot(&mut second);
 
         let first_list = table
@@ -541,79 +472,5 @@ mod tests {
             Some(second_snapshot.sequence_number())
         );
         assert_ne!(second_snapshot.sequence_number(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_rejects_non_data_content() {
-        let table = make_v2_minimal_table();
-        let mut file = data_file(&table, "test/1.parquet");
-        file.content = DataContentType::EqualityDeletes;
-
-        let producer = SimpleSnapshotProducer::new(None);
-        let err = producer
-            .validate_added_data_files(&table, &[file])
-            .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-    }
-
-    #[tokio::test]
-    async fn test_rejects_empty_append() {
-        let table = make_v2_minimal_table();
-        let mut producer = SimpleSnapshotProducer::new(None);
-        let err = producer
-            .apply(&table, HashMap::new(), &[])
-            .await
-            .err()
-            .expect("empty append should be rejected");
-        assert_eq!(err.kind(), ErrorKind::PreconditionFailed);
-    }
-
-    #[tokio::test]
-    async fn test_duplicate_check_sees_files_added_by_rebase() {
-        // First attempt: table has no snapshot, so nothing is a duplicate.
-        let table = make_v2_minimal_table();
-        let producer = SimpleSnapshotProducer::new(None);
-        let files = vec![data_file(&table, "test/dup.parquet")];
-        producer
-            .validate_duplicate_files(&table, &files)
-            .await
-            .unwrap();
-
-        // A concurrent writer commits the same file; our next attempt rebases
-        // onto that snapshot and must detect the duplicate.
-        let mut other = SimpleSnapshotProducer::new(None);
-        let mut commit = other.apply(&table, HashMap::new(), &files).await.unwrap();
-        let snapshot = added_snapshot(&mut commit);
-        let metadata = table
-            .metadata()
-            .clone()
-            .into_builder(None)
-            .add_snapshot(snapshot.as_ref().clone())
-            .unwrap()
-            .set_ref(
-                MAIN_BRANCH,
-                SnapshotReference::new(
-                    snapshot.snapshot_id(),
-                    SnapshotRetention::branch(None, None, None),
-                ),
-            )
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
-        let rebased = table.clone().with_metadata(Arc::new(metadata));
-
-        let err = producer
-            .validate_duplicate_files(&rebased, &files)
-            .await
-            .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("test/dup.parquet"));
-
-        // Sanity: a different file is not flagged.
-        producer
-            .validate_duplicate_files(&rebased, &[data_file(&table, "test/other.parquet")])
-            .await
-            .unwrap();
     }
 }
