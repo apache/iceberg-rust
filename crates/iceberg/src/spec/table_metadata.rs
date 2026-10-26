@@ -785,7 +785,7 @@ pub(super) mod _serde {
     use crate::spec::{
         EncryptedKey, INITIAL_ROW_ID, PartitionField, PartitionSpec, PartitionSpecRef,
         PartitionStatisticsFile, Schema, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
-        SortOrder, StatisticsFile,
+        SortOrder, StatisticsFile, UnboundPartitionSpec,
     };
     use crate::{Error, ErrorKind};
 
@@ -1220,10 +1220,14 @@ pub(super) mod _serde {
                     .collect::<HashMap<_, _>>()
             } else if let Some(partition_spec) = value.partition_spec {
                 // Option 2: Fall back to 'partition_spec'
-                let spec = PartitionSpec::builder(current_schema.clone())
-                    .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
-                    .add_unbound_fields(partition_spec.into_iter().map(|f| f.into_unbound()))?
-                    .build()?;
+                let spec = UnboundPartitionSpec {
+                    spec_id: Some(DEFAULT_PARTITION_SPEC_ID),
+                    fields: partition_spec
+                        .into_iter()
+                        .map(|f| f.into_unbound())
+                        .collect(),
+                }
+                .bind(current_schema.clone())?;
 
                 HashMap::from_iter(vec![(DEFAULT_PARTITION_SPEC_ID, Arc::new(spec))])
             } else {
@@ -3315,6 +3319,33 @@ mod tests {
         };
 
         check_table_metadata_serde(&metadata, expected);
+    }
+
+    #[test]
+    fn test_table_metadata_v1_legacy_partition_spec_with_void_fields() {
+        let mut metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap(),
+        )
+        .unwrap();
+        // What a format version 1 spec keeps after identity(x) was removed twice.
+        metadata["partition-spec"] = serde_json::json!([
+            {"name": "x", "transform": "void", "source-id": 1, "field-id": 1000},
+            {"name": "x_null", "transform": "void", "source-id": 1, "field-id": 1001},
+        ]);
+
+        let metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
+
+        let fields = metadata.default_partition_spec().fields();
+        assert_eq!(
+            fields
+                .iter()
+                .map(|f| (f.field_id, f.name.as_str(), f.transform))
+                .collect::<Vec<_>>(),
+            vec![
+                (1000, "x", Transform::Void),
+                (1001, "x_null", Transform::Void)
+            ]
+        );
     }
 
     #[test]
