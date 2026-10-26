@@ -26,7 +26,7 @@ use crate::spec::{
     StructType, Type,
 };
 use crate::table::Table;
-use crate::transaction::action::{ActionCommit, TransactionAction};
+use crate::transaction::action::{ActionCommit, StatelessAction};
 use crate::{Error, ErrorKind, Result, TableRequirement, TableUpdate};
 
 // Default ID for a new column. This will be re-assigned to a fresh ID at commit time.
@@ -37,7 +37,7 @@ const DEFAULT_FIELD_ID: i32 = 0;
 /// Use helper constructors such as [`AddColumn::optional`] and [`AddColumn::required`],
 /// optionally combined with the builder's `parent` and `doc` setters via
 /// [`AddColumn::builder`], then pass the value to [`UpdateSchemaAction::add_column`].
-#[derive(TypedBuilder)]
+#[derive(Clone, TypedBuilder)]
 pub struct AddColumn {
     #[builder(default = None, setter(strip_option, into))]
     parent: Option<String>,
@@ -112,6 +112,7 @@ impl AddColumn {
 /// let tx = action.apply(tx).unwrap();
 /// let table = tx.commit(&catalog).await.unwrap();
 /// ```
+#[derive(Clone)]
 pub struct UpdateSchemaAction {
     additions: Vec<AddColumn>,
     deletes: Vec<String>,
@@ -328,12 +329,12 @@ fn rebuild_field(
 }
 
 // ---------------------------------------------------------------------------
-// TransactionAction implementation
+// StatelessAction implementation
 // ---------------------------------------------------------------------------
 
 #[async_trait]
-impl TransactionAction for UpdateSchemaAction {
-    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+impl StatelessAction for UpdateSchemaAction {
+    async fn commit(&self, table: &Table) -> Result<ActionCommit> {
         let base_schema = table.metadata().current_schema();
         let mut last_column_id = table.metadata().last_column_id();
 
@@ -473,7 +474,6 @@ impl TransactionAction for UpdateSchemaAction {
 #[cfg(test)]
 mod tests {
     use std::io::BufReader;
-    use std::sync::Arc;
 
     use as_any::Downcast;
 
@@ -482,8 +482,9 @@ mod tests {
         VariantType,
     };
     use crate::table::Table;
+    use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::Transaction;
-    use crate::transaction::action::{ApplyTransactionAction, TransactionAction};
+    use crate::transaction::action::{ActionEntry, ApplyTransactionAction};
     use crate::transaction::tests::make_v2_table;
     use crate::transaction::update_schema::{AddColumn, DEFAULT_FIELD_ID, UpdateSchemaAction};
     use crate::{ErrorKind, TableIdent, TableRequirement, TableUpdate};
@@ -618,7 +619,7 @@ mod tests {
             Type::Primitive(PrimitiveType::Int),
         ));
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
         let requirements = action_commit.take_requirements();
 
@@ -666,7 +667,7 @@ mod tests {
                 .build(),
         );
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
@@ -693,7 +694,7 @@ mod tests {
             Literal::int(0),
         ));
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
@@ -721,7 +722,7 @@ mod tests {
             Type::Primitive(PrimitiveType::Int),
         ));
 
-        let result = Arc::new(action).commit(&table).await;
+        let result = commit_with_fresh_state(action, &table).await;
         let err = match result {
             Err(e) => e,
             Ok(_) => panic!("should reject adding a column with an existing name"),
@@ -742,7 +743,7 @@ mod tests {
         // z is not an identifier field, so we can delete it.
         let action = tx.update_schema().delete_column("z");
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
@@ -765,7 +766,7 @@ mod tests {
 
         let action = tx.update_schema().delete_column("nonexistent");
 
-        let result = Arc::new(action).commit(&table).await;
+        let result = commit_with_fresh_state(action, &table).await;
         let err = match result {
             Err(e) => e,
             Ok(_) => panic!("should reject deleting a non-existent column"),
@@ -792,7 +793,7 @@ mod tests {
                 Type::Primitive(PrimitiveType::Boolean),
             ));
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
@@ -823,7 +824,7 @@ mod tests {
                 Type::Primitive(PrimitiveType::Boolean),
             ));
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
@@ -854,7 +855,7 @@ mod tests {
 
         assert_eq!(tx.actions.len(), 1);
         (*tx.actions[0])
-            .downcast_ref::<UpdateSchemaAction>()
+            .downcast_ref::<ActionEntry<UpdateSchemaAction>>()
             .expect("UpdateSchemaAction was not applied to Transaction!");
     }
 
@@ -876,7 +877,7 @@ mod tests {
                 .build(),
         );
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
@@ -911,7 +912,7 @@ mod tests {
                 .build(),
         );
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
@@ -941,7 +942,7 @@ mod tests {
                 .build(),
         );
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
@@ -976,7 +977,7 @@ mod tests {
                 .build(),
         );
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
@@ -1006,7 +1007,7 @@ mod tests {
                 .build(),
         );
 
-        let err = match Arc::new(action).commit(&table).await {
+        let err = match commit_with_fresh_state(action, &table).await {
             Err(e) => e,
             Ok(_) => panic!("should reject adding to a nonexistent parent"),
         };
@@ -1032,7 +1033,7 @@ mod tests {
                 .build(),
         );
 
-        let err = match Arc::new(action).commit(&table).await {
+        let err = match commit_with_fresh_state(action, &table).await {
             Err(e) => e,
             Ok(_) => panic!("should reject adding to a primitive parent"),
         };
@@ -1058,7 +1059,7 @@ mod tests {
                 .build(),
         );
 
-        let err = match Arc::new(action).commit(&table).await {
+        let err = match commit_with_fresh_state(action, &table).await {
             Err(e) => e,
             Ok(_) => panic!("should reject adding a column with conflicting name"),
         };
@@ -1090,7 +1091,7 @@ mod tests {
                     .build(),
             );
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
@@ -1136,7 +1137,7 @@ mod tests {
             ])),
         ));
 
-        let mut action_commit = Arc::new(action).commit(&table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         let new_schema = match &updates[0] {
