@@ -183,11 +183,14 @@ impl<'a> SnapshotProducer<'a> {
             return Ok(());
         };
 
-        let new_files: HashSet<&str> = self
+        let mut new_files: HashSet<&str> = self
             .added_data_files
             .iter()
             .map(|df| df.file_path.as_str())
             .collect();
+        for df in &self.deleted_data_files {
+            new_files.remove(df.file_path.as_str());
+        }
 
         let runtime = self.table.runtime();
         let manifest_list = self

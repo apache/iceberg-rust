@@ -56,7 +56,7 @@ impl OverwriteAction {
     }
 
     /// Set whether to reject added paths already live in the table (enabled by default).
-    /// This also rejects paths deleted and re-added in the same overwrite.
+    /// Paths deleted in the same overwrite may be re-added.
     pub fn with_check_duplicate(mut self, v: bool) -> Self {
         self.check_duplicate = v;
         self
@@ -668,7 +668,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_overwrite_rejects_readding_a_deleted_path_by_default() {
+    async fn test_overwrite_readds_a_deleted_path_by_default() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
         let file = test_data_file(
@@ -684,16 +684,20 @@ mod tests {
             .commit(&catalog)
             .await
             .unwrap();
-        let action = Transaction::new(&table)
+        let tx = Transaction::new(&table);
+        let table = tx
             .overwrite()
             .delete_data_files([file.clone()])
-            .add_data_files([file]);
-        let err = commit_with_fresh_state(action, &table).await.err().unwrap();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(
-            err.message()
-                .contains("Cannot add files that are already referenced by table")
-        );
+            .add_data_files([file])
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        assert_eq!(current_manifest_entries(&table).await, [
+            (ManifestStatus::Deleted, "test/a.parquet".to_string()),
+            (ManifestStatus::Added, "test/a.parquet".to_string()),
+        ]);
     }
 
     #[tokio::test]
