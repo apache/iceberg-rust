@@ -21,9 +21,9 @@ mod config;
 mod local_fs;
 mod memory;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Debug;
-use std::sync::{Arc, Once};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -146,8 +146,8 @@ pub trait StorageFactory: Debug + Send + Sync {
     ///
     /// Backends that cannot use the provider ignore it and use the credentials
     /// in `config`, as they would without one. The default does so and logs a
-    /// warning once per process, since the storage's credentials are then not
-    /// refreshed. Factories that wrap another factory should forward the
+    /// warning once per factory type, since the storage's credentials are then
+    /// not refreshed. Factories that wrap another factory should forward the
     /// provider to it, and factories whose storage needs no credentials can
     /// ignore it silently.
     fn build_with_credential_provider(
@@ -156,14 +156,19 @@ pub trait StorageFactory: Debug + Send + Sync {
         credential_provider: Option<Arc<dyn StorageCredentialProvider>>,
     ) -> Result<Arc<dyn Storage>> {
         if credential_provider.is_some() {
-            static WARNED: Once = Once::new();
-            WARNED.call_once(|| {
+            // A static in a provided method is shared by every implementor.
+            static WARNED: Mutex<BTreeSet<&'static str>> = Mutex::new(BTreeSet::new());
+            let factory = std::any::type_name::<Self>();
+            if WARNED
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(factory)
+            {
                 tracing::warn!(
-                    "{} ignores storage credential providers; its storage uses the credentials \
-                     in its configuration, which are not refreshed",
-                    std::any::type_name::<Self>()
-                )
-            });
+                    "{factory} ignores storage credential providers; its storage uses the \
+                     credentials in its configuration, which are not refreshed"
+                );
+            }
         }
         self.build(config)
     }
@@ -211,7 +216,8 @@ pub trait StorageCredentialProvider: Debug + Send + Sync {
     /// (`s3://bucket/`) or the prefix of a previously returned credential
     /// (`s3://bucket/warehouse/db/table`). Providers that vend distinct
     /// credentials per location prefix use it to select the most specific
-    /// match, which must [cover](StorageCredential::covers) `path`.
+    /// match with [`StorageCredential::select`], which must
+    /// [cover](StorageCredential::covers) `path`.
     ///
     /// Backends read the credential's expiry from its config, such as
     /// `s3.session-token-expires-at-ms`, and load a new one before it expires.
@@ -292,14 +298,26 @@ impl StorageCredential {
     pub fn covers(&self, location: &str) -> bool {
         !self.prefix.is_empty() && location.starts_with(&self.prefix)
     }
+
+    /// Return the credential with the longest prefix that covers `location`.
+    pub fn select<'a>(
+        credentials: impl IntoIterator<Item = &'a Self>,
+        location: &str,
+    ) -> Option<&'a Self> {
+        credentials
+            .into_iter()
+            .filter(|credential| credential.covers(location))
+            .max_by_key(|credential| credential.prefix.len())
+    }
 }
 
 impl Debug for StorageCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Config values are secrets.
+        // Config values are secrets. Keys are sorted for stable output.
+        let config_keys: BTreeSet<_> = self.config.keys().collect();
         f.debug_struct("StorageCredential")
             .field("prefix", &self.prefix)
-            .field("config_keys", &self.config.keys().collect::<Vec<_>>())
+            .field("config_keys", &config_keys)
             .finish()
     }
 }
@@ -332,9 +350,36 @@ mod tests {
     }
 
     #[test]
+    fn test_select_prefers_the_longest_covering_prefix() {
+        let credentials = [
+            scoped("s3"),
+            scoped("s3://bucket/table"),
+            scoped("s3://bucket"),
+            scoped("s3://other"),
+        ];
+        let select = |location| {
+            StorageCredential::select(&credentials, location).map(StorageCredential::prefix)
+        };
+
+        assert_eq!(select("s3://bucket/table/file"), Some("s3://bucket/table"));
+        assert_eq!(select("s3://bucket/other/file"), Some("s3://bucket"));
+        assert_eq!(select("s3a://bucket/table/file"), Some("s3"));
+        assert_eq!(select("gs://bucket/table/file"), None);
+    }
+
+    #[test]
     fn test_credential_debug_omits_config_values() {
         let debug = format!("{:?}", scoped("s3://bucket"));
         assert!(debug.contains("s3://bucket"), "{debug}");
         assert!(!debug.contains("secret"), "{debug}");
+
+        let credential = StorageCredential::new(
+            "s3",
+            HashMap::from([
+                ("b".to_string(), String::new()),
+                ("a".to_string(), String::new()),
+            ]),
+        );
+        assert!(format!("{credential:?}").contains(r#"{"a", "b"}"#));
     }
 }

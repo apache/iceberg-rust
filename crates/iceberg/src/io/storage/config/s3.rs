@@ -42,10 +42,6 @@ pub const S3_SESSION_TOKEN_EXPIRES_AT_MS: &str = "s3.session-token-expires-at-ms
 pub const S3_REGION: &str = "s3.region";
 /// Region to use for the S3 client (takes precedence over [`S3_REGION`]).
 pub const CLIENT_REGION: &str = "client.region";
-/// Table property naming the endpoint a catalog serves to refresh vended AWS credentials.
-pub const AWS_REFRESH_CREDENTIALS_ENDPOINT: &str = "client.refresh-credentials-endpoint";
-/// Table property enabling refresh of vended AWS credentials. Defaults to `true`.
-pub const AWS_REFRESH_CREDENTIALS_ENABLED: &str = "client.refresh-credentials-enabled";
 /// S3 Path Style Access.
 pub const S3_PATH_STYLE_ACCESS: &str = "s3.path-style-access";
 /// S3 Server Side Encryption Type.

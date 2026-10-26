@@ -1013,12 +1013,14 @@ mod tests {
     #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[cfg(feature = "opendal-s3")]
-    use iceberg::io::S3_SESSION_TOKEN_EXPIRES_AT_MS;
     #[cfg(feature = "opendal-gcs")]
     use iceberg::io::{GCS_SERVICE_HOST, GCS_TOKEN, GCS_TOKEN_EXPIRES_AT};
     #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
     use iceberg::io::{S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY, StorageCredential};
+    #[cfg(feature = "opendal-s3")]
+    use iceberg::io::{
+        S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SESSION_TOKEN_EXPIRES_AT_MS,
+    };
 
     #[allow(unused_imports)]
     use super::*;
@@ -1551,11 +1553,11 @@ mod tests {
     }
 
     /// Fails every credential load.
-    #[cfg(feature = "opendal-gcs")]
+    #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
     #[derive(Debug)]
     struct FailingCredentialProvider;
 
-    #[cfg(feature = "opendal-gcs")]
+    #[cfg(any(feature = "opendal-s3", feature = "opendal-gcs"))]
     #[async_trait]
     impl StorageCredentialProvider for FailingCredentialProvider {
         fn supports_path(&self, _path: &str) -> bool {
@@ -1672,6 +1674,99 @@ mod tests {
             serde_json::to_string(&storage(Some(Arc::new(AlwaysSupportedCredentialProvider))))
                 .unwrap_err();
         assert!(error.to_string().contains("credential provider"), "{error}");
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[tokio::test]
+    async fn test_s3_does_not_fall_back_when_the_provider_fails() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("HEAD", mockito::Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        // REST catalogs often return static keys next to vended credentials.
+        let config = s3_config_parse(HashMap::from([
+            (S3_ENDPOINT.to_string(), server.url()),
+            (S3_PATH_STYLE_ACCESS.to_string(), "true".to_string()),
+            (S3_REGION.to_string(), "us-east-1".to_string()),
+            (S3_ACCESS_KEY_ID.to_string(), "STATIC_AK".to_string()),
+            (
+                S3_SECRET_ACCESS_KEY.to_string(),
+                "static-secret".to_string(),
+            ),
+        ]))
+        .unwrap();
+        let storage = OpenDalStorage::S3 {
+            config: Arc::new(config),
+            customized_credential_load: None,
+            credential_provider: Some(Arc::new(FailingCredentialProvider)),
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        assert!(storage.exists("s3://bucket/file.parquet").await.is_err());
+        mock.assert_async().await;
+    }
+
+    /// Vends one credential scoped to `s3://bucket/table` and counts loads.
+    #[cfg(feature = "opendal-s3")]
+    #[derive(Debug, Default)]
+    struct CountingS3Provider {
+        loads: AtomicUsize,
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[async_trait]
+    impl StorageCredentialProvider for CountingS3Provider {
+        fn supports_path(&self, _path: &str) -> bool {
+            true
+        }
+
+        async fn load_credential(&self, _path: &str) -> Result<StorageCredential> {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+            Ok(s3_credential("s3://bucket/table", "SCOPED_AK"))
+        }
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[tokio::test]
+    async fn test_delete_stream_loads_a_credential_per_path_and_batch() {
+        let mut server = mockito::Server::new_async().await;
+        let delete = server
+            .mock("POST", mockito::Matcher::Any)
+            .match_header(
+                "authorization",
+                mockito::Matcher::Regex("Credential=SCOPED_AK/".to_string()),
+            )
+            .expect(1)
+            .with_status(200)
+            .with_body(r#"<?xml version="1.0" encoding="UTF-8"?><DeleteResult></DeleteResult>"#)
+            .create_async()
+            .await;
+
+        let mut config = S3Config::default();
+        config.endpoint = Some(server.url());
+        config.region = Some("us-east-1".to_string());
+        config.disable_config_load = true;
+        config.disable_ec2_metadata = true;
+        let provider = Arc::new(CountingS3Provider::default());
+        let storage = OpenDalStorage::S3 {
+            config: Arc::new(config),
+            customized_credential_load: None,
+            credential_provider: Some(provider.clone()),
+            client_config: OpenDalClientConfig::default(),
+        };
+        let paths: Vec<String> = (0..3)
+            .map(|i| format!("s3://bucket/table/f{i}.parquet"))
+            .collect();
+        storage
+            .delete_stream(futures::stream::iter(paths.clone()).boxed())
+            .await
+            .unwrap();
+
+        delete.assert_async().await;
+        // One load to choose each path's batch, and one to sign the batch.
+        assert_eq!(provider.loads.load(Ordering::SeqCst), paths.len() + 1);
     }
 
     #[cfg(feature = "opendal-s3")]

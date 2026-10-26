@@ -1064,6 +1064,7 @@ pub fn iceberg::io::StorageCredential::config(&self) -> &std::collections::hash:
 pub fn iceberg::io::StorageCredential::covers(&self, location: &str) -> bool
 pub fn iceberg::io::StorageCredential::new(prefix: impl core::convert::Into<alloc::string::String>, config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
 pub fn iceberg::io::StorageCredential::prefix(&self) -> &str
+pub fn iceberg::io::StorageCredential::select<'a>(credentials: impl core::iter::traits::collect::IntoIterator<Item = &'a Self>, location: &str) -> core::option::Option<&'a Self>
 impl core::clone::Clone for iceberg::io::StorageCredential
 pub fn iceberg::io::StorageCredential::clone(&self) -> iceberg::io::StorageCredential
 impl core::cmp::Eq for iceberg::io::StorageCredential
@@ -1078,14 +1079,8 @@ pub const iceberg::io::ADLS_AUTHORITY_HOST: &str
 pub const iceberg::io::ADLS_CLIENT_ID: &str
 pub const iceberg::io::ADLS_CLIENT_SECRET: &str
 pub const iceberg::io::ADLS_CONNECTION_STRING: &str
-pub const iceberg::io::ADLS_REFRESH_CREDENTIALS_ENABLED: &str
-pub const iceberg::io::ADLS_REFRESH_CREDENTIALS_ENDPOINT: &str
 pub const iceberg::io::ADLS_SAS_TOKEN: &str
-pub const iceberg::io::ADLS_SAS_TOKEN_EXPIRES_AT_MS_PREFIX: &str
-pub const iceberg::io::ADLS_SAS_TOKEN_PREFIX: &str
 pub const iceberg::io::ADLS_TENANT_ID: &str
-pub const iceberg::io::AWS_REFRESH_CREDENTIALS_ENABLED: &str
-pub const iceberg::io::AWS_REFRESH_CREDENTIALS_ENDPOINT: &str
 pub const iceberg::io::CLIENT_REGION: &str
 pub const iceberg::io::GCS_ALLOW_ANONYMOUS: &str
 pub const iceberg::io::GCS_CREDENTIALS_JSON: &str
@@ -1093,8 +1088,6 @@ pub const iceberg::io::GCS_DISABLE_CONFIG_LOAD: &str
 pub const iceberg::io::GCS_DISABLE_VM_METADATA: &str
 pub const iceberg::io::GCS_NO_AUTH: &str
 pub const iceberg::io::GCS_PROJECT_ID: &str
-pub const iceberg::io::GCS_REFRESH_CREDENTIALS_ENABLED: &str
-pub const iceberg::io::GCS_REFRESH_CREDENTIALS_ENDPOINT: &str
 pub const iceberg::io::GCS_SERVICE_HOST: &str
 pub const iceberg::io::GCS_TOKEN: &str
 pub const iceberg::io::GCS_TOKEN_EXPIRES_AT: &str
