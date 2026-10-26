@@ -62,8 +62,8 @@ use crate::types::{
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 /// REST catalog warehouse location
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
-/// Requested maximum number of results per list response (a positive `i32`).
-/// When unset, no `pageSize` query parameter is sent.
+/// Requested page size for namespace and table listings; see
+/// [`RestSessionCatalogBuilder::with_page_size`].
 pub const REST_CATALOG_PROP_PAGE_SIZE: &str = "rest-page-size";
 /// Disable header redaction in error logs and `Debug` output (defaults to
 /// false for security)
@@ -148,10 +148,8 @@ impl CatalogBuilder for RestCatalogBuilder {
 }
 
 impl RestCatalogBuilder {
-    /// Sets the requested page size for namespace and table listings.
-    ///
-    /// See [`RestSessionCatalogBuilder::with_page_size`] for configuration
-    /// precedence and validation. All pages are still returned by list operations.
+    /// Sets the requested page size for namespace and table listings; see
+    /// [`RestSessionCatalogBuilder::with_page_size`].
     pub fn with_page_size(mut self, page_size: NonZeroU32) -> Self {
         self.inner = self.inner.with_page_size(page_size);
         self
@@ -1723,14 +1721,11 @@ impl Default for RestSessionCatalogBuilder {
 impl RestSessionCatalogBuilder {
     /// Sets the requested page size for namespace and table listings.
     ///
-    /// This overrides server defaults. The `rest-page-size` property passed to
-    /// [`load`](Self::load) takes precedence over this value, and server overrides
-    /// take precedence over both. There is no client-side default.
-    ///
-    /// The effective value must be a positive `i32`; an invalid value produces
-    /// [`ErrorKind::DataInvalid`] when the catalog is first used, after the server
-    /// configuration is fetched. List operations continue to return all results,
-    /// fetching as many pages as necessary.
+    /// List operations still return all results. Without a page size, no
+    /// `pageSize` is sent. Precedence, lowest to highest: server defaults, this
+    /// value, [`REST_CATALOG_PROP_PAGE_SIZE`] passed to [`load`](Self::load), and
+    /// server overrides. Catalog operations fail with [`ErrorKind::DataInvalid`]
+    /// if the effective value is not in `1..=i32::MAX`.
     pub fn with_page_size(mut self, page_size: NonZeroU32) -> Self {
         self.config.props.insert(
             REST_CATALOG_PROP_PAGE_SIZE.to_string(),
