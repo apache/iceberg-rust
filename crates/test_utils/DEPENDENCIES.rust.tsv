@@ -296,4 +296,4 @@ zlib-rs@0.6.5													X
 zmij@1.0.21										X			
 zstd@0.13.3										X			
 zstd-safe@7.2.4		X								X			
-zstd-sys@2.0.16+zstd.1.5.7		X								X			
+zstd-sys@2.1.2+zstd.1.5.7					X								
