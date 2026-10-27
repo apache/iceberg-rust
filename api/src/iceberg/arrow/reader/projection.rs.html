@@ -1690,10 +1690,10 @@
 <a href=#1690 id=1690 data-nosnippet>1690</a>    }
 <a href=#1691 id=1691 data-nosnippet>1691</a>
 <a href=#1692 id=1692 data-nosnippet>1692</a>    <span class="doccomment">/// Test reading Parquet files without field IDs with nested types (struct).
-<a href=#1693 id=1693 data-nosnippet>1693</a>    /// Java's pruneColumnsFallback() projects entire top-level columns including nested content.
-<a href=#1694 id=1694 data-nosnippet>1694</a>    /// This test verifies that a top-level struct field is projected correctly with all its nested fields.
+<a href=#1693 id=1693 data-nosnippet>1693</a>    /// Java's pruneColumnsFallback() projects entire top-level columns including nested content,
+<a href=#1694 id=1694 data-nosnippet>1694</a>    /// but only top-level fields get fallback ids, so struct fields read as null.
 <a href=#1695 id=1695 data-nosnippet>1695</a>    </span><span class="attr">#[tokio::test]
-<a href=#1696 id=1696 data-nosnippet>1696</a>    </span><span class="kw">async fn </span>test_read_parquet_without_field_ids_with_struct() {
+<a href=#1696 id=1696 data-nosnippet>1696</a>    </span><span class="kw">async fn </span>test_read_parquet_without_field_ids_reads_struct_fields_as_null() {
 <a href=#1697 id=1697 data-nosnippet>1697</a>        <span class="kw">use </span>arrow_array::{Int32Array, StructArray};
 <a href=#1698 id=1698 data-nosnippet>1698</a>        <span class="kw">use </span>arrow_schema::Fields;
 <a href=#1699 id=1699 data-nosnippet>1699</a>
@@ -1706,13 +1706,13 @@
 <a href=#1706 id=1706 data-nosnippet>1706</a>                        <span class="number">2</span>,
 <a href=#1707 id=1707 data-nosnippet>1707</a>                        <span class="string">"person"</span>,
 <a href=#1708 id=1708 data-nosnippet>1708</a>                        Type::Struct(StructType::new(<span class="macro">vec!</span>[
-<a href=#1709 id=1709 data-nosnippet>1709</a>                            NestedField::required(
+<a href=#1709 id=1709 data-nosnippet>1709</a>                            NestedField::optional(
 <a href=#1710 id=1710 data-nosnippet>1710</a>                                <span class="number">3</span>,
 <a href=#1711 id=1711 data-nosnippet>1711</a>                                <span class="string">"name"</span>,
 <a href=#1712 id=1712 data-nosnippet>1712</a>                                Type::Primitive(PrimitiveType::String),
 <a href=#1713 id=1713 data-nosnippet>1713</a>                            )
 <a href=#1714 id=1714 data-nosnippet>1714</a>                            .into(),
-<a href=#1715 id=1715 data-nosnippet>1715</a>                            NestedField::required(<span class="number">4</span>, <span class="string">"age"</span>, Type::Primitive(PrimitiveType::Int))
+<a href=#1715 id=1715 data-nosnippet>1715</a>                            NestedField::optional(<span class="number">4</span>, <span class="string">"age"</span>, Type::Primitive(PrimitiveType::Int))
 <a href=#1716 id=1716 data-nosnippet>1716</a>                                .into(),
 <a href=#1717 id=1717 data-nosnippet>1717</a>                        ])),
 <a href=#1718 id=1718 data-nosnippet>1718</a>                    )
@@ -1807,687 +1807,680 @@
 <a href=#1807 id=1807 data-nosnippet>1807</a>
 <a href=#1808 id=1808 data-nosnippet>1808</a>        <span class="kw">let </span>person_array = batch.column(<span class="number">1</span>).as_struct();
 <a href=#1809 id=1809 data-nosnippet>1809</a>        <span class="macro">assert_eq!</span>(person_array.num_columns(), <span class="number">2</span>);
-<a href=#1810 id=1810 data-nosnippet>1810</a>
-<a href=#1811 id=1811 data-nosnippet>1811</a>        <span class="kw">let </span>name_array = person_array.column(<span class="number">0</span>).as_string::&lt;i32&gt;();
-<a href=#1812 id=1812 data-nosnippet>1812</a>        <span class="macro">assert_eq!</span>(name_array.value(<span class="number">0</span>), <span class="string">"Alice"</span>);
-<a href=#1813 id=1813 data-nosnippet>1813</a>        <span class="macro">assert_eq!</span>(name_array.value(<span class="number">1</span>), <span class="string">"Bob"</span>);
+<a href=#1810 id=1810 data-nosnippet>1810</a>        <span class="macro">assert_eq!</span>(person_array.null_count(), <span class="number">0</span>);
+<a href=#1811 id=1811 data-nosnippet>1811</a>        <span class="macro">assert_eq!</span>(person_array.column(<span class="number">0</span>).null_count(), <span class="number">2</span>);
+<a href=#1812 id=1812 data-nosnippet>1812</a>        <span class="macro">assert_eq!</span>(person_array.column(<span class="number">1</span>).null_count(), <span class="number">2</span>);
+<a href=#1813 id=1813 data-nosnippet>1813</a>    }
 <a href=#1814 id=1814 data-nosnippet>1814</a>
-<a href=#1815 id=1815 data-nosnippet>1815</a>        <span class="kw">let </span>age_array = person_array
-<a href=#1816 id=1816 data-nosnippet>1816</a>            .column(<span class="number">1</span>)
-<a href=#1817 id=1817 data-nosnippet>1817</a>            .as_primitive::&lt;arrow_array::types::Int32Type&gt;();
-<a href=#1818 id=1818 data-nosnippet>1818</a>        <span class="macro">assert_eq!</span>(age_array.value(<span class="number">0</span>), <span class="number">30</span>);
-<a href=#1819 id=1819 data-nosnippet>1819</a>        <span class="macro">assert_eq!</span>(age_array.value(<span class="number">1</span>), <span class="number">25</span>);
-<a href=#1820 id=1820 data-nosnippet>1820</a>    }
+<a href=#1815 id=1815 data-nosnippet>1815</a>    <span class="doccomment">/// Test reading Parquet files without field IDs with schema evolution - column added in the middle.
+<a href=#1816 id=1816 data-nosnippet>1816</a>    /// When a new column is inserted between existing columns in the schema order,
+<a href=#1817 id=1817 data-nosnippet>1817</a>    /// the fallback projection must correctly map field IDs to output positions.
+<a href=#1818 id=1818 data-nosnippet>1818</a>    </span><span class="attr">#[tokio::test]
+<a href=#1819 id=1819 data-nosnippet>1819</a>    </span><span class="kw">async fn </span>test_read_parquet_without_field_ids_schema_evolution_add_column_in_middle() {
+<a href=#1820 id=1820 data-nosnippet>1820</a>        <span class="kw">use </span>arrow_array::{Array, Int32Array};
 <a href=#1821 id=1821 data-nosnippet>1821</a>
-<a href=#1822 id=1822 data-nosnippet>1822</a>    <span class="doccomment">/// Test reading Parquet files without field IDs with schema evolution - column added in the middle.
-<a href=#1823 id=1823 data-nosnippet>1823</a>    /// When a new column is inserted between existing columns in the schema order,
-<a href=#1824 id=1824 data-nosnippet>1824</a>    /// the fallback projection must correctly map field IDs to output positions.
-<a href=#1825 id=1825 data-nosnippet>1825</a>    </span><span class="attr">#[tokio::test]
-<a href=#1826 id=1826 data-nosnippet>1826</a>    </span><span class="kw">async fn </span>test_read_parquet_without_field_ids_schema_evolution_add_column_in_middle() {
-<a href=#1827 id=1827 data-nosnippet>1827</a>        <span class="kw">use </span>arrow_array::{Array, Int32Array};
-<a href=#1828 id=1828 data-nosnippet>1828</a>
-<a href=#1829 id=1829 data-nosnippet>1829</a>        <span class="kw">let </span>arrow_schema_old = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
-<a href=#1830 id=1830 data-nosnippet>1830</a>            Field::new(<span class="string">"col0"</span>, DataType::Int32, <span class="bool-val">true</span>),
-<a href=#1831 id=1831 data-nosnippet>1831</a>            Field::new(<span class="string">"col1"</span>, DataType::Int32, <span class="bool-val">true</span>),
-<a href=#1832 id=1832 data-nosnippet>1832</a>        ]));
-<a href=#1833 id=1833 data-nosnippet>1833</a>
-<a href=#1834 id=1834 data-nosnippet>1834</a>        <span class="comment">// New column added between existing columns: col0 (id=1), newCol (id=5), col1 (id=2)
-<a href=#1835 id=1835 data-nosnippet>1835</a>        </span><span class="kw">let </span>schema = Arc::new(
-<a href=#1836 id=1836 data-nosnippet>1836</a>            Schema::builder()
-<a href=#1837 id=1837 data-nosnippet>1837</a>                .with_schema_id(<span class="number">1</span>)
-<a href=#1838 id=1838 data-nosnippet>1838</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#1839 id=1839 data-nosnippet>1839</a>                    NestedField::optional(<span class="number">1</span>, <span class="string">"col0"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#1840 id=1840 data-nosnippet>1840</a>                    NestedField::optional(<span class="number">5</span>, <span class="string">"newCol"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#1841 id=1841 data-nosnippet>1841</a>                    NestedField::optional(<span class="number">2</span>, <span class="string">"col1"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#1842 id=1842 data-nosnippet>1842</a>                ])
-<a href=#1843 id=1843 data-nosnippet>1843</a>                .build()
-<a href=#1844 id=1844 data-nosnippet>1844</a>                .unwrap(),
-<a href=#1845 id=1845 data-nosnippet>1845</a>        );
+<a href=#1822 id=1822 data-nosnippet>1822</a>        <span class="kw">let </span>arrow_schema_old = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
+<a href=#1823 id=1823 data-nosnippet>1823</a>            Field::new(<span class="string">"col0"</span>, DataType::Int32, <span class="bool-val">true</span>),
+<a href=#1824 id=1824 data-nosnippet>1824</a>            Field::new(<span class="string">"col1"</span>, DataType::Int32, <span class="bool-val">true</span>),
+<a href=#1825 id=1825 data-nosnippet>1825</a>        ]));
+<a href=#1826 id=1826 data-nosnippet>1826</a>
+<a href=#1827 id=1827 data-nosnippet>1827</a>        <span class="comment">// New column added between existing columns: col0 (id=1), newCol (id=5), col1 (id=2)
+<a href=#1828 id=1828 data-nosnippet>1828</a>        </span><span class="kw">let </span>schema = Arc::new(
+<a href=#1829 id=1829 data-nosnippet>1829</a>            Schema::builder()
+<a href=#1830 id=1830 data-nosnippet>1830</a>                .with_schema_id(<span class="number">1</span>)
+<a href=#1831 id=1831 data-nosnippet>1831</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#1832 id=1832 data-nosnippet>1832</a>                    NestedField::optional(<span class="number">1</span>, <span class="string">"col0"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#1833 id=1833 data-nosnippet>1833</a>                    NestedField::optional(<span class="number">5</span>, <span class="string">"newCol"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#1834 id=1834 data-nosnippet>1834</a>                    NestedField::optional(<span class="number">2</span>, <span class="string">"col1"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#1835 id=1835 data-nosnippet>1835</a>                ])
+<a href=#1836 id=1836 data-nosnippet>1836</a>                .build()
+<a href=#1837 id=1837 data-nosnippet>1837</a>                .unwrap(),
+<a href=#1838 id=1838 data-nosnippet>1838</a>        );
+<a href=#1839 id=1839 data-nosnippet>1839</a>
+<a href=#1840 id=1840 data-nosnippet>1840</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#1841 id=1841 data-nosnippet>1841</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
+<a href=#1842 id=1842 data-nosnippet>1842</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#1843 id=1843 data-nosnippet>1843</a>
+<a href=#1844 id=1844 data-nosnippet>1844</a>        <span class="kw">let </span>col0_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>])) <span class="kw">as </span>ArrayRef;
+<a href=#1845 id=1845 data-nosnippet>1845</a>        <span class="kw">let </span>col1_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">10</span>, <span class="number">20</span>])) <span class="kw">as </span>ArrayRef;
 <a href=#1846 id=1846 data-nosnippet>1846</a>
-<a href=#1847 id=1847 data-nosnippet>1847</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#1848 id=1848 data-nosnippet>1848</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#1849 id=1849 data-nosnippet>1849</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
-<a href=#1850 id=1850 data-nosnippet>1850</a>
-<a href=#1851 id=1851 data-nosnippet>1851</a>        <span class="kw">let </span>col0_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>])) <span class="kw">as </span>ArrayRef;
-<a href=#1852 id=1852 data-nosnippet>1852</a>        <span class="kw">let </span>col1_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">10</span>, <span class="number">20</span>])) <span class="kw">as </span>ArrayRef;
+<a href=#1847 id=1847 data-nosnippet>1847</a>        <span class="kw">let </span>to_write =
+<a href=#1848 id=1848 data-nosnippet>1848</a>            RecordBatch::try_new(arrow_schema_old.clone(), <span class="macro">vec!</span>[col0_data, col1_data]).unwrap();
+<a href=#1849 id=1849 data-nosnippet>1849</a>
+<a href=#1850 id=1850 data-nosnippet>1850</a>        <span class="kw">let </span>props = WriterProperties::builder()
+<a href=#1851 id=1851 data-nosnippet>1851</a>            .set_compression(Compression::SNAPPY)
+<a href=#1852 id=1852 data-nosnippet>1852</a>            .build();
 <a href=#1853 id=1853 data-nosnippet>1853</a>
-<a href=#1854 id=1854 data-nosnippet>1854</a>        <span class="kw">let </span>to_write =
-<a href=#1855 id=1855 data-nosnippet>1855</a>            RecordBatch::try_new(arrow_schema_old.clone(), <span class="macro">vec!</span>[col0_data, col1_data]).unwrap();
-<a href=#1856 id=1856 data-nosnippet>1856</a>
-<a href=#1857 id=1857 data-nosnippet>1857</a>        <span class="kw">let </span>props = WriterProperties::builder()
-<a href=#1858 id=1858 data-nosnippet>1858</a>            .set_compression(Compression::SNAPPY)
-<a href=#1859 id=1859 data-nosnippet>1859</a>            .build();
+<a href=#1854 id=1854 data-nosnippet>1854</a>        <span class="kw">let </span>file = File::create(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>)).unwrap();
+<a href=#1855 id=1855 data-nosnippet>1855</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, to_write.schema(), <span class="prelude-val">Some</span>(props)).unwrap();
+<a href=#1856 id=1856 data-nosnippet>1856</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
+<a href=#1857 id=1857 data-nosnippet>1857</a>        writer.close().unwrap();
+<a href=#1858 id=1858 data-nosnippet>1858</a>
+<a href=#1859 id=1859 data-nosnippet>1859</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 <a href=#1860 id=1860 data-nosnippet>1860</a>
-<a href=#1861 id=1861 data-nosnippet>1861</a>        <span class="kw">let </span>file = File::create(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>)).unwrap();
-<a href=#1862 id=1862 data-nosnippet>1862</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, to_write.schema(), <span class="prelude-val">Some</span>(props)).unwrap();
-<a href=#1863 id=1863 data-nosnippet>1863</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
-<a href=#1864 id=1864 data-nosnippet>1864</a>        writer.close().unwrap();
-<a href=#1865 id=1865 data-nosnippet>1865</a>
-<a href=#1866 id=1866 data-nosnippet>1866</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
-<a href=#1867 id=1867 data-nosnippet>1867</a>
-<a href=#1868 id=1868 data-nosnippet>1868</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
-<a href=#1869 id=1869 data-nosnippet>1869</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask::builder()
-<a href=#1870 id=1870 data-nosnippet>1870</a>                .with_file_size_in_bytes(
-<a href=#1871 id=1871 data-nosnippet>1871</a>                    std::fs::metadata(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>))
-<a href=#1872 id=1872 data-nosnippet>1872</a>                        .unwrap()
-<a href=#1873 id=1873 data-nosnippet>1873</a>                        .len(),
-<a href=#1874 id=1874 data-nosnippet>1874</a>                )
-<a href=#1875 id=1875 data-nosnippet>1875</a>                .with_start(<span class="number">0</span>)
-<a href=#1876 id=1876 data-nosnippet>1876</a>                .with_length(<span class="number">0</span>)
-<a href=#1877 id=1877 data-nosnippet>1877</a>                .with_data_file_path(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>))
-<a href=#1878 id=1878 data-nosnippet>1878</a>                .with_data_file_format(DataFileFormat::Parquet)
-<a href=#1879 id=1879 data-nosnippet>1879</a>                .with_schema(schema.clone())
-<a href=#1880 id=1880 data-nosnippet>1880</a>                .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">5</span>, <span class="number">2</span>])
-<a href=#1881 id=1881 data-nosnippet>1881</a>                .with_case_sensitive(<span class="bool-val">false</span>)
-<a href=#1882 id=1882 data-nosnippet>1882</a>                .build()
-<a href=#1883 id=1883 data-nosnippet>1883</a>                .unwrap())]
-<a href=#1884 id=1884 data-nosnippet>1884</a>            .into_iter(),
-<a href=#1885 id=1885 data-nosnippet>1885</a>        )) <span class="kw">as </span>FileScanTaskStream;
-<a href=#1886 id=1886 data-nosnippet>1886</a>
-<a href=#1887 id=1887 data-nosnippet>1887</a>        <span class="kw">let </span>result = reader
-<a href=#1888 id=1888 data-nosnippet>1888</a>            .read(tasks)
-<a href=#1889 id=1889 data-nosnippet>1889</a>            .unwrap()
-<a href=#1890 id=1890 data-nosnippet>1890</a>            .stream()
-<a href=#1891 id=1891 data-nosnippet>1891</a>            .try_collect::&lt;Vec&lt;RecordBatch&gt;&gt;()
-<a href=#1892 id=1892 data-nosnippet>1892</a>            .<span class="kw">await
-<a href=#1893 id=1893 data-nosnippet>1893</a>            </span>.unwrap();
-<a href=#1894 id=1894 data-nosnippet>1894</a>
-<a href=#1895 id=1895 data-nosnippet>1895</a>        <span class="macro">assert_eq!</span>(result.len(), <span class="number">1</span>);
-<a href=#1896 id=1896 data-nosnippet>1896</a>        <span class="kw">let </span>batch = <span class="kw-2">&amp;</span>result[<span class="number">0</span>];
-<a href=#1897 id=1897 data-nosnippet>1897</a>        <span class="macro">assert_eq!</span>(batch.num_rows(), <span class="number">2</span>);
-<a href=#1898 id=1898 data-nosnippet>1898</a>        <span class="macro">assert_eq!</span>(batch.num_columns(), <span class="number">3</span>);
-<a href=#1899 id=1899 data-nosnippet>1899</a>
-<a href=#1900 id=1900 data-nosnippet>1900</a>        <span class="kw">let </span>result_col0 = batch
-<a href=#1901 id=1901 data-nosnippet>1901</a>            .column(<span class="number">0</span>)
+<a href=#1861 id=1861 data-nosnippet>1861</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
+<a href=#1862 id=1862 data-nosnippet>1862</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask::builder()
+<a href=#1863 id=1863 data-nosnippet>1863</a>                .with_file_size_in_bytes(
+<a href=#1864 id=1864 data-nosnippet>1864</a>                    std::fs::metadata(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>))
+<a href=#1865 id=1865 data-nosnippet>1865</a>                        .unwrap()
+<a href=#1866 id=1866 data-nosnippet>1866</a>                        .len(),
+<a href=#1867 id=1867 data-nosnippet>1867</a>                )
+<a href=#1868 id=1868 data-nosnippet>1868</a>                .with_start(<span class="number">0</span>)
+<a href=#1869 id=1869 data-nosnippet>1869</a>                .with_length(<span class="number">0</span>)
+<a href=#1870 id=1870 data-nosnippet>1870</a>                .with_data_file_path(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>))
+<a href=#1871 id=1871 data-nosnippet>1871</a>                .with_data_file_format(DataFileFormat::Parquet)
+<a href=#1872 id=1872 data-nosnippet>1872</a>                .with_schema(schema.clone())
+<a href=#1873 id=1873 data-nosnippet>1873</a>                .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">5</span>, <span class="number">2</span>])
+<a href=#1874 id=1874 data-nosnippet>1874</a>                .with_case_sensitive(<span class="bool-val">false</span>)
+<a href=#1875 id=1875 data-nosnippet>1875</a>                .build()
+<a href=#1876 id=1876 data-nosnippet>1876</a>                .unwrap())]
+<a href=#1877 id=1877 data-nosnippet>1877</a>            .into_iter(),
+<a href=#1878 id=1878 data-nosnippet>1878</a>        )) <span class="kw">as </span>FileScanTaskStream;
+<a href=#1879 id=1879 data-nosnippet>1879</a>
+<a href=#1880 id=1880 data-nosnippet>1880</a>        <span class="kw">let </span>result = reader
+<a href=#1881 id=1881 data-nosnippet>1881</a>            .read(tasks)
+<a href=#1882 id=1882 data-nosnippet>1882</a>            .unwrap()
+<a href=#1883 id=1883 data-nosnippet>1883</a>            .stream()
+<a href=#1884 id=1884 data-nosnippet>1884</a>            .try_collect::&lt;Vec&lt;RecordBatch&gt;&gt;()
+<a href=#1885 id=1885 data-nosnippet>1885</a>            .<span class="kw">await
+<a href=#1886 id=1886 data-nosnippet>1886</a>            </span>.unwrap();
+<a href=#1887 id=1887 data-nosnippet>1887</a>
+<a href=#1888 id=1888 data-nosnippet>1888</a>        <span class="macro">assert_eq!</span>(result.len(), <span class="number">1</span>);
+<a href=#1889 id=1889 data-nosnippet>1889</a>        <span class="kw">let </span>batch = <span class="kw-2">&amp;</span>result[<span class="number">0</span>];
+<a href=#1890 id=1890 data-nosnippet>1890</a>        <span class="macro">assert_eq!</span>(batch.num_rows(), <span class="number">2</span>);
+<a href=#1891 id=1891 data-nosnippet>1891</a>        <span class="macro">assert_eq!</span>(batch.num_columns(), <span class="number">3</span>);
+<a href=#1892 id=1892 data-nosnippet>1892</a>
+<a href=#1893 id=1893 data-nosnippet>1893</a>        <span class="kw">let </span>result_col0 = batch
+<a href=#1894 id=1894 data-nosnippet>1894</a>            .column(<span class="number">0</span>)
+<a href=#1895 id=1895 data-nosnippet>1895</a>            .as_primitive::&lt;arrow_array::types::Int32Type&gt;();
+<a href=#1896 id=1896 data-nosnippet>1896</a>        <span class="macro">assert_eq!</span>(result_col0.value(<span class="number">0</span>), <span class="number">1</span>);
+<a href=#1897 id=1897 data-nosnippet>1897</a>        <span class="macro">assert_eq!</span>(result_col0.value(<span class="number">1</span>), <span class="number">2</span>);
+<a href=#1898 id=1898 data-nosnippet>1898</a>
+<a href=#1899 id=1899 data-nosnippet>1899</a>        <span class="comment">// New column should be NULL (doesn't exist in old file)
+<a href=#1900 id=1900 data-nosnippet>1900</a>        </span><span class="kw">let </span>result_newcol = batch
+<a href=#1901 id=1901 data-nosnippet>1901</a>            .column(<span class="number">1</span>)
 <a href=#1902 id=1902 data-nosnippet>1902</a>            .as_primitive::&lt;arrow_array::types::Int32Type&gt;();
-<a href=#1903 id=1903 data-nosnippet>1903</a>        <span class="macro">assert_eq!</span>(result_col0.value(<span class="number">0</span>), <span class="number">1</span>);
-<a href=#1904 id=1904 data-nosnippet>1904</a>        <span class="macro">assert_eq!</span>(result_col0.value(<span class="number">1</span>), <span class="number">2</span>);
-<a href=#1905 id=1905 data-nosnippet>1905</a>
-<a href=#1906 id=1906 data-nosnippet>1906</a>        <span class="comment">// New column should be NULL (doesn't exist in old file)
-<a href=#1907 id=1907 data-nosnippet>1907</a>        </span><span class="kw">let </span>result_newcol = batch
-<a href=#1908 id=1908 data-nosnippet>1908</a>            .column(<span class="number">1</span>)
+<a href=#1903 id=1903 data-nosnippet>1903</a>        <span class="macro">assert_eq!</span>(result_newcol.null_count(), <span class="number">2</span>);
+<a href=#1904 id=1904 data-nosnippet>1904</a>        <span class="macro">assert!</span>(result_newcol.is_null(<span class="number">0</span>));
+<a href=#1905 id=1905 data-nosnippet>1905</a>        <span class="macro">assert!</span>(result_newcol.is_null(<span class="number">1</span>));
+<a href=#1906 id=1906 data-nosnippet>1906</a>
+<a href=#1907 id=1907 data-nosnippet>1907</a>        <span class="kw">let </span>result_col1 = batch
+<a href=#1908 id=1908 data-nosnippet>1908</a>            .column(<span class="number">2</span>)
 <a href=#1909 id=1909 data-nosnippet>1909</a>            .as_primitive::&lt;arrow_array::types::Int32Type&gt;();
-<a href=#1910 id=1910 data-nosnippet>1910</a>        <span class="macro">assert_eq!</span>(result_newcol.null_count(), <span class="number">2</span>);
-<a href=#1911 id=1911 data-nosnippet>1911</a>        <span class="macro">assert!</span>(result_newcol.is_null(<span class="number">0</span>));
-<a href=#1912 id=1912 data-nosnippet>1912</a>        <span class="macro">assert!</span>(result_newcol.is_null(<span class="number">1</span>));
+<a href=#1910 id=1910 data-nosnippet>1910</a>        <span class="macro">assert_eq!</span>(result_col1.value(<span class="number">0</span>), <span class="number">10</span>);
+<a href=#1911 id=1911 data-nosnippet>1911</a>        <span class="macro">assert_eq!</span>(result_col1.value(<span class="number">1</span>), <span class="number">20</span>);
+<a href=#1912 id=1912 data-nosnippet>1912</a>    }
 <a href=#1913 id=1913 data-nosnippet>1913</a>
-<a href=#1914 id=1914 data-nosnippet>1914</a>        <span class="kw">let </span>result_col1 = batch
-<a href=#1915 id=1915 data-nosnippet>1915</a>            .column(<span class="number">2</span>)
-<a href=#1916 id=1916 data-nosnippet>1916</a>            .as_primitive::&lt;arrow_array::types::Int32Type&gt;();
-<a href=#1917 id=1917 data-nosnippet>1917</a>        <span class="macro">assert_eq!</span>(result_col1.value(<span class="number">0</span>), <span class="number">10</span>);
-<a href=#1918 id=1918 data-nosnippet>1918</a>        <span class="macro">assert_eq!</span>(result_col1.value(<span class="number">1</span>), <span class="number">20</span>);
-<a href=#1919 id=1919 data-nosnippet>1919</a>    }
+<a href=#1914 id=1914 data-nosnippet>1914</a>    <span class="doccomment">/// Test reading Parquet files without field IDs with a filter that eliminates all row groups.
+<a href=#1915 id=1915 data-nosnippet>1915</a>    /// During development of field ID mapping, we saw a panic when row_selection_enabled=true and
+<a href=#1916 id=1916 data-nosnippet>1916</a>    /// all row groups are filtered out.
+<a href=#1917 id=1917 data-nosnippet>1917</a>    </span><span class="attr">#[tokio::test]
+<a href=#1918 id=1918 data-nosnippet>1918</a>    </span><span class="kw">async fn </span>test_read_parquet_without_field_ids_filter_eliminates_all_rows() {
+<a href=#1919 id=1919 data-nosnippet>1919</a>        <span class="kw">use </span>arrow_array::{Float64Array, Int32Array};
 <a href=#1920 id=1920 data-nosnippet>1920</a>
-<a href=#1921 id=1921 data-nosnippet>1921</a>    <span class="doccomment">/// Test reading Parquet files without field IDs with a filter that eliminates all row groups.
-<a href=#1922 id=1922 data-nosnippet>1922</a>    /// During development of field ID mapping, we saw a panic when row_selection_enabled=true and
-<a href=#1923 id=1923 data-nosnippet>1923</a>    /// all row groups are filtered out.
-<a href=#1924 id=1924 data-nosnippet>1924</a>    </span><span class="attr">#[tokio::test]
-<a href=#1925 id=1925 data-nosnippet>1925</a>    </span><span class="kw">async fn </span>test_read_parquet_without_field_ids_filter_eliminates_all_rows() {
-<a href=#1926 id=1926 data-nosnippet>1926</a>        <span class="kw">use </span>arrow_array::{Float64Array, Int32Array};
-<a href=#1927 id=1927 data-nosnippet>1927</a>
-<a href=#1928 id=1928 data-nosnippet>1928</a>        <span class="comment">// Schema with fields that will use fallback IDs 1, 2, 3
-<a href=#1929 id=1929 data-nosnippet>1929</a>        </span><span class="kw">let </span>schema = Arc::new(
-<a href=#1930 id=1930 data-nosnippet>1930</a>            Schema::builder()
-<a href=#1931 id=1931 data-nosnippet>1931</a>                .with_schema_id(<span class="number">1</span>)
-<a href=#1932 id=1932 data-nosnippet>1932</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#1933 id=1933 data-nosnippet>1933</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#1934 id=1934 data-nosnippet>1934</a>                    NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#1935 id=1935 data-nosnippet>1935</a>                    NestedField::required(<span class="number">3</span>, <span class="string">"value"</span>, Type::Primitive(PrimitiveType::Double))
-<a href=#1936 id=1936 data-nosnippet>1936</a>                        .into(),
-<a href=#1937 id=1937 data-nosnippet>1937</a>                ])
-<a href=#1938 id=1938 data-nosnippet>1938</a>                .build()
-<a href=#1939 id=1939 data-nosnippet>1939</a>                .unwrap(),
-<a href=#1940 id=1940 data-nosnippet>1940</a>        );
-<a href=#1941 id=1941 data-nosnippet>1941</a>
-<a href=#1942 id=1942 data-nosnippet>1942</a>        <span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
-<a href=#1943 id=1943 data-nosnippet>1943</a>            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>),
-<a href=#1944 id=1944 data-nosnippet>1944</a>            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>),
-<a href=#1945 id=1945 data-nosnippet>1945</a>            Field::new(<span class="string">"value"</span>, DataType::Float64, <span class="bool-val">false</span>),
-<a href=#1946 id=1946 data-nosnippet>1946</a>        ]));
-<a href=#1947 id=1947 data-nosnippet>1947</a>
-<a href=#1948 id=1948 data-nosnippet>1948</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#1949 id=1949 data-nosnippet>1949</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#1950 id=1950 data-nosnippet>1950</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
-<a href=#1951 id=1951 data-nosnippet>1951</a>
-<a href=#1952 id=1952 data-nosnippet>1952</a>        <span class="comment">// Write data where all ids are &gt;= 10
-<a href=#1953 id=1953 data-nosnippet>1953</a>        </span><span class="kw">let </span>id_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">10</span>, <span class="number">11</span>, <span class="number">12</span>])) <span class="kw">as </span>ArrayRef;
-<a href=#1954 id=1954 data-nosnippet>1954</a>        <span class="kw">let </span>name_data = Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"a"</span>, <span class="string">"b"</span>, <span class="string">"c"</span>])) <span class="kw">as </span>ArrayRef;
-<a href=#1955 id=1955 data-nosnippet>1955</a>        <span class="kw">let </span>value_data = Arc::new(Float64Array::from(<span class="macro">vec!</span>[<span class="number">100.0</span>, <span class="number">200.0</span>, <span class="number">300.0</span>])) <span class="kw">as </span>ArrayRef;
-<a href=#1956 id=1956 data-nosnippet>1956</a>
-<a href=#1957 id=1957 data-nosnippet>1957</a>        <span class="kw">let </span>to_write =
-<a href=#1958 id=1958 data-nosnippet>1958</a>            RecordBatch::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[id_data, name_data, value_data])
-<a href=#1959 id=1959 data-nosnippet>1959</a>                .unwrap();
-<a href=#1960 id=1960 data-nosnippet>1960</a>
-<a href=#1961 id=1961 data-nosnippet>1961</a>        <span class="kw">let </span>props = WriterProperties::builder()
-<a href=#1962 id=1962 data-nosnippet>1962</a>            .set_compression(Compression::SNAPPY)
-<a href=#1963 id=1963 data-nosnippet>1963</a>            .build();
-<a href=#1964 id=1964 data-nosnippet>1964</a>
-<a href=#1965 id=1965 data-nosnippet>1965</a>        <span class="kw">let </span>file = File::create(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>)).unwrap();
-<a href=#1966 id=1966 data-nosnippet>1966</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, to_write.schema(), <span class="prelude-val">Some</span>(props)).unwrap();
-<a href=#1967 id=1967 data-nosnippet>1967</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
-<a href=#1968 id=1968 data-nosnippet>1968</a>        writer.close().unwrap();
-<a href=#1969 id=1969 data-nosnippet>1969</a>
-<a href=#1970 id=1970 data-nosnippet>1970</a>        <span class="comment">// Filter that eliminates all row groups: id &lt; 5
-<a href=#1971 id=1971 data-nosnippet>1971</a>        </span><span class="kw">let </span>predicate = Reference::new(<span class="string">"id"</span>).less_than(Datum::int(<span class="number">5</span>));
-<a href=#1972 id=1972 data-nosnippet>1972</a>
-<a href=#1973 id=1973 data-nosnippet>1973</a>        <span class="comment">// Enable both row_group_filtering and row_selection - triggered the panic
-<a href=#1974 id=1974 data-nosnippet>1974</a>        </span><span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-<a href=#1975 id=1975 data-nosnippet>1975</a>            .with_row_group_filtering_enabled(<span class="bool-val">true</span>)
-<a href=#1976 id=1976 data-nosnippet>1976</a>            .with_row_selection_enabled(<span class="bool-val">true</span>)
-<a href=#1977 id=1977 data-nosnippet>1977</a>            .build();
-<a href=#1978 id=1978 data-nosnippet>1978</a>
-<a href=#1979 id=1979 data-nosnippet>1979</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
-<a href=#1980 id=1980 data-nosnippet>1980</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask::builder()
-<a href=#1981 id=1981 data-nosnippet>1981</a>                .with_file_size_in_bytes(
-<a href=#1982 id=1982 data-nosnippet>1982</a>                    std::fs::metadata(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>))
-<a href=#1983 id=1983 data-nosnippet>1983</a>                        .unwrap()
-<a href=#1984 id=1984 data-nosnippet>1984</a>                        .len(),
-<a href=#1985 id=1985 data-nosnippet>1985</a>                )
-<a href=#1986 id=1986 data-nosnippet>1986</a>                .with_start(<span class="number">0</span>)
-<a href=#1987 id=1987 data-nosnippet>1987</a>                .with_length(<span class="number">0</span>)
-<a href=#1988 id=1988 data-nosnippet>1988</a>                .with_data_file_path(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>))
-<a href=#1989 id=1989 data-nosnippet>1989</a>                .with_data_file_format(DataFileFormat::Parquet)
-<a href=#1990 id=1990 data-nosnippet>1990</a>                .with_schema(schema.clone())
-<a href=#1991 id=1991 data-nosnippet>1991</a>                .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])
-<a href=#1992 id=1992 data-nosnippet>1992</a>                .with_case_sensitive(<span class="bool-val">false</span>)
-<a href=#1993 id=1993 data-nosnippet>1993</a>                .with_predicate(<span class="prelude-val">Some</span>(predicate.bind(schema, <span class="bool-val">true</span>).unwrap()))
-<a href=#1994 id=1994 data-nosnippet>1994</a>                .build()
-<a href=#1995 id=1995 data-nosnippet>1995</a>                .unwrap())]
-<a href=#1996 id=1996 data-nosnippet>1996</a>            .into_iter(),
-<a href=#1997 id=1997 data-nosnippet>1997</a>        )) <span class="kw">as </span>FileScanTaskStream;
-<a href=#1998 id=1998 data-nosnippet>1998</a>
-<a href=#1999 id=1999 data-nosnippet>1999</a>        <span class="comment">// Should no longer panic
-<a href=#2000 id=2000 data-nosnippet>2000</a>        </span><span class="kw">let </span>result = reader
-<a href=#2001 id=2001 data-nosnippet>2001</a>            .read(tasks)
-<a href=#2002 id=2002 data-nosnippet>2002</a>            .unwrap()
-<a href=#2003 id=2003 data-nosnippet>2003</a>            .stream()
-<a href=#2004 id=2004 data-nosnippet>2004</a>            .try_collect::&lt;Vec&lt;RecordBatch&gt;&gt;()
-<a href=#2005 id=2005 data-nosnippet>2005</a>            .<span class="kw">await
-<a href=#2006 id=2006 data-nosnippet>2006</a>            </span>.unwrap();
-<a href=#2007 id=2007 data-nosnippet>2007</a>
-<a href=#2008 id=2008 data-nosnippet>2008</a>        <span class="comment">// Should return empty results
-<a href=#2009 id=2009 data-nosnippet>2009</a>        </span><span class="macro">assert!</span>(result.is_empty() || result.iter().all(|batch| batch.num_rows() == <span class="number">0</span>));
-<a href=#2010 id=2010 data-nosnippet>2010</a>    }
-<a href=#2011 id=2011 data-nosnippet>2011</a>
-<a href=#2012 id=2012 data-nosnippet>2012</a>    <span class="doccomment">/// Test bucket partitioning reads source column from data file (not partition metadata).
-<a href=#2013 id=2013 data-nosnippet>2013</a>    ///
-<a href=#2014 id=2014 data-nosnippet>2014</a>    /// This is an integration test verifying the complete ArrowReader pipeline with bucket partitioning.
-<a href=#2015 id=2015 data-nosnippet>2015</a>    /// It corresponds to TestRuntimeFiltering tests in Iceberg Java (e.g., testRenamedSourceColumnTable).
-<a href=#2016 id=2016 data-nosnippet>2016</a>    ///
-<a href=#2017 id=2017 data-nosnippet>2017</a>    /// # Iceberg Spec Requirements
-<a href=#2018 id=2018 data-nosnippet>2018</a>    ///
-<a href=#2019 id=2019 data-nosnippet>2019</a>    /// Per the Iceberg spec "Column Projection" section:
-<a href=#2020 id=2020 data-nosnippet>2020</a>    /// &gt; "Return the value from partition metadata if an **Identity Transform** exists for the field"
-<a href=#2021 id=2021 data-nosnippet>2021</a>    ///
-<a href=#2022 id=2022 data-nosnippet>2022</a>    /// This means:
-<a href=#2023 id=2023 data-nosnippet>2023</a>    /// - Identity transforms (e.g., `identity(dept)`) use constants from partition metadata
-<a href=#2024 id=2024 data-nosnippet>2024</a>    /// - Non-identity transforms (e.g., `bucket(4, id)`) must read source columns from data files
-<a href=#2025 id=2025 data-nosnippet>2025</a>    /// - Partition metadata for bucket transforms stores bucket numbers (0-3), NOT source values
+<a href=#1921 id=1921 data-nosnippet>1921</a>        <span class="comment">// Schema with fields that will use fallback IDs 1, 2, 3
+<a href=#1922 id=1922 data-nosnippet>1922</a>        </span><span class="kw">let </span>schema = Arc::new(
+<a href=#1923 id=1923 data-nosnippet>1923</a>            Schema::builder()
+<a href=#1924 id=1924 data-nosnippet>1924</a>                .with_schema_id(<span class="number">1</span>)
+<a href=#1925 id=1925 data-nosnippet>1925</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#1926 id=1926 data-nosnippet>1926</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#1927 id=1927 data-nosnippet>1927</a>                    NestedField::required(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#1928 id=1928 data-nosnippet>1928</a>                    NestedField::required(<span class="number">3</span>, <span class="string">"value"</span>, Type::Primitive(PrimitiveType::Double))
+<a href=#1929 id=1929 data-nosnippet>1929</a>                        .into(),
+<a href=#1930 id=1930 data-nosnippet>1930</a>                ])
+<a href=#1931 id=1931 data-nosnippet>1931</a>                .build()
+<a href=#1932 id=1932 data-nosnippet>1932</a>                .unwrap(),
+<a href=#1933 id=1933 data-nosnippet>1933</a>        );
+<a href=#1934 id=1934 data-nosnippet>1934</a>
+<a href=#1935 id=1935 data-nosnippet>1935</a>        <span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
+<a href=#1936 id=1936 data-nosnippet>1936</a>            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>),
+<a href=#1937 id=1937 data-nosnippet>1937</a>            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">false</span>),
+<a href=#1938 id=1938 data-nosnippet>1938</a>            Field::new(<span class="string">"value"</span>, DataType::Float64, <span class="bool-val">false</span>),
+<a href=#1939 id=1939 data-nosnippet>1939</a>        ]));
+<a href=#1940 id=1940 data-nosnippet>1940</a>
+<a href=#1941 id=1941 data-nosnippet>1941</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#1942 id=1942 data-nosnippet>1942</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
+<a href=#1943 id=1943 data-nosnippet>1943</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#1944 id=1944 data-nosnippet>1944</a>
+<a href=#1945 id=1945 data-nosnippet>1945</a>        <span class="comment">// Write data where all ids are &gt;= 10
+<a href=#1946 id=1946 data-nosnippet>1946</a>        </span><span class="kw">let </span>id_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">10</span>, <span class="number">11</span>, <span class="number">12</span>])) <span class="kw">as </span>ArrayRef;
+<a href=#1947 id=1947 data-nosnippet>1947</a>        <span class="kw">let </span>name_data = Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"a"</span>, <span class="string">"b"</span>, <span class="string">"c"</span>])) <span class="kw">as </span>ArrayRef;
+<a href=#1948 id=1948 data-nosnippet>1948</a>        <span class="kw">let </span>value_data = Arc::new(Float64Array::from(<span class="macro">vec!</span>[<span class="number">100.0</span>, <span class="number">200.0</span>, <span class="number">300.0</span>])) <span class="kw">as </span>ArrayRef;
+<a href=#1949 id=1949 data-nosnippet>1949</a>
+<a href=#1950 id=1950 data-nosnippet>1950</a>        <span class="kw">let </span>to_write =
+<a href=#1951 id=1951 data-nosnippet>1951</a>            RecordBatch::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[id_data, name_data, value_data])
+<a href=#1952 id=1952 data-nosnippet>1952</a>                .unwrap();
+<a href=#1953 id=1953 data-nosnippet>1953</a>
+<a href=#1954 id=1954 data-nosnippet>1954</a>        <span class="kw">let </span>props = WriterProperties::builder()
+<a href=#1955 id=1955 data-nosnippet>1955</a>            .set_compression(Compression::SNAPPY)
+<a href=#1956 id=1956 data-nosnippet>1956</a>            .build();
+<a href=#1957 id=1957 data-nosnippet>1957</a>
+<a href=#1958 id=1958 data-nosnippet>1958</a>        <span class="kw">let </span>file = File::create(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>)).unwrap();
+<a href=#1959 id=1959 data-nosnippet>1959</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, to_write.schema(), <span class="prelude-val">Some</span>(props)).unwrap();
+<a href=#1960 id=1960 data-nosnippet>1960</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
+<a href=#1961 id=1961 data-nosnippet>1961</a>        writer.close().unwrap();
+<a href=#1962 id=1962 data-nosnippet>1962</a>
+<a href=#1963 id=1963 data-nosnippet>1963</a>        <span class="comment">// Filter that eliminates all row groups: id &lt; 5
+<a href=#1964 id=1964 data-nosnippet>1964</a>        </span><span class="kw">let </span>predicate = Reference::new(<span class="string">"id"</span>).less_than(Datum::int(<span class="number">5</span>));
+<a href=#1965 id=1965 data-nosnippet>1965</a>
+<a href=#1966 id=1966 data-nosnippet>1966</a>        <span class="comment">// Enable both row_group_filtering and row_selection - triggered the panic
+<a href=#1967 id=1967 data-nosnippet>1967</a>        </span><span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current())
+<a href=#1968 id=1968 data-nosnippet>1968</a>            .with_row_group_filtering_enabled(<span class="bool-val">true</span>)
+<a href=#1969 id=1969 data-nosnippet>1969</a>            .with_row_selection_enabled(<span class="bool-val">true</span>)
+<a href=#1970 id=1970 data-nosnippet>1970</a>            .build();
+<a href=#1971 id=1971 data-nosnippet>1971</a>
+<a href=#1972 id=1972 data-nosnippet>1972</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
+<a href=#1973 id=1973 data-nosnippet>1973</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask::builder()
+<a href=#1974 id=1974 data-nosnippet>1974</a>                .with_file_size_in_bytes(
+<a href=#1975 id=1975 data-nosnippet>1975</a>                    std::fs::metadata(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>))
+<a href=#1976 id=1976 data-nosnippet>1976</a>                        .unwrap()
+<a href=#1977 id=1977 data-nosnippet>1977</a>                        .len(),
+<a href=#1978 id=1978 data-nosnippet>1978</a>                )
+<a href=#1979 id=1979 data-nosnippet>1979</a>                .with_start(<span class="number">0</span>)
+<a href=#1980 id=1980 data-nosnippet>1980</a>                .with_length(<span class="number">0</span>)
+<a href=#1981 id=1981 data-nosnippet>1981</a>                .with_data_file_path(<span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>))
+<a href=#1982 id=1982 data-nosnippet>1982</a>                .with_data_file_format(DataFileFormat::Parquet)
+<a href=#1983 id=1983 data-nosnippet>1983</a>                .with_schema(schema.clone())
+<a href=#1984 id=1984 data-nosnippet>1984</a>                .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])
+<a href=#1985 id=1985 data-nosnippet>1985</a>                .with_case_sensitive(<span class="bool-val">false</span>)
+<a href=#1986 id=1986 data-nosnippet>1986</a>                .with_predicate(<span class="prelude-val">Some</span>(predicate.bind(schema, <span class="bool-val">true</span>).unwrap()))
+<a href=#1987 id=1987 data-nosnippet>1987</a>                .build()
+<a href=#1988 id=1988 data-nosnippet>1988</a>                .unwrap())]
+<a href=#1989 id=1989 data-nosnippet>1989</a>            .into_iter(),
+<a href=#1990 id=1990 data-nosnippet>1990</a>        )) <span class="kw">as </span>FileScanTaskStream;
+<a href=#1991 id=1991 data-nosnippet>1991</a>
+<a href=#1992 id=1992 data-nosnippet>1992</a>        <span class="comment">// Should no longer panic
+<a href=#1993 id=1993 data-nosnippet>1993</a>        </span><span class="kw">let </span>result = reader
+<a href=#1994 id=1994 data-nosnippet>1994</a>            .read(tasks)
+<a href=#1995 id=1995 data-nosnippet>1995</a>            .unwrap()
+<a href=#1996 id=1996 data-nosnippet>1996</a>            .stream()
+<a href=#1997 id=1997 data-nosnippet>1997</a>            .try_collect::&lt;Vec&lt;RecordBatch&gt;&gt;()
+<a href=#1998 id=1998 data-nosnippet>1998</a>            .<span class="kw">await
+<a href=#1999 id=1999 data-nosnippet>1999</a>            </span>.unwrap();
+<a href=#2000 id=2000 data-nosnippet>2000</a>
+<a href=#2001 id=2001 data-nosnippet>2001</a>        <span class="comment">// Should return empty results
+<a href=#2002 id=2002 data-nosnippet>2002</a>        </span><span class="macro">assert!</span>(result.is_empty() || result.iter().all(|batch| batch.num_rows() == <span class="number">0</span>));
+<a href=#2003 id=2003 data-nosnippet>2003</a>    }
+<a href=#2004 id=2004 data-nosnippet>2004</a>
+<a href=#2005 id=2005 data-nosnippet>2005</a>    <span class="doccomment">/// Test bucket partitioning reads source column from data file (not partition metadata).
+<a href=#2006 id=2006 data-nosnippet>2006</a>    ///
+<a href=#2007 id=2007 data-nosnippet>2007</a>    /// This is an integration test verifying the complete ArrowReader pipeline with bucket partitioning.
+<a href=#2008 id=2008 data-nosnippet>2008</a>    /// It corresponds to TestRuntimeFiltering tests in Iceberg Java (e.g., testRenamedSourceColumnTable).
+<a href=#2009 id=2009 data-nosnippet>2009</a>    ///
+<a href=#2010 id=2010 data-nosnippet>2010</a>    /// # Iceberg Spec Requirements
+<a href=#2011 id=2011 data-nosnippet>2011</a>    ///
+<a href=#2012 id=2012 data-nosnippet>2012</a>    /// Per the Iceberg spec "Column Projection" section:
+<a href=#2013 id=2013 data-nosnippet>2013</a>    /// &gt; "Return the value from partition metadata if an **Identity Transform** exists for the field"
+<a href=#2014 id=2014 data-nosnippet>2014</a>    ///
+<a href=#2015 id=2015 data-nosnippet>2015</a>    /// This means:
+<a href=#2016 id=2016 data-nosnippet>2016</a>    /// - Identity transforms (e.g., `identity(dept)`) use constants from partition metadata
+<a href=#2017 id=2017 data-nosnippet>2017</a>    /// - Non-identity transforms (e.g., `bucket(4, id)`) must read source columns from data files
+<a href=#2018 id=2018 data-nosnippet>2018</a>    /// - Partition metadata for bucket transforms stores bucket numbers (0-3), NOT source values
+<a href=#2019 id=2019 data-nosnippet>2019</a>    ///
+<a href=#2020 id=2020 data-nosnippet>2020</a>    /// Java's PartitionUtil.constantsMap() implements this via:
+<a href=#2021 id=2021 data-nosnippet>2021</a>    /// ```java
+<a href=#2022 id=2022 data-nosnippet>2022</a>    /// if (field.transform().isIdentity()) {
+<a href=#2023 id=2023 data-nosnippet>2023</a>    ///     idToConstant.put(field.sourceId(), converted);
+<a href=#2024 id=2024 data-nosnippet>2024</a>    /// }
+<a href=#2025 id=2025 data-nosnippet>2025</a>    /// ```
 <a href=#2026 id=2026 data-nosnippet>2026</a>    ///
-<a href=#2027 id=2027 data-nosnippet>2027</a>    /// Java's PartitionUtil.constantsMap() implements this via:
-<a href=#2028 id=2028 data-nosnippet>2028</a>    /// ```java
-<a href=#2029 id=2029 data-nosnippet>2029</a>    /// if (field.transform().isIdentity()) {
-<a href=#2030 id=2030 data-nosnippet>2030</a>    ///     idToConstant.put(field.sourceId(), converted);
-<a href=#2031 id=2031 data-nosnippet>2031</a>    /// }
-<a href=#2032 id=2032 data-nosnippet>2032</a>    /// ```
-<a href=#2033 id=2033 data-nosnippet>2033</a>    ///
-<a href=#2034 id=2034 data-nosnippet>2034</a>    /// # What This Test Verifies
-<a href=#2035 id=2035 data-nosnippet>2035</a>    ///
-<a href=#2036 id=2036 data-nosnippet>2036</a>    /// This test ensures the full ArrowReader → RecordBatchTransformer pipeline correctly handles
-<a href=#2037 id=2037 data-nosnippet>2037</a>    /// bucket partitioning when FileScanTask provides partition_spec and partition_data:
-<a href=#2038 id=2038 data-nosnippet>2038</a>    ///
-<a href=#2039 id=2039 data-nosnippet>2039</a>    /// - Parquet file has field_id=1 named "id" with actual data [1, 5, 9, 13]
-<a href=#2040 id=2040 data-nosnippet>2040</a>    /// - FileScanTask specifies partition_spec with bucket(4, id) and partition_data with bucket=1
-<a href=#2041 id=2041 data-nosnippet>2041</a>    /// - RecordBatchTransformer.constants_map() excludes bucket-partitioned field from constants
-<a href=#2042 id=2042 data-nosnippet>2042</a>    /// - ArrowReader correctly reads [1, 5, 9, 13] from the data file
-<a href=#2043 id=2043 data-nosnippet>2043</a>    /// - Values are NOT replaced with constant 1 from partition metadata
+<a href=#2027 id=2027 data-nosnippet>2027</a>    /// # What This Test Verifies
+<a href=#2028 id=2028 data-nosnippet>2028</a>    ///
+<a href=#2029 id=2029 data-nosnippet>2029</a>    /// This test ensures the full ArrowReader → RecordBatchTransformer pipeline correctly handles
+<a href=#2030 id=2030 data-nosnippet>2030</a>    /// bucket partitioning when FileScanTask provides partition_spec and partition_data:
+<a href=#2031 id=2031 data-nosnippet>2031</a>    ///
+<a href=#2032 id=2032 data-nosnippet>2032</a>    /// - Parquet file has field_id=1 named "id" with actual data [1, 5, 9, 13]
+<a href=#2033 id=2033 data-nosnippet>2033</a>    /// - FileScanTask specifies partition_spec with bucket(4, id) and partition_data with bucket=1
+<a href=#2034 id=2034 data-nosnippet>2034</a>    /// - RecordBatchTransformer.constants_map() excludes bucket-partitioned field from constants
+<a href=#2035 id=2035 data-nosnippet>2035</a>    /// - ArrowReader correctly reads [1, 5, 9, 13] from the data file
+<a href=#2036 id=2036 data-nosnippet>2036</a>    /// - Values are NOT replaced with constant 1 from partition metadata
+<a href=#2037 id=2037 data-nosnippet>2037</a>    ///
+<a href=#2038 id=2038 data-nosnippet>2038</a>    /// # Why This Matters
+<a href=#2039 id=2039 data-nosnippet>2039</a>    ///
+<a href=#2040 id=2040 data-nosnippet>2040</a>    /// Without correct handling:
+<a href=#2041 id=2041 data-nosnippet>2041</a>    /// - Runtime filtering would break (e.g., `WHERE id = 5` would fail)
+<a href=#2042 id=2042 data-nosnippet>2042</a>    /// - Query results would be incorrect (all rows would have id=1)
+<a href=#2043 id=2043 data-nosnippet>2043</a>    /// - Bucket partitioning would be unusable for query optimization
 <a href=#2044 id=2044 data-nosnippet>2044</a>    ///
-<a href=#2045 id=2045 data-nosnippet>2045</a>    /// # Why This Matters
-<a href=#2046 id=2046 data-nosnippet>2046</a>    ///
-<a href=#2047 id=2047 data-nosnippet>2047</a>    /// Without correct handling:
-<a href=#2048 id=2048 data-nosnippet>2048</a>    /// - Runtime filtering would break (e.g., `WHERE id = 5` would fail)
-<a href=#2049 id=2049 data-nosnippet>2049</a>    /// - Query results would be incorrect (all rows would have id=1)
-<a href=#2050 id=2050 data-nosnippet>2050</a>    /// - Bucket partitioning would be unusable for query optimization
-<a href=#2051 id=2051 data-nosnippet>2051</a>    ///
-<a href=#2052 id=2052 data-nosnippet>2052</a>    /// # References
-<a href=#2053 id=2053 data-nosnippet>2053</a>    /// - Iceberg spec: format/spec.md "Column Projection" + "Partition Transforms"
-<a href=#2054 id=2054 data-nosnippet>2054</a>    /// - Java test: spark/src/test/java/.../TestRuntimeFiltering.java
-<a href=#2055 id=2055 data-nosnippet>2055</a>    /// - Java impl: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java
-<a href=#2056 id=2056 data-nosnippet>2056</a>    </span><span class="attr">#[tokio::test]
-<a href=#2057 id=2057 data-nosnippet>2057</a>    </span><span class="kw">async fn </span>test_bucket_partitioning_reads_source_column_from_file() {
-<a href=#2058 id=2058 data-nosnippet>2058</a>        <span class="kw">use </span>arrow_array::Int32Array;
-<a href=#2059 id=2059 data-nosnippet>2059</a>
-<a href=#2060 id=2060 data-nosnippet>2060</a>        <span class="kw">use </span><span class="kw">crate</span>::spec::{Literal, PartitionSpec, Struct, Transform};
-<a href=#2061 id=2061 data-nosnippet>2061</a>
-<a href=#2062 id=2062 data-nosnippet>2062</a>        <span class="comment">// Iceberg schema with id and name columns
-<a href=#2063 id=2063 data-nosnippet>2063</a>        </span><span class="kw">let </span>schema = Arc::new(
-<a href=#2064 id=2064 data-nosnippet>2064</a>            Schema::builder()
-<a href=#2065 id=2065 data-nosnippet>2065</a>                .with_schema_id(<span class="number">0</span>)
-<a href=#2066 id=2066 data-nosnippet>2066</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#2067 id=2067 data-nosnippet>2067</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#2068 id=2068 data-nosnippet>2068</a>                    NestedField::optional(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
-<a href=#2069 id=2069 data-nosnippet>2069</a>                ])
-<a href=#2070 id=2070 data-nosnippet>2070</a>                .build()
-<a href=#2071 id=2071 data-nosnippet>2071</a>                .unwrap(),
-<a href=#2072 id=2072 data-nosnippet>2072</a>        );
-<a href=#2073 id=2073 data-nosnippet>2073</a>
-<a href=#2074 id=2074 data-nosnippet>2074</a>        <span class="comment">// Partition spec: bucket(4, id)
-<a href=#2075 id=2075 data-nosnippet>2075</a>        </span><span class="kw">let </span>partition_spec = Arc::new(
-<a href=#2076 id=2076 data-nosnippet>2076</a>            PartitionSpec::builder(schema.clone())
-<a href=#2077 id=2077 data-nosnippet>2077</a>                .with_spec_id(<span class="number">0</span>)
-<a href=#2078 id=2078 data-nosnippet>2078</a>                .add_partition_field(<span class="string">"id"</span>, <span class="string">"id_bucket"</span>, Transform::Bucket(<span class="number">4</span>))
-<a href=#2079 id=2079 data-nosnippet>2079</a>                .unwrap()
-<a href=#2080 id=2080 data-nosnippet>2080</a>                .build()
-<a href=#2081 id=2081 data-nosnippet>2081</a>                .unwrap(),
-<a href=#2082 id=2082 data-nosnippet>2082</a>        );
-<a href=#2083 id=2083 data-nosnippet>2083</a>
-<a href=#2084 id=2084 data-nosnippet>2084</a>        <span class="comment">// Partition data: bucket value is 1
-<a href=#2085 id=2085 data-nosnippet>2085</a>        </span><span class="kw">let </span>partition_data = Struct::from_iter(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(Literal::int(<span class="number">1</span>))]);
-<a href=#2086 id=2086 data-nosnippet>2086</a>
-<a href=#2087 id=2087 data-nosnippet>2087</a>        <span class="comment">// Create Arrow schema with field IDs for Parquet file
-<a href=#2088 id=2088 data-nosnippet>2088</a>        </span><span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
-<a href=#2089 id=2089 data-nosnippet>2089</a>            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
-<a href=#2090 id=2090 data-nosnippet>2090</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#2091 id=2091 data-nosnippet>2091</a>                <span class="string">"1"</span>.to_string(),
-<a href=#2092 id=2092 data-nosnippet>2092</a>            )])),
-<a href=#2093 id=2093 data-nosnippet>2093</a>            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">true</span>).with_metadata(HashMap::from([(
-<a href=#2094 id=2094 data-nosnippet>2094</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
-<a href=#2095 id=2095 data-nosnippet>2095</a>                <span class="string">"2"</span>.to_string(),
-<a href=#2096 id=2096 data-nosnippet>2096</a>            )])),
-<a href=#2097 id=2097 data-nosnippet>2097</a>        ]));
-<a href=#2098 id=2098 data-nosnippet>2098</a>
-<a href=#2099 id=2099 data-nosnippet>2099</a>        <span class="comment">// Write Parquet file with data
-<a href=#2100 id=2100 data-nosnippet>2100</a>        </span><span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#2101 id=2101 data-nosnippet>2101</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#2102 id=2102 data-nosnippet>2102</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#2045 id=2045 data-nosnippet>2045</a>    /// # References
+<a href=#2046 id=2046 data-nosnippet>2046</a>    /// - Iceberg spec: format/spec.md "Column Projection" + "Partition Transforms"
+<a href=#2047 id=2047 data-nosnippet>2047</a>    /// - Java test: spark/src/test/java/.../TestRuntimeFiltering.java
+<a href=#2048 id=2048 data-nosnippet>2048</a>    /// - Java impl: core/src/main/java/org/apache/iceberg/util/PartitionUtil.java
+<a href=#2049 id=2049 data-nosnippet>2049</a>    </span><span class="attr">#[tokio::test]
+<a href=#2050 id=2050 data-nosnippet>2050</a>    </span><span class="kw">async fn </span>test_bucket_partitioning_reads_source_column_from_file() {
+<a href=#2051 id=2051 data-nosnippet>2051</a>        <span class="kw">use </span>arrow_array::Int32Array;
+<a href=#2052 id=2052 data-nosnippet>2052</a>
+<a href=#2053 id=2053 data-nosnippet>2053</a>        <span class="kw">use </span><span class="kw">crate</span>::spec::{Literal, PartitionSpec, Struct, Transform};
+<a href=#2054 id=2054 data-nosnippet>2054</a>
+<a href=#2055 id=2055 data-nosnippet>2055</a>        <span class="comment">// Iceberg schema with id and name columns
+<a href=#2056 id=2056 data-nosnippet>2056</a>        </span><span class="kw">let </span>schema = Arc::new(
+<a href=#2057 id=2057 data-nosnippet>2057</a>            Schema::builder()
+<a href=#2058 id=2058 data-nosnippet>2058</a>                .with_schema_id(<span class="number">0</span>)
+<a href=#2059 id=2059 data-nosnippet>2059</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#2060 id=2060 data-nosnippet>2060</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#2061 id=2061 data-nosnippet>2061</a>                    NestedField::optional(<span class="number">2</span>, <span class="string">"name"</span>, Type::Primitive(PrimitiveType::String)).into(),
+<a href=#2062 id=2062 data-nosnippet>2062</a>                ])
+<a href=#2063 id=2063 data-nosnippet>2063</a>                .build()
+<a href=#2064 id=2064 data-nosnippet>2064</a>                .unwrap(),
+<a href=#2065 id=2065 data-nosnippet>2065</a>        );
+<a href=#2066 id=2066 data-nosnippet>2066</a>
+<a href=#2067 id=2067 data-nosnippet>2067</a>        <span class="comment">// Partition spec: bucket(4, id)
+<a href=#2068 id=2068 data-nosnippet>2068</a>        </span><span class="kw">let </span>partition_spec = Arc::new(
+<a href=#2069 id=2069 data-nosnippet>2069</a>            PartitionSpec::builder(schema.clone())
+<a href=#2070 id=2070 data-nosnippet>2070</a>                .with_spec_id(<span class="number">0</span>)
+<a href=#2071 id=2071 data-nosnippet>2071</a>                .add_partition_field(<span class="string">"id"</span>, <span class="string">"id_bucket"</span>, Transform::Bucket(<span class="number">4</span>))
+<a href=#2072 id=2072 data-nosnippet>2072</a>                .unwrap()
+<a href=#2073 id=2073 data-nosnippet>2073</a>                .build()
+<a href=#2074 id=2074 data-nosnippet>2074</a>                .unwrap(),
+<a href=#2075 id=2075 data-nosnippet>2075</a>        );
+<a href=#2076 id=2076 data-nosnippet>2076</a>
+<a href=#2077 id=2077 data-nosnippet>2077</a>        <span class="comment">// Partition data: bucket value is 1
+<a href=#2078 id=2078 data-nosnippet>2078</a>        </span><span class="kw">let </span>partition_data = Struct::from_iter(<span class="macro">vec!</span>[<span class="prelude-val">Some</span>(Literal::int(<span class="number">1</span>))]);
+<a href=#2079 id=2079 data-nosnippet>2079</a>
+<a href=#2080 id=2080 data-nosnippet>2080</a>        <span class="comment">// Create Arrow schema with field IDs for Parquet file
+<a href=#2081 id=2081 data-nosnippet>2081</a>        </span><span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(<span class="macro">vec!</span>[
+<a href=#2082 id=2082 data-nosnippet>2082</a>            Field::new(<span class="string">"id"</span>, DataType::Int32, <span class="bool-val">false</span>).with_metadata(HashMap::from([(
+<a href=#2083 id=2083 data-nosnippet>2083</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#2084 id=2084 data-nosnippet>2084</a>                <span class="string">"1"</span>.to_string(),
+<a href=#2085 id=2085 data-nosnippet>2085</a>            )])),
+<a href=#2086 id=2086 data-nosnippet>2086</a>            Field::new(<span class="string">"name"</span>, DataType::Utf8, <span class="bool-val">true</span>).with_metadata(HashMap::from([(
+<a href=#2087 id=2087 data-nosnippet>2087</a>                PARQUET_FIELD_ID_META_KEY.to_string(),
+<a href=#2088 id=2088 data-nosnippet>2088</a>                <span class="string">"2"</span>.to_string(),
+<a href=#2089 id=2089 data-nosnippet>2089</a>            )])),
+<a href=#2090 id=2090 data-nosnippet>2090</a>        ]));
+<a href=#2091 id=2091 data-nosnippet>2091</a>
+<a href=#2092 id=2092 data-nosnippet>2092</a>        <span class="comment">// Write Parquet file with data
+<a href=#2093 id=2093 data-nosnippet>2093</a>        </span><span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#2094 id=2094 data-nosnippet>2094</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
+<a href=#2095 id=2095 data-nosnippet>2095</a>        <span class="kw">let </span>file_io = FileIO::new_with_fs();
+<a href=#2096 id=2096 data-nosnippet>2096</a>
+<a href=#2097 id=2097 data-nosnippet>2097</a>        <span class="kw">let </span>id_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">5</span>, <span class="number">9</span>, <span class="number">13</span>])) <span class="kw">as </span>ArrayRef;
+<a href=#2098 id=2098 data-nosnippet>2098</a>        <span class="kw">let </span>name_data =
+<a href=#2099 id=2099 data-nosnippet>2099</a>            Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"Alice"</span>, <span class="string">"Bob"</span>, <span class="string">"Charlie"</span>, <span class="string">"Dave"</span>])) <span class="kw">as </span>ArrayRef;
+<a href=#2100 id=2100 data-nosnippet>2100</a>
+<a href=#2101 id=2101 data-nosnippet>2101</a>        <span class="kw">let </span>to_write =
+<a href=#2102 id=2102 data-nosnippet>2102</a>            RecordBatch::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[id_data, name_data]).unwrap();
 <a href=#2103 id=2103 data-nosnippet>2103</a>
-<a href=#2104 id=2104 data-nosnippet>2104</a>        <span class="kw">let </span>id_data = Arc::new(Int32Array::from(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">5</span>, <span class="number">9</span>, <span class="number">13</span>])) <span class="kw">as </span>ArrayRef;
-<a href=#2105 id=2105 data-nosnippet>2105</a>        <span class="kw">let </span>name_data =
-<a href=#2106 id=2106 data-nosnippet>2106</a>            Arc::new(StringArray::from(<span class="macro">vec!</span>[<span class="string">"Alice"</span>, <span class="string">"Bob"</span>, <span class="string">"Charlie"</span>, <span class="string">"Dave"</span>])) <span class="kw">as </span>ArrayRef;
-<a href=#2107 id=2107 data-nosnippet>2107</a>
-<a href=#2108 id=2108 data-nosnippet>2108</a>        <span class="kw">let </span>to_write =
-<a href=#2109 id=2109 data-nosnippet>2109</a>            RecordBatch::try_new(arrow_schema.clone(), <span class="macro">vec!</span>[id_data, name_data]).unwrap();
-<a href=#2110 id=2110 data-nosnippet>2110</a>
-<a href=#2111 id=2111 data-nosnippet>2111</a>        <span class="kw">let </span>props = WriterProperties::builder()
-<a href=#2112 id=2112 data-nosnippet>2112</a>            .set_compression(Compression::SNAPPY)
-<a href=#2113 id=2113 data-nosnippet>2113</a>            .build();
-<a href=#2114 id=2114 data-nosnippet>2114</a>        <span class="kw">let </span>file = File::create(<span class="macro">format!</span>(<span class="string">"{}/data.parquet"</span>, <span class="kw-2">&amp;</span>table_location)).unwrap();
-<a href=#2115 id=2115 data-nosnippet>2115</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, to_write.schema(), <span class="prelude-val">Some</span>(props)).unwrap();
-<a href=#2116 id=2116 data-nosnippet>2116</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
-<a href=#2117 id=2117 data-nosnippet>2117</a>        writer.close().unwrap();
-<a href=#2118 id=2118 data-nosnippet>2118</a>
-<a href=#2119 id=2119 data-nosnippet>2119</a>        <span class="comment">// Read the Parquet file with partition spec and data
-<a href=#2120 id=2120 data-nosnippet>2120</a>        </span><span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
-<a href=#2121 id=2121 data-nosnippet>2121</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
-<a href=#2122 id=2122 data-nosnippet>2122</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask::builder()
-<a href=#2123 id=2123 data-nosnippet>2123</a>                .with_file_size_in_bytes(
-<a href=#2124 id=2124 data-nosnippet>2124</a>                    std::fs::metadata(<span class="macro">format!</span>(<span class="string">"{table_location}/data.parquet"</span>))
-<a href=#2125 id=2125 data-nosnippet>2125</a>                        .unwrap()
-<a href=#2126 id=2126 data-nosnippet>2126</a>                        .len(),
-<a href=#2127 id=2127 data-nosnippet>2127</a>                )
-<a href=#2128 id=2128 data-nosnippet>2128</a>                .with_start(<span class="number">0</span>)
-<a href=#2129 id=2129 data-nosnippet>2129</a>                .with_length(<span class="number">0</span>)
-<a href=#2130 id=2130 data-nosnippet>2130</a>                .with_data_file_path(<span class="macro">format!</span>(<span class="string">"{table_location}/data.parquet"</span>))
-<a href=#2131 id=2131 data-nosnippet>2131</a>                .with_data_file_format(DataFileFormat::Parquet)
-<a href=#2132 id=2132 data-nosnippet>2132</a>                .with_schema(schema.clone())
-<a href=#2133 id=2133 data-nosnippet>2133</a>                .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>])
-<a href=#2134 id=2134 data-nosnippet>2134</a>                .with_case_sensitive(<span class="bool-val">false</span>)
-<a href=#2135 id=2135 data-nosnippet>2135</a>                .with_partition(<span class="prelude-val">Some</span>(partition_data))
-<a href=#2136 id=2136 data-nosnippet>2136</a>                .with_partition_spec(<span class="prelude-val">Some</span>(partition_spec))
-<a href=#2137 id=2137 data-nosnippet>2137</a>                .build()
-<a href=#2138 id=2138 data-nosnippet>2138</a>                .unwrap())]
-<a href=#2139 id=2139 data-nosnippet>2139</a>            .into_iter(),
-<a href=#2140 id=2140 data-nosnippet>2140</a>        )) <span class="kw">as </span>FileScanTaskStream;
-<a href=#2141 id=2141 data-nosnippet>2141</a>
-<a href=#2142 id=2142 data-nosnippet>2142</a>        <span class="kw">let </span>result = reader
-<a href=#2143 id=2143 data-nosnippet>2143</a>            .read(tasks)
-<a href=#2144 id=2144 data-nosnippet>2144</a>            .unwrap()
-<a href=#2145 id=2145 data-nosnippet>2145</a>            .stream()
-<a href=#2146 id=2146 data-nosnippet>2146</a>            .try_collect::&lt;Vec&lt;RecordBatch&gt;&gt;()
-<a href=#2147 id=2147 data-nosnippet>2147</a>            .<span class="kw">await
-<a href=#2148 id=2148 data-nosnippet>2148</a>            </span>.unwrap();
+<a href=#2104 id=2104 data-nosnippet>2104</a>        <span class="kw">let </span>props = WriterProperties::builder()
+<a href=#2105 id=2105 data-nosnippet>2105</a>            .set_compression(Compression::SNAPPY)
+<a href=#2106 id=2106 data-nosnippet>2106</a>            .build();
+<a href=#2107 id=2107 data-nosnippet>2107</a>        <span class="kw">let </span>file = File::create(<span class="macro">format!</span>(<span class="string">"{}/data.parquet"</span>, <span class="kw-2">&amp;</span>table_location)).unwrap();
+<a href=#2108 id=2108 data-nosnippet>2108</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, to_write.schema(), <span class="prelude-val">Some</span>(props)).unwrap();
+<a href=#2109 id=2109 data-nosnippet>2109</a>        writer.write(<span class="kw-2">&amp;</span>to_write).expect(<span class="string">"Writing batch"</span>);
+<a href=#2110 id=2110 data-nosnippet>2110</a>        writer.close().unwrap();
+<a href=#2111 id=2111 data-nosnippet>2111</a>
+<a href=#2112 id=2112 data-nosnippet>2112</a>        <span class="comment">// Read the Parquet file with partition spec and data
+<a href=#2113 id=2113 data-nosnippet>2113</a>        </span><span class="kw">let </span>reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+<a href=#2114 id=2114 data-nosnippet>2114</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
+<a href=#2115 id=2115 data-nosnippet>2115</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask::builder()
+<a href=#2116 id=2116 data-nosnippet>2116</a>                .with_file_size_in_bytes(
+<a href=#2117 id=2117 data-nosnippet>2117</a>                    std::fs::metadata(<span class="macro">format!</span>(<span class="string">"{table_location}/data.parquet"</span>))
+<a href=#2118 id=2118 data-nosnippet>2118</a>                        .unwrap()
+<a href=#2119 id=2119 data-nosnippet>2119</a>                        .len(),
+<a href=#2120 id=2120 data-nosnippet>2120</a>                )
+<a href=#2121 id=2121 data-nosnippet>2121</a>                .with_start(<span class="number">0</span>)
+<a href=#2122 id=2122 data-nosnippet>2122</a>                .with_length(<span class="number">0</span>)
+<a href=#2123 id=2123 data-nosnippet>2123</a>                .with_data_file_path(<span class="macro">format!</span>(<span class="string">"{table_location}/data.parquet"</span>))
+<a href=#2124 id=2124 data-nosnippet>2124</a>                .with_data_file_format(DataFileFormat::Parquet)
+<a href=#2125 id=2125 data-nosnippet>2125</a>                .with_schema(schema.clone())
+<a href=#2126 id=2126 data-nosnippet>2126</a>                .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>])
+<a href=#2127 id=2127 data-nosnippet>2127</a>                .with_case_sensitive(<span class="bool-val">false</span>)
+<a href=#2128 id=2128 data-nosnippet>2128</a>                .with_partition(<span class="prelude-val">Some</span>(partition_data))
+<a href=#2129 id=2129 data-nosnippet>2129</a>                .with_partition_spec(<span class="prelude-val">Some</span>(partition_spec))
+<a href=#2130 id=2130 data-nosnippet>2130</a>                .build()
+<a href=#2131 id=2131 data-nosnippet>2131</a>                .unwrap())]
+<a href=#2132 id=2132 data-nosnippet>2132</a>            .into_iter(),
+<a href=#2133 id=2133 data-nosnippet>2133</a>        )) <span class="kw">as </span>FileScanTaskStream;
+<a href=#2134 id=2134 data-nosnippet>2134</a>
+<a href=#2135 id=2135 data-nosnippet>2135</a>        <span class="kw">let </span>result = reader
+<a href=#2136 id=2136 data-nosnippet>2136</a>            .read(tasks)
+<a href=#2137 id=2137 data-nosnippet>2137</a>            .unwrap()
+<a href=#2138 id=2138 data-nosnippet>2138</a>            .stream()
+<a href=#2139 id=2139 data-nosnippet>2139</a>            .try_collect::&lt;Vec&lt;RecordBatch&gt;&gt;()
+<a href=#2140 id=2140 data-nosnippet>2140</a>            .<span class="kw">await
+<a href=#2141 id=2141 data-nosnippet>2141</a>            </span>.unwrap();
+<a href=#2142 id=2142 data-nosnippet>2142</a>
+<a href=#2143 id=2143 data-nosnippet>2143</a>        <span class="comment">// Verify we got the correct data
+<a href=#2144 id=2144 data-nosnippet>2144</a>        </span><span class="macro">assert_eq!</span>(result.len(), <span class="number">1</span>);
+<a href=#2145 id=2145 data-nosnippet>2145</a>        <span class="kw">let </span>batch = <span class="kw-2">&amp;</span>result[<span class="number">0</span>];
+<a href=#2146 id=2146 data-nosnippet>2146</a>
+<a href=#2147 id=2147 data-nosnippet>2147</a>        <span class="macro">assert_eq!</span>(batch.num_columns(), <span class="number">2</span>);
+<a href=#2148 id=2148 data-nosnippet>2148</a>        <span class="macro">assert_eq!</span>(batch.num_rows(), <span class="number">4</span>);
 <a href=#2149 id=2149 data-nosnippet>2149</a>
-<a href=#2150 id=2150 data-nosnippet>2150</a>        <span class="comment">// Verify we got the correct data
-<a href=#2151 id=2151 data-nosnippet>2151</a>        </span><span class="macro">assert_eq!</span>(result.len(), <span class="number">1</span>);
-<a href=#2152 id=2152 data-nosnippet>2152</a>        <span class="kw">let </span>batch = <span class="kw-2">&amp;</span>result[<span class="number">0</span>];
-<a href=#2153 id=2153 data-nosnippet>2153</a>
-<a href=#2154 id=2154 data-nosnippet>2154</a>        <span class="macro">assert_eq!</span>(batch.num_columns(), <span class="number">2</span>);
-<a href=#2155 id=2155 data-nosnippet>2155</a>        <span class="macro">assert_eq!</span>(batch.num_rows(), <span class="number">4</span>);
-<a href=#2156 id=2156 data-nosnippet>2156</a>
-<a href=#2157 id=2157 data-nosnippet>2157</a>        <span class="comment">// The id column MUST contain actual values from the Parquet file [1, 5, 9, 13],
-<a href=#2158 id=2158 data-nosnippet>2158</a>        // NOT the constant partition value 1
-<a href=#2159 id=2159 data-nosnippet>2159</a>        </span><span class="kw">let </span>id_col = batch
-<a href=#2160 id=2160 data-nosnippet>2160</a>            .column(<span class="number">0</span>)
-<a href=#2161 id=2161 data-nosnippet>2161</a>            .as_primitive::&lt;arrow_array::types::Int32Type&gt;();
-<a href=#2162 id=2162 data-nosnippet>2162</a>        <span class="macro">assert_eq!</span>(id_col.value(<span class="number">0</span>), <span class="number">1</span>);
-<a href=#2163 id=2163 data-nosnippet>2163</a>        <span class="macro">assert_eq!</span>(id_col.value(<span class="number">1</span>), <span class="number">5</span>);
-<a href=#2164 id=2164 data-nosnippet>2164</a>        <span class="macro">assert_eq!</span>(id_col.value(<span class="number">2</span>), <span class="number">9</span>);
-<a href=#2165 id=2165 data-nosnippet>2165</a>        <span class="macro">assert_eq!</span>(id_col.value(<span class="number">3</span>), <span class="number">13</span>);
+<a href=#2150 id=2150 data-nosnippet>2150</a>        <span class="comment">// The id column MUST contain actual values from the Parquet file [1, 5, 9, 13],
+<a href=#2151 id=2151 data-nosnippet>2151</a>        // NOT the constant partition value 1
+<a href=#2152 id=2152 data-nosnippet>2152</a>        </span><span class="kw">let </span>id_col = batch
+<a href=#2153 id=2153 data-nosnippet>2153</a>            .column(<span class="number">0</span>)
+<a href=#2154 id=2154 data-nosnippet>2154</a>            .as_primitive::&lt;arrow_array::types::Int32Type&gt;();
+<a href=#2155 id=2155 data-nosnippet>2155</a>        <span class="macro">assert_eq!</span>(id_col.value(<span class="number">0</span>), <span class="number">1</span>);
+<a href=#2156 id=2156 data-nosnippet>2156</a>        <span class="macro">assert_eq!</span>(id_col.value(<span class="number">1</span>), <span class="number">5</span>);
+<a href=#2157 id=2157 data-nosnippet>2157</a>        <span class="macro">assert_eq!</span>(id_col.value(<span class="number">2</span>), <span class="number">9</span>);
+<a href=#2158 id=2158 data-nosnippet>2158</a>        <span class="macro">assert_eq!</span>(id_col.value(<span class="number">3</span>), <span class="number">13</span>);
+<a href=#2159 id=2159 data-nosnippet>2159</a>
+<a href=#2160 id=2160 data-nosnippet>2160</a>        <span class="kw">let </span>name_col = batch.column(<span class="number">1</span>).as_string::&lt;i32&gt;();
+<a href=#2161 id=2161 data-nosnippet>2161</a>        <span class="macro">assert_eq!</span>(name_col.value(<span class="number">0</span>), <span class="string">"Alice"</span>);
+<a href=#2162 id=2162 data-nosnippet>2162</a>        <span class="macro">assert_eq!</span>(name_col.value(<span class="number">1</span>), <span class="string">"Bob"</span>);
+<a href=#2163 id=2163 data-nosnippet>2163</a>        <span class="macro">assert_eq!</span>(name_col.value(<span class="number">2</span>), <span class="string">"Charlie"</span>);
+<a href=#2164 id=2164 data-nosnippet>2164</a>        <span class="macro">assert_eq!</span>(name_col.value(<span class="number">3</span>), <span class="string">"Dave"</span>);
+<a href=#2165 id=2165 data-nosnippet>2165</a>    }
 <a href=#2166 id=2166 data-nosnippet>2166</a>
-<a href=#2167 id=2167 data-nosnippet>2167</a>        <span class="kw">let </span>name_col = batch.column(<span class="number">1</span>).as_string::&lt;i32&gt;();
-<a href=#2168 id=2168 data-nosnippet>2168</a>        <span class="macro">assert_eq!</span>(name_col.value(<span class="number">0</span>), <span class="string">"Alice"</span>);
-<a href=#2169 id=2169 data-nosnippet>2169</a>        <span class="macro">assert_eq!</span>(name_col.value(<span class="number">1</span>), <span class="string">"Bob"</span>);
-<a href=#2170 id=2170 data-nosnippet>2170</a>        <span class="macro">assert_eq!</span>(name_col.value(<span class="number">2</span>), <span class="string">"Charlie"</span>);
-<a href=#2171 id=2171 data-nosnippet>2171</a>        <span class="macro">assert_eq!</span>(name_col.value(<span class="number">3</span>), <span class="string">"Dave"</span>);
-<a href=#2172 id=2172 data-nosnippet>2172</a>    }
-<a href=#2173 id=2173 data-nosnippet>2173</a>
-<a href=#2174 id=2174 data-nosnippet>2174</a>    <span class="doccomment">/// Regression for &lt;https://github.com/apache/iceberg-rust/issues/2306&gt;:
-<a href=#2175 id=2175 data-nosnippet>2175</a>    /// predicate on a column after nested types in a migrated file (no field IDs).
-<a href=#2176 id=2176 data-nosnippet>2176</a>    /// Schema has struct, list, and map columns before the predicate target (`id`),
-<a href=#2177 id=2177 data-nosnippet>2177</a>    /// exercising the fallback field ID mapping across all nested type variants.
-<a href=#2178 id=2178 data-nosnippet>2178</a>    </span><span class="attr">#[tokio::test]
-<a href=#2179 id=2179 data-nosnippet>2179</a>    </span><span class="kw">async fn </span>test_predicate_on_migrated_file_with_nested_types() {
-<a href=#2180 id=2180 data-nosnippet>2180</a>        <span class="kw">use </span>serde::{Deserialize, Serialize};
-<a href=#2181 id=2181 data-nosnippet>2181</a>        <span class="kw">use </span>serde_arrow::schema::{SchemaLike, TracingOptions};
-<a href=#2182 id=2182 data-nosnippet>2182</a>
-<a href=#2183 id=2183 data-nosnippet>2183</a>        <span class="attr">#[derive(Serialize, Deserialize)]
-<a href=#2184 id=2184 data-nosnippet>2184</a>        </span><span class="kw">struct </span>Person {
-<a href=#2185 id=2185 data-nosnippet>2185</a>            name: String,
-<a href=#2186 id=2186 data-nosnippet>2186</a>            age: i32,
-<a href=#2187 id=2187 data-nosnippet>2187</a>        }
-<a href=#2188 id=2188 data-nosnippet>2188</a>
-<a href=#2189 id=2189 data-nosnippet>2189</a>        <span class="attr">#[derive(Serialize, Deserialize)]
-<a href=#2190 id=2190 data-nosnippet>2190</a>        </span><span class="kw">struct </span>Row {
-<a href=#2191 id=2191 data-nosnippet>2191</a>            person: Person,
-<a href=#2192 id=2192 data-nosnippet>2192</a>            people: Vec&lt;Person&gt;,
-<a href=#2193 id=2193 data-nosnippet>2193</a>            props: std::collections::BTreeMap&lt;String, String&gt;,
-<a href=#2194 id=2194 data-nosnippet>2194</a>            id: i32,
-<a href=#2195 id=2195 data-nosnippet>2195</a>        }
-<a href=#2196 id=2196 data-nosnippet>2196</a>
-<a href=#2197 id=2197 data-nosnippet>2197</a>        <span class="kw">let </span>rows = <span class="macro">vec!</span>[
-<a href=#2198 id=2198 data-nosnippet>2198</a>            Row {
-<a href=#2199 id=2199 data-nosnippet>2199</a>                person: Person {
-<a href=#2200 id=2200 data-nosnippet>2200</a>                    name: <span class="string">"Alice"</span>.into(),
-<a href=#2201 id=2201 data-nosnippet>2201</a>                    age: <span class="number">30</span>,
-<a href=#2202 id=2202 data-nosnippet>2202</a>                },
-<a href=#2203 id=2203 data-nosnippet>2203</a>                people: <span class="macro">vec!</span>[Person {
-<a href=#2204 id=2204 data-nosnippet>2204</a>                    name: <span class="string">"Alice"</span>.into(),
-<a href=#2205 id=2205 data-nosnippet>2205</a>                    age: <span class="number">30</span>,
-<a href=#2206 id=2206 data-nosnippet>2206</a>                }],
-<a href=#2207 id=2207 data-nosnippet>2207</a>                props: [(<span class="string">"k1"</span>.into(), <span class="string">"v1"</span>.into())].into(),
-<a href=#2208 id=2208 data-nosnippet>2208</a>                id: <span class="number">1</span>,
-<a href=#2209 id=2209 data-nosnippet>2209</a>            },
-<a href=#2210 id=2210 data-nosnippet>2210</a>            Row {
-<a href=#2211 id=2211 data-nosnippet>2211</a>                person: Person {
-<a href=#2212 id=2212 data-nosnippet>2212</a>                    name: <span class="string">"Bob"</span>.into(),
-<a href=#2213 id=2213 data-nosnippet>2213</a>                    age: <span class="number">25</span>,
-<a href=#2214 id=2214 data-nosnippet>2214</a>                },
-<a href=#2215 id=2215 data-nosnippet>2215</a>                people: <span class="macro">vec!</span>[Person {
-<a href=#2216 id=2216 data-nosnippet>2216</a>                    name: <span class="string">"Bob"</span>.into(),
-<a href=#2217 id=2217 data-nosnippet>2217</a>                    age: <span class="number">25</span>,
-<a href=#2218 id=2218 data-nosnippet>2218</a>                }],
-<a href=#2219 id=2219 data-nosnippet>2219</a>                props: [(<span class="string">"k2"</span>.into(), <span class="string">"v2"</span>.into())].into(),
-<a href=#2220 id=2220 data-nosnippet>2220</a>                id: <span class="number">2</span>,
-<a href=#2221 id=2221 data-nosnippet>2221</a>            },
-<a href=#2222 id=2222 data-nosnippet>2222</a>            Row {
-<a href=#2223 id=2223 data-nosnippet>2223</a>                person: Person {
-<a href=#2224 id=2224 data-nosnippet>2224</a>                    name: <span class="string">"Carol"</span>.into(),
-<a href=#2225 id=2225 data-nosnippet>2225</a>                    age: <span class="number">40</span>,
-<a href=#2226 id=2226 data-nosnippet>2226</a>                },
-<a href=#2227 id=2227 data-nosnippet>2227</a>                people: <span class="macro">vec!</span>[Person {
-<a href=#2228 id=2228 data-nosnippet>2228</a>                    name: <span class="string">"Carol"</span>.into(),
-<a href=#2229 id=2229 data-nosnippet>2229</a>                    age: <span class="number">40</span>,
-<a href=#2230 id=2230 data-nosnippet>2230</a>                }],
-<a href=#2231 id=2231 data-nosnippet>2231</a>                props: [(<span class="string">"k3"</span>.into(), <span class="string">"v3"</span>.into())].into(),
-<a href=#2232 id=2232 data-nosnippet>2232</a>                id: <span class="number">3</span>,
-<a href=#2233 id=2233 data-nosnippet>2233</a>            },
-<a href=#2234 id=2234 data-nosnippet>2234</a>        ];
-<a href=#2235 id=2235 data-nosnippet>2235</a>
-<a href=#2236 id=2236 data-nosnippet>2236</a>        <span class="kw">let </span>tracing_options = TracingOptions::default()
-<a href=#2237 id=2237 data-nosnippet>2237</a>            .map_as_struct(<span class="bool-val">false</span>)
-<a href=#2238 id=2238 data-nosnippet>2238</a>            .strings_as_large_utf8(<span class="bool-val">false</span>)
-<a href=#2239 id=2239 data-nosnippet>2239</a>            .sequence_as_large_list(<span class="bool-val">false</span>);
-<a href=#2240 id=2240 data-nosnippet>2240</a>        <span class="kw">let </span>fields = Vec::&lt;arrow_schema::FieldRef&gt;::from_type::&lt;Row&gt;(tracing_options).unwrap();
-<a href=#2241 id=2241 data-nosnippet>2241</a>        <span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(fields.clone()));
-<a href=#2242 id=2242 data-nosnippet>2242</a>        <span class="kw">let </span>batch = serde_arrow::to_record_batch(<span class="kw-2">&amp;</span>fields, <span class="kw-2">&amp;</span>rows).unwrap();
-<a href=#2243 id=2243 data-nosnippet>2243</a>
-<a href=#2244 id=2244 data-nosnippet>2244</a>        <span class="comment">// Fallback field IDs: person=1, people=2, props=3, id=4
-<a href=#2245 id=2245 data-nosnippet>2245</a>        </span><span class="kw">let </span>iceberg_schema = Arc::new(
-<a href=#2246 id=2246 data-nosnippet>2246</a>            Schema::builder()
-<a href=#2247 id=2247 data-nosnippet>2247</a>                .with_schema_id(<span class="number">1</span>)
-<a href=#2248 id=2248 data-nosnippet>2248</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#2249 id=2249 data-nosnippet>2249</a>                    NestedField::required(
-<a href=#2250 id=2250 data-nosnippet>2250</a>                        <span class="number">1</span>,
-<a href=#2251 id=2251 data-nosnippet>2251</a>                        <span class="string">"person"</span>,
-<a href=#2252 id=2252 data-nosnippet>2252</a>                        Type::Struct(StructType::new(<span class="macro">vec!</span>[
-<a href=#2253 id=2253 data-nosnippet>2253</a>                            NestedField::required(
-<a href=#2254 id=2254 data-nosnippet>2254</a>                                <span class="number">5</span>,
-<a href=#2255 id=2255 data-nosnippet>2255</a>                                <span class="string">"name"</span>,
-<a href=#2256 id=2256 data-nosnippet>2256</a>                                Type::Primitive(PrimitiveType::String),
-<a href=#2257 id=2257 data-nosnippet>2257</a>                            )
-<a href=#2258 id=2258 data-nosnippet>2258</a>                            .into(),
-<a href=#2259 id=2259 data-nosnippet>2259</a>                            NestedField::required(<span class="number">6</span>, <span class="string">"age"</span>, Type::Primitive(PrimitiveType::Int))
-<a href=#2260 id=2260 data-nosnippet>2260</a>                                .into(),
-<a href=#2261 id=2261 data-nosnippet>2261</a>                        ])),
-<a href=#2262 id=2262 data-nosnippet>2262</a>                    )
-<a href=#2263 id=2263 data-nosnippet>2263</a>                    .into(),
-<a href=#2264 id=2264 data-nosnippet>2264</a>                    NestedField::required(
-<a href=#2265 id=2265 data-nosnippet>2265</a>                        <span class="number">2</span>,
-<a href=#2266 id=2266 data-nosnippet>2266</a>                        <span class="string">"people"</span>,
-<a href=#2267 id=2267 data-nosnippet>2267</a>                        Type::List(<span class="kw">crate</span>::spec::ListType {
-<a href=#2268 id=2268 data-nosnippet>2268</a>                            element_field: NestedField::required(
-<a href=#2269 id=2269 data-nosnippet>2269</a>                                <span class="number">7</span>,
-<a href=#2270 id=2270 data-nosnippet>2270</a>                                <span class="string">"element"</span>,
-<a href=#2271 id=2271 data-nosnippet>2271</a>                                Type::Struct(StructType::new(<span class="macro">vec!</span>[
-<a href=#2272 id=2272 data-nosnippet>2272</a>                                    NestedField::required(
-<a href=#2273 id=2273 data-nosnippet>2273</a>                                        <span class="number">8</span>,
-<a href=#2274 id=2274 data-nosnippet>2274</a>                                        <span class="string">"name"</span>,
-<a href=#2275 id=2275 data-nosnippet>2275</a>                                        Type::Primitive(PrimitiveType::String),
-<a href=#2276 id=2276 data-nosnippet>2276</a>                                    )
-<a href=#2277 id=2277 data-nosnippet>2277</a>                                    .into(),
-<a href=#2278 id=2278 data-nosnippet>2278</a>                                    NestedField::required(
-<a href=#2279 id=2279 data-nosnippet>2279</a>                                        <span class="number">9</span>,
-<a href=#2280 id=2280 data-nosnippet>2280</a>                                        <span class="string">"age"</span>,
-<a href=#2281 id=2281 data-nosnippet>2281</a>                                        Type::Primitive(PrimitiveType::Int),
-<a href=#2282 id=2282 data-nosnippet>2282</a>                                    )
-<a href=#2283 id=2283 data-nosnippet>2283</a>                                    .into(),
-<a href=#2284 id=2284 data-nosnippet>2284</a>                                ])),
-<a href=#2285 id=2285 data-nosnippet>2285</a>                            )
-<a href=#2286 id=2286 data-nosnippet>2286</a>                            .into(),
-<a href=#2287 id=2287 data-nosnippet>2287</a>                        }),
-<a href=#2288 id=2288 data-nosnippet>2288</a>                    )
-<a href=#2289 id=2289 data-nosnippet>2289</a>                    .into(),
-<a href=#2290 id=2290 data-nosnippet>2290</a>                    NestedField::required(
-<a href=#2291 id=2291 data-nosnippet>2291</a>                        <span class="number">3</span>,
-<a href=#2292 id=2292 data-nosnippet>2292</a>                        <span class="string">"props"</span>,
-<a href=#2293 id=2293 data-nosnippet>2293</a>                        Type::Map(<span class="kw">crate</span>::spec::MapType {
-<a href=#2294 id=2294 data-nosnippet>2294</a>                            key_field: NestedField::required(
-<a href=#2295 id=2295 data-nosnippet>2295</a>                                <span class="number">10</span>,
-<a href=#2296 id=2296 data-nosnippet>2296</a>                                <span class="string">"key"</span>,
-<a href=#2297 id=2297 data-nosnippet>2297</a>                                Type::Primitive(PrimitiveType::String),
-<a href=#2298 id=2298 data-nosnippet>2298</a>                            )
-<a href=#2299 id=2299 data-nosnippet>2299</a>                            .into(),
-<a href=#2300 id=2300 data-nosnippet>2300</a>                            value_field: NestedField::required(
-<a href=#2301 id=2301 data-nosnippet>2301</a>                                <span class="number">11</span>,
-<a href=#2302 id=2302 data-nosnippet>2302</a>                                <span class="string">"value"</span>,
-<a href=#2303 id=2303 data-nosnippet>2303</a>                                Type::Primitive(PrimitiveType::String),
-<a href=#2304 id=2304 data-nosnippet>2304</a>                            )
-<a href=#2305 id=2305 data-nosnippet>2305</a>                            .into(),
-<a href=#2306 id=2306 data-nosnippet>2306</a>                        }),
-<a href=#2307 id=2307 data-nosnippet>2307</a>                    )
-<a href=#2308 id=2308 data-nosnippet>2308</a>                    .into(),
-<a href=#2309 id=2309 data-nosnippet>2309</a>                    NestedField::required(<span class="number">4</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
-<a href=#2310 id=2310 data-nosnippet>2310</a>                ])
-<a href=#2311 id=2311 data-nosnippet>2311</a>                .build()
-<a href=#2312 id=2312 data-nosnippet>2312</a>                .unwrap(),
-<a href=#2313 id=2313 data-nosnippet>2313</a>        );
-<a href=#2314 id=2314 data-nosnippet>2314</a>
-<a href=#2315 id=2315 data-nosnippet>2315</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#2316 id=2316 data-nosnippet>2316</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
-<a href=#2317 id=2317 data-nosnippet>2317</a>        <span class="kw">let </span>file_path = <span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>);
-<a href=#2318 id=2318 data-nosnippet>2318</a>
-<a href=#2319 id=2319 data-nosnippet>2319</a>        <span class="kw">let </span>props = WriterProperties::builder()
-<a href=#2320 id=2320 data-nosnippet>2320</a>            .set_compression(Compression::SNAPPY)
-<a href=#2321 id=2321 data-nosnippet>2321</a>            .build();
-<a href=#2322 id=2322 data-nosnippet>2322</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>file_path).unwrap();
-<a href=#2323 id=2323 data-nosnippet>2323</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, arrow_schema, <span class="prelude-val">Some</span>(props)).unwrap();
-<a href=#2324 id=2324 data-nosnippet>2324</a>        writer.write(<span class="kw-2">&amp;</span>batch).expect(<span class="string">"Writing batch"</span>);
-<a href=#2325 id=2325 data-nosnippet>2325</a>        writer.close().unwrap();
+<a href=#2167 id=2167 data-nosnippet>2167</a>    <span class="doccomment">/// Regression for &lt;https://github.com/apache/iceberg-rust/issues/2306&gt;:
+<a href=#2168 id=2168 data-nosnippet>2168</a>    /// predicate on a column after nested types in a migrated file (no field IDs).
+<a href=#2169 id=2169 data-nosnippet>2169</a>    /// Schema has struct, list, and map columns before the predicate target (`id`),
+<a href=#2170 id=2170 data-nosnippet>2170</a>    /// exercising the fallback field ID mapping across all nested type variants.
+<a href=#2171 id=2171 data-nosnippet>2171</a>    </span><span class="attr">#[tokio::test]
+<a href=#2172 id=2172 data-nosnippet>2172</a>    </span><span class="kw">async fn </span>test_predicate_on_migrated_file_with_nested_types() {
+<a href=#2173 id=2173 data-nosnippet>2173</a>        <span class="kw">use </span>serde::{Deserialize, Serialize};
+<a href=#2174 id=2174 data-nosnippet>2174</a>        <span class="kw">use </span>serde_arrow::schema::{SchemaLike, TracingOptions};
+<a href=#2175 id=2175 data-nosnippet>2175</a>
+<a href=#2176 id=2176 data-nosnippet>2176</a>        <span class="attr">#[derive(Serialize, Deserialize)]
+<a href=#2177 id=2177 data-nosnippet>2177</a>        </span><span class="kw">struct </span>Person {
+<a href=#2178 id=2178 data-nosnippet>2178</a>            name: String,
+<a href=#2179 id=2179 data-nosnippet>2179</a>            age: i32,
+<a href=#2180 id=2180 data-nosnippet>2180</a>        }
+<a href=#2181 id=2181 data-nosnippet>2181</a>
+<a href=#2182 id=2182 data-nosnippet>2182</a>        <span class="attr">#[derive(Serialize, Deserialize)]
+<a href=#2183 id=2183 data-nosnippet>2183</a>        </span><span class="kw">struct </span>Row {
+<a href=#2184 id=2184 data-nosnippet>2184</a>            person: Person,
+<a href=#2185 id=2185 data-nosnippet>2185</a>            people: Vec&lt;Person&gt;,
+<a href=#2186 id=2186 data-nosnippet>2186</a>            props: std::collections::BTreeMap&lt;String, String&gt;,
+<a href=#2187 id=2187 data-nosnippet>2187</a>            id: i32,
+<a href=#2188 id=2188 data-nosnippet>2188</a>        }
+<a href=#2189 id=2189 data-nosnippet>2189</a>
+<a href=#2190 id=2190 data-nosnippet>2190</a>        <span class="kw">let </span>rows = <span class="macro">vec!</span>[
+<a href=#2191 id=2191 data-nosnippet>2191</a>            Row {
+<a href=#2192 id=2192 data-nosnippet>2192</a>                person: Person {
+<a href=#2193 id=2193 data-nosnippet>2193</a>                    name: <span class="string">"Alice"</span>.into(),
+<a href=#2194 id=2194 data-nosnippet>2194</a>                    age: <span class="number">30</span>,
+<a href=#2195 id=2195 data-nosnippet>2195</a>                },
+<a href=#2196 id=2196 data-nosnippet>2196</a>                people: <span class="macro">vec!</span>[Person {
+<a href=#2197 id=2197 data-nosnippet>2197</a>                    name: <span class="string">"Alice"</span>.into(),
+<a href=#2198 id=2198 data-nosnippet>2198</a>                    age: <span class="number">30</span>,
+<a href=#2199 id=2199 data-nosnippet>2199</a>                }],
+<a href=#2200 id=2200 data-nosnippet>2200</a>                props: [(<span class="string">"k1"</span>.into(), <span class="string">"v1"</span>.into())].into(),
+<a href=#2201 id=2201 data-nosnippet>2201</a>                id: <span class="number">1</span>,
+<a href=#2202 id=2202 data-nosnippet>2202</a>            },
+<a href=#2203 id=2203 data-nosnippet>2203</a>            Row {
+<a href=#2204 id=2204 data-nosnippet>2204</a>                person: Person {
+<a href=#2205 id=2205 data-nosnippet>2205</a>                    name: <span class="string">"Bob"</span>.into(),
+<a href=#2206 id=2206 data-nosnippet>2206</a>                    age: <span class="number">25</span>,
+<a href=#2207 id=2207 data-nosnippet>2207</a>                },
+<a href=#2208 id=2208 data-nosnippet>2208</a>                people: <span class="macro">vec!</span>[Person {
+<a href=#2209 id=2209 data-nosnippet>2209</a>                    name: <span class="string">"Bob"</span>.into(),
+<a href=#2210 id=2210 data-nosnippet>2210</a>                    age: <span class="number">25</span>,
+<a href=#2211 id=2211 data-nosnippet>2211</a>                }],
+<a href=#2212 id=2212 data-nosnippet>2212</a>                props: [(<span class="string">"k2"</span>.into(), <span class="string">"v2"</span>.into())].into(),
+<a href=#2213 id=2213 data-nosnippet>2213</a>                id: <span class="number">2</span>,
+<a href=#2214 id=2214 data-nosnippet>2214</a>            },
+<a href=#2215 id=2215 data-nosnippet>2215</a>            Row {
+<a href=#2216 id=2216 data-nosnippet>2216</a>                person: Person {
+<a href=#2217 id=2217 data-nosnippet>2217</a>                    name: <span class="string">"Carol"</span>.into(),
+<a href=#2218 id=2218 data-nosnippet>2218</a>                    age: <span class="number">40</span>,
+<a href=#2219 id=2219 data-nosnippet>2219</a>                },
+<a href=#2220 id=2220 data-nosnippet>2220</a>                people: <span class="macro">vec!</span>[Person {
+<a href=#2221 id=2221 data-nosnippet>2221</a>                    name: <span class="string">"Carol"</span>.into(),
+<a href=#2222 id=2222 data-nosnippet>2222</a>                    age: <span class="number">40</span>,
+<a href=#2223 id=2223 data-nosnippet>2223</a>                }],
+<a href=#2224 id=2224 data-nosnippet>2224</a>                props: [(<span class="string">"k3"</span>.into(), <span class="string">"v3"</span>.into())].into(),
+<a href=#2225 id=2225 data-nosnippet>2225</a>                id: <span class="number">3</span>,
+<a href=#2226 id=2226 data-nosnippet>2226</a>            },
+<a href=#2227 id=2227 data-nosnippet>2227</a>        ];
+<a href=#2228 id=2228 data-nosnippet>2228</a>
+<a href=#2229 id=2229 data-nosnippet>2229</a>        <span class="kw">let </span>tracing_options = TracingOptions::default()
+<a href=#2230 id=2230 data-nosnippet>2230</a>            .map_as_struct(<span class="bool-val">false</span>)
+<a href=#2231 id=2231 data-nosnippet>2231</a>            .strings_as_large_utf8(<span class="bool-val">false</span>)
+<a href=#2232 id=2232 data-nosnippet>2232</a>            .sequence_as_large_list(<span class="bool-val">false</span>);
+<a href=#2233 id=2233 data-nosnippet>2233</a>        <span class="kw">let </span>fields = Vec::&lt;arrow_schema::FieldRef&gt;::from_type::&lt;Row&gt;(tracing_options).unwrap();
+<a href=#2234 id=2234 data-nosnippet>2234</a>        <span class="kw">let </span>arrow_schema = Arc::new(ArrowSchema::new(fields.clone()));
+<a href=#2235 id=2235 data-nosnippet>2235</a>        <span class="kw">let </span>batch = serde_arrow::to_record_batch(<span class="kw-2">&amp;</span>fields, <span class="kw-2">&amp;</span>rows).unwrap();
+<a href=#2236 id=2236 data-nosnippet>2236</a>
+<a href=#2237 id=2237 data-nosnippet>2237</a>        <span class="comment">// Fallback field IDs: person=1, people=2, props=3, id=4
+<a href=#2238 id=2238 data-nosnippet>2238</a>        </span><span class="kw">let </span>iceberg_schema = Arc::new(
+<a href=#2239 id=2239 data-nosnippet>2239</a>            Schema::builder()
+<a href=#2240 id=2240 data-nosnippet>2240</a>                .with_schema_id(<span class="number">1</span>)
+<a href=#2241 id=2241 data-nosnippet>2241</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#2242 id=2242 data-nosnippet>2242</a>                    NestedField::required(
+<a href=#2243 id=2243 data-nosnippet>2243</a>                        <span class="number">1</span>,
+<a href=#2244 id=2244 data-nosnippet>2244</a>                        <span class="string">"person"</span>,
+<a href=#2245 id=2245 data-nosnippet>2245</a>                        Type::Struct(StructType::new(<span class="macro">vec!</span>[
+<a href=#2246 id=2246 data-nosnippet>2246</a>                            NestedField::required(
+<a href=#2247 id=2247 data-nosnippet>2247</a>                                <span class="number">5</span>,
+<a href=#2248 id=2248 data-nosnippet>2248</a>                                <span class="string">"name"</span>,
+<a href=#2249 id=2249 data-nosnippet>2249</a>                                Type::Primitive(PrimitiveType::String),
+<a href=#2250 id=2250 data-nosnippet>2250</a>                            )
+<a href=#2251 id=2251 data-nosnippet>2251</a>                            .into(),
+<a href=#2252 id=2252 data-nosnippet>2252</a>                            NestedField::required(<span class="number">6</span>, <span class="string">"age"</span>, Type::Primitive(PrimitiveType::Int))
+<a href=#2253 id=2253 data-nosnippet>2253</a>                                .into(),
+<a href=#2254 id=2254 data-nosnippet>2254</a>                        ])),
+<a href=#2255 id=2255 data-nosnippet>2255</a>                    )
+<a href=#2256 id=2256 data-nosnippet>2256</a>                    .into(),
+<a href=#2257 id=2257 data-nosnippet>2257</a>                    NestedField::required(
+<a href=#2258 id=2258 data-nosnippet>2258</a>                        <span class="number">2</span>,
+<a href=#2259 id=2259 data-nosnippet>2259</a>                        <span class="string">"people"</span>,
+<a href=#2260 id=2260 data-nosnippet>2260</a>                        Type::List(<span class="kw">crate</span>::spec::ListType {
+<a href=#2261 id=2261 data-nosnippet>2261</a>                            element_field: NestedField::required(
+<a href=#2262 id=2262 data-nosnippet>2262</a>                                <span class="number">7</span>,
+<a href=#2263 id=2263 data-nosnippet>2263</a>                                <span class="string">"element"</span>,
+<a href=#2264 id=2264 data-nosnippet>2264</a>                                Type::Struct(StructType::new(<span class="macro">vec!</span>[
+<a href=#2265 id=2265 data-nosnippet>2265</a>                                    NestedField::required(
+<a href=#2266 id=2266 data-nosnippet>2266</a>                                        <span class="number">8</span>,
+<a href=#2267 id=2267 data-nosnippet>2267</a>                                        <span class="string">"name"</span>,
+<a href=#2268 id=2268 data-nosnippet>2268</a>                                        Type::Primitive(PrimitiveType::String),
+<a href=#2269 id=2269 data-nosnippet>2269</a>                                    )
+<a href=#2270 id=2270 data-nosnippet>2270</a>                                    .into(),
+<a href=#2271 id=2271 data-nosnippet>2271</a>                                    NestedField::required(
+<a href=#2272 id=2272 data-nosnippet>2272</a>                                        <span class="number">9</span>,
+<a href=#2273 id=2273 data-nosnippet>2273</a>                                        <span class="string">"age"</span>,
+<a href=#2274 id=2274 data-nosnippet>2274</a>                                        Type::Primitive(PrimitiveType::Int),
+<a href=#2275 id=2275 data-nosnippet>2275</a>                                    )
+<a href=#2276 id=2276 data-nosnippet>2276</a>                                    .into(),
+<a href=#2277 id=2277 data-nosnippet>2277</a>                                ])),
+<a href=#2278 id=2278 data-nosnippet>2278</a>                            )
+<a href=#2279 id=2279 data-nosnippet>2279</a>                            .into(),
+<a href=#2280 id=2280 data-nosnippet>2280</a>                        }),
+<a href=#2281 id=2281 data-nosnippet>2281</a>                    )
+<a href=#2282 id=2282 data-nosnippet>2282</a>                    .into(),
+<a href=#2283 id=2283 data-nosnippet>2283</a>                    NestedField::required(
+<a href=#2284 id=2284 data-nosnippet>2284</a>                        <span class="number">3</span>,
+<a href=#2285 id=2285 data-nosnippet>2285</a>                        <span class="string">"props"</span>,
+<a href=#2286 id=2286 data-nosnippet>2286</a>                        Type::Map(<span class="kw">crate</span>::spec::MapType {
+<a href=#2287 id=2287 data-nosnippet>2287</a>                            key_field: NestedField::required(
+<a href=#2288 id=2288 data-nosnippet>2288</a>                                <span class="number">10</span>,
+<a href=#2289 id=2289 data-nosnippet>2289</a>                                <span class="string">"key"</span>,
+<a href=#2290 id=2290 data-nosnippet>2290</a>                                Type::Primitive(PrimitiveType::String),
+<a href=#2291 id=2291 data-nosnippet>2291</a>                            )
+<a href=#2292 id=2292 data-nosnippet>2292</a>                            .into(),
+<a href=#2293 id=2293 data-nosnippet>2293</a>                            value_field: NestedField::required(
+<a href=#2294 id=2294 data-nosnippet>2294</a>                                <span class="number">11</span>,
+<a href=#2295 id=2295 data-nosnippet>2295</a>                                <span class="string">"value"</span>,
+<a href=#2296 id=2296 data-nosnippet>2296</a>                                Type::Primitive(PrimitiveType::String),
+<a href=#2297 id=2297 data-nosnippet>2297</a>                            )
+<a href=#2298 id=2298 data-nosnippet>2298</a>                            .into(),
+<a href=#2299 id=2299 data-nosnippet>2299</a>                        }),
+<a href=#2300 id=2300 data-nosnippet>2300</a>                    )
+<a href=#2301 id=2301 data-nosnippet>2301</a>                    .into(),
+<a href=#2302 id=2302 data-nosnippet>2302</a>                    NestedField::required(<span class="number">4</span>, <span class="string">"id"</span>, Type::Primitive(PrimitiveType::Int)).into(),
+<a href=#2303 id=2303 data-nosnippet>2303</a>                ])
+<a href=#2304 id=2304 data-nosnippet>2304</a>                .build()
+<a href=#2305 id=2305 data-nosnippet>2305</a>                .unwrap(),
+<a href=#2306 id=2306 data-nosnippet>2306</a>        );
+<a href=#2307 id=2307 data-nosnippet>2307</a>
+<a href=#2308 id=2308 data-nosnippet>2308</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#2309 id=2309 data-nosnippet>2309</a>        <span class="kw">let </span>table_location = tmp_dir.path().to_str().unwrap().to_string();
+<a href=#2310 id=2310 data-nosnippet>2310</a>        <span class="kw">let </span>file_path = <span class="macro">format!</span>(<span class="string">"{table_location}/1.parquet"</span>);
+<a href=#2311 id=2311 data-nosnippet>2311</a>
+<a href=#2312 id=2312 data-nosnippet>2312</a>        <span class="kw">let </span>props = WriterProperties::builder()
+<a href=#2313 id=2313 data-nosnippet>2313</a>            .set_compression(Compression::SNAPPY)
+<a href=#2314 id=2314 data-nosnippet>2314</a>            .build();
+<a href=#2315 id=2315 data-nosnippet>2315</a>        <span class="kw">let </span>file = File::create(<span class="kw-2">&amp;</span>file_path).unwrap();
+<a href=#2316 id=2316 data-nosnippet>2316</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer = ArrowWriter::try_new(file, arrow_schema, <span class="prelude-val">Some</span>(props)).unwrap();
+<a href=#2317 id=2317 data-nosnippet>2317</a>        writer.write(<span class="kw-2">&amp;</span>batch).expect(<span class="string">"Writing batch"</span>);
+<a href=#2318 id=2318 data-nosnippet>2318</a>        writer.close().unwrap();
+<a href=#2319 id=2319 data-nosnippet>2319</a>
+<a href=#2320 id=2320 data-nosnippet>2320</a>        <span class="kw">let </span>predicate = Reference::new(<span class="string">"id"</span>).greater_than(Datum::int(<span class="number">1</span>));
+<a href=#2321 id=2321 data-nosnippet>2321</a>
+<a href=#2322 id=2322 data-nosnippet>2322</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+<a href=#2323 id=2323 data-nosnippet>2323</a>            .with_row_group_filtering_enabled(<span class="bool-val">true</span>)
+<a href=#2324 id=2324 data-nosnippet>2324</a>            .with_row_selection_enabled(<span class="bool-val">true</span>)
+<a href=#2325 id=2325 data-nosnippet>2325</a>            .build();
 <a href=#2326 id=2326 data-nosnippet>2326</a>
-<a href=#2327 id=2327 data-nosnippet>2327</a>        <span class="kw">let </span>predicate = Reference::new(<span class="string">"id"</span>).greater_than(Datum::int(<span class="number">1</span>));
-<a href=#2328 id=2328 data-nosnippet>2328</a>
-<a href=#2329 id=2329 data-nosnippet>2329</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-<a href=#2330 id=2330 data-nosnippet>2330</a>            .with_row_group_filtering_enabled(<span class="bool-val">true</span>)
-<a href=#2331 id=2331 data-nosnippet>2331</a>            .with_row_selection_enabled(<span class="bool-val">true</span>)
-<a href=#2332 id=2332 data-nosnippet>2332</a>            .build();
-<a href=#2333 id=2333 data-nosnippet>2333</a>
-<a href=#2334 id=2334 data-nosnippet>2334</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
-<a href=#2335 id=2335 data-nosnippet>2335</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask::builder()
-<a href=#2336 id=2336 data-nosnippet>2336</a>                .with_file_size_in_bytes(std::fs::metadata(<span class="kw-2">&amp;</span>file_path).unwrap().len())
-<a href=#2337 id=2337 data-nosnippet>2337</a>                .with_start(<span class="number">0</span>)
-<a href=#2338 id=2338 data-nosnippet>2338</a>                .with_length(<span class="number">0</span>)
-<a href=#2339 id=2339 data-nosnippet>2339</a>                .with_data_file_path(file_path)
-<a href=#2340 id=2340 data-nosnippet>2340</a>                .with_data_file_format(DataFileFormat::Parquet)
-<a href=#2341 id=2341 data-nosnippet>2341</a>                .with_schema(iceberg_schema.clone())
-<a href=#2342 id=2342 data-nosnippet>2342</a>                .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">4</span>])
-<a href=#2343 id=2343 data-nosnippet>2343</a>                .with_case_sensitive(<span class="bool-val">false</span>)
-<a href=#2344 id=2344 data-nosnippet>2344</a>                .with_predicate(<span class="prelude-val">Some</span>(predicate.bind(iceberg_schema, <span class="bool-val">true</span>).unwrap()))
-<a href=#2345 id=2345 data-nosnippet>2345</a>                .build()
-<a href=#2346 id=2346 data-nosnippet>2346</a>                .unwrap())]
-<a href=#2347 id=2347 data-nosnippet>2347</a>            .into_iter(),
-<a href=#2348 id=2348 data-nosnippet>2348</a>        )) <span class="kw">as </span>FileScanTaskStream;
-<a href=#2349 id=2349 data-nosnippet>2349</a>
-<a href=#2350 id=2350 data-nosnippet>2350</a>        <span class="kw">let </span>result = reader
-<a href=#2351 id=2351 data-nosnippet>2351</a>            .read(tasks)
-<a href=#2352 id=2352 data-nosnippet>2352</a>            .unwrap()
-<a href=#2353 id=2353 data-nosnippet>2353</a>            .stream()
-<a href=#2354 id=2354 data-nosnippet>2354</a>            .try_collect::&lt;Vec&lt;RecordBatch&gt;&gt;()
-<a href=#2355 id=2355 data-nosnippet>2355</a>            .<span class="kw">await
-<a href=#2356 id=2356 data-nosnippet>2356</a>            </span>.unwrap();
-<a href=#2357 id=2357 data-nosnippet>2357</a>
-<a href=#2358 id=2358 data-nosnippet>2358</a>        <span class="kw">let </span>ids: Vec&lt;i32&gt; = result
-<a href=#2359 id=2359 data-nosnippet>2359</a>            .iter()
-<a href=#2360 id=2360 data-nosnippet>2360</a>            .flat_map(|b| {
-<a href=#2361 id=2361 data-nosnippet>2361</a>                b.column(<span class="number">0</span>)
-<a href=#2362 id=2362 data-nosnippet>2362</a>                    .as_primitive::&lt;arrow_array::types::Int32Type&gt;()
-<a href=#2363 id=2363 data-nosnippet>2363</a>                    .values()
-<a href=#2364 id=2364 data-nosnippet>2364</a>                    .iter()
-<a href=#2365 id=2365 data-nosnippet>2365</a>                    .copied()
-<a href=#2366 id=2366 data-nosnippet>2366</a>            })
-<a href=#2367 id=2367 data-nosnippet>2367</a>            .collect();
-<a href=#2368 id=2368 data-nosnippet>2368</a>        <span class="macro">assert_eq!</span>(ids, <span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>]);
-<a href=#2369 id=2369 data-nosnippet>2369</a>    }
+<a href=#2327 id=2327 data-nosnippet>2327</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
+<a href=#2328 id=2328 data-nosnippet>2328</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask::builder()
+<a href=#2329 id=2329 data-nosnippet>2329</a>                .with_file_size_in_bytes(std::fs::metadata(<span class="kw-2">&amp;</span>file_path).unwrap().len())
+<a href=#2330 id=2330 data-nosnippet>2330</a>                .with_start(<span class="number">0</span>)
+<a href=#2331 id=2331 data-nosnippet>2331</a>                .with_length(<span class="number">0</span>)
+<a href=#2332 id=2332 data-nosnippet>2332</a>                .with_data_file_path(file_path)
+<a href=#2333 id=2333 data-nosnippet>2333</a>                .with_data_file_format(DataFileFormat::Parquet)
+<a href=#2334 id=2334 data-nosnippet>2334</a>                .with_schema(iceberg_schema.clone())
+<a href=#2335 id=2335 data-nosnippet>2335</a>                .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">4</span>])
+<a href=#2336 id=2336 data-nosnippet>2336</a>                .with_case_sensitive(<span class="bool-val">false</span>)
+<a href=#2337 id=2337 data-nosnippet>2337</a>                .with_predicate(<span class="prelude-val">Some</span>(predicate.bind(iceberg_schema, <span class="bool-val">true</span>).unwrap()))
+<a href=#2338 id=2338 data-nosnippet>2338</a>                .build()
+<a href=#2339 id=2339 data-nosnippet>2339</a>                .unwrap())]
+<a href=#2340 id=2340 data-nosnippet>2340</a>            .into_iter(),
+<a href=#2341 id=2341 data-nosnippet>2341</a>        )) <span class="kw">as </span>FileScanTaskStream;
+<a href=#2342 id=2342 data-nosnippet>2342</a>
+<a href=#2343 id=2343 data-nosnippet>2343</a>        <span class="kw">let </span>result = reader
+<a href=#2344 id=2344 data-nosnippet>2344</a>            .read(tasks)
+<a href=#2345 id=2345 data-nosnippet>2345</a>            .unwrap()
+<a href=#2346 id=2346 data-nosnippet>2346</a>            .stream()
+<a href=#2347 id=2347 data-nosnippet>2347</a>            .try_collect::&lt;Vec&lt;RecordBatch&gt;&gt;()
+<a href=#2348 id=2348 data-nosnippet>2348</a>            .<span class="kw">await
+<a href=#2349 id=2349 data-nosnippet>2349</a>            </span>.unwrap();
+<a href=#2350 id=2350 data-nosnippet>2350</a>
+<a href=#2351 id=2351 data-nosnippet>2351</a>        <span class="kw">let </span>ids: Vec&lt;i32&gt; = result
+<a href=#2352 id=2352 data-nosnippet>2352</a>            .iter()
+<a href=#2353 id=2353 data-nosnippet>2353</a>            .flat_map(|b| {
+<a href=#2354 id=2354 data-nosnippet>2354</a>                b.column(<span class="number">0</span>)
+<a href=#2355 id=2355 data-nosnippet>2355</a>                    .as_primitive::&lt;arrow_array::types::Int32Type&gt;()
+<a href=#2356 id=2356 data-nosnippet>2356</a>                    .values()
+<a href=#2357 id=2357 data-nosnippet>2357</a>                    .iter()
+<a href=#2358 id=2358 data-nosnippet>2358</a>                    .copied()
+<a href=#2359 id=2359 data-nosnippet>2359</a>            })
+<a href=#2360 id=2360 data-nosnippet>2360</a>            .collect();
+<a href=#2361 id=2361 data-nosnippet>2361</a>        <span class="macro">assert_eq!</span>(ids, <span class="macro">vec!</span>[<span class="number">2</span>, <span class="number">3</span>]);
+<a href=#2362 id=2362 data-nosnippet>2362</a>    }
+<a href=#2363 id=2363 data-nosnippet>2363</a>
+<a href=#2364 id=2364 data-nosnippet>2364</a>    <span class="doccomment">/// Reads a file written with an older nested schema through an evolved one. This relies
+<a href=#2365 id=2365 data-nosnippet>2365</a>    /// on parquet-rs attaching `PARQUET:field_id` to struct children, list elements, and map
+<a href=#2366 id=2366 data-nosnippet>2366</a>    /// keys and values, which the hand-built fixtures in `record_batch_transformer` assume.
+<a href=#2367 id=2367 data-nosnippet>2367</a>    </span><span class="attr">#[tokio::test]
+<a href=#2368 id=2368 data-nosnippet>2368</a>    </span><span class="kw">async fn </span>test_read_evolved_nested_fields_by_field_id() {
+<a href=#2369 id=2369 data-nosnippet>2369</a>        <span class="kw">use </span>serde_json::{Value, json};
 <a href=#2370 id=2370 data-nosnippet>2370</a>
-<a href=#2371 id=2371 data-nosnippet>2371</a>    <span class="doccomment">/// Reads a file written with an older nested schema through an evolved one. This relies
-<a href=#2372 id=2372 data-nosnippet>2372</a>    /// on parquet-rs attaching `PARQUET:field_id` to struct children, list elements, and map
-<a href=#2373 id=2373 data-nosnippet>2373</a>    /// keys and values, which the hand-built fixtures in `record_batch_transformer` assume.
-<a href=#2374 id=2374 data-nosnippet>2374</a>    </span><span class="attr">#[tokio::test]
-<a href=#2375 id=2375 data-nosnippet>2375</a>    </span><span class="kw">async fn </span>test_read_evolved_nested_fields_by_field_id() {
-<a href=#2376 id=2376 data-nosnippet>2376</a>        <span class="kw">use </span>serde_json::{Value, json};
-<a href=#2377 id=2377 data-nosnippet>2377</a>
-<a href=#2378 id=2378 data-nosnippet>2378</a>        <span class="kw">use </span><span class="kw">crate</span>::arrow::schema_to_arrow_schema;
-<a href=#2379 id=2379 data-nosnippet>2379</a>        <span class="kw">use </span><span class="kw">crate</span>::spec::PrimitiveType::{Int, Long};
-<a href=#2380 id=2380 data-nosnippet>2380</a>        <span class="kw">use </span><span class="kw">crate</span>::spec::{ListType, MapType};
-<a href=#2381 id=2381 data-nosnippet>2381</a>
-<a href=#2382 id=2382 data-nosnippet>2382</a>        <span class="kw">fn </span>struct_of(fields: <span class="kw-2">&amp;</span>[(i32, <span class="kw-2">&amp;</span>str, PrimitiveType)]) -&gt; Type {
-<a href=#2383 id=2383 data-nosnippet>2383</a>            Type::Struct(StructType::new(
-<a href=#2384 id=2384 data-nosnippet>2384</a>                fields
-<a href=#2385 id=2385 data-nosnippet>2385</a>                    .iter()
-<a href=#2386 id=2386 data-nosnippet>2386</a>                    .map(|(id, name, ty)| {
-<a href=#2387 id=2387 data-nosnippet>2387</a>                        NestedField::optional(<span class="kw-2">*</span>id, <span class="kw-2">*</span>name, Type::Primitive(ty.clone())).into()
-<a href=#2388 id=2388 data-nosnippet>2388</a>                    })
-<a href=#2389 id=2389 data-nosnippet>2389</a>                    .collect(),
-<a href=#2390 id=2390 data-nosnippet>2390</a>            ))
-<a href=#2391 id=2391 data-nosnippet>2391</a>        }
-<a href=#2392 id=2392 data-nosnippet>2392</a>        <span class="kw">fn </span>schema(s: Type, element: Type, value: Type) -&gt; Schema {
-<a href=#2393 id=2393 data-nosnippet>2393</a>            <span class="kw">let </span>string = Type::Primitive(PrimitiveType::String);
-<a href=#2394 id=2394 data-nosnippet>2394</a>            Schema::builder()
-<a href=#2395 id=2395 data-nosnippet>2395</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#2396 id=2396 data-nosnippet>2396</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(Int)).into(),
-<a href=#2397 id=2397 data-nosnippet>2397</a>                    NestedField::optional(<span class="number">2</span>, <span class="string">"s"</span>, s).into(),
-<a href=#2398 id=2398 data-nosnippet>2398</a>                    NestedField::optional(
-<a href=#2399 id=2399 data-nosnippet>2399</a>                        <span class="number">3</span>,
-<a href=#2400 id=2400 data-nosnippet>2400</a>                        <span class="string">"l"</span>,
-<a href=#2401 id=2401 data-nosnippet>2401</a>                        Type::List(ListType::new(
-<a href=#2402 id=2402 data-nosnippet>2402</a>                            NestedField::list_element(<span class="number">7</span>, element, <span class="bool-val">true</span>).into(),
-<a href=#2403 id=2403 data-nosnippet>2403</a>                        )),
-<a href=#2404 id=2404 data-nosnippet>2404</a>                    )
-<a href=#2405 id=2405 data-nosnippet>2405</a>                    .into(),
-<a href=#2406 id=2406 data-nosnippet>2406</a>                    NestedField::optional(
-<a href=#2407 id=2407 data-nosnippet>2407</a>                        <span class="number">4</span>,
-<a href=#2408 id=2408 data-nosnippet>2408</a>                        <span class="string">"m"</span>,
-<a href=#2409 id=2409 data-nosnippet>2409</a>                        Type::Map(MapType::required(<span class="number">9</span>, string, <span class="number">10</span>, value)),
-<a href=#2410 id=2410 data-nosnippet>2410</a>                    )
-<a href=#2411 id=2411 data-nosnippet>2411</a>                    .into(),
-<a href=#2412 id=2412 data-nosnippet>2412</a>                ])
-<a href=#2413 id=2413 data-nosnippet>2413</a>                .build()
-<a href=#2414 id=2414 data-nosnippet>2414</a>                .unwrap()
-<a href=#2415 id=2415 data-nosnippet>2415</a>        }
-<a href=#2416 id=2416 data-nosnippet>2416</a>        <span class="kw">fn </span>to_batch(schema: <span class="kw-2">&amp;</span>Schema, rows: Value) -&gt; RecordBatch {
-<a href=#2417 id=2417 data-nosnippet>2417</a>            <span class="kw">let </span>fields = schema_to_arrow_schema(schema).unwrap().fields().to_vec();
-<a href=#2418 id=2418 data-nosnippet>2418</a>            serde_arrow::to_record_batch(<span class="kw-2">&amp;</span>fields, <span class="kw-2">&amp;</span>rows).unwrap()
-<a href=#2419 id=2419 data-nosnippet>2419</a>        }
-<a href=#2420 id=2420 data-nosnippet>2420</a>
-<a href=#2421 id=2421 data-nosnippet>2421</a>        <span class="kw">let </span>old_schema = schema(
-<a href=#2422 id=2422 data-nosnippet>2422</a>            struct_of(<span class="kw-2">&amp;</span>[(<span class="number">5</span>, <span class="string">"a"</span>, Int), (<span class="number">6</span>, <span class="string">"b"</span>, PrimitiveType::String)]),
-<a href=#2423 id=2423 data-nosnippet>2423</a>            struct_of(<span class="kw-2">&amp;</span>[(<span class="number">8</span>, <span class="string">"x"</span>, Int)]),
-<a href=#2424 id=2424 data-nosnippet>2424</a>            struct_of(<span class="kw-2">&amp;</span>[(<span class="number">11</span>, <span class="string">"x"</span>, Int)]),
-<a href=#2425 id=2425 data-nosnippet>2425</a>        );
-<a href=#2426 id=2426 data-nosnippet>2426</a>        <span class="comment">// Reorders `s`, adds children before, between, and after existing ones, and
-<a href=#2427 id=2427 data-nosnippet>2427</a>        // promotes int to long.
-<a href=#2428 id=2428 data-nosnippet>2428</a>        </span><span class="kw">let </span>new_schema = Arc::new(schema(
-<a href=#2429 id=2429 data-nosnippet>2429</a>            struct_of(<span class="kw-2">&amp;</span>[
-<a href=#2430 id=2430 data-nosnippet>2430</a>                (<span class="number">6</span>, <span class="string">"b"</span>, PrimitiveType::String),
-<a href=#2431 id=2431 data-nosnippet>2431</a>                (<span class="number">12</span>, <span class="string">"c"</span>, Int),
-<a href=#2432 id=2432 data-nosnippet>2432</a>                (<span class="number">5</span>, <span class="string">"a"</span>, Long),
-<a href=#2433 id=2433 data-nosnippet>2433</a>            ]),
-<a href=#2434 id=2434 data-nosnippet>2434</a>            struct_of(<span class="kw-2">&amp;</span>[(<span class="number">13</span>, <span class="string">"y"</span>, Int), (<span class="number">8</span>, <span class="string">"x"</span>, Int)]),
-<a href=#2435 id=2435 data-nosnippet>2435</a>            struct_of(<span class="kw-2">&amp;</span>[(<span class="number">11</span>, <span class="string">"x"</span>, Long), (<span class="number">14</span>, <span class="string">"y"</span>, Int)]),
-<a href=#2436 id=2436 data-nosnippet>2436</a>        ));
-<a href=#2437 id=2437 data-nosnippet>2437</a>        <span class="kw">let </span>old_batch = to_batch(
-<a href=#2438 id=2438 data-nosnippet>2438</a>            <span class="kw-2">&amp;</span>old_schema,
-<a href=#2439 id=2439 data-nosnippet>2439</a>            <span class="macro">json!</span>([
-<a href=#2440 id=2440 data-nosnippet>2440</a>                {<span class="string">"id"</span>: <span class="number">1</span>, <span class="string">"s"</span>: {<span class="string">"a"</span>: <span class="number">1</span>, <span class="string">"b"</span>: <span class="string">"p"</span>}, <span class="string">"l"</span>: [{<span class="string">"x"</span>: <span class="number">10</span>}, {<span class="string">"x"</span>: <span class="number">11</span>}], <span class="string">"m"</span>: {<span class="string">"k1"</span>: {<span class="string">"x"</span>: <span class="number">100</span>}}},
-<a href=#2441 id=2441 data-nosnippet>2441</a>                {<span class="string">"id"</span>: <span class="number">2</span>, <span class="string">"s"</span>: null, <span class="string">"l"</span>: null, <span class="string">"m"</span>: {<span class="string">"k2"</span>: {<span class="string">"x"</span>: <span class="number">200</span>}}},
-<a href=#2442 id=2442 data-nosnippet>2442</a>                {<span class="string">"id"</span>: <span class="number">3</span>, <span class="string">"s"</span>: {<span class="string">"a"</span>: <span class="number">3</span>, <span class="string">"b"</span>: null}, <span class="string">"l"</span>: [{<span class="string">"x"</span>: <span class="number">30</span>}], <span class="string">"m"</span>: null},
-<a href=#2443 id=2443 data-nosnippet>2443</a>            ]),
-<a href=#2444 id=2444 data-nosnippet>2444</a>        );
-<a href=#2445 id=2445 data-nosnippet>2445</a>        <span class="kw">let </span>expected = to_batch(
-<a href=#2446 id=2446 data-nosnippet>2446</a>            <span class="kw-2">&amp;</span>new_schema,
-<a href=#2447 id=2447 data-nosnippet>2447</a>            <span class="macro">json!</span>([
-<a href=#2448 id=2448 data-nosnippet>2448</a>                {
-<a href=#2449 id=2449 data-nosnippet>2449</a>                    <span class="string">"id"</span>: <span class="number">1</span>,
-<a href=#2450 id=2450 data-nosnippet>2450</a>                    <span class="string">"s"</span>: {<span class="string">"b"</span>: <span class="string">"p"</span>, <span class="string">"c"</span>: null, <span class="string">"a"</span>: <span class="number">1</span>},
-<a href=#2451 id=2451 data-nosnippet>2451</a>                    <span class="string">"l"</span>: [{<span class="string">"y"</span>: null, <span class="string">"x"</span>: <span class="number">10</span>}, {<span class="string">"y"</span>: null, <span class="string">"x"</span>: <span class="number">11</span>}],
-<a href=#2452 id=2452 data-nosnippet>2452</a>                    <span class="string">"m"</span>: {<span class="string">"k1"</span>: {<span class="string">"x"</span>: <span class="number">100</span>, <span class="string">"y"</span>: null}},
-<a href=#2453 id=2453 data-nosnippet>2453</a>                },
-<a href=#2454 id=2454 data-nosnippet>2454</a>                {<span class="string">"id"</span>: <span class="number">2</span>, <span class="string">"s"</span>: null, <span class="string">"l"</span>: null, <span class="string">"m"</span>: {<span class="string">"k2"</span>: {<span class="string">"x"</span>: <span class="number">200</span>, <span class="string">"y"</span>: null}}},
-<a href=#2455 id=2455 data-nosnippet>2455</a>                {<span class="string">"id"</span>: <span class="number">3</span>, <span class="string">"s"</span>: {<span class="string">"b"</span>: null, <span class="string">"c"</span>: null, <span class="string">"a"</span>: <span class="number">3</span>}, <span class="string">"l"</span>: [{<span class="string">"y"</span>: null, <span class="string">"x"</span>: <span class="number">30</span>}], <span class="string">"m"</span>: null},
-<a href=#2456 id=2456 data-nosnippet>2456</a>            ]),
-<a href=#2457 id=2457 data-nosnippet>2457</a>        );
-<a href=#2458 id=2458 data-nosnippet>2458</a>
-<a href=#2459 id=2459 data-nosnippet>2459</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
-<a href=#2460 id=2460 data-nosnippet>2460</a>        <span class="kw">let </span>file_path = <span class="macro">format!</span>(<span class="string">"{}/old.parquet"</span>, tmp_dir.path().to_str().unwrap());
-<a href=#2461 id=2461 data-nosnippet>2461</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer =
-<a href=#2462 id=2462 data-nosnippet>2462</a>            ArrowWriter::try_new(File::create(<span class="kw-2">&amp;</span>file_path).unwrap(), old_batch.schema(), <span class="prelude-val">None</span>)
-<a href=#2463 id=2463 data-nosnippet>2463</a>                .unwrap();
-<a href=#2464 id=2464 data-nosnippet>2464</a>        writer.write(<span class="kw-2">&amp;</span>old_batch).unwrap();
-<a href=#2465 id=2465 data-nosnippet>2465</a>        writer.close().unwrap();
-<a href=#2466 id=2466 data-nosnippet>2466</a>
-<a href=#2467 id=2467 data-nosnippet>2467</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
-<a href=#2468 id=2468 data-nosnippet>2468</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
-<a href=#2469 id=2469 data-nosnippet>2469</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask::builder()
-<a href=#2470 id=2470 data-nosnippet>2470</a>                .with_file_size_in_bytes(std::fs::metadata(<span class="kw-2">&amp;</span>file_path).unwrap().len())
-<a href=#2471 id=2471 data-nosnippet>2471</a>                .with_start(<span class="number">0</span>)
-<a href=#2472 id=2472 data-nosnippet>2472</a>                .with_length(<span class="number">0</span>)
-<a href=#2473 id=2473 data-nosnippet>2473</a>                .with_data_file_path(file_path)
-<a href=#2474 id=2474 data-nosnippet>2474</a>                .with_data_file_format(DataFileFormat::Parquet)
-<a href=#2475 id=2475 data-nosnippet>2475</a>                .with_schema(new_schema)
-<a href=#2476 id=2476 data-nosnippet>2476</a>                .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>])
-<a href=#2477 id=2477 data-nosnippet>2477</a>                .with_case_sensitive(<span class="bool-val">false</span>)
-<a href=#2478 id=2478 data-nosnippet>2478</a>                .build()
-<a href=#2479 id=2479 data-nosnippet>2479</a>                .unwrap())]
-<a href=#2480 id=2480 data-nosnippet>2480</a>            .into_iter(),
-<a href=#2481 id=2481 data-nosnippet>2481</a>        )) <span class="kw">as </span>FileScanTaskStream;
-<a href=#2482 id=2482 data-nosnippet>2482</a>
-<a href=#2483 id=2483 data-nosnippet>2483</a>        <span class="kw">let </span>result = reader
-<a href=#2484 id=2484 data-nosnippet>2484</a>            .read(tasks)
-<a href=#2485 id=2485 data-nosnippet>2485</a>            .unwrap()
-<a href=#2486 id=2486 data-nosnippet>2486</a>            .stream()
-<a href=#2487 id=2487 data-nosnippet>2487</a>            .try_collect::&lt;Vec&lt;RecordBatch&gt;&gt;()
-<a href=#2488 id=2488 data-nosnippet>2488</a>            .<span class="kw">await
-<a href=#2489 id=2489 data-nosnippet>2489</a>            </span>.unwrap();
-<a href=#2490 id=2490 data-nosnippet>2490</a>        <span class="macro">assert_eq!</span>(result, <span class="macro">vec!</span>[expected]);
-<a href=#2491 id=2491 data-nosnippet>2491</a>    }
-<a href=#2492 id=2492 data-nosnippet>2492</a>}
+<a href=#2371 id=2371 data-nosnippet>2371</a>        <span class="kw">use </span><span class="kw">crate</span>::arrow::schema_to_arrow_schema;
+<a href=#2372 id=2372 data-nosnippet>2372</a>        <span class="kw">use </span><span class="kw">crate</span>::spec::PrimitiveType::{Int, Long};
+<a href=#2373 id=2373 data-nosnippet>2373</a>        <span class="kw">use </span><span class="kw">crate</span>::spec::{ListType, MapType};
+<a href=#2374 id=2374 data-nosnippet>2374</a>
+<a href=#2375 id=2375 data-nosnippet>2375</a>        <span class="kw">fn </span>struct_of(fields: <span class="kw-2">&amp;</span>[(i32, <span class="kw-2">&amp;</span>str, PrimitiveType)]) -&gt; Type {
+<a href=#2376 id=2376 data-nosnippet>2376</a>            Type::Struct(StructType::new(
+<a href=#2377 id=2377 data-nosnippet>2377</a>                fields
+<a href=#2378 id=2378 data-nosnippet>2378</a>                    .iter()
+<a href=#2379 id=2379 data-nosnippet>2379</a>                    .map(|(id, name, ty)| {
+<a href=#2380 id=2380 data-nosnippet>2380</a>                        NestedField::optional(<span class="kw-2">*</span>id, <span class="kw-2">*</span>name, Type::Primitive(ty.clone())).into()
+<a href=#2381 id=2381 data-nosnippet>2381</a>                    })
+<a href=#2382 id=2382 data-nosnippet>2382</a>                    .collect(),
+<a href=#2383 id=2383 data-nosnippet>2383</a>            ))
+<a href=#2384 id=2384 data-nosnippet>2384</a>        }
+<a href=#2385 id=2385 data-nosnippet>2385</a>        <span class="kw">fn </span>schema(s: Type, element: Type, value: Type) -&gt; Schema {
+<a href=#2386 id=2386 data-nosnippet>2386</a>            <span class="kw">let </span>string = Type::Primitive(PrimitiveType::String);
+<a href=#2387 id=2387 data-nosnippet>2387</a>            Schema::builder()
+<a href=#2388 id=2388 data-nosnippet>2388</a>                .with_fields(<span class="macro">vec!</span>[
+<a href=#2389 id=2389 data-nosnippet>2389</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, Type::Primitive(Int)).into(),
+<a href=#2390 id=2390 data-nosnippet>2390</a>                    NestedField::optional(<span class="number">2</span>, <span class="string">"s"</span>, s).into(),
+<a href=#2391 id=2391 data-nosnippet>2391</a>                    NestedField::optional(
+<a href=#2392 id=2392 data-nosnippet>2392</a>                        <span class="number">3</span>,
+<a href=#2393 id=2393 data-nosnippet>2393</a>                        <span class="string">"l"</span>,
+<a href=#2394 id=2394 data-nosnippet>2394</a>                        Type::List(ListType::new(
+<a href=#2395 id=2395 data-nosnippet>2395</a>                            NestedField::list_element(<span class="number">7</span>, element, <span class="bool-val">true</span>).into(),
+<a href=#2396 id=2396 data-nosnippet>2396</a>                        )),
+<a href=#2397 id=2397 data-nosnippet>2397</a>                    )
+<a href=#2398 id=2398 data-nosnippet>2398</a>                    .into(),
+<a href=#2399 id=2399 data-nosnippet>2399</a>                    NestedField::optional(
+<a href=#2400 id=2400 data-nosnippet>2400</a>                        <span class="number">4</span>,
+<a href=#2401 id=2401 data-nosnippet>2401</a>                        <span class="string">"m"</span>,
+<a href=#2402 id=2402 data-nosnippet>2402</a>                        Type::Map(MapType::required(<span class="number">9</span>, string, <span class="number">10</span>, value)),
+<a href=#2403 id=2403 data-nosnippet>2403</a>                    )
+<a href=#2404 id=2404 data-nosnippet>2404</a>                    .into(),
+<a href=#2405 id=2405 data-nosnippet>2405</a>                ])
+<a href=#2406 id=2406 data-nosnippet>2406</a>                .build()
+<a href=#2407 id=2407 data-nosnippet>2407</a>                .unwrap()
+<a href=#2408 id=2408 data-nosnippet>2408</a>        }
+<a href=#2409 id=2409 data-nosnippet>2409</a>        <span class="kw">fn </span>to_batch(schema: <span class="kw-2">&amp;</span>Schema, rows: Value) -&gt; RecordBatch {
+<a href=#2410 id=2410 data-nosnippet>2410</a>            <span class="kw">let </span>fields = schema_to_arrow_schema(schema).unwrap().fields().to_vec();
+<a href=#2411 id=2411 data-nosnippet>2411</a>            serde_arrow::to_record_batch(<span class="kw-2">&amp;</span>fields, <span class="kw-2">&amp;</span>rows).unwrap()
+<a href=#2412 id=2412 data-nosnippet>2412</a>        }
+<a href=#2413 id=2413 data-nosnippet>2413</a>
+<a href=#2414 id=2414 data-nosnippet>2414</a>        <span class="kw">let </span>old_schema = schema(
+<a href=#2415 id=2415 data-nosnippet>2415</a>            struct_of(<span class="kw-2">&amp;</span>[(<span class="number">5</span>, <span class="string">"a"</span>, Int), (<span class="number">6</span>, <span class="string">"b"</span>, PrimitiveType::String)]),
+<a href=#2416 id=2416 data-nosnippet>2416</a>            struct_of(<span class="kw-2">&amp;</span>[(<span class="number">8</span>, <span class="string">"x"</span>, Int)]),
+<a href=#2417 id=2417 data-nosnippet>2417</a>            struct_of(<span class="kw-2">&amp;</span>[(<span class="number">11</span>, <span class="string">"x"</span>, Int)]),
+<a href=#2418 id=2418 data-nosnippet>2418</a>        );
+<a href=#2419 id=2419 data-nosnippet>2419</a>        <span class="comment">// Reorders `s`, adds children before, between, and after existing ones, and
+<a href=#2420 id=2420 data-nosnippet>2420</a>        // promotes int to long.
+<a href=#2421 id=2421 data-nosnippet>2421</a>        </span><span class="kw">let </span>new_schema = Arc::new(schema(
+<a href=#2422 id=2422 data-nosnippet>2422</a>            struct_of(<span class="kw-2">&amp;</span>[
+<a href=#2423 id=2423 data-nosnippet>2423</a>                (<span class="number">6</span>, <span class="string">"b"</span>, PrimitiveType::String),
+<a href=#2424 id=2424 data-nosnippet>2424</a>                (<span class="number">12</span>, <span class="string">"c"</span>, Int),
+<a href=#2425 id=2425 data-nosnippet>2425</a>                (<span class="number">5</span>, <span class="string">"a"</span>, Long),
+<a href=#2426 id=2426 data-nosnippet>2426</a>            ]),
+<a href=#2427 id=2427 data-nosnippet>2427</a>            struct_of(<span class="kw-2">&amp;</span>[(<span class="number">13</span>, <span class="string">"y"</span>, Int), (<span class="number">8</span>, <span class="string">"x"</span>, Int)]),
+<a href=#2428 id=2428 data-nosnippet>2428</a>            struct_of(<span class="kw-2">&amp;</span>[(<span class="number">11</span>, <span class="string">"x"</span>, Long), (<span class="number">14</span>, <span class="string">"y"</span>, Int)]),
+<a href=#2429 id=2429 data-nosnippet>2429</a>        ));
+<a href=#2430 id=2430 data-nosnippet>2430</a>        <span class="kw">let </span>old_batch = to_batch(
+<a href=#2431 id=2431 data-nosnippet>2431</a>            <span class="kw-2">&amp;</span>old_schema,
+<a href=#2432 id=2432 data-nosnippet>2432</a>            <span class="macro">json!</span>([
+<a href=#2433 id=2433 data-nosnippet>2433</a>                {<span class="string">"id"</span>: <span class="number">1</span>, <span class="string">"s"</span>: {<span class="string">"a"</span>: <span class="number">1</span>, <span class="string">"b"</span>: <span class="string">"p"</span>}, <span class="string">"l"</span>: [{<span class="string">"x"</span>: <span class="number">10</span>}, {<span class="string">"x"</span>: <span class="number">11</span>}], <span class="string">"m"</span>: {<span class="string">"k1"</span>: {<span class="string">"x"</span>: <span class="number">100</span>}}},
+<a href=#2434 id=2434 data-nosnippet>2434</a>                {<span class="string">"id"</span>: <span class="number">2</span>, <span class="string">"s"</span>: null, <span class="string">"l"</span>: null, <span class="string">"m"</span>: {<span class="string">"k2"</span>: {<span class="string">"x"</span>: <span class="number">200</span>}}},
+<a href=#2435 id=2435 data-nosnippet>2435</a>                {<span class="string">"id"</span>: <span class="number">3</span>, <span class="string">"s"</span>: {<span class="string">"a"</span>: <span class="number">3</span>, <span class="string">"b"</span>: null}, <span class="string">"l"</span>: [{<span class="string">"x"</span>: <span class="number">30</span>}], <span class="string">"m"</span>: null},
+<a href=#2436 id=2436 data-nosnippet>2436</a>            ]),
+<a href=#2437 id=2437 data-nosnippet>2437</a>        );
+<a href=#2438 id=2438 data-nosnippet>2438</a>        <span class="kw">let </span>expected = to_batch(
+<a href=#2439 id=2439 data-nosnippet>2439</a>            <span class="kw-2">&amp;</span>new_schema,
+<a href=#2440 id=2440 data-nosnippet>2440</a>            <span class="macro">json!</span>([
+<a href=#2441 id=2441 data-nosnippet>2441</a>                {
+<a href=#2442 id=2442 data-nosnippet>2442</a>                    <span class="string">"id"</span>: <span class="number">1</span>,
+<a href=#2443 id=2443 data-nosnippet>2443</a>                    <span class="string">"s"</span>: {<span class="string">"b"</span>: <span class="string">"p"</span>, <span class="string">"c"</span>: null, <span class="string">"a"</span>: <span class="number">1</span>},
+<a href=#2444 id=2444 data-nosnippet>2444</a>                    <span class="string">"l"</span>: [{<span class="string">"y"</span>: null, <span class="string">"x"</span>: <span class="number">10</span>}, {<span class="string">"y"</span>: null, <span class="string">"x"</span>: <span class="number">11</span>}],
+<a href=#2445 id=2445 data-nosnippet>2445</a>                    <span class="string">"m"</span>: {<span class="string">"k1"</span>: {<span class="string">"x"</span>: <span class="number">100</span>, <span class="string">"y"</span>: null}},
+<a href=#2446 id=2446 data-nosnippet>2446</a>                },
+<a href=#2447 id=2447 data-nosnippet>2447</a>                {<span class="string">"id"</span>: <span class="number">2</span>, <span class="string">"s"</span>: null, <span class="string">"l"</span>: null, <span class="string">"m"</span>: {<span class="string">"k2"</span>: {<span class="string">"x"</span>: <span class="number">200</span>, <span class="string">"y"</span>: null}}},
+<a href=#2448 id=2448 data-nosnippet>2448</a>                {<span class="string">"id"</span>: <span class="number">3</span>, <span class="string">"s"</span>: {<span class="string">"b"</span>: null, <span class="string">"c"</span>: null, <span class="string">"a"</span>: <span class="number">3</span>}, <span class="string">"l"</span>: [{<span class="string">"y"</span>: null, <span class="string">"x"</span>: <span class="number">30</span>}], <span class="string">"m"</span>: null},
+<a href=#2449 id=2449 data-nosnippet>2449</a>            ]),
+<a href=#2450 id=2450 data-nosnippet>2450</a>        );
+<a href=#2451 id=2451 data-nosnippet>2451</a>
+<a href=#2452 id=2452 data-nosnippet>2452</a>        <span class="kw">let </span>tmp_dir = TempDir::new().unwrap();
+<a href=#2453 id=2453 data-nosnippet>2453</a>        <span class="kw">let </span>file_path = <span class="macro">format!</span>(<span class="string">"{}/old.parquet"</span>, tmp_dir.path().to_str().unwrap());
+<a href=#2454 id=2454 data-nosnippet>2454</a>        <span class="kw">let </span><span class="kw-2">mut </span>writer =
+<a href=#2455 id=2455 data-nosnippet>2455</a>            ArrowWriter::try_new(File::create(<span class="kw-2">&amp;</span>file_path).unwrap(), old_batch.schema(), <span class="prelude-val">None</span>)
+<a href=#2456 id=2456 data-nosnippet>2456</a>                .unwrap();
+<a href=#2457 id=2457 data-nosnippet>2457</a>        writer.write(<span class="kw-2">&amp;</span>old_batch).unwrap();
+<a href=#2458 id=2458 data-nosnippet>2458</a>        writer.close().unwrap();
+<a href=#2459 id=2459 data-nosnippet>2459</a>
+<a href=#2460 id=2460 data-nosnippet>2460</a>        <span class="kw">let </span>reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+<a href=#2461 id=2461 data-nosnippet>2461</a>        <span class="kw">let </span>tasks = Box::pin(futures::stream::iter(
+<a href=#2462 id=2462 data-nosnippet>2462</a>            <span class="macro">vec!</span>[<span class="prelude-val">Ok</span>(FileScanTask::builder()
+<a href=#2463 id=2463 data-nosnippet>2463</a>                .with_file_size_in_bytes(std::fs::metadata(<span class="kw-2">&amp;</span>file_path).unwrap().len())
+<a href=#2464 id=2464 data-nosnippet>2464</a>                .with_start(<span class="number">0</span>)
+<a href=#2465 id=2465 data-nosnippet>2465</a>                .with_length(<span class="number">0</span>)
+<a href=#2466 id=2466 data-nosnippet>2466</a>                .with_data_file_path(file_path)
+<a href=#2467 id=2467 data-nosnippet>2467</a>                .with_data_file_format(DataFileFormat::Parquet)
+<a href=#2468 id=2468 data-nosnippet>2468</a>                .with_schema(new_schema)
+<a href=#2469 id=2469 data-nosnippet>2469</a>                .with_project_field_ids(<span class="macro">vec!</span>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>])
+<a href=#2470 id=2470 data-nosnippet>2470</a>                .with_case_sensitive(<span class="bool-val">false</span>)
+<a href=#2471 id=2471 data-nosnippet>2471</a>                .build()
+<a href=#2472 id=2472 data-nosnippet>2472</a>                .unwrap())]
+<a href=#2473 id=2473 data-nosnippet>2473</a>            .into_iter(),
+<a href=#2474 id=2474 data-nosnippet>2474</a>        )) <span class="kw">as </span>FileScanTaskStream;
+<a href=#2475 id=2475 data-nosnippet>2475</a>
+<a href=#2476 id=2476 data-nosnippet>2476</a>        <span class="kw">let </span>result = reader
+<a href=#2477 id=2477 data-nosnippet>2477</a>            .read(tasks)
+<a href=#2478 id=2478 data-nosnippet>2478</a>            .unwrap()
+<a href=#2479 id=2479 data-nosnippet>2479</a>            .stream()
+<a href=#2480 id=2480 data-nosnippet>2480</a>            .try_collect::&lt;Vec&lt;RecordBatch&gt;&gt;()
+<a href=#2481 id=2481 data-nosnippet>2481</a>            .<span class="kw">await
+<a href=#2482 id=2482 data-nosnippet>2482</a>            </span>.unwrap();
+<a href=#2483 id=2483 data-nosnippet>2483</a>        <span class="macro">assert_eq!</span>(result, <span class="macro">vec!</span>[expected]);
+<a href=#2484 id=2484 data-nosnippet>2484</a>    }
+<a href=#2485 id=2485 data-nosnippet>2485</a>}
 </code></pre></div></section></main></body></html>
