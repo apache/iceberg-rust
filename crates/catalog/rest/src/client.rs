@@ -94,7 +94,7 @@ impl HttpClient {
         HttpClient {
             client,
             extra_headers: cfg.extra_headers(),
-            disable_header_redaction: cfg.disable_header_redaction,
+            disable_header_redaction: cfg.disable_header_redaction(),
         }
     }
 
@@ -103,7 +103,7 @@ impl HttpClient {
         HttpClient {
             client: self.client,
             extra_headers: cfg.extra_headers(),
-            disable_header_redaction: cfg.disable_header_redaction,
+            disable_header_redaction: cfg.disable_header_redaction(),
         }
     }
 

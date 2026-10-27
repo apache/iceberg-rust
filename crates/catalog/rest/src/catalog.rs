@@ -187,34 +187,41 @@ impl RestCatalogBuilder {
 /// Typed REST catalog properties.
 #[derive(Clone, Properties, PartialEq, Eq)]
 pub(crate) struct RestCatalogProperties {
-    #[property(key = REST_CATALOG_PROP_URI, default = "")]
-    pub(crate) uri: String,
+    /// Catalog URI.
+    #[property(key = REST_CATALOG_PROP_URI, default = "", getter)]
+    uri: String,
     #[property(key = REST_CATALOG_PROP_WAREHOUSE, default = None)]
     warehouse: Option<String>,
     #[property(key = "prefix", default = None)]
     prefix: Option<String>,
     #[property(key = REST_CATALOG_PROP_AUTH_TYPE, default = None)]
     auth_type: Option<AuthType>,
-    #[property(key = "token", default = None, parse_with = parse_sensitive_string)]
-    pub(crate) token: Option<SensitiveString>,
-    #[property(key = "credential", default = None, parse_with = parse_credential)]
-    pub(crate) credential: Option<(Option<String>, SensitiveString)>,
-    #[property(key = "oauth2-server-uri", default = None)]
-    pub(crate) oauth2_server_uri: Option<String>,
+    /// Configured bearer token.
+    #[property(key = "token", default = None, parse_with = parse_sensitive_string, getter)]
+    token: Option<SensitiveString>,
+    /// Configured OAuth2 client ID and secret.
+    #[property(key = "credential", default = None, parse_with = parse_credential, getter)]
+    credential: Option<(Option<String>, SensitiveString)>,
+    /// Explicit OAuth2 token endpoint.
+    #[property(key = "oauth2-server-uri", default = None, getter)]
+    oauth2_server_uri: Option<String>,
     #[property(key = "scope", default = None)]
     scope: Option<String>,
     #[property(key = "audience", default = None)]
     audience: Option<String>,
     #[property(key = "resource", default = None)]
     resource: Option<String>,
-    #[property(nested)]
-    pub(crate) headers: RestHeaders,
+    /// Explicit headers added to requests.
+    #[property(nested, getter)]
+    headers: RestHeaders,
+    /// Whether header redaction is disabled.
     #[property(
         key = REST_CATALOG_PROP_DISABLE_HEADER_REDACTION,
         default = false,
-        parse_with = parse_header_redaction
+        parse_with = parse_header_redaction,
+        getter
     )]
-    pub(crate) disable_header_redaction: bool,
+    disable_header_redaction: bool,
     #[property(key = REST_CATALOG_PROP_PAGE_SIZE, default = None, parse_with = parse_page_size)]
     page_size: Option<NonZeroU32>,
     #[property(key = REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES, default = TABLE_CACHE_MAX_ENTRIES_DEFAULT)]

@@ -104,14 +104,14 @@ impl OAuth2Manager {
 
     pub(crate) fn from_properties(cfg: &RestCatalogProperties) -> Self {
         Self {
-            token: Arc::new(Mutex::new(cfg.token.clone())),
+            token: Arc::new(Mutex::new(cfg.token().clone())),
             init_params: OAuth2Params {
                 extra_headers: cfg.extra_headers(),
                 token_endpoint: cfg.get_token_endpoint(),
-                credential: cfg.credential.clone(),
+                credential: cfg.credential().clone(),
                 extra_oauth_params: cfg.extra_oauth_params(),
             },
-            endpoint_is_default: cfg.oauth2_server_uri.is_none(),
+            endpoint_is_default: cfg.oauth2_server_uri().is_none(),
         }
     }
 }
@@ -155,28 +155,29 @@ impl OAuth2Manager {
     ) -> Result<OAuth2Session> {
         let properties = RestCatalogProperties::for_handshake(props)?;
         // The properties may carry a new token (or restate the user's).
-        if let Some(token) = &properties.token {
+        if let Some(token) = properties.token() {
             *self.token.lock().await = Some(token.clone());
         }
 
         let mut extra_headers = self.init_params.extra_headers.clone();
-        extra_headers.extend(properties.headers.0.clone());
+        extra_headers.extend(properties.headers().0.clone());
 
         let mut extra_oauth_params = self.init_params.extra_oauth_params.clone();
         extra_oauth_params.extend(properties.explicit_oauth_params());
 
-        let token_endpoint = match &properties.oauth2_server_uri {
+        let token_endpoint = match properties.oauth2_server_uri() {
             Some(uri) if !uri.is_empty() => uri.clone(),
             // A default endpoint follows the merged catalog URI; an injected
             // manager keeps its explicit endpoint.
             _ if self.endpoint_is_default && props.contains_key(REST_CATALOG_PROP_URI) => {
-                default_token_endpoint(&properties.uri)
+                default_token_endpoint(properties.uri())
             }
             _ => self.init_params.token_endpoint.clone(),
         };
 
         let credential = properties
-            .credential
+            .credential()
+            .clone()
             .or_else(|| self.init_params.credential.clone());
 
         Ok(OAuth2Session {
