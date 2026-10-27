@@ -497,8 +497,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             return ROW_GROUP_MIGHT_MATCH;
         }
 
-        let lower_bound = self.min_value(field_id)?;
-        let upper_bound = self.max_value(field_id)?;
+        let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+        let lower_bound = get_parquet_stat_min_as_datum(&primitive_type, stats)?;
+        let upper_bound = get_parquet_stat_max_as_datum(&primitive_type, stats)?;
 
         // A NaN bound is unreliable on that side only. Drop it to unbounded
         // so a valid bound can still prune. See InclusiveMetricsEvaluator.
