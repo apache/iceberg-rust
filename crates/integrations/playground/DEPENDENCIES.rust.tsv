@@ -45,8 +45,8 @@ atomic-waker@1.1.2		X								X
 autocfg@1.5.1		X								X						
 aws-config@1.8.18		X														
 aws-credential-types@1.2.14		X														
-aws-lc-rs@1.17.1		X						X								
-aws-lc-sys@0.42.0		X			X			X		X	X					
+aws-lc-rs@1.18.1		X						X								
+aws-lc-sys@0.45.0		X			X			X		X	X					
 aws-runtime@1.7.5		X														
 aws-sdk-sso@1.102.0		X														
 aws-sdk-ssooidc@1.104.0		X														
@@ -129,7 +129,7 @@ crypto-common@0.2.2		X								X
 csv@1.4.0										X				X		
 csv-core@0.1.13										X				X		
 ctr@0.9.2		X								X						
-ctutils@0.4.2		X								X						
+ctutils@0.4.5		X								X						
 darling@0.20.11										X						
 darling@0.23.0										X						
 darling_core@0.20.11										X						
@@ -364,10 +364,10 @@ ring@0.17.14		X						X
 roaring@0.11.4		X								X						
 rustc_version@0.4.1		X								X						
 rustix@1.1.4		X	X							X						
-rustls@0.23.41		X						X		X						
+rustls@0.23.46		X						X		X						
 rustls-native-certs@0.8.4		X						X		X						
 rustls-pki-types@1.15.0		X								X						
-rustls-webpki@0.103.13								X								
+rustls-webpki@0.103.16								X								
 rustversion@1.0.23		X								X						
 rustyline@18.0.1										X						
 ryu@1.0.23		X				X										
@@ -519,4 +519,4 @@ zlib-rs@0.6.5															X
 zmij@1.0.21										X						
 zstd@0.13.3										X						
 zstd-safe@7.2.4		X								X						
-zstd-sys@2.0.16+zstd.1.5.7		X								X						
+zstd-sys@2.1.2+zstd.1.5.7					X											

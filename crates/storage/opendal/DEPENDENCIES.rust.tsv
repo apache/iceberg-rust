@@ -35,8 +35,8 @@ async-trait@0.1.89		X									X
 atoi@2.0.0											X					
 atomic-waker@1.1.2		X									X					
 autocfg@1.5.1		X									X					
-aws-lc-rs@1.17.1		X							X							
-aws-lc-sys@0.42.0		X			X				X		X	X				
+aws-lc-rs@1.18.1		X							X							
+aws-lc-sys@0.45.0		X			X				X		X	X				
 backon@1.6.0		X														
 base64@0.22.1		X									X					
 base64@0.23.0		X									X					
@@ -103,7 +103,7 @@ ctor@0.6.3		X									X
 ctor@1.0.8		X									X					
 ctor-proc-macro@0.0.7		X									X					
 ctr@0.9.2		X									X					
-ctutils@0.4.2		X									X					
+ctutils@0.4.5		X									X					
 darling@0.20.11											X					
 darling@0.23.0											X					
 darling_core@0.20.11											X					
@@ -333,12 +333,12 @@ rsa@0.9.10		X									X
 rust-ini@0.21.3											X					
 rustc_version@0.4.1		X									X					
 rustix@1.1.4		X	X								X					
-rustls@0.23.41		X							X		X					
+rustls@0.23.46		X							X		X					
 rustls-native-certs@0.8.4		X							X		X					
 rustls-pki-types@1.15.0		X									X					
 rustls-platform-verifier@0.7.0		X									X					
 rustls-platform-verifier-android@0.1.1		X									X					
-rustls-webpki@0.103.13									X							
+rustls-webpki@0.103.16									X							
 rustversion@1.0.23		X									X					
 ryu@1.0.23		X				X										
 safe-transmute@0.11.3											X					
@@ -452,7 +452,7 @@ wasm-bindgen-shared@0.2.126		X									X
 wasm-streams@0.5.0		X									X					
 web-sys@0.3.103		X									X					
 web-time@1.1.0		X									X					
-webpki-root-certs@1.0.8								X								
+webpki-root-certs@1.0.10								X								
 whoami@2.1.2		X				X					X					
 winapi@0.3.9		X									X					
 winapi-i686-pc-windows-gnu@0.4.0		X									X					
@@ -511,4 +511,4 @@ zlib-rs@0.6.5																X
 zmij@1.0.21											X					
 zstd@0.13.3											X					
 zstd-safe@7.2.4		X									X					
-zstd-sys@2.0.16+zstd.1.5.7		X									X					
+zstd-sys@2.1.2+zstd.1.5.7					X											
