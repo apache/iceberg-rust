@@ -235,7 +235,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * fix: break dev-dependency cycle that blocks publishing iceberg-property-macro by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3184
 * ci: check new crates are reserved on crates.io before merge by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3185
 * ci: pull MinIO images from Quay by @smaheshwar-pltr in https://github.com/apache/iceberg-rust/pull/3202
-* fix(encryption) [18/N] wire in ags1 file length for tamper proofing by @xanderbailey in https://github.com/apache/iceberg-rust/pull/3236
+* fix(encryption) [18/N] wire in ags1 file length for tamper proofing by @xanderbailey in https://github.com/apache/iceberg-rust/pull/3236 (backported in https://github.com/apache/iceberg-rust/pull/3270)
+* ci: fix Rust cache action casing for ASF allowlist by @blackmwk in https://github.com/apache/iceberg-rust/pull/3249 (backported in https://github.com/apache/iceberg-rust/pull/3271)
+* ci: replace MinIO with RustFS for integration tests by @comphead in https://github.com/apache/iceberg-rust/pull/3273 (backported in https://github.com/apache/iceberg-rust/pull/3271)
+* docs: note iceberg-datafusion move to Apache DataFusion in crate README by @dannycjones in https://github.com/apache/iceberg-rust/pull/3491
+* ci: update PyPI publish action to ASF-approved v1.14.3 by @blackmwk in https://github.com/apache/iceberg-rust/pull/3531 (backported in https://github.com/apache/iceberg-rust/pull/3534)
+* build: disable unused zstd legacy feature by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3495 (backported in https://github.com/apache/iceberg-rust/pull/3535)
+* ci(python): bundle third-party licenses in pyiceberg-core wheels by @kevinjqliu in https://github.com/apache/iceberg-rust/pull/3493 (backported in https://github.com/apache/iceberg-rust/pull/3554)
+* chore(deps): update dependencies to address security advisories by @dannycjones in https://github.com/apache/iceberg-rust/pull/3558
 
 ## [v0.10.1] - 2026-07-28
 
