@@ -93,7 +93,9 @@ jobs:
         with:
           key: bindings-python
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      # The output doesn't depend on the OS, and the release workflows run it on every OS.
       - uses: $/.github/actions/generate-python-license
+        if: runner.os == 'Linux'
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: "bindings/python"
