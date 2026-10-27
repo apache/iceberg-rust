@@ -379,10 +379,7 @@ impl MinMaxColAggregator {
                 ));
             };
 
-            // Iceberg does not allow NaN as a bound, and Parquet 60 writes NaN min/max for a column
-            // chunk whose values are all NaN. Record no bound for such a chunk, as iceberg-java
-            // does. NaN is unordered, so a stored NaN bound would never be replaced by the
-            // non-NaN values of a later chunk.
+            // Iceberg bounds must not be NaN.
             if !min_datum.is_nan() {
                 self.update_state_min(field_id, min_datum);
             }
@@ -2631,14 +2628,12 @@ mod tests {
         let double_stats =
             |min, max| Statistics::Double(ValueStatistics::new(min, max, None, None, false));
 
-        // An all-NaN chunk records no bound, and does not hide the bounds of a later chunk.
         min_max_agg
-            .update(0, &float_stats(Some(f32::NAN), Some(f32::NAN)))
+            .update(0, &float_stats(Some(-f32::NAN), Some(f32::NAN)))
             .unwrap();
         min_max_agg
             .update(0, &float_stats(Some(1.5), Some(2.5)))
             .unwrap();
-        // A column whose only chunk is all NaN records no bounds at all.
         min_max_agg
             .update(1, &double_stats(Some(f64::NAN), Some(f64::NAN)))
             .unwrap();
