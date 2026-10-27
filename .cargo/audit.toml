@@ -64,4 +64,21 @@ ignore = [
   # once the transitive dependency set permits quick-xml >=0.41.0.
   "RUSTSEC-2026-0194",
   "RUSTSEC-2026-0195",
+  # `zstd` < 0.14.3 / `zstd-safe` < 8.2.0 memory-safety bugs.
+  #
+  # Fixed only in zstd 0.14, but parquet 58 and apache-avro 0.21 require
+  # zstd 0.13. Remove once on parquet >= 60
+  # (https://github.com/apache/iceberg-rust/pull/3257), an apache-avro release
+  # after 0.21, and workspace `zstd` >= 0.14.3.
+  #
+  # None of the affected code is reachable here. To re-check, run
+  # `cargo tree --workspace --all-features --target all -e features -i zstd-safe`
+  # and confirm only `std` is enabled.
+  #
+  # Affects only zstd's `with_context` constructors, which nothing calls.
+  "RUSTSEC-2026-0391",
+  # Requires the `seekable` feature, which is off.
+  "RUSTSEC-2026-0398",
+  # Requires the `legacy` feature, which is off.
+  "RUSTSEC-2026-0403",
 ]
