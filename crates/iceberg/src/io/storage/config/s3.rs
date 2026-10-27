@@ -36,6 +36,8 @@ pub const S3_ACCESS_KEY_ID: &str = "s3.access-key-id";
 pub const S3_SECRET_ACCESS_KEY: &str = "s3.secret-access-key";
 /// S3 session token (required when using temporary credentials).
 pub const S3_SESSION_TOKEN: &str = "s3.session-token";
+/// Epoch-millisecond timestamp at which the vended S3 session token expires.
+pub const S3_SESSION_TOKEN_EXPIRES_AT_MS: &str = "s3.session-token-expires-at-ms";
 /// S3 region.
 pub const S3_REGION: &str = "s3.region";
 /// Region to use for the S3 client (takes precedence over [`S3_REGION`]).
