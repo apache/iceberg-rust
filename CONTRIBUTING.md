@@ -38,6 +38,10 @@ First, thank you for contributing to Iceberg Rust! The goal of this document is 
 
 Once your changes are ready you must submit your branch as a [pull request](https://github.com/apache/iceberg-rust/pulls).
 
+#### Open Pull Request Limit
+
+With coding agents, the number of open PRs now far exceeds our review capacity. To help reviewers focus on fewer PRs, users without write access are limited to **3 open, non-draft PRs** at a time. If you've reached the limit, wait for existing PRs to be merged, close some of them, or convert some to drafts until you have fewer than three open PRs before opening another.
+
 #### Title
 
 The pull request title must follow the format outlined in the [conventional commits spec](https://www.conventionalcommits.org). [Conventional commits](https://www.conventionalcommits.org) is a standardized format for commit messages. iceberg-rust only requires this format for commits on the `main` branch. And because iceberg-rust squashes commits before merging branches, this means that only the pull request title must conform to this format.
@@ -61,6 +65,19 @@ All pull requests should be reviewed by at least one iceberg-rust committer.
 All pull requests are squash merged. We generally discourage large pull requests that are over 300-500 lines of diff. If you would like to propose a change that is larger we suggest coming onto [Iceberg's DEV mailing list](mailto:dev@iceberg.apache.org) or [Slack #rust Channel](https://join.slack.com/t/apache-iceberg/shared_invite/zt-1zbov3k6e-KtJfoaxp97YfX6dPz1Bk7A) and discuss it with us. This way we can talk through the solution and discuss if a change that large is even needed! This will produce a quicker response to the change and likely produce code that aligns better with our process.
 
 When a pull request is under review, please avoid using force push as it makes it difficult for reviewer to track changes. If you need to keep the branch up to date with the main branch, consider using `git merge` instead. 
+
+#### Merging an urgent PR
+
+Committers can merge an urgent, approved pull request without waiting for the merge queue or required checks (for example, a security fix while CI is stuck). Use this only when necessary; otherwise, let the merge queue run.
+
+1. Join the [`apache/iceberg-public`](https://github.com/orgs/apache/teams/iceberg-public) team via [Boxer](https://gitbox.apache.org/boxer/) (one-time; membership syncs in about 15 minutes).
+2. Get the pull request approved by a committer.
+3. If the pull request is in the merge queue, click **Remove from queue**.
+4. Merge it directly:
+
+   ```sh
+   gh pr merge <number> --squash --admin
+   ```
 
 ### CI
 
@@ -117,6 +134,14 @@ tested in CI and developers have reproducible builds.
 
 In `Cargo.toml`, we specify the minimum version required to use iceberg-rust. This allows users to choose their
 dependency versions without always upgrading to the latest.
+
+Dependency licenses must comply with the [ASF 3rd Party License Policy](https://www.apache.org/legal/resolved.html).
+CI checks them against `deny.toml` with `cargo deny`; run `make check-dependency-licenses` to check locally. If a
+license is rejected, find its category in the policy:
+
+- Category A: add the license to `allow`.
+- Category B: add a per-crate entry to `exceptions`.
+- Category X: not allowed by ASF policy; do not take the dependency.
 
 ## Code of Conduct
 

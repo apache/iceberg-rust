@@ -21,47 +21,32 @@ ignore = [
   # Marvin Attack: potential key recovery through timing sidechannels
   # Issues: https://github.com/apache/iceberg-rust/issues/221
   "RUSTSEC-2023-0071",
-  # `derivative` is unmaintained; consider using an alternative
-  #
-  # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
-  "RUSTSEC-2024-0388",
   # `paste` is unmaintained; consider using an alternative
   #
   # Introduced by hive_metastore, tracked at https://github.com/cloudwego/pilota/issues/293
   "RUSTSEC-2024-0436",
-  # `generational-arena` is unmaintained; consider using an alternative
+  # `webpki-roots` < 1.0.10 bundles a distrusted emSign root.
   #
-  # Introduced by datafusion-ffi through abi_stable/async-ffi until upstream
-  # provides a replacement path.
-  "RUSTSEC-2024-0014",
-  # `rustls-pemfile` is unmaintained
+  # sqlx-core 0.8.6 pulls in webpki-roots 0.26.11, the final 0.26.x release.
+  # It only re-exports webpki-roots 1.x, which the lockfile pins to the fixed
+  # 1.0.10, but cargo-audit flags it by version number. Remove once sqlx moves
+  # to webpki-roots 1.x directly.
+  "RUSTSEC-2026-0381",
+  # `zstd` < 0.14.3 / `zstd-safe` < 8.2.0 memory-safety bugs.
   #
-  # Introduced by object_store, see https://github.com/apache/arrow-rs-object-store/issues/564
-  "RUSTSEC-2025-0134",
-  # `rand` unsoundness with custom logger using `rand::rng()`
+  # Fixed only in zstd 0.14, but parquet 59 and apache-avro 0.22 require
+  # zstd 0.13. Remove once on parquet >= 60
+  # (https://github.com/apache/iceberg-rust/pull/3257), an apache-avro release
+  # after 0.22, and workspace `zstd` >= 0.14.3.
   #
-  # Direct dependency upgraded to 0.9.3+. Transitive rand 0.8.5 remains
-  # from reqsign/sqllogictest/rustc-hash — no 0.8.x patch exists.
-  "RUSTSEC-2026-0097",
-  # pyo3 < 0.29: out-of-bounds read in PyList/PyTuple `nth`/`nth_back`, and
-  # missing `Sync` bound on `PyCFunction::new_closure` closures.
+  # None of the affected code is reachable here. To re-check, run
+  # `cargo tree --workspace --all-features --target all -e features -i zstd-safe`
+  # and confirm only `std` is enabled.
   #
-  # Pulled only transitively through arrow's `pyarrow` feature
-  # (arrow-pyarrow), which still pins pyo3 ^0.28 in its latest release; no
-  # arrow build supports the patched pyo3 0.29 yet. Remove once arrow-pyarrow
-  # moves to pyo3 >=0.29.
-  "RUSTSEC-2026-0176",
-  "RUSTSEC-2026-0177",
-  # `quick-xml` < 0.41.0 has quadratic duplicate-attribute validation and
-  # unbounded namespace-declaration allocation (parser DoS).
-  #
-  # It is transitive through object_store 0.13.2 (DataFusion 53 / Parquet 58),
-  # OpenDAL 0.57.0, and reqsign-aws-v4 3.0.0. Their released compatible
-  # versions cannot select the fixed quick-xml >=0.41.0 release.
-  #
-  # Per SECURITY-THREAT-MODEL.md, malformed-input parser CPU/memory DoS is
-  # hardening rather than an Iceberg Rust trust-boundary vulnerability. Remove
-  # once the transitive dependency set permits quick-xml >=0.41.0.
-  "RUSTSEC-2026-0194",
-  "RUSTSEC-2026-0195",
+  # Affects only zstd's `with_context` constructors, which nothing calls.
+  "RUSTSEC-2026-0391",
+  # Requires the `seekable` feature, which is off.
+  "RUSTSEC-2026-0398",
+  # Requires the `legacy` feature, which is off.
+  "RUSTSEC-2026-0403",
 ]

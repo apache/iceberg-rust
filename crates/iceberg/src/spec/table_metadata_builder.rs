@@ -22,12 +22,12 @@ use uuid::Uuid;
 
 use super::{
     DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
-    ONE_MINUTE_MS, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile, Schema, SchemaRef,
-    Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder, SortOrderRef,
-    StatisticsFile, StructType, TableMetadata, TableProperties, UNPARTITIONED_LAST_ASSIGNED_ID,
-    UnboundPartitionSpec,
+    ONE_MINUTE_MS, PartitionField, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
+    Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
+    SortOrderRef, StatisticsFile, StructType, TableMetadata, TableProperties, Transform,
+    UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
 };
-use crate::error::{Error, ErrorKind, Result};
+use crate::error::{Error, ErrorKind, Result, invalid_data};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
 use crate::{TableCreation, TableUpdate};
 
@@ -175,12 +175,8 @@ impl TableMetadataBuilder {
             format_version,
         } = table_creation;
 
-        let location = location.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Can't create table without location",
-            )
-        })?;
+        let location =
+            location.ok_or_else(|| invalid_data!("Can't create table without location"))?;
         let partition_spec = partition_spec.unwrap_or(UnboundPartitionSpec {
             spec_id: None,
             fields: vec![],
@@ -212,12 +208,10 @@ impl TableMetadataBuilder {
     /// - Cannot downgrade to older format versions.
     pub fn upgrade_format_version(mut self, format_version: FormatVersion) -> Result<Self> {
         if format_version < self.metadata.format_version {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot downgrade FormatVersion from {} to {}",
-                    self.metadata.format_version, format_version
-                ),
+            return Err(invalid_data!(
+                "Cannot downgrade FormatVersion from {} to {}",
+                self.metadata.format_version,
+                format_version
             ));
         }
 
@@ -261,12 +255,9 @@ impl TableMetadataBuilder {
             .collect::<Vec<_>>();
 
         if !reserved_properties.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Table properties should not contain reserved properties, but got: [{}]",
-                    reserved_properties.join(", ")
-                ),
+            return Err(invalid_data!(
+                "Table properties should not contain reserved properties, but got: [{}]",
+                reserved_properties.join(", ")
             ));
         }
 
@@ -299,12 +290,9 @@ impl TableMetadataBuilder {
             .collect::<Vec<_>>();
 
         if !reserved_properties.is_empty() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Table properties to remove contain reserved properties: [{}]",
-                    reserved_properties.join(", ")
-                ),
+            return Err(invalid_data!(
+                "Table properties to remove contain reserved properties: [{}]",
+                reserved_properties.join(", ")
             ));
         }
 
@@ -348,9 +336,9 @@ impl TableMetadataBuilder {
             .snapshots
             .contains_key(&snapshot.snapshot_id())
         {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Snapshot already exists for: '{}'", snapshot.snapshot_id()),
+            return Err(invalid_data!(
+                "Snapshot already exists for: '{}'",
+                snapshot.snapshot_id()
             ));
         }
 
@@ -358,13 +346,10 @@ impl TableMetadataBuilder {
             && snapshot.sequence_number() <= self.metadata.last_sequence_number
             && snapshot.parent_snapshot_id().is_some()
         {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot add snapshot with sequence number {} older than last sequence number {}",
-                    snapshot.sequence_number(),
-                    self.metadata.last_sequence_number
-                ),
+            return Err(invalid_data!(
+                "Cannot add snapshot with sequence number {} older than last sequence number {}",
+                snapshot.sequence_number(),
+                self.metadata.last_sequence_number
             ));
         }
 
@@ -372,13 +357,10 @@ impl TableMetadataBuilder {
             // commits can happen concurrently from different machines.
             // A tolerance helps us avoid failure for small clock skew
             if snapshot.timestamp_ms() - last.timestamp_ms < -ONE_MINUTE_MS {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid snapshot timestamp {}: before last snapshot timestamp {}",
-                        snapshot.timestamp_ms(),
-                        last.timestamp_ms
-                    ),
+                return Err(invalid_data!(
+                    "Invalid snapshot timestamp {}: before last snapshot timestamp {}",
+                    snapshot.timestamp_ms(),
+                    last.timestamp_ms
                 ));
             }
         }
@@ -388,13 +370,10 @@ impl TableMetadataBuilder {
             .unwrap_or_default()
             .max(self.metadata.last_updated_ms);
         if snapshot.timestamp_ms() - max_last_updated < -ONE_MINUTE_MS {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid snapshot timestamp {}: before last updated timestamp {}",
-                    snapshot.timestamp_ms(),
-                    max_last_updated
-                ),
+            return Err(invalid_data!(
+                "Invalid snapshot timestamp {}: before last updated timestamp {}",
+                snapshot.timestamp_ms(),
+                max_last_updated
             ));
         }
 
@@ -402,22 +381,16 @@ impl TableMetadataBuilder {
         if self.metadata.format_version >= MIN_FORMAT_VERSION_ROW_LINEAGE {
             if let Some((first_row_id, added_rows_count)) = snapshot.row_range() {
                 if first_row_id < self.metadata.next_row_id {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Cannot add a snapshot, first-row-id is behind table next-row-id: {first_row_id} < {}",
-                            self.metadata.next_row_id
-                        ),
+                    return Err(invalid_data!(
+                        "Cannot add a snapshot, first-row-id is behind table next-row-id: {first_row_id} < {}",
+                        self.metadata.next_row_id
                     ));
                 }
 
                 added_rows = Some(added_rows_count);
             } else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add a snapshot: first-row-id is null. first-row-id must be set for format version >= {MIN_FORMAT_VERSION_ROW_LINEAGE}",
-                    ),
+                return Err(invalid_data!(
+                    "Cannot add a snapshot: first-row-id is null. first-row-id must be set for format version >= {MIN_FORMAT_VERSION_ROW_LINEAGE}",
                 ));
             }
         }
@@ -428,9 +401,8 @@ impl TableMetadataBuilder {
                 .next_row_id
                 .checked_add(added_rows)
                 .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Cannot add snapshot: next-row-id overflowed when adding added-rows",
+                    invalid_data!(
+                        "Cannot add snapshot: next-row-id overflowed when adding added-rows"
                     )
                 })?;
         }
@@ -459,9 +431,8 @@ impl TableMetadataBuilder {
 
         let reference = if let Some(mut reference) = reference {
             if !reference.is_branch() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Cannot append snapshot to non-branch reference '{branch}'",),
+                return Err(invalid_data!(
+                    "Cannot append snapshot to non-branch reference '{branch}'",
                 ));
             }
 
@@ -525,12 +496,9 @@ impl TableMetadataBuilder {
         }
 
         let Some(snapshot) = self.metadata.snapshots.get(&reference.snapshot_id) else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot set '{ref_name}' to unknown snapshot: '{}'",
-                    reference.snapshot_id
-                ),
+            return Err(invalid_data!(
+                "Cannot set '{ref_name}' to unknown snapshot: '{}'",
+                reference.snapshot_id
             ));
         };
 
@@ -687,9 +655,8 @@ impl TableMetadataBuilder {
     pub fn set_current_schema(mut self, mut schema_id: i32) -> Result<Self> {
         if schema_id == Self::LAST_ADDED {
             schema_id = self.last_added_schema_id.ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot set current schema to last added schema: no schema has been added.",
+                invalid_data!(
+                    "Cannot set current schema to last added schema: no schema has been added."
                 )
             })?;
         };
@@ -700,10 +667,7 @@ impl TableMetadataBuilder {
         }
 
         let _schema = self.metadata.schemas.get(&schema_id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot set current schema to unknown schema with id: '{schema_id}'"),
-            )
+            invalid_data!("Cannot set current schema to unknown schema with id: '{schema_id}'")
         })?;
 
         // Old partition specs and sort-orders should be preserved even if they are not compatible with the new schema,
@@ -749,12 +713,9 @@ impl TableMetadataBuilder {
             let is_new_field = !self.metadata.name_exists_in_any_schema(field_name);
 
             if has_partition_conflict && is_new_field {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add schema field '{field_name}' because it conflicts with existing partition field name. \
+                return Err(invalid_data!(
+                    "Cannot add schema field '{field_name}' because it conflicts with existing partition field name. \
                          Schema evolution cannot introduce field names that match existing partition field names."
-                    ),
                 ));
             }
         }
@@ -765,12 +726,13 @@ impl TableMetadataBuilder {
     /// Validate partition field names against schema field names across all historical schemas.
     ///
     /// Due to Iceberg's multi-version property, partition fields can share names with schema fields
-    /// if they meet specific requirements (identity transform + matching source field ID).
+    /// if they meet specific requirements (identity or void transform + matching source field ID).
     /// This validation enforces those rules across all historical schema versions.
     ///
     /// # Errors
-    /// - Partition field name conflicts with schema field name but doesn't use identity transform.
-    /// - Partition field uses identity transform but references wrong source field ID.
+    /// - Partition field name conflicts with schema field name but doesn't use identity or void
+    ///   transform.
+    /// - Partition field uses identity or void transform but references wrong source field ID.
     fn validate_partition_field_names(&self, unbound_spec: &UnboundPartitionSpec) -> Result<()> {
         if self.metadata.schemas.is_empty() {
             return Ok(());
@@ -780,7 +742,7 @@ impl TableMetadataBuilder {
         for partition_field in unbound_spec.fields() {
             let exists_in_any_schema = self
                 .metadata
-                .name_exists_in_any_schema(&partition_field.name);
+                .name_exists_in_any_schema(partition_field.name());
 
             // Skip if partition field name doesn't conflict with any schema field
             if !exists_in_any_schema {
@@ -788,29 +750,23 @@ impl TableMetadataBuilder {
             }
 
             // If name exists in schemas, validate against current schema rules
-            if let Some(schema_field) = current_schema.field_by_name(&partition_field.name) {
-                let is_identity_transform =
-                    partition_field.transform == crate::spec::Transform::Identity;
-                let has_matching_source_id = schema_field.id == partition_field.source_id;
+            if let Some(schema_field) = current_schema.field_by_name(partition_field.name()) {
+                let has_matching_source_id = schema_field.id == partition_field.source_id()?;
 
-                if !is_identity_transform {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Cannot create partition with name '{}' that conflicts with schema field and is not an identity transform.",
-                            partition_field.name
-                        ),
+                if !partition_field.transform().may_share_name_with_source() {
+                    return Err(invalid_data!(
+                        "Cannot create partition with name '{}' that conflicts with schema field and is not an identity or void transform.",
+                        partition_field.name()
                     ));
                 }
 
                 if !has_matching_source_id {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Cannot create identity partition sourced from different field in schema. \
+                    return Err(invalid_data!(
+                        "Cannot create identity or void partition sourced from different field in schema. \
                              Field name '{}' has id `{}` in schema but partition source id is `{}`",
-                            partition_field.name, schema_field.id, partition_field.source_id
-                        ),
+                        partition_field.name(),
+                        schema_field.id,
+                        partition_field.source_id()?
                     ));
                 }
             }
@@ -858,9 +814,8 @@ impl TableMetadataBuilder {
         }
 
         if self.metadata.format_version <= FormatVersion::V1 && !spec.has_sequential_ids() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot add partition spec with non-sequential field ids to format version 1 table",
+            return Err(invalid_data!(
+                "Cannot add partition spec with non-sequential field ids to format version 1 table"
             ));
         }
 
@@ -888,27 +843,26 @@ impl TableMetadataBuilder {
         &self,
         unbound_spec: UnboundPartitionSpec,
     ) -> Result<UnboundPartitionSpec> {
-        // Build a map of (source_id, transform) -> field_id from existing specs
-        let equivalent_field_ids: HashMap<_, _> = self
-            .metadata
-            .partition_specs
-            .values()
-            .flat_map(|spec| spec.fields())
-            .map(|field| ((field.source_id, &field.transform), field.field_id))
-            .collect();
+        let equivalent_field_ids = Self::highest_equivalent_field_ids(
+            self.metadata
+                .partition_specs
+                .values()
+                .flat_map(|spec| spec.fields()),
+        );
 
         // Create new fields with reused field IDs where possible
         let fields = unbound_spec
             .fields
             .into_iter()
-            .map(|mut field| {
-                if field.field_id.is_none()
+            .map(|field| {
+                if field.field_id().is_none()
                     && let Some(&existing_field_id) =
-                        equivalent_field_ids.get(&(field.source_id, &field.transform))
+                        equivalent_field_ids.get(&(field.source_ids().to_vec(), field.transform()))
                 {
-                    field.field_id = Some(existing_field_id);
+                    field.with_field_id(existing_field_id)
+                } else {
+                    field
                 }
-                field
             })
             .collect();
 
@@ -916,6 +870,23 @@ impl TableMetadataBuilder {
             spec_id: unbound_spec.spec_id,
             fields,
         })
+    }
+
+    /// Map each (source_ids, transform) pair to the highest field id assigned to it.
+    ///
+    /// Taking the highest keeps the result independent of the order `fields` arrive in, which for
+    /// the specs of a `TableMetadata` is an arbitrary `HashMap` iteration order.
+    fn highest_equivalent_field_ids<'a>(
+        fields: impl Iterator<Item = &'a PartitionField>,
+    ) -> HashMap<(Vec<i32>, Transform), i32> {
+        let mut equivalent_field_ids = HashMap::new();
+        for field in fields {
+            equivalent_field_ids
+                .entry((vec![field.source_id], field.transform))
+                .and_modify(|id: &mut i32| *id = (*id).max(field.field_id))
+                .or_insert(field.field_id);
+        }
+        equivalent_field_ids
     }
 
     /// Set the default partition spec.
@@ -926,9 +897,8 @@ impl TableMetadataBuilder {
     pub fn set_default_partition_spec(mut self, mut spec_id: i32) -> Result<Self> {
         if spec_id == Self::LAST_ADDED {
             spec_id = self.last_added_spec_id.ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot set default partition spec to last added spec: no spec has been added.",
+                invalid_data!(
+                    "Cannot set default partition spec to last added spec: no spec has been added."
                 )
             })?;
         }
@@ -938,9 +908,8 @@ impl TableMetadataBuilder {
         }
 
         if !self.metadata.partition_specs.contains_key(&spec_id) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot set default partition spec to unknown spec with id: '{spec_id}'",),
+            return Err(invalid_data!(
+                "Cannot set default partition spec to unknown spec with id: '{spec_id}'",
             ));
         }
 
@@ -949,11 +918,8 @@ impl TableMetadataBuilder {
             .partition_specs
             .get(&spec_id)
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot set default partition spec to unknown spec with id: '{spec_id}'",
-                    ),
+                invalid_data!(
+                    "Cannot set default partition spec to unknown spec with id: '{spec_id}'",
                 )
             })?
             .clone();
@@ -987,10 +953,7 @@ impl TableMetadataBuilder {
     /// - Cannot remove the default partition spec.
     pub fn remove_partition_specs(mut self, spec_ids: &[i32]) -> Result<Self> {
         if spec_ids.contains(&self.metadata.default_spec.spec_id()) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot remove default partition spec",
-            ));
+            return Err(invalid_data!("Cannot remove default partition spec"));
         }
 
         let mut removed_specs = Vec::with_capacity(spec_ids.len());
@@ -1040,11 +1003,8 @@ impl TableMetadataBuilder {
             .with_fields(sort_order.fields)
             .build(&schema)
             .map_err(|e| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Sort order to add is incompatible with current schema: {e}"),
-                )
-                .with_source(e)
+                invalid_data!("Sort order to add is incompatible with current schema: {e}")
+                    .with_source(e)
             })?;
 
         self.last_added_order_id = Some(new_order_id);
@@ -1064,9 +1024,8 @@ impl TableMetadataBuilder {
     pub fn set_default_sort_order(mut self, mut sort_order_id: i64) -> Result<Self> {
         if sort_order_id == Self::LAST_ADDED as i64 {
             sort_order_id = self.last_added_order_id.ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot set default sort order to last added order: no order has been added.",
+                invalid_data!(
+                    "Cannot set default sort order to last added order: no order has been added."
                 )
             })?;
         }
@@ -1076,11 +1035,8 @@ impl TableMetadataBuilder {
         }
 
         if !self.metadata.sort_orders.contains_key(&sort_order_id) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot set default sort order to unknown order with id: '{sort_order_id}'"
-                ),
+            return Err(invalid_data!(
+                "Cannot set default sort order to unknown order with id: '{sort_order_id}'"
             ));
         }
 
@@ -1217,9 +1173,8 @@ impl TableMetadataBuilder {
         if let Some(current_snapshot_id) = self.metadata.current_snapshot_id {
             let last_id = new_snapshot_log.last().map(|entry| entry.snapshot_id);
             if last_id != Some(current_snapshot_id) {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot set invalid snapshot log: latest entry is not the current snapshot",
+                return Err(invalid_data!(
+                    "Cannot set invalid snapshot log: latest entry is not the current snapshot"
                 ));
             }
         };
@@ -1288,17 +1243,19 @@ impl TableMetadataBuilder {
         // Re-build partition spec with new ids
         let mut fresh_spec = PartitionSpecBuilder::new(fresh_schema.clone());
         for field in spec.fields() {
-            let source_field_name = previous_id_to_name.get(&field.source_id).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot find source column with id {} for partition column {} in schema.",
-                        field.source_id, field.name
-                    ),
+            let source_id = field.source_id()?;
+            let source_field_name = previous_id_to_name.get(&source_id).ok_or_else(|| {
+                invalid_data!(
+                    "Cannot find source column with id {} for partition column {} in schema.",
+                    source_id,
+                    field.name()
                 )
             })?;
-            fresh_spec =
-                fresh_spec.add_partition_field(source_field_name, &field.name, field.transform)?;
+            fresh_spec = fresh_spec.add_partition_field(
+                source_field_name,
+                field.name(),
+                field.transform(),
+            )?;
         }
         let fresh_spec = fresh_spec.build()?;
 
@@ -1306,12 +1263,9 @@ impl TableMetadataBuilder {
         let mut fresh_order = SortOrder::builder();
         for mut field in sort_order.fields {
             let source_field_name = previous_id_to_name.get(&field.source_id).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot find source column with id {} for sort column in schema.",
-                        field.source_id
-                    ),
+                invalid_data!(
+                    "Cannot find source column with id {} for sort column in schema.",
+                    field.source_id
                 )
             })?;
             let new_field_id = fresh_schema
@@ -1354,12 +1308,9 @@ impl TableMetadataBuilder {
             .schemas
             .get(&self.metadata.current_schema_id)
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Current schema with id '{}' not found in table metadata.",
-                        self.metadata.current_schema_id
-                    ),
+                invalid_data!(
+                    "Current schema with id '{}' not found in table metadata.",
+                    self.metadata.current_schema_id
                 )
             })
     }
@@ -1370,12 +1321,9 @@ impl TableMetadataBuilder {
             .get(&self.metadata.default_sort_order_id)
             .cloned()
             .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Default sort order with id '{}' not found in table metadata.",
-                        self.metadata.default_sort_order_id
-                    ),
+                invalid_data!(
+                    "Default sort order with id '{}' not found in table metadata.",
+                    self.metadata.default_sort_order_id
                 )
             })
     }
@@ -1424,10 +1372,7 @@ impl TableMetadataBuilder {
     /// Does nothing if a schema id is not present. Active schemas should not be removed.
     pub fn remove_schemas(mut self, schema_id_to_remove: &[i32]) -> Result<Self> {
         if schema_id_to_remove.contains(&self.metadata.current_schema_id) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Cannot remove current schema",
-            ));
+            return Err(invalid_data!("Cannot remove current schema"));
         }
 
         if schema_id_to_remove.is_empty() {
@@ -1506,7 +1451,14 @@ mod tests {
     fn partition_spec() -> UnboundPartitionSpec {
         UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(2, "y", Transform::Identity)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("y")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
     }
@@ -1740,12 +1692,15 @@ mod tests {
                 // partition_spec() has None set for field-id
                 spec: PartitionSpec::builder(schema())
                     .with_spec_id(0)
-                    .add_unbound_field(UnboundPartitionField {
-                        name: "y".to_string(),
-                        transform: Transform::Identity,
-                        source_id: 2,
-                        field_id: Some(1000)
-                    })
+                    .add_unbound_field(
+                        UnboundPartitionField::builder()
+                            .source_ids(vec![2])
+                            .field_id(1000)
+                            .name("y".to_string())
+                            .transform(Transform::Identity)
+                            .build()
+                            .unwrap()
+                    )
                     .unwrap()
                     .build()
                     .unwrap()
@@ -1813,20 +1768,21 @@ mod tests {
         let added_spec = UnboundPartitionSpec::builder()
             .with_spec_id(10)
             .add_partition_fields(vec![
-                UnboundPartitionField {
-                    // The previous field - has field_id set
-                    name: "y".to_string(),
-                    transform: Transform::Identity,
-                    source_id: 2,
-                    field_id: Some(1000),
-                },
-                UnboundPartitionField {
-                    // A new field without field id - should still be without field id in changes
-                    name: "z".to_string(),
-                    transform: Transform::Identity,
-                    source_id: 3,
-                    field_id: None,
-                },
+                // The previous field - has field_id set
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .field_id(1000)
+                    .name("y".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+                // A new field without field id - should still be without field id in changes
+                UnboundPartitionField::builder()
+                    .source_ids(vec![3])
+                    .name("z".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
             ])
             .unwrap()
             .build();
@@ -1841,19 +1797,25 @@ mod tests {
         let expected_change = added_spec.with_spec_id(1);
         let expected_spec = PartitionSpec::builder(schema())
             .with_spec_id(1)
-            .add_unbound_field(UnboundPartitionField {
-                name: "y".to_string(),
-                transform: Transform::Identity,
-                source_id: 2,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .field_id(1000)
+                    .name("y".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
-            .add_unbound_field(UnboundPartitionField {
-                name: "z".to_string(),
-                transform: Transform::Identity,
-                source_id: 3,
-                field_id: Some(1001),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![3])
+                    .field_id(1001)
+                    .name("z".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -1891,7 +1853,14 @@ mod tests {
         let schema = builder.get_current_schema().unwrap().clone();
         let added_spec = UnboundPartitionSpec::builder()
             .with_spec_id(10)
-            .add_partition_field(1, "y_bucket[2]", Transform::Bucket(2))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("y_bucket[2]")
+                    .transform(Transform::Bucket(2))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -1905,12 +1874,15 @@ mod tests {
 
         let expected_spec = PartitionSpec::builder(schema)
             .with_spec_id(1)
-            .add_unbound_field(UnboundPartitionField {
-                name: "y_bucket[2]".to_string(),
-                transform: Transform::Bucket(2),
-                source_id: 1,
-                field_id: Some(1001),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1001)
+                    .name("y_bucket[2]".to_string())
+                    .transform(Transform::Bucket(2))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -2475,18 +2447,20 @@ mod tests {
         let added_spec = UnboundPartitionSpec::builder()
             .with_spec_id(10)
             .add_partition_fields(vec![
-                UnboundPartitionField {
-                    name: "y".to_string(),
-                    transform: Transform::Identity,
-                    source_id: 2,
-                    field_id: Some(1000),
-                },
-                UnboundPartitionField {
-                    name: "z".to_string(),
-                    transform: Transform::Identity,
-                    source_id: 3,
-                    field_id: Some(1002),
-                },
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .field_id(1000)
+                    .name("y".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+                UnboundPartitionField::builder()
+                    .source_ids(vec![3])
+                    .field_id(1002)
+                    .name("z".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
             ])
             .unwrap()
             .build();
@@ -2495,6 +2469,92 @@ mod tests {
         assert!(err.to_string().contains(
             "Cannot add partition spec with non-sequential field ids to format version 1 table"
         ));
+    }
+
+    #[test]
+    fn test_add_partition_spec_accepts_void_fields_of_removed_fields() {
+        let builder = builder_without_changes(FormatVersion::V1);
+        let void_field = |field_id: i32, name: &str| {
+            UnboundPartitionField::builder()
+                .source_ids(vec![2])
+                .field_id(field_id)
+                .name(name)
+                .transform(Transform::Void)
+                .build()
+                .unwrap()
+        };
+        let added_spec = UnboundPartitionSpec {
+            spec_id: None,
+            fields: vec![void_field(1000, "y"), void_field(1001, "y_null")],
+        };
+
+        let metadata = builder
+            .add_default_partition_spec(added_spec.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let expected = added_spec.with_spec_id(1).bind(schema()).unwrap();
+        assert_eq!(metadata.default_partition_spec().as_ref(), &expected);
+        assert_eq!(metadata.last_partition_id, 1001);
+    }
+
+    #[test]
+    fn test_add_partition_spec_accepts_two_time_granularities_of_one_column() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "ts", Type::Primitive(PrimitiveType::Timestamptz)).into(),
+            ])
+            .build()
+            .unwrap();
+        let time_field = |field_id: i32, name: &str, transform: Transform| {
+            UnboundPartitionField::builder()
+                .source_ids(vec![1])
+                .field_id(field_id)
+                .name(name)
+                .transform(transform)
+                .build()
+                .unwrap()
+        };
+        let added_spec = UnboundPartitionSpec {
+            spec_id: None,
+            fields: vec![
+                time_field(1000, "ts_day", Transform::Day),
+                time_field(1001, "ts_hour", Transform::Hour),
+            ],
+        };
+        let metadata = TableMetadataBuilder::new(
+            schema.clone(),
+            PartitionSpec::unpartition_spec(),
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        let metadata = metadata
+            .into_builder(None)
+            .add_default_partition_spec(added_spec.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        // Every later commit re-validates the default spec.
+        let metadata = metadata
+            .into_builder(None)
+            .set_properties(HashMap::from([("key".to_string(), "value".to_string())]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let expected = added_spec.with_spec_id(1).bind(schema).unwrap();
+        assert_eq!(metadata.default_partition_spec().as_ref(), &expected);
     }
 
     #[test]
@@ -2811,7 +2871,14 @@ mod tests {
 
         let partition_spec_with_bucket = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "bucket_data", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("bucket_data")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -2870,7 +2937,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "partition_col", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("partition_col")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -2919,7 +2993,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "data_bucket", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("data_bucket")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -2942,7 +3023,14 @@ mod tests {
 
         let conflicting_partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(1)
-            .add_partition_field(1, "existing_field", Transform::Bucket(8))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("existing_field")
+                    .transform(Transform::Bucket(8))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -2955,7 +3043,7 @@ mod tests {
         assert!(error_message.contains(
             "Cannot create partition with name 'existing_field' that conflicts with schema field"
         ));
-        assert!(error_message.contains("and is not an identity transform"));
+        assert!(error_message.contains("and is not an identity or void transform"));
     }
 
     #[test]
@@ -2972,7 +3060,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "bucket_data", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("bucket_data")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3068,7 +3163,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(2, "partition_data", Transform::Identity)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("partition_data")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3117,7 +3219,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "bucket_data", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("bucket_data")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3167,7 +3276,14 @@ mod tests {
 
         let partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(0)
-            .add_partition_field(1, "data_bucket", Transform::Bucket(16))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("data_bucket")
+                    .transform(Transform::Bucket(16))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3191,7 +3307,14 @@ mod tests {
         // Try to add a partition spec with a field name that does NOT conflict with existing schema fields
         let non_conflicting_partition_spec = UnboundPartitionSpec::builder()
             .with_spec_id(1)
-            .add_partition_field(2, "new_partition_field", Transform::Bucket(8))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("new_partition_field")
+                    .transform(Transform::Bucket(8))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3592,7 +3715,14 @@ mod tests {
 
         // Create initial table with spec 0: identity(id) -> field_id = 1000
         let initial_spec = UnboundPartitionSpec::builder()
-            .add_partition_field(1, "id", Transform::Identity)
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("id")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
 
@@ -3611,7 +3741,14 @@ mod tests {
 
         // Add spec 1: bucket(data) -> field_id = 1001
         let spec1 = UnboundPartitionSpec::builder()
-            .add_partition_field(2, "data_bucket", Transform::Bucket(10))
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("data_bucket")
+                    .transform(Transform::Bucket(10))
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build();
         let builder = metadata.into_builder(Some("s3://bucket/table/metadata/v1.json".to_string()));
@@ -3621,11 +3758,32 @@ mod tests {
         // Add spec 2: identity(id) + bucket(data) + year(timestamp)
         // Should reuse field_id 1000 for identity(id) and 1001 for bucket(data)
         let spec2 = UnboundPartitionSpec::builder()
-            .add_partition_field(1, "id", Transform::Identity) // Should reuse 1000
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("id")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            ) // Should reuse 1000
             .unwrap()
-            .add_partition_field(2, "data_bucket", Transform::Bucket(10)) // Should reuse 1001
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("data_bucket")
+                    .transform(Transform::Bucket(10))
+                    .build()
+                    .unwrap(),
+            ) // Should reuse 1001
             .unwrap()
-            .add_partition_field(3, "year", Transform::Year) // Should get new 1002
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![3])
+                    .name("year")
+                    .transform(Transform::Year)
+                    .build()
+                    .unwrap(),
+            ) // Should get new 1002
             .unwrap()
             .build();
         let builder = metadata.into_builder(Some("s3://bucket/table/metadata/v2.json".to_string()));
@@ -3635,5 +3793,122 @@ mod tests {
         let spec2 = result.metadata.partition_spec_by_id(2).unwrap();
         let field_ids: Vec<i32> = spec2.fields().iter().map(|f| f.field_id).collect();
         assert_eq!(field_ids, vec![1000, 1001, 1002]); // Reused 1000, 1001; new 1002
+    }
+
+    #[test]
+    fn test_highest_equivalent_field_ids_is_independent_of_field_order() {
+        let field = |source_id, field_id, transform| PartitionField {
+            source_id,
+            field_id,
+            name: format!("f{field_id}"),
+            transform,
+        };
+        let fields = [
+            field(1, 1000, Transform::Identity),
+            field(2, 1003, Transform::Identity),
+            field(1, 1006, Transform::Identity),
+            field(1, 1005, Transform::Bucket(16)),
+            field(2, 1001, Transform::Identity),
+            field(1, 1002, Transform::Identity),
+            field(1, 1004, Transform::Bucket(16)),
+        ];
+        let expected = HashMap::from([
+            ((vec![1], Transform::Identity), 1006),
+            ((vec![2], Transform::Identity), 1003),
+            ((vec![1], Transform::Bucket(16)), 1005),
+        ]);
+
+        assert_eq!(
+            TableMetadataBuilder::highest_equivalent_field_ids(fields.iter()),
+            expected
+        );
+        assert_eq!(
+            TableMetadataBuilder::highest_equivalent_field_ids(fields.iter().rev()),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_partition_field_id_reuse_picks_the_highest_of_several_candidates() {
+        // These specs give identity(x) four different field ids, which a writer that does not
+        // reuse ids can leave behind. `partition_specs` is a HashMap, so the id reused for a new
+        // spec must not depend on which of them is visited first.
+        let metadata: TableMetadata = serde_json::from_value(serde_json::json!({
+            "format-version": 2,
+            "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+            "location": "s3://bucket/test/location",
+            "last-sequence-number": 0,
+            "last-updated-ms": 1602638573590i64,
+            "last-column-id": 2,
+            "current-schema-id": 0,
+            "schemas": [{
+                "type": "struct",
+                "schema-id": 0,
+                "fields": [
+                    {"id": 1, "name": "x", "required": true, "type": "long"},
+                    {"id": 2, "name": "y", "required": true, "type": "long"},
+                ],
+            }],
+            "default-spec-id": 3,
+            "last-partition-id": 1006,
+            "partition-specs": [
+                {"spec-id": 0, "fields": [
+                    {"name": "x", "transform": "identity", "source-id": 1, "field-id": 1000},
+                ]},
+                {"spec-id": 1, "fields": [
+                    {"name": "x", "transform": "identity", "source-id": 1, "field-id": 1002},
+                ]},
+                {"spec-id": 2, "fields": [
+                    {"name": "x", "transform": "identity", "source-id": 1, "field-id": 1004},
+                ]},
+                {"spec-id": 3, "fields": [
+                    {"name": "x", "transform": "identity", "source-id": 1, "field-id": 1006},
+                ]},
+            ],
+            "default-sort-order-id": 0,
+            "sort-orders": [{"order-id": 0, "fields": []}],
+        }))
+        .unwrap();
+
+        // Two fields, so this is not compatible with any existing spec and is added as a new
+        // one rather than resolving to an existing spec id.
+        let new_spec = UnboundPartitionSpec::builder()
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .name("x")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap()
+            .add_partition_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .name("y")
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap()
+            .build();
+
+        let result = metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/v1.json".to_string(),
+            ))
+            .add_partition_spec(new_spec)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let spec = result.metadata.partition_spec_by_id(4).unwrap();
+        let fields: Vec<(i32, i32)> = spec
+            .fields()
+            .iter()
+            .map(|f| (f.source_id, f.field_id))
+            .collect();
+        assert_eq!(fields, vec![(1, 1006), (2, 1007)]);
+        assert_eq!(result.metadata.last_partition_id, 1007);
     }
 }

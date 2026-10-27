@@ -23,7 +23,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use serde_with::{DefaultOnNull, serde_as};
 
-use crate::{Error, ErrorKind, Result};
+use crate::error::invalid_data;
+use crate::{Error, Result};
 
 /// Iceberg fallback field name to ID mapping.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
@@ -50,11 +51,7 @@ impl FromStr for NameMapping {
     /// Parses a [`NameMapping`] from its JSON representation.
     fn from_str(value: &str) -> Result<Self> {
         serde_json::from_str(value).map_err(|error| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Failed to parse value as a NameMapping",
-            )
-            .with_source(error)
+            invalid_data!("Failed to parse value as a NameMapping").with_source(error)
         })
     }
 }

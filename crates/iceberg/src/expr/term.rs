@@ -22,12 +22,12 @@ use std::fmt::{Display, Formatter};
 use fnv::FnvHashSet;
 use serde::{Deserialize, Serialize};
 
+use crate::error::invalid_data;
 use crate::expr::accessor::{StructAccessor, StructAccessorRef};
 use crate::expr::{
     BinaryExpression, Bind, Predicate, PredicateOperator, SetExpression, UnaryExpression,
 };
 use crate::spec::{Datum, NestedField, NestedFieldRef, SchemaRef};
-use crate::{Error, ErrorKind};
 
 /// Unbound term before binding to a schema.
 pub type Term = Reference;
@@ -313,22 +313,15 @@ impl Bind for Reference {
         let field = if case_sensitive {
             schema.field_by_name(&self.name)
         } else {
-            schema.field_by_name_case_insensitive(&self.name)
+            schema.field_by_name_case_insensitive_checked(&self.name)?
         };
 
-        let field = field.ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Field {} not found in schema", self.name),
-            )
-        })?;
+        let field =
+            field.ok_or_else(|| invalid_data!("Field {} not found in schema", self.name))?;
 
-        let accessor = schema.accessor_by_field_id(field.id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Accessor for Field {} not found", self.name),
-            )
-        })?;
+        let accessor = schema
+            .accessor_by_field_id(field.id)
+            .ok_or_else(|| invalid_data!("Accessor for Field {} not found", self.name))?;
 
         Ok(BoundReference::new(
             self.name.clone(),
@@ -433,6 +426,23 @@ mod tests {
         );
 
         assert_eq!(expected_ref, reference);
+    }
+
+    #[test]
+    fn test_bind_reference_case_insensitive_ambiguous() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", PrimitiveType::Int).into(),
+                    NestedField::optional(2, "ID", PrimitiveType::Int).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let error = Reference::new("Id").bind(schema, false).unwrap_err();
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(error.message().contains("case-insensitively"), "{error}");
     }
 
     #[test]

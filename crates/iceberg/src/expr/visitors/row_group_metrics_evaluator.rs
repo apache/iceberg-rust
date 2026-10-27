@@ -177,6 +177,13 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
         }?;
 
         if let Some(bound) = bound {
+            if bound.is_nan() {
+                // NaN indicates unreliable bounds (e.g. parquet-mr <= 1.9 records a
+                // NaN that starts a row group as both min and max).
+                // See the InclusiveMetricsEvaluator docs for more.
+                return ROW_GROUP_MIGHT_MATCH;
+            }
+
             if cmp_fn(&bound, datum) {
                 return ROW_GROUP_MIGHT_MATCH;
             }
@@ -207,8 +214,14 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         Ok(lhs || rhs)
     }
 
-    fn not(&mut self, inner: bool) -> Result<bool> {
-        Ok(!inner)
+    fn not(&mut self, _: bool) -> Result<bool> {
+        // Negating a conservative "might match" bound is unsound (it can turn into
+        // "can't match" and prune row groups that do match), so NOT must be
+        // rewritten out of the predicate before it reaches this evaluator.
+        Err(Error::new(
+            ErrorKind::Unexpected,
+            "NOT unsupported at this point. NOT-rewrite should be performed first",
+        ))
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
@@ -297,7 +310,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             return ROW_GROUP_CANT_MATCH;
         }
 
-        if let Some(lower_bound) = self.min_value(field_id)? {
+        let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+
+        if let Some(lower_bound) = get_parquet_stat_min_as_datum(&primitive_type, stats)? {
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -307,7 +324,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             }
         }
 
-        if let Some(upper_bound) = self.max_value(field_id)? {
+        if let Some(upper_bound) = get_parquet_stat_max_as_datum(&primitive_type, stats)? {
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds.
                 // See the InclusiveMetricsEvaluator docs for more.
@@ -351,7 +368,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             ));
         };
 
-        if let Some(lower_bound) = self.min_value(field_id)? {
+        let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+
+        if let Some(lower_bound) = get_parquet_stat_min_as_datum(&primitive_type, stats)? {
             let PrimitiveLiteral::String(lower_bound) = lower_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -369,7 +390,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             }
         }
 
-        if let Some(upper_bound) = self.max_value(field_id)? {
+        if let Some(upper_bound) = get_parquet_stat_max_as_datum(&primitive_type, stats)? {
             let PrimitiveLiteral::String(upper_bound) = upper_bound.literal() else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
@@ -476,7 +497,11 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             return ROW_GROUP_MIGHT_MATCH;
         }
 
-        if let Some(lower_bound) = self.min_value(field_id)? {
+        let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
+            return ROW_GROUP_MIGHT_MATCH;
+        };
+
+        if let Some(lower_bound) = get_parquet_stat_min_as_datum(&primitive_type, stats)? {
             if lower_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROW_GROUP_MIGHT_MATCH;
@@ -488,7 +513,7 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
             }
         }
 
-        if let Some(upper_bound) = self.max_value(field_id)? {
+        if let Some(upper_bound) = get_parquet_stat_max_as_datum(&primitive_type, stats)? {
             if upper_bound.is_nan() {
                 // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
                 return ROW_GROUP_MIGHT_MATCH;
@@ -531,9 +556,9 @@ mod tests {
     use rand::Rng;
 
     use super::RowGroupMetricsEvaluator;
-    use crate::Result;
-    use crate::expr::{Bind, Reference};
+    use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+    use crate::{ErrorKind, Result};
 
     #[test]
     fn eval_matches_no_rows_for_empty_row_group() -> Result<()> {
@@ -575,6 +600,32 @@ mod tests {
         )?;
 
         assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_error_for_not_predicate_requires_rewrite() -> Result<()> {
+        // The evaluator cannot soundly negate a conservative bound, so a NOT node
+        // that reaches it (one that was not rewritten away first) is rejected
+        // rather than silently mispruning a matching row group.
+        let row_group_metadata = create_row_group_metadata(1, 1, None, 1, None)?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = (!Reference::new("col_float").greater_than(Datum::float(5.0_f32)))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let err = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.message().contains("NOT"));
 
         Ok(())
     }
@@ -1677,6 +1728,83 @@ mod tests {
         )?;
 
         assert!(result);
+        Ok(())
+    }
+
+    // A NaN with the sign bit set sorts below -Inf under `total_cmp`, so it
+    // exercises the `>` / `>=` side of the NaN check as well.
+    const NAN_BOUNDS: [f32; 2] = [f32::NAN, f32::from_bits(0xffc0_0000)];
+
+    fn eval_float_bounds(filter: &Predicate, min: f32, max: f32) -> Result<bool> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(
+                Some(min),
+                Some(max),
+                None,
+                Some(0),
+                false,
+            )),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+        let filter = filter.clone().bind(iceberg_schema_ref.clone(), false)?;
+
+        RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )
+    }
+
+    #[test]
+    fn eval_true_for_nan_lower_bound_less_than() -> Result<()> {
+        let filter = Reference::new("col_float").less_than(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&filter, nan, nan)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_lower_bound_less_than_or_eq() -> Result<()> {
+        let filter = Reference::new("col_float").less_than_or_equal_to(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&filter, nan, nan)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_lower_bound_finite_upper_bound_less_than() -> Result<()> {
+        let lt = Reference::new("col_float").less_than(Datum::float(5.0_f32));
+        let lt_eq = Reference::new("col_float").less_than_or_equal_to(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&lt, nan, 2.0)?);
+            assert!(eval_float_bounds(&lt_eq, nan, 2.0)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_upper_bound_greater_than() -> Result<()> {
+        let filter = Reference::new("col_float").greater_than(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&filter, nan, nan)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_upper_bound_greater_than_or_eq() -> Result<()> {
+        let filter = Reference::new("col_float").greater_than_or_equal_to(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&filter, nan, nan)?);
+        }
         Ok(())
     }
 

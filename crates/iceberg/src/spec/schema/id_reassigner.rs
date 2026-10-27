@@ -17,6 +17,7 @@
 
 use super::utils::try_insert_field;
 use super::*;
+use crate::error::invalid_data;
 
 pub struct ReassignFieldIds {
     next_field_id: i32,
@@ -52,7 +53,7 @@ impl ReassignFieldIds {
         outer_fields
             .into_iter()
             .map(|field| {
-                if field.field_type.is_primitive() {
+                if !field.field_type.is_nested() {
                     Ok(field)
                 } else {
                     let mut new_field = Arc::unwrap_or_clone(field);
@@ -107,12 +108,10 @@ impl ReassignFieldIds {
     }
 
     fn increase_next_field_id(&mut self) -> Result<()> {
-        self.next_field_id = self.next_field_id.checked_add(1).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Field ID overflowed, cannot add more fields",
-            )
-        })?;
+        self.next_field_id = self
+            .next_field_id
+            .checked_add(1)
+            .ok_or_else(|| invalid_data!("Field ID overflowed, cannot add more fields"))?;
         Ok(())
     }
 
@@ -120,12 +119,10 @@ impl ReassignFieldIds {
         field_ids
             .into_iter()
             .map(|id| {
-                self.old_to_new_id.get(&id).copied().ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Identifier Field ID {id} not found"),
-                    )
-                })
+                self.old_to_new_id
+                    .get(&id)
+                    .copied()
+                    .ok_or_else(|| invalid_data!("identifier field id {id} not found"))
             })
             .collect()
     }
@@ -140,12 +137,7 @@ impl ReassignFieldIds {
                 self.old_to_new_id
                     .get(&id)
                     .copied()
-                    .ok_or_else(|| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Field with id {id} for alias {name} not found"),
-                        )
-                    })
+                    .ok_or_else(|| invalid_data!("Field with id {id} for alias {name} not found"))
                     .map(|new_id| (name, new_id))
             })
             .collect()
