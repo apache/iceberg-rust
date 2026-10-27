@@ -21,6 +21,7 @@ runs:
   using: "composite"
   steps:
     - name: Install cargo-about
+      # Keep version in sync with the install-cargo-about target in bindings/python/Makefile.
       uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
       with:
         tool: cargo-about@0.9.2

@@ -67,6 +67,5 @@ Everything else needs a manual check and update before every release: the clarif
 Run this from `bindings/python` to check. A `WARN` or `warning:` on stderr means a clarification no longer applies, and `<year>` in the output means no license file was matched:
 
 ```shell
-cargo install cargo-about --version 0.9.2 --locked --features cli
-cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml about.hbs | grep -nE '<year>|<owner>|<copyright holders>'
+make -s cargo-about | grep -nE '<year>|<owner>|<copyright holders>'
 ```
