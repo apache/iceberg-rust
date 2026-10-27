@@ -18,11 +18,9 @@
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
-use super::{ArrowReader, ParquetReadOptions};
-use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
-use crate::io::FileIO;
-use crate::runtime::Runtime;
-use crate::util::available_parallelism;
+use super::{
+    DEFAULT_METADATA_SIZE_HINT, DEFAULT_RANGE_COALESCE_BYTES, DEFAULT_RANGE_FETCH_CONCURRENCY,
+};
 
 /// Configures Arrow reads independently of file planning and local I/O resources.
 ///
@@ -33,7 +31,7 @@ use crate::util::available_parallelism;
 ///     .with_batch_size(Some(1024))
 ///     .with_parquet_options(
 ///         ParquetReadOptions::builder()
-///             .with_metadata_size_hint(Some(512 * 1024))
+///             .with_metadata_size_hint(512 * 1024)
 ///             .build(),
 ///     )
 ///     .build();
@@ -66,127 +64,151 @@ impl Default for ArrowReaderOptions {
     }
 }
 
-/// Builder to create ArrowReader
-pub struct ArrowReaderBuilder {
-    options: ArrowReaderOptions,
-    file_io: FileIO,
-    runtime: Runtime,
+impl ArrowReaderOptions {
+    /// Returns the configured batch size.
+    pub fn batch_size(&self) -> Option<usize> {
+        self.batch_size
+    }
+
+    pub(super) fn parquet_options_mut(&mut self) -> &mut ParquetReadOptions {
+        &mut self.parquet_options
+    }
+
+    pub(super) fn set_batch_size(&mut self, value: Option<usize>) {
+        self.batch_size = value;
+    }
+    /// Returns the configured data file concurrency limit.
+    pub fn data_file_concurrency_limit(&self) -> Option<usize> {
+        self.data_file_concurrency_limit
+    }
+
+    pub(super) fn set_data_file_concurrency_limit(&mut self, value: Option<usize>) {
+        self.data_file_concurrency_limit = value;
+    }
+    /// Returns whether row-group statistics filtering is enabled.
+    pub fn row_group_filtering_enabled(&self) -> bool {
+        self.row_group_filtering_enabled
+    }
+
+    pub(super) fn set_row_group_filtering_enabled(&mut self, value: bool) {
+        self.row_group_filtering_enabled = value;
+    }
+    /// Returns whether page-index row selection is enabled.
+    pub fn row_selection_enabled(&self) -> bool {
+        self.row_selection_enabled
+    }
+
+    pub(super) fn set_row_selection_enabled(&mut self, value: bool) {
+        self.row_selection_enabled = value;
+    }
+    /// Returns whether bloom-filter pruning is enabled.
+    pub fn bloom_filter_enabled(&self) -> bool {
+        self.bloom_filter_enabled
+    }
+
+    pub(super) fn set_bloom_filter_enabled(&mut self, value: bool) {
+        self.bloom_filter_enabled = value;
+    }
+    /// Returns the configured parquet options.
+    pub fn parquet_options(&self) -> &ParquetReadOptions {
+        &self.parquet_options
+    }
+
+    pub(super) fn set_parquet_options(&mut self, value: ParquetReadOptions) {
+        self.parquet_options = value;
+    }
 }
 
-impl ArrowReaderBuilder {
-    /// Create a new ArrowReaderBuilder
-    pub fn new(file_io: FileIO, runtime: Runtime) -> Self {
-        ArrowReaderBuilder {
-            options: ArrowReaderOptions::default(),
-            file_io,
-            runtime,
-        }
-    }
-
-    /// Sets the max number of in flight data files that are being fetched
-    pub fn with_data_file_concurrency_limit(mut self, val: usize) -> Self {
-        self.options.data_file_concurrency_limit = Some(val);
-        self
-    }
-
-    /// Sets the desired size of batches in the response
-    /// to something other than the default
-    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
-        self.options.batch_size = Some(batch_size);
-        self
-    }
-
-    /// Determines whether to enable row group filtering.
-    pub fn with_row_group_filtering_enabled(mut self, row_group_filtering_enabled: bool) -> Self {
-        self.options.row_group_filtering_enabled = row_group_filtering_enabled;
-        self
-    }
-
-    /// Determines whether to enable row selection.
-    pub fn with_row_selection_enabled(mut self, row_selection_enabled: bool) -> Self {
-        self.options.row_selection_enabled = row_selection_enabled;
-        self
-    }
-
-    /// Determines whether to enable bloom filter-based row group filtering.
-    ///
-    /// When enabled, if a read is performed with an equality or IN predicate,
-    /// the bloom filter for relevant columns in each row group is read and
-    /// checked. Row groups where the bloom filter proves the value is absent
-    /// are skipped entirely.
-    ///
-    /// Defaults to disabled. Each bloom filter is a separate read, and they are
-    /// issued serially — one round trip per relevant column per row group, before
-    /// any data is read. TODO(#3191)
-    pub fn with_bloom_filter_enabled(mut self, bloom_filter_enabled: bool) -> Self {
-        self.options.bloom_filter_enabled = bloom_filter_enabled;
-        self
-    }
-
-    /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
+/// Options for tuning Parquet file I/O.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, TypedBuilder)]
+#[serde(default)]
+#[builder(field_defaults(setter(prefix = "with_")))]
+pub struct ParquetReadOptions {
+    /// Number of bytes to prefetch for parsing the Parquet metadata.
     ///
     /// This hint can help reduce the number of fetch requests. For more details see the
     /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
-    pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
-        self.options.parquet_options.metadata_size_hint = Some(metadata_size_hint);
-        self
-    }
-
-    /// Sets the gap threshold for merging nearby byte ranges into a single request.
+    ///
+    /// Defaults to 512 KiB, matching DataFusion's default `ParquetOptions::metadata_size_hint`.
+    #[builder(default = Some(DEFAULT_METADATA_SIZE_HINT), setter(strip_option))]
+    metadata_size_hint: Option<usize>,
+    /// Gap threshold for merging nearby byte ranges into a single request.
     /// Ranges with gaps smaller than this value will be coalesced.
     ///
-    /// Defaults to 1 MiB, matching object_store's OBJECT_STORE_COALESCE_DEFAULT.
-    pub fn with_range_coalesce_bytes(mut self, range_coalesce_bytes: u64) -> Self {
-        self.options.parquet_options.range_coalesce_bytes = range_coalesce_bytes;
-        self
-    }
-
-    /// Sets the maximum number of merged byte ranges to fetch concurrently.
+    /// Defaults to 1 MiB, matching object_store's `OBJECT_STORE_COALESCE_DEFAULT`.
+    #[builder(default = DEFAULT_RANGE_COALESCE_BYTES)]
+    range_coalesce_bytes: u64,
+    /// Maximum number of merged byte ranges to fetch concurrently.
     ///
-    /// Defaults to 10, matching object_store's OBJECT_STORE_COALESCE_PARALLEL.
-    pub fn with_range_fetch_concurrency(mut self, range_fetch_concurrency: usize) -> Self {
-        self.options.parquet_options.range_fetch_concurrency = range_fetch_concurrency;
-        self
+    /// Defaults to 10, matching object_store's `OBJECT_STORE_COALESCE_PARALLEL`.
+    #[builder(default = DEFAULT_RANGE_FETCH_CONCURRENCY)]
+    range_fetch_concurrency: usize,
+    /// Whether to preload the column index when reading Parquet metadata.
+    #[builder(default = true, setter(skip))]
+    #[serde(skip)]
+    preload_column_index: bool,
+    /// Whether to preload the offset index when reading Parquet metadata.
+    #[builder(default = true, setter(skip))]
+    #[serde(skip)]
+    preload_offset_index: bool,
+    /// Whether to preload the page index when reading Parquet metadata.
+    #[builder(default = false, setter(skip))]
+    #[serde(skip)]
+    preload_page_index: bool,
+}
+
+impl Default for ParquetReadOptions {
+    fn default() -> Self {
+        Self::builder().build()
+    }
+}
+
+impl ParquetReadOptions {
+    pub(super) fn set_metadata_size_hint(&mut self, value: Option<usize>) {
+        self.metadata_size_hint = value;
+    }
+    pub(super) fn set_range_coalesce_bytes(&mut self, value: u64) {
+        self.range_coalesce_bytes = value;
+    }
+    pub(super) fn set_range_fetch_concurrency(&mut self, value: usize) {
+        self.range_fetch_concurrency = value;
+    }
+    pub(super) fn set_preload_page_index(&mut self, value: bool) {
+        self.preload_page_index = value;
     }
 
-    /// Replaces all reader settings while preserving local I/O and runtime resources.
-    pub fn with_options(mut self, options: ArrowReaderOptions) -> Self {
-        self.options = options;
-        self
+    /// Returns the configured metadata size hint.
+    pub fn metadata_size_hint(&self) -> Option<usize> {
+        self.metadata_size_hint
     }
 
-    /// Replaces Parquet I/O settings while preserving other reader settings.
-    pub fn with_parquet_options(mut self, options: ParquetReadOptions) -> Self {
-        self.options.parquet_options = options;
-        self
+    /// Returns the byte-gap threshold for coalescing read requests.
+    pub fn range_coalesce_bytes(&self) -> u64 {
+        self.range_coalesce_bytes
     }
 
-    /// Build the ArrowReader.
-    pub fn build(self) -> ArrowReader {
-        let concurrency_limit_data_files = self
-            .options
-            .data_file_concurrency_limit
-            .unwrap_or_else(|| available_parallelism().get());
-        ArrowReader {
-            batch_size: self.options.batch_size,
-            file_io: self.file_io.clone(),
-            delete_file_loader: CachingDeleteFileLoader::new(
-                self.file_io.clone(),
-                concurrency_limit_data_files,
-                self.runtime.clone(),
-            ),
-            concurrency_limit_data_files,
-            row_group_filtering_enabled: self.options.row_group_filtering_enabled,
-            row_selection_enabled: self.options.row_selection_enabled,
-            bloom_filter_enabled: self.options.bloom_filter_enabled,
-            parquet_read_options: self.options.parquet_options,
-        }
+    /// Returns the maximum number of concurrent range requests.
+    pub fn range_fetch_concurrency(&self) -> usize {
+        self.range_fetch_concurrency
+    }
+
+    pub(super) fn preload_column_index(&self) -> bool {
+        self.preload_column_index
+    }
+
+    pub(super) fn preload_offset_index(&self) -> bool {
+        self.preload_offset_index
+    }
+
+    pub(super) fn preload_page_index(&self) -> bool {
+        self.preload_page_index
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::ArrowReaderBuilder;
     use crate::io::FileIO;
     use crate::test_utils::test_runtime;
     use crate::util::available_parallelism;
@@ -237,7 +259,7 @@ mod tests {
             )
             .with_parquet_options(
                 ParquetReadOptions::builder()
-                    .with_metadata_size_hint(Some(4096))
+                    .with_metadata_size_hint(4096)
                     .with_range_fetch_concurrency(2)
                     .build(),
             )
@@ -248,7 +270,7 @@ mod tests {
             (
                 Some(17),
                 ParquetReadOptions::builder()
-                    .with_metadata_size_hint(Some(4096))
+                    .with_metadata_size_hint(4096)
                     .with_range_fetch_concurrency(3)
                     .build()
             )
@@ -267,7 +289,7 @@ mod tests {
                     .with_bloom_filter_enabled(true)
                     .with_parquet_options(
                         ParquetReadOptions::builder()
-                            .with_metadata_size_hint(Some(4096))
+                            .with_metadata_size_hint(4096)
                             .with_range_coalesce_bytes(8192)
                             .with_range_fetch_concurrency(2)
                             .build(),
