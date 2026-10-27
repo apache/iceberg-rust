@@ -178,6 +178,11 @@ Run the following command to verify the licenses meet the project's policy.
 python3 dev/release/licenses.py dependencies check
 ```
 
+#### Check pyiceberg-core LICENSE and NOTICE
+
+The `pyiceberg-core` wheels bundle third-party licenses and notices, and some of the entries are maintained by hand.
+Check and update them following [`bindings/python/LICENSING.md`](https://github.com/apache/iceberg-rust/blob/main/bindings/python/LICENSING.md#keeping-entries-up-to-date).
+
 #### Open pull request
 
 Open a pull request with all the changes.
