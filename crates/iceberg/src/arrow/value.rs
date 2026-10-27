@@ -346,6 +346,10 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                     Err(invalid_data!("The partner is not a binary array"))
                 }
             }
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!("Converting {p} Arrow array to an Iceberg literal is not supported yet"),
+            )),
         }
     }
 
@@ -1104,6 +1108,31 @@ mod test {
                 .contains("Converting variant Arrow array to Iceberg literal is not supported yet"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn test_arrow_geospatial_to_literal_is_unsupported() {
+        let values = Arc::new(LargeBinaryArray::from_vec(vec![b"wkb".as_slice()])) as ArrayRef;
+        let struct_array = Arc::new(StructArray::from(vec![(
+            Arc::new(
+                Field::new("geom", DataType::LargeBinary, false).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "1".to_string(),
+                )])),
+            ),
+            values,
+        )])) as ArrayRef;
+        let ty = StructType::new(vec![
+            NestedField::required(
+                1,
+                "geom",
+                Type::Primitive(PrimitiveType::Geometry(Default::default())),
+            )
+            .into(),
+        ]);
+
+        let err = arrow_struct_to_literal(&struct_array, &ty).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
     }
 
     #[test]

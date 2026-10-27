@@ -1,0 +1,81 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Configuration for `cargo about`, which lists the license texts of the Rust
+# dependencies compiled into pyiceberg-core.
+#
+# Keep `accepted` in line with deny.toml. Order is preference when a crate offers
+# a choice, so add new licenses at the end.
+#
+# Accepted licenses must be ASF Category A or B:
+# https://www.apache.org/legal/resolved.html
+accepted = [
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  # Not on that page; Category A per
+  # https://issues.apache.org/jira/browse/LEGAL-660
+  "Unicode-3.0",
+  "Zlib",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSL-1.0",
+  "CDLA-Permissive-2.0",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# The wheel targets in release_python.yml and release_python_nightly.yml. Keep in sync.
+targets = [
+  "aarch64-apple-darwin",
+  "aarch64-pc-windows-msvc",
+  "aarch64-unknown-linux-gnu",
+  "armv7-unknown-linux-gnueabihf",
+  "x86_64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-linux-gnu",
+]
+
+# The published crate omits its LICENSE, so cargo-about fetches it from the
+# upstream repository.
+[alloc-stdlib.clarify]
+license = "BSD-3-Clause"
+[[alloc-stdlib.clarify.git]]
+checksum = "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+path = "LICENSE"
+
+# libm's license is in LICENSE.txt, which cargo-about doesn't match by name.
+[libm.clarify]
+license = "MIT"
+[[libm.clarify.files]]
+checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
+path = "LICENSE.txt"
+
+# zstd-sys's LICENSE covers only its Rust code. Without this, cargo-about omits
+# the Meta copyright notices for the bindings and the vendored zstd C code.
+[zstd-sys.clarify]
+license = "BSD-3-Clause"
+[[zstd-sys.clarify.files]]
+checksum = "ce4868c8e4ebe47a7d4b3c93dbf6b802033e5ae2fa7638098173f80836daac60"
+path = "LICENSE"
+[[zstd-sys.clarify.files]]
+checksum = "bf7017a73a95ea63bf3716b13ec2bcd79c92942356e3408c6fb66332bad6d977"
+path = "LICENSE.BSD-3-Clause"
+[[zstd-sys.clarify.files]]
+checksum = "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+path = "zstd/LICENSE"
