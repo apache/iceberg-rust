@@ -37,13 +37,14 @@ accepted = [
   "BSD-2-Clause",
   "BSL-1.0",
   "CDLA-Permissive-2.0",
+  "bzip2-1.0.6",
 ]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 # The wheel targets in release_python.yml and release_python_nightly.yml. Keep in sync.
+# 0.11.x branch builds no windows-arm wheel, so aarch64-pc-windows-msvc is absent.
 targets = [
   "aarch64-apple-darwin",
-  "aarch64-pc-windows-msvc",
   "aarch64-unknown-linux-gnu",
   "armv7-unknown-linux-gnueabihf",
   "x86_64-apple-darwin",
@@ -82,3 +83,19 @@ path = "LICENSE.BSD-3-Clause"
 checksum = "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
 license = "BSD-3-Clause"
 path = "zstd/LICENSE"
+
+# aws-lc-sys ships under a series of licenses. However, the licenses are included as one file.
+# For simplicity, we just point each license at the same file at the cost of duplicating the license text.
+[aws-lc-sys.clarify]
+license = "Apache-2.0 AND ISC AND MIT AND BSD-3-Clause"
+[[aws-lc-sys.clarify.files]]
+checksum = "728536b4160e051f86d7c9c388f704866b3d512cd7df97ac3516c65279523c4e"
+path = "LICENSE"
+
+# For individual crate acceptions, refer to deny.toml.
+
+[colored]
+accepted = ["MPL-2.0"]
+
+[option-ext]
+accepted = ["MPL-2.0"]
