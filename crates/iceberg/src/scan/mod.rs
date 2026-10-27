@@ -263,6 +263,22 @@ impl<'a> TableScanBuilder<'a> {
     ///
     /// [`build`](Self::build) fails if a name matches no field, matches more than one field when
     /// the scan is case-insensitive, or names a struct, list, map or metadata column.
+    ///
+    /// ```
+    /// # use futures::TryStreamExt;
+    /// # use iceberg::table::Table;
+    /// # async fn example(table: &Table) -> iceberg::Result<()> {
+    /// let scan = table.scan().with_column_stats(["x"]).build()?;
+    /// let mut tasks = scan.plan_files().await?;
+    /// while let Some(task) = tasks.try_next().await? {
+    ///     let x = task.schema().field_id_by_name("x").unwrap();
+    ///     let lower_bound = task
+    ///         .column_stats()
+    ///         .and_then(|stats| stats.lower_bounds().get(&x));
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_column_stats(
         mut self,
         column_names: impl IntoIterator<Item = impl ToString>,
@@ -836,8 +852,8 @@ mod tests {
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, MAIN_BRANCH,
         ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, MappedField,
         NameMapping, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
-        Snapshot, SortDirection, SortField, SortOrder, Struct, StructType, Summary, TableMetadataBuilder,
-        TableProperties, Transform, Type, UnboundPartitionSpec,
+        Snapshot, SortDirection, SortField, SortOrder, Struct, StructType, Summary,
+        TableMetadataBuilder, TableProperties, Transform, Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::scan::{
@@ -905,7 +921,7 @@ mod tests {
                     1,
                     "s",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(2, "f", PrimitiveType::Long.into()).into(),
+                        NestedField::optional(2, "f", PrimitiveType::Long).into(),
                     ])),
                 )
                 .into(),
@@ -1720,13 +1736,10 @@ mod tests {
 
         // The second file has no statistics for `x`.
         fixture
-            .setup_manifest_files_with_column_stats(
-                &[
-                    column_stats(&[x.clone(), a.clone(), dbl.clone()]),
-                    column_stats(&[a.clone(), dbl.clone()]),
-                ],
-                None,
-            )
+            .setup_manifest_files_with_column_stats(&[(None, vec![
+                column_stats(&[x.clone(), a.clone(), dbl.clone()]),
+                column_stats(&[a.clone(), dbl.clone()]),
+            ])])
             .await;
         let table = &fixture.table;
 
@@ -1802,33 +1815,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plan_files_keeps_bounds_typed_with_manifest_schema() {
+    async fn test_plan_files_promotes_bounds_to_scan_schema_type() {
         let mut fixture = TableTestFixture::new();
 
-        // `y` is a `long` in the table schema but was an `int` when the manifest was written.
-        let manifest_schema = Arc::new(
+        // `y` is a `long` in the table schema. The first manifest was written when it was an `int`.
+        let int_schema = Arc::new(
             Schema::builder()
-                .with_fields(
-                    fixture
-                        .table
-                        .metadata()
-                        .current_schema()
-                        .as_struct()
-                        .fields()
-                        .iter()
-                        .map(|field| match field.id {
-                            2 => NestedField::required(2, "y", PrimitiveType::Int.into()).into(),
-                            _ => field.clone(),
-                        }),
-                )
+                .with_fields(vec![
+                    NestedField::required(1, "x", PrimitiveType::Long).into(),
+                    NestedField::required(2, "y", PrimitiveType::Int).into(),
+                ])
                 .build()
                 .unwrap(),
         );
-        let y = column_stats(&[(2, 4, 1, 0, None, Datum::int(5), Datum::int(7))]);
+        let written_as_int = column_stats(&[(2, 4, 1, 0, None, Datum::int(5), Datum::int(7))]);
+        let written_as_long = column_stats(&[(2, 4, 1, 0, None, Datum::long(6), Datum::long(9))]);
         fixture
-            .setup_manifest_files_with_column_stats(std::slice::from_ref(&y), Some(manifest_schema))
+            .setup_manifest_files_with_column_stats(&[
+                (Some(int_schema), vec![written_as_int]),
+                (None, vec![written_as_long.clone()]),
+            ])
             .await;
 
+        let promoted = column_stats(&[(2, 4, 1, 0, None, Datum::long(5), Datum::long(7))]);
         assert_eq!(
             column_stats_by_file(
                 fixture
@@ -1839,7 +1848,7 @@ mod tests {
                     .unwrap()
             )
             .await,
-            vec![Some(y)]
+            vec![Some(promoted), Some(written_as_long)]
         );
     }
 

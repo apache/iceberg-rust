@@ -1524,62 +1524,65 @@ impl TableTestFixture {
         manifest_list_write.close().await.unwrap();
     }
 
-    /// Writes a manifest with one live "Added" data-file entry per element of
-    /// `column_stats` (`1.parquet`, `2.parquet`, ..., partitioned on `x` = 100, 200, ...),
-    /// each carrying that element's column sizes, value, null and NaN counts and bounds. The
-    /// manifest is written with `manifest_schema`, or the current snapshot's schema if `None`.
+    /// Writes one manifest per element of `manifests`, in order. Each holds one live "Added"
+    /// data-file entry per element of its statistics (`1.parquet`, `2.parquet`, ..., numbered
+    /// across manifests and partitioned on `x` = 100, 200, ...), carrying that element's column
+    /// sizes, value, null and NaN counts and bounds. A manifest is written with its schema, or
+    /// the current snapshot's schema if `None`.
     pub(crate) async fn setup_manifest_files_with_column_stats(
         &mut self,
-        column_stats: &[FileScanTaskColumnStats],
-        manifest_schema: Option<SchemaRef>,
+        manifests: &[(Option<SchemaRef>, Vec<FileScanTaskColumnStats>)],
     ) {
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
-        let current_schema = match manifest_schema {
-            Some(schema) => schema,
-            None => current_snapshot.schema(self.table.metadata()).unwrap(),
-        };
         let current_partition_spec = self.table.metadata().default_partition_spec();
         let parquet_file_size = self.write_parquet_data_files();
 
-        let mut writer = ManifestWriterBuilder::new(
-            self.next_manifest_file(),
-            Some(current_snapshot.snapshot_id()),
-            current_schema.clone(),
-            current_partition_spec.as_ref().clone(),
-        )
-        .build_v2_data();
+        let mut manifest_files = vec![];
+        let mut file_number = 0;
+        for (manifest_schema, column_stats) in manifests {
+            let schema = match manifest_schema {
+                Some(schema) => schema.clone(),
+                None => current_snapshot.schema(self.table.metadata()).unwrap(),
+            };
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                schema,
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
 
-        for (i, stats) in column_stats.iter().enumerate() {
-            let data_file = DataFileBuilder::default()
-                .partition_spec_id(0)
-                .content(DataContentType::Data)
-                .file_path(format!("{}/{}.parquet", &self.table_location, i + 1))
-                .file_format(DataFileFormat::Parquet)
-                .file_size_in_bytes(parquet_file_size)
-                .record_count(1)
-                .partition(Struct::from_iter([Some(Literal::long(
-                    100 * (i as i64 + 1),
-                ))]))
-                .column_sizes(stats.column_sizes().clone())
-                .value_counts(stats.value_counts().clone())
-                .null_value_counts(stats.null_value_counts().clone())
-                .nan_value_counts(stats.nan_value_counts().clone())
-                .lower_bounds(stats.lower_bounds().clone())
-                .upper_bounds(stats.upper_bounds().clone())
-                .build()
-                .unwrap();
+            for stats in column_stats {
+                file_number += 1;
+                let data_file = DataFileBuilder::default()
+                    .partition_spec_id(0)
+                    .content(DataContentType::Data)
+                    .file_path(format!("{}/{file_number}.parquet", &self.table_location))
+                    .file_format(DataFileFormat::Parquet)
+                    .file_size_in_bytes(parquet_file_size)
+                    .record_count(1)
+                    .partition(Struct::from_iter([Some(Literal::long(100 * file_number))]))
+                    .column_sizes(stats.column_sizes().clone())
+                    .value_counts(stats.value_counts().clone())
+                    .null_value_counts(stats.null_value_counts().clone())
+                    .nan_value_counts(stats.nan_value_counts().clone())
+                    .lower_bounds(stats.lower_bounds().clone())
+                    .upper_bounds(stats.upper_bounds().clone())
+                    .build()
+                    .unwrap();
 
-            writer
-                .add_entry(
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Added)
-                        .data_file(data_file)
-                        .build(),
-                )
-                .unwrap();
+                writer
+                    .add_entry(
+                        ManifestEntry::builder()
+                            .status(ManifestStatus::Added)
+                            .data_file(data_file)
+                            .build(),
+                    )
+                    .unwrap();
+            }
+
+            manifest_files.push(writer.write_manifest_file().await.unwrap());
         }
-
-        let data_file_manifest = writer.write_manifest_file().await.unwrap();
 
         let manifest_list_writer = self
             .table
@@ -1596,7 +1599,7 @@ impl TableTestFixture {
             current_snapshot.sequence_number(),
         );
         manifest_list_write
-            .add_manifests(std::iter::once(data_file_manifest))
+            .add_manifests(manifest_files.into_iter())
             .unwrap();
         manifest_list_write.close().await.unwrap();
     }

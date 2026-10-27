@@ -198,6 +198,14 @@ impl ManifestEntryContext {
             )
             .await?;
 
+        let column_stats = self.column_stats_field_ids.as_ref().map(|field_ids| {
+            FileScanTaskColumnStats::from_data_file(
+                self.manifest_entry.data_file(),
+                field_ids,
+                &self.snapshot_schema,
+            )
+        });
+
         FileScanTask::builder()
             .with_file_size_in_bytes(self.manifest_entry.file_size_in_bytes())
             .with_start(0)
@@ -222,9 +230,7 @@ impl ManifestEntryContext {
             .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
             .with_sort_order_id(self.sort_order_id)
             .with_sort_order(self.sort_order)
-            .with_column_stats(self.column_stats_field_ids.map(|field_ids| {
-                FileScanTaskColumnStats::from_data_file(self.manifest_entry.data_file(), &field_ids)
-            }))
+            .with_column_stats(column_stats)
             .build()
     }
 

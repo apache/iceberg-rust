@@ -26,7 +26,7 @@ use crate::error::invalid_data;
 use crate::expr::BoundPredicate;
 use crate::spec::{
     DataContentType, DataFile, DataFileFormat, Datum, ManifestEntryRef, NameMapping, PartitionSpec,
-    Schema, SchemaRef, SortOrderRef, Struct, StructType,
+    PrimitiveType, Schema, SchemaRef, SortOrderRef, Struct, StructType,
 };
 use crate::{Error, Result};
 
@@ -141,8 +141,8 @@ pub struct FileScanTask {
     /// The data file's column statistics for the columns requested with
     /// [`TableScanBuilder::with_column_stats`](crate::scan::TableScanBuilder::with_column_stats).
     /// `None` if no statistics were requested.
-    #[builder(default)]
-    column_stats: Option<FileScanTaskColumnStats>,
+    #[builder(default, setter(transform = |stats: Option<FileScanTaskColumnStats>| stats.map(Box::new)))]
+    column_stats: Option<Box<FileScanTaskColumnStats>>,
 
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     case_sensitive: bool,
@@ -269,7 +269,7 @@ impl FileScanTask {
     /// [`TableScanBuilder::with_column_stats`](crate::scan::TableScanBuilder::with_column_stats),
     /// or `None` if none were requested.
     pub fn column_stats(&self) -> Option<&FileScanTaskColumnStats> {
-        self.column_stats.as_ref()
+        self.column_stats.as_deref()
     }
 
     /// Returns whether names are treated as case-sensitive.
@@ -571,7 +571,7 @@ mod _serde {
                 unified_partition_type: value.unified_partition_type.as_ref(),
                 sort_order_id: value.sort_order_id,
                 sort_order: value.sort_order.as_ref(),
-                column_stats: value.column_stats.as_ref(),
+                column_stats: value.column_stats.as_deref(),
                 case_sensitive: value.case_sensitive,
                 key_metadata: value.key_metadata.as_deref(),
             })
@@ -830,10 +830,11 @@ impl From<FileScanTaskDeleteFile> for Result<FileScanTaskDeleteFile> {
 /// columns requested for the scan.
 ///
 /// A requested column missing from a map has unknown statistics of that kind, for example when
-/// the table's metrics mode records no bounds. Bounds are inclusive even when truncated, and are
-/// typed with the schema the manifest was written with, so after type promotion an `int` bound
-/// can describe a `long` column. All statistics cover the whole file, before delete files, the
-/// scan's filter or task splits.
+/// the table's metrics mode records no bounds. Bounds are inclusive even when truncated. A
+/// manifest written before a type promotion stores the narrower type, so bounds are promoted to
+/// the column's type in the scan schema (`int` to `long`, `float` to `double`, a decimal to a
+/// wider precision), and a bound that cannot be promoted is omitted. All statistics cover the
+/// whole file, before delete files, the scan's filter or task splits.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TypedBuilder)]
 #[builder(field_defaults(default, setter(prefix = "with_")))]
 pub struct FileScanTaskColumnStats {
@@ -870,8 +871,35 @@ pub struct FileScanTaskColumnStats {
     upper_bounds: HashMap<i32, Datum>,
 }
 
+/// Returns `bound` typed as column `field_id` of `schema`, or `None` if it cannot be promoted to
+/// that type. A decimal is retyped only to a wider precision with the same scale.
+fn bound_as_column_type(bound: &Datum, schema: &Schema, field_id: i32) -> Option<Datum> {
+    let target = schema
+        .field_by_id(field_id)?
+        .field_type
+        .as_primitive_type()?;
+    if bound.data_type() == target {
+        return Some(bound.clone());
+    }
+    if let Some(promoted) = bound.promote_to(target) {
+        return Some(promoted);
+    }
+    match (bound.data_type(), target) {
+        (
+            PrimitiveType::Decimal {
+                precision: from_precision,
+                scale: from_scale,
+            },
+            PrimitiveType::Decimal { precision, scale },
+        ) if from_scale == scale && from_precision <= precision => {
+            Some(Datum::new(target.clone(), bound.literal().clone()))
+        }
+        _ => None,
+    }
+}
+
 impl FileScanTaskColumnStats {
-    pub(crate) fn from_data_file(data_file: &DataFile, field_ids: &[i32]) -> Self {
+    pub(crate) fn from_data_file(data_file: &DataFile, field_ids: &[i32], schema: &Schema) -> Self {
         fn retain<V: Clone>(map: &HashMap<i32, V>, field_ids: &[i32]) -> HashMap<i32, V> {
             if map.is_empty() {
                 return HashMap::new();
@@ -885,13 +913,29 @@ impl FileScanTaskColumnStats {
             retained
         }
 
+        fn retain_bounds(
+            bounds: &HashMap<i32, Datum>,
+            field_ids: &[i32],
+            schema: &Schema,
+        ) -> HashMap<i32, Datum> {
+            if bounds.is_empty() {
+                return HashMap::new();
+            }
+            let mut retained = HashMap::with_capacity(field_ids.len().min(bounds.len()));
+            retained.extend(field_ids.iter().filter_map(|id| {
+                let bound = bound_as_column_type(bounds.get(id)?, schema, *id)?;
+                Some((*id, bound))
+            }));
+            retained
+        }
+
         Self {
             column_sizes: retain(data_file.column_sizes(), field_ids),
             value_counts: retain(data_file.value_counts(), field_ids),
             null_value_counts: retain(data_file.null_value_counts(), field_ids),
             nan_value_counts: retain(data_file.nan_value_counts(), field_ids),
-            lower_bounds: retain(data_file.lower_bounds(), field_ids),
-            upper_bounds: retain(data_file.upper_bounds(), field_ids),
+            lower_bounds: retain_bounds(data_file.lower_bounds(), field_ids, schema),
+            upper_bounds: retain_bounds(data_file.upper_bounds(), field_ids, schema),
         }
     }
 
@@ -933,8 +977,8 @@ mod tests {
     use super::*;
     use crate::ErrorKind;
     use crate::spec::{
-        DataFileBuilder, Literal, ManifestEntry, ManifestStatus, NestedField, PrimitiveType,
-        Transform, Type,
+        DataFileBuilder, Literal, ManifestEntry, ManifestStatus, NestedField, PrimitiveLiteral,
+        PrimitiveType, Transform, Type,
     };
 
     fn build_file_scan_task(
@@ -1324,6 +1368,54 @@ mod tests {
             ),
             "delete file position-deletes.parquet has negative content_size_in_bytes -1",
         );
+    }
+
+    #[test]
+    fn test_bound_as_column_type() {
+        let decimal = |precision, scale| PrimitiveType::Decimal { precision, scale };
+        let decimal_datum =
+            |precision, scale| Datum::new(decimal(precision, scale), PrimitiveLiteral::Int128(150));
+        let cases = [
+            (Datum::int(-5), PrimitiveType::Long, Some(Datum::long(-5))),
+            (
+                Datum::float(f32::NEG_INFINITY),
+                PrimitiveType::Double,
+                Some(Datum::double(f64::NEG_INFINITY)),
+            ),
+            (
+                Datum::float(1.5_f32),
+                PrimitiveType::Double,
+                Some(Datum::double(1.5)),
+            ),
+            (
+                Datum::string("a"),
+                PrimitiveType::String,
+                Some(Datum::string("a")),
+            ),
+            (
+                decimal_datum(9, 2),
+                decimal(18, 2),
+                Some(decimal_datum(18, 2)),
+            ),
+            (decimal_datum(9, 2), decimal(18, 3), None),
+            (decimal_datum(38, 2), decimal(18, 2), None),
+            (Datum::long(6), PrimitiveType::Int, None),
+            (Datum::string("a"), PrimitiveType::Long, None),
+        ];
+
+        for (bound, column_type, expected) in cases {
+            let schema = Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "c", column_type.clone()).into(),
+                ])
+                .build()
+                .unwrap();
+            assert_eq!(
+                bound_as_column_type(&bound, &schema, 1),
+                expected,
+                "{bound:?} as {column_type:?}"
+            );
+        }
     }
 
     #[test]
