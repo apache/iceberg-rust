@@ -540,6 +540,7 @@ impl FileScanTaskReader {
                 record_batch_stream_builder.parquet_schema(),
                 &iceberg_field_ids,
                 &field_id_map,
+                task.schema_ref(),
             )?;
             record_batch_stream_builder = record_batch_stream_builder.with_row_filter(row_filter);
 
