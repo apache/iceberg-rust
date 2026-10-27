@@ -621,7 +621,7 @@ impl TableTestFixture {
         // The schema the data manifest was written under: the current schema with the
         // partition source `x` still `int`.
         let mut fields = current_schema.as_struct().fields().to_vec();
-        fields[0] = NestedField::required(1, "x", PrimitiveType::Int.into()).into();
+        fields[0] = NestedField::required(1, "x", PrimitiveType::Int).into();
         let written_schema = Arc::new(
             Schema::builder()
                 .with_schema_id(0)
@@ -851,7 +851,7 @@ impl TableTestFixture {
             .as_struct()
             .fields()
             .to_vec();
-        fields.push(NestedField::optional(9, "d", PrimitiveType::Date.into()).into());
+        fields.push(NestedField::optional(9, "d", PrimitiveType::Date).into());
         let date_schema = Schema::builder().with_fields(fields).build().unwrap();
         let date_spec = PartitionSpec::builder(date_schema.clone())
             .add_partition_field("x", "x", Transform::Identity)

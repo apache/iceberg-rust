@@ -827,9 +827,9 @@ mod tests {
     fn test_resolve_field_id_case_insensitive_rejects_ambiguous_name() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
-                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
-                NestedField::optional(3, "data", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "id", PrimitiveType::Int).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int).into(),
             ])
             .build()
             .unwrap();
@@ -848,9 +848,9 @@ mod tests {
         let schema = Schema::builder()
             .with_schema_id(metadata.current_schema_id())
             .with_fields(vec![
-                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
-                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
-                NestedField::optional(3, "data", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "id", PrimitiveType::Int).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int).into(),
             ])
             .build()
             .unwrap();
