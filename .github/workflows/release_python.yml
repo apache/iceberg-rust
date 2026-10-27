@@ -142,6 +142,7 @@ jobs:
     strategy:
       max-parallel: 15
       matrix:
+        # Keep `targets` in bindings/python/about.toml in sync with these.
         include:
           - { os: windows-latest }
           - { os: macos-latest, target: "universal2-apple-darwin" }
@@ -183,6 +184,7 @@ jobs:
         uses: ./.github/actions/setup-builder
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
+      - uses: ./.github/actions/generate-python-license
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}

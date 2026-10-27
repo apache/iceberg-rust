@@ -1,0 +1,42 @@
+This package bundles the following Rust dependencies that ship their own NOTICE.
+
+Apache Arrow (arrow, parquet and related crates)
+Copyright 2016-2026 The Apache Software Foundation
+
+This product includes software from the chronoutil crate (MIT)
+ * Copyright (c) 2020-2022 Oliver Margetts
+ * https://github.com/olliemath/chronoutil
+
+This product includes software from the compact-thrift project (Apache 2.0)
+ * Copyright Jörn Horstmann
+ * https://github.com/jhorstmann/compact-thrift
+
+Apache Avro (apache-avro)
+Copyright 2010-2025 The Apache Software Foundation
+
+The initial implementation of the Apache Avro Rust SDK has been
+developed by Flavien Raynaud (https://github.com/flavray/avro-rs)
+and donated to the Apache Avro project in 2020.
+
+Apache Arrow Object Store (object_store)
+Copyright 2020-2024 The Apache Software Foundation
+
+Apache DataFusion (datafusion and related crates)
+Copyright 2019-2026 The Apache Software Foundation
+
+Apache OpenDAL (opendal and related crates)
+Copyright 2023-2026 The Apache Software Foundation
+
+Apache OpenDAL Reqsign (reqsign-core and related crates)
+Copyright 2025-2026 The Apache Software Foundation
+
+Moka (moka)
+
+The majority of the Moka library is dual-licensed under the MIT and Apache 2.0
+licenses. However, the following files are licensed solely under the Apache
+License 2.0:
+
+- src/common/frequency_sketch.rs
+- src/common/timer_wheel.rs
+
+These files were ported from the Java Caffeine library and are not dual-licensed.
