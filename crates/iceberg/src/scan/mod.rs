@@ -1940,7 +1940,7 @@ mod tests {
             .with_data_file_concurrency_limit(Some(1))
             .with_parquet_options(
                 ParquetReadOptions::builder()
-                    .with_metadata_size_hint(Some(4096))
+                    .with_metadata_size_hint(4096)
                     .with_range_fetch_concurrency(2)
                     .build(),
             )

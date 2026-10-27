@@ -151,7 +151,7 @@ impl FileScanTaskReader {
         let should_load_page_index = (self.row_selection_enabled && task.predicate().is_some())
             || !task.deletes().is_empty();
         let mut parquet_read_options = self.parquet_read_options;
-        parquet_read_options.preload_page_index = should_load_page_index;
+        parquet_read_options.set_preload_page_index(should_load_page_index);
 
         let delete_filter_rx = self
             .delete_file_loader

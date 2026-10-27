@@ -75,7 +75,7 @@ let options = iceberg::arrow::ArrowReaderOptions::builder()
     .with_row_selection_enabled(true)
     .with_parquet_options(
         iceberg::arrow::ParquetReadOptions::builder()
-            .with_metadata_size_hint(Some(512 * 1024))
+            .with_metadata_size_hint(512 * 1024)
             .build(),
     )
     .build();
