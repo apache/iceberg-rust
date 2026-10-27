@@ -60,12 +60,10 @@ Note that in the repository, `bindings/python/LICENSE` and `NOTICE` are symlinks
 
 ## Keeping entries up to date
 
-Pull request CI runs the action, so it fails when generation fails, for example on a license that isn't in `accepted`.
-
-Everything else needs a manual check and update before every release: the clarifications and `targets` in `about.toml`, `third-party-licenses.txt` and `third-party-notices.txt`. They don't change with the dependencies.
-
-Run this from `bindings/python` to check. A `WARN` or `warning:` on stderr means a clarification no longer applies, and `<year>` in the output means no license file was matched:
+Pull request CI runs the action, so it fails when generation fails, for example on a license that isn't in `accepted`. It also fails on a `WARN` on stderr, which means a clarification no longer applies, and on `<year>` in the output, which means no license file was matched. Run this from `bindings/python` to check locally:
 
 ```shell
 make -s cargo-about | grep -nE '<year>|<owner>|<copyright holders>'
 ```
+
+Everything else needs a manual check and update before every release: `targets` in `about.toml`, `third-party-licenses.txt` and `third-party-notices.txt`. They don't change with the dependencies.
