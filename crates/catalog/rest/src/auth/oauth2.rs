@@ -22,7 +22,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use http::StatusCode;
 use iceberg::sensitive::SensitiveString;
-use iceberg::{Error, ErrorKind, Result};
+use iceberg::{Error, ErrorKind, Result, TableIdent};
 use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
@@ -46,8 +46,9 @@ struct OAuth2Params {
 /// Iceberg REST catalogs.
 ///
 /// A configured `token` is used directly; otherwise `credential` is exchanged
-/// for a token at the token endpoint and cached. The cached token is shared
-/// across sessions so it survives the config handshake.
+/// for a token at the token endpoint and cached. The cached token is shared by
+/// the init and catalog sessions so it survives the config handshake;
+/// table-specific tokens use isolated sessions.
 pub struct OAuth2Manager {
     token: Arc<Mutex<Option<SensitiveString>>>,
     init_params: OAuth2Params,
@@ -144,13 +145,39 @@ impl AuthManager for OAuth2Manager {
     ) -> Result<Arc<dyn AuthSession>> {
         Ok(Arc::new(self.session_from(client, props).await?))
     }
+
+    /// Like Java, only a `token` in the table config overrides the parent
+    /// session; a table-level `credential` is ignored. Unlike Java, the token is
+    /// used as-is and never refreshed, and token-type exchange keys are ignored,
+    /// because this manager implements neither token refresh nor token exchange.
+    async fn table_session(
+        &self,
+        _client: &HttpClient,
+        _table: &TableIdent,
+        props: &HashMap<String, String>,
+        parent: Arc<dyn AuthSession>,
+    ) -> Result<Arc<dyn AuthSession>> {
+        Ok(match props.get("token") {
+            Some(token) => static_token_session(token),
+            None => parent,
+        })
+    }
+}
+
+/// A session that authenticates with `token` as a bearer token, which is never
+/// refreshed.
+pub(crate) fn static_token_session(token: &str) -> Arc<dyn AuthSession> {
+    Arc::new(OAuth2Session {
+        token: Arc::new(Mutex::new(Some(SensitiveString::from(token.to_string())))),
+        token_source: TokenSource::StaticToken,
+    })
 }
 
 impl OAuth2Manager {
     /// Builds a session from the manager's options with `props` merged onto
     /// them, so an injected manager keeps whatever a property doesn't
-    /// override. The manager's token cell is shared with every session it
-    /// builds, so a token cached during the handshake survives it.
+    /// override. The manager's token cell is shared by the init and catalog
+    /// sessions, so a token cached during the handshake survives it.
     async fn session_from(
         &self,
         client: &HttpClient,
@@ -287,15 +314,21 @@ impl ClientCredentialsConfig {
         let body = response.body();
 
         let auth_res: TokenResponse = if status == StatusCode::OK {
+            // A token response holds the token, and serde's errors quote the
+            // values they reject, so neither the body nor the error is kept.
             Ok(serde_json::from_slice(body).map_err(|e| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    "Failed to parse response from rest catalog server!",
+                    format!(
+                        "Failed to parse response from rest catalog server: {:?} error at \
+                         line {}, column {}",
+                        e.classify(),
+                        e.line(),
+                        e.column()
+                    ),
                 )
                 .with_context("operation", "auth")
                 .with_context("url", self.token_endpoint.clone())
-                .with_context("json", String::from_utf8_lossy(body))
-                .with_source(e)
             })?)
         } else {
             let e: ErrorResponse = serde_json::from_slice(body).map_err(|e| {
@@ -379,5 +412,85 @@ mod tests {
             req.headers().get("authorization").unwrap(),
             "Bearer tok-static"
         );
+    }
+
+    #[tokio::test]
+    async fn test_table_session_inherits_parent_unless_token_is_overridden() {
+        let manager = OAuth2Manager::new("http://localhost/unused").with_token("catalog-token");
+        let client = test_client();
+        let parent = manager
+            .catalog_session(&client, &HashMap::new())
+            .await
+            .unwrap();
+        let table = TableIdent::from_strs(["namespace", "table"]).unwrap();
+
+        let inherited = manager
+            .table_session(&client, &table, &HashMap::new(), Arc::clone(&parent))
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&parent, &inherited));
+
+        let overridden = manager
+            .table_session(
+                &client,
+                &table,
+                &HashMap::from([("token".to_string(), "table-token".to_string())]),
+                Arc::clone(&parent),
+            )
+            .await
+            .unwrap();
+        assert!(!Arc::ptr_eq(&parent, &overridden));
+
+        let mut parent_request = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/catalog")
+                .build()
+                .unwrap(),
+        );
+        parent.authenticate(&mut parent_request).await.unwrap();
+        assert_eq!(
+            parent_request.headers().get("authorization").unwrap(),
+            "Bearer catalog-token"
+        );
+
+        let mut table_request = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/table")
+                .build()
+                .unwrap(),
+        );
+        overridden.authenticate(&mut table_request).await.unwrap();
+        assert_eq!(
+            table_request.headers().get("authorization").unwrap(),
+            "Bearer table-token"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unparsable_token_response_is_not_quoted() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .with_status(200)
+            .with_body(r#"{"access_token":"SECRET-TOKEN","token_type":7}"#)
+            .create_async()
+            .await;
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
+            .with_credential(Some("client".to_string()), "secret".to_string());
+        let session = manager
+            .catalog_session(&test_client(), &HashMap::new())
+            .await
+            .unwrap();
+
+        let mut request = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/catalog")
+                .build()
+                .unwrap(),
+        );
+        let error = session.authenticate(&mut request).await.unwrap_err();
+        let error = format!("{error:?}");
+        assert!(!error.contains("SECRET-TOKEN"), "{error}");
+        mock.assert_async().await;
     }
 }

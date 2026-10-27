@@ -29,11 +29,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 #[cfg(feature = "sigv4")]
 pub use aws_credential_types::Credentials;
-use iceberg::{Result, SessionContext};
+use iceberg::{Error, ErrorKind, Result, SessionContext, TableIdent};
 pub use oauth2::OAuth2Manager;
+pub(crate) use oauth2::static_token_session;
 #[cfg(feature = "sigv4")]
 pub use sigv4::{PayloadHashMode, SigV4Signer};
 
+use crate::catalog::{REST_CATALOG_PROP_AUTH_TYPE, RestCatalogConfig};
 use crate::client::HttpClient;
 use crate::request::HttpRequest;
 
@@ -41,6 +43,32 @@ use crate::request::HttpRequest;
 pub const AUTH_TYPE_NONE: &str = "none";
 /// `rest.auth.type` value selecting OAuth2 token authentication.
 pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
+
+/// Builds the auth manager selected by the `rest.auth.type` configuration,
+/// like Java's `AuthManagers.loadAuthManager`.
+pub(crate) fn load_auth_manager(config: &RestCatalogConfig) -> Result<Arc<dyn AuthManager>> {
+    let auth_type = config.auth_type();
+    // Java parity (`AuthManagers`): make the inference visible so users
+    // configure the type explicitly.
+    if auth_type == AUTH_TYPE_OAUTH2 && !config.has_explicit_auth_type() {
+        tracing::warn!(
+            "Inferring {REST_CATALOG_PROP_AUTH_TYPE}={AUTH_TYPE_OAUTH2} from the configured \
+             OAuth properties; set it explicitly to avoid this warning"
+        );
+    }
+    match auth_type.as_str() {
+        AUTH_TYPE_NONE => Ok(Arc::new(NoopAuthManager)),
+        AUTH_TYPE_OAUTH2 => Ok(Arc::new(OAuth2Manager::from_config(config)?)),
+        other => Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "unknown '{REST_CATALOG_PROP_AUTH_TYPE}': {other}; use \
+                 `RestSessionCatalogBuilder::with_auth_manager` or \
+                 `RestCatalogBuilder::with_auth_manager` to inject a custom auth manager"
+            ),
+        )),
+    }
+}
 
 /// Creates the [`AuthSession`]s used to authenticate REST catalog requests.
 ///
@@ -53,10 +81,10 @@ pub const AUTH_TYPE_OAUTH2: &str = "oauth2";
 /// the context-specific sessions that [`AuthManager::contextual_session`]
 /// derives from it may rely on the state established by that call.
 ///
-/// [`Self::init_session`] and [`Self::catalog_session`] are handed the
-/// catalog's [`HttpClient`], which an implementation may clone and store for
-/// its own requests (e.g. a token exchange) so that they share the catalog's
-/// connection pool and configuration.
+/// [`Self::init_session`], [`Self::catalog_session`] and [`Self::table_session`]
+/// are handed the catalog's [`HttpClient`], which an implementation may clone
+/// and store for its own requests (e.g. a token exchange) so that they share
+/// the catalog's connection pool and configuration.
 #[async_trait]
 pub trait AuthManager: Debug + Send + Sync {
     /// Session used for the initial `/v1/config` handshake, given the
@@ -107,6 +135,26 @@ pub trait AuthManager: Debug + Send + Sync {
     ) -> Result<Arc<dyn AuthSession>> {
         let _ = context;
         Ok(catalog_session)
+    }
+
+    /// Returns a session for requests associated with `table`.
+    ///
+    /// Currently only requests for the table's vended storage credentials use
+    /// it; other table operations use the contextual session.
+    ///
+    /// `props` are the unmerged properties returned by the table endpoint, and
+    /// `parent` is the contextual session of the operation that loaded the
+    /// table. The default preserves `parent`; managers should return a child
+    /// session only when the table properties contain an authentication
+    /// override.
+    async fn table_session(
+        &self,
+        _client: &HttpClient,
+        _table: &TableIdent,
+        _props: &HashMap<String, String>,
+        parent: Arc<dyn AuthSession>,
+    ) -> Result<Arc<dyn AuthSession>> {
+        Ok(parent)
     }
 }
 
