@@ -1213,9 +1213,9 @@
 <a href=#1213 id=1213 data-nosnippet>1213</a>        <span class="macro">assert_eq!</span>(
 <a href=#1214 id=1214 data-nosnippet>1214</a>            partition_spec.partition_type(<span class="kw-2">&amp;</span>schema).unwrap(),
 <a href=#1215 id=1215 data-nosnippet>1215</a>            StructType::new(<span class="macro">vec!</span>[
-<a href=#1216 id=1216 data-nosnippet>1216</a>                NestedField::optional(<span class="number">1000</span>, <span class="string">"ts_day"</span>, PrimitiveType::Date.into()).into(),
-<a href=#1217 id=1217 data-nosnippet>1217</a>                NestedField::optional(<span class="number">1001</span>, <span class="string">"id_bucket"</span>, PrimitiveType::Int.into()).into(),
-<a href=#1218 id=1218 data-nosnippet>1218</a>                NestedField::optional(<span class="number">1002</span>, <span class="string">"id_truncate"</span>, PrimitiveType::String.into()).into(),
+<a href=#1216 id=1216 data-nosnippet>1216</a>                NestedField::optional(<span class="number">1000</span>, <span class="string">"ts_day"</span>, PrimitiveType::Date).into(),
+<a href=#1217 id=1217 data-nosnippet>1217</a>                NestedField::optional(<span class="number">1001</span>, <span class="string">"id_bucket"</span>, PrimitiveType::Int).into(),
+<a href=#1218 id=1218 data-nosnippet>1218</a>                NestedField::optional(<span class="number">1002</span>, <span class="string">"id_truncate"</span>, PrimitiveType::String).into(),
 <a href=#1219 id=1219 data-nosnippet>1219</a>            ])
 <a href=#1220 id=1220 data-nosnippet>1220</a>        );
 <a href=#1221 id=1221 data-nosnippet>1221</a>
@@ -1224,16 +1224,16 @@
 <a href=#1224 id=1224 data-nosnippet>1224</a>        <span class="macro">assert_eq!</span>(
 <a href=#1225 id=1225 data-nosnippet>1225</a>            partition_spec.partition_type(<span class="kw-2">&amp;</span>empty_schema).unwrap(),
 <a href=#1226 id=1226 data-nosnippet>1226</a>            StructType::new(<span class="macro">vec!</span>[
-<a href=#1227 id=1227 data-nosnippet>1227</a>                NestedField::optional(<span class="number">1000</span>, <span class="string">"ts_day"</span>, PrimitiveType::Date.into()).into(),
-<a href=#1228 id=1228 data-nosnippet>1228</a>                NestedField::optional(<span class="number">1001</span>, <span class="string">"id_bucket"</span>, PrimitiveType::Int.into()).into(),
-<a href=#1229 id=1229 data-nosnippet>1229</a>                NestedField::optional(<span class="number">1002</span>, <span class="string">"id_truncate"</span>, PrimitiveType::Unknown.into()).into(),
+<a href=#1227 id=1227 data-nosnippet>1227</a>                NestedField::optional(<span class="number">1000</span>, <span class="string">"ts_day"</span>, PrimitiveType::Date).into(),
+<a href=#1228 id=1228 data-nosnippet>1228</a>                NestedField::optional(<span class="number">1001</span>, <span class="string">"id_bucket"</span>, PrimitiveType::Int).into(),
+<a href=#1229 id=1229 data-nosnippet>1229</a>                NestedField::optional(<span class="number">1002</span>, <span class="string">"id_truncate"</span>, PrimitiveType::Unknown).into(),
 <a href=#1230 id=1230 data-nosnippet>1230</a>            ])
 <a href=#1231 id=1231 data-nosnippet>1231</a>        );
 <a href=#1232 id=1232 data-nosnippet>1232</a>
 <a href=#1233 id=1233 data-nosnippet>1233</a>        <span class="comment">// Missing sources must not suppress validation of transforms on remaining sources.
 <a href=#1234 id=1234 data-nosnippet>1234</a>        </span><span class="kw">let </span>incompatible_schema = Schema::builder()
 <a href=#1235 id=1235 data-nosnippet>1235</a>            .with_fields(<span class="macro">vec!</span>[
-<a href=#1236 id=1236 data-nosnippet>1236</a>                NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, PrimitiveType::Boolean.into()).into(),
+<a href=#1236 id=1236 data-nosnippet>1236</a>                NestedField::required(<span class="number">1</span>, <span class="string">"id"</span>, PrimitiveType::Boolean).into(),
 <a href=#1237 id=1237 data-nosnippet>1237</a>            ])
 <a href=#1238 id=1238 data-nosnippet>1238</a>            .build()
 <a href=#1239 id=1239 data-nosnippet>1239</a>            .unwrap();
@@ -1273,7 +1273,7 @@
 <a href=#1273 id=1273 data-nosnippet>1273</a>            <span class="macro">assert_eq!</span>(
 <a href=#1274 id=1274 data-nosnippet>1274</a>                spec.partition_type(<span class="kw-2">&amp;</span>schema).unwrap(),
 <a href=#1275 id=1275 data-nosnippet>1275</a>                StructType::new(<span class="macro">vec!</span>[
-<a href=#1276 id=1276 data-nosnippet>1276</a>                    NestedField::optional(<span class="number">1000</span>, <span class="string">"partition"</span>, expected_type.into()).into(),
+<a href=#1276 id=1276 data-nosnippet>1276</a>                    NestedField::optional(<span class="number">1000</span>, <span class="string">"partition"</span>, expected_type).into(),
 <a href=#1277 id=1277 data-nosnippet>1277</a>                ])
 <a href=#1278 id=1278 data-nosnippet>1278</a>            );
 <a href=#1279 id=1279 data-nosnippet>1279</a>        }
@@ -2093,8 +2093,8 @@
 <a href=#2093 id=2093 data-nosnippet>2093</a>        ] {
 <a href=#2094 id=2094 data-nosnippet>2094</a>            <span class="kw">let </span>schema = Schema::builder()
 <a href=#2095 id=2095 data-nosnippet>2095</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#2096 id=2096 data-nosnippet>2096</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"kept"</span>, PrimitiveType::Int.into()).into(),
-<a href=#2097 id=2097 data-nosnippet>2097</a>                    NestedField::required(<span class="number">2</span>, <span class="string">"dropped"</span>, source_type.into()).into(),
+<a href=#2096 id=2096 data-nosnippet>2096</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"kept"</span>, PrimitiveType::Int).into(),
+<a href=#2097 id=2097 data-nosnippet>2097</a>                    NestedField::required(<span class="number">2</span>, <span class="string">"dropped"</span>, source_type).into(),
 <a href=#2098 id=2098 data-nosnippet>2098</a>                ])
 <a href=#2099 id=2099 data-nosnippet>2099</a>                .build()
 <a href=#2100 id=2100 data-nosnippet>2100</a>                .unwrap();
@@ -2105,7 +2105,7 @@
 <a href=#2105 id=2105 data-nosnippet>2105</a>                .unwrap();
 <a href=#2106 id=2106 data-nosnippet>2106</a>            <span class="kw">let </span>current_schema = Schema::builder()
 <a href=#2107 id=2107 data-nosnippet>2107</a>                .with_fields(<span class="macro">vec!</span>[
-<a href=#2108 id=2108 data-nosnippet>2108</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"kept"</span>, PrimitiveType::Int.into()).into(),
+<a href=#2108 id=2108 data-nosnippet>2108</a>                    NestedField::required(<span class="number">1</span>, <span class="string">"kept"</span>, PrimitiveType::Int).into(),
 <a href=#2109 id=2109 data-nosnippet>2109</a>                ])
 <a href=#2110 id=2110 data-nosnippet>2110</a>                .build()
 <a href=#2111 id=2111 data-nosnippet>2111</a>                .unwrap();

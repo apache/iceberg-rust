@@ -837,9 +837,9 @@
 <a href=#837 id=837 data-nosnippet>837</a>    </span><span class="kw">fn </span>test_resolve_field_id_case_insensitive_rejects_ambiguous_name() {
 <a href=#838 id=838 data-nosnippet>838</a>        <span class="kw">let </span>schema = Schema::builder()
 <a href=#839 id=839 data-nosnippet>839</a>            .with_fields(<span class="macro">vec!</span>[
-<a href=#840 id=840 data-nosnippet>840</a>                NestedField::optional(<span class="number">1</span>, <span class="string">"id"</span>, PrimitiveType::Int.into()).into(),
-<a href=#841 id=841 data-nosnippet>841</a>                NestedField::optional(<span class="number">2</span>, <span class="string">"ID"</span>, PrimitiveType::Int.into()).into(),
-<a href=#842 id=842 data-nosnippet>842</a>                NestedField::optional(<span class="number">3</span>, <span class="string">"data"</span>, PrimitiveType::Int.into()).into(),
+<a href=#840 id=840 data-nosnippet>840</a>                NestedField::optional(<span class="number">1</span>, <span class="string">"id"</span>, PrimitiveType::Int).into(),
+<a href=#841 id=841 data-nosnippet>841</a>                NestedField::optional(<span class="number">2</span>, <span class="string">"ID"</span>, PrimitiveType::Int).into(),
+<a href=#842 id=842 data-nosnippet>842</a>                NestedField::optional(<span class="number">3</span>, <span class="string">"data"</span>, PrimitiveType::Int).into(),
 <a href=#843 id=843 data-nosnippet>843</a>            ])
 <a href=#844 id=844 data-nosnippet>844</a>            .build()
 <a href=#845 id=845 data-nosnippet>845</a>            .unwrap();
@@ -858,9 +858,9 @@
 <a href=#858 id=858 data-nosnippet>858</a>        <span class="kw">let </span>schema = Schema::builder()
 <a href=#859 id=859 data-nosnippet>859</a>            .with_schema_id(metadata.current_schema_id())
 <a href=#860 id=860 data-nosnippet>860</a>            .with_fields(<span class="macro">vec!</span>[
-<a href=#861 id=861 data-nosnippet>861</a>                NestedField::optional(<span class="number">1</span>, <span class="string">"id"</span>, PrimitiveType::Int.into()).into(),
-<a href=#862 id=862 data-nosnippet>862</a>                NestedField::optional(<span class="number">2</span>, <span class="string">"ID"</span>, PrimitiveType::Int.into()).into(),
-<a href=#863 id=863 data-nosnippet>863</a>                NestedField::optional(<span class="number">3</span>, <span class="string">"data"</span>, PrimitiveType::Int.into()).into(),
+<a href=#861 id=861 data-nosnippet>861</a>                NestedField::optional(<span class="number">1</span>, <span class="string">"id"</span>, PrimitiveType::Int).into(),
+<a href=#862 id=862 data-nosnippet>862</a>                NestedField::optional(<span class="number">2</span>, <span class="string">"ID"</span>, PrimitiveType::Int).into(),
+<a href=#863 id=863 data-nosnippet>863</a>                NestedField::optional(<span class="number">3</span>, <span class="string">"data"</span>, PrimitiveType::Int).into(),
 <a href=#864 id=864 data-nosnippet>864</a>            ])
 <a href=#865 id=865 data-nosnippet>865</a>            .build()
 <a href=#866 id=866 data-nosnippet>866</a>            .unwrap();
