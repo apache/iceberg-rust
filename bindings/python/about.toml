@@ -84,15 +84,22 @@ checksum = "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
 license = "BSD-3-Clause"
 path = "zstd/LICENSE"
 
-# aws-lc-sys ships under a series of licenses. However, the licenses are included as one file.
-# For simplicity, we just point each license at the same file at the cost of duplicating the license text.
+# aws-lc-sys and aws-lc-rs each ship all of their licenses in one LICENSE file,
+# which cargo-about doesn't match. Point every license at that file, at the cost
+# of repeating its text.
 [aws-lc-sys.clarify]
 license = "Apache-2.0 AND ISC AND MIT AND BSD-3-Clause"
 [[aws-lc-sys.clarify.files]]
 checksum = "728536b4160e051f86d7c9c388f704866b3d512cd7df97ac3516c65279523c4e"
 path = "LICENSE"
 
-# For individual crate acceptions, refer to deny.toml.
+[aws-lc-rs.clarify]
+license = "Apache-2.0 AND ISC"
+[[aws-lc-rs.clarify.files]]
+checksum = "b50b376e7d24a0598488b730c3034ffcd0b58dd36c0913a24b9903a3cfd04bf7"
+path = "LICENSE"
+
+# For individual crate exceptions, refer to deny.toml.
 
 [colored]
 accepted = ["MPL-2.0"]

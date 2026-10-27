@@ -50,7 +50,7 @@ Note that in the repository, `bindings/python/LICENSE` and `NOTICE` are symlinks
   - `targets`: the wheel targets. Keep in sync with the build matrices in `release_python.yml` and `release_python_nightly.yml`.
   - Clarifications, for crates whose license files `cargo-about` can't read (such as `libm`). They pin the file by checksum (`shasum -a 256 <file>`). See the [`cargo-about` docs](https://embarkstudios.github.io/cargo-about/cli/clarify.html).
 - `third-party-licenses.txt`: otherwise, add the license text here. For example, `brotli-decompressor`'s MIT license, which the crate doesn't ship. It names the crate and version, so re-check it when the crate is upgraded.
-- `third-party-notices.txt`: the `NOTICE` entries of dependencies that ship one (Arrow, Avro, moka). Find them from `bindings/python` (the repository's own crates appear too):
+- `third-party-notices.txt`: the `NOTICE` entries of dependencies that ship one (such as Arrow, Avro, DataFusion, OpenDAL and moka). Find them from `bindings/python` (the repository's own crates appear too):
 
   ```shell
   cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml --format json \

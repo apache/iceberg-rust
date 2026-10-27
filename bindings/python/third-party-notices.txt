@@ -18,6 +18,18 @@ The initial implementation of the Apache Avro Rust SDK has been
 developed by Flavien Raynaud (https://github.com/flavray/avro-rs)
 and donated to the Apache Avro project in 2020.
 
+Apache Arrow Object Store (object_store)
+Copyright 2020-2024 The Apache Software Foundation
+
+Apache DataFusion (datafusion and related crates)
+Copyright 2019-2026 The Apache Software Foundation
+
+Apache OpenDAL (opendal and related crates)
+Copyright 2023-2026 The Apache Software Foundation
+
+Apache OpenDAL Reqsign (reqsign-core and related crates)
+Copyright 2025-2026 The Apache Software Foundation
+
 Moka (moka)
 
 The majority of the Moka library is dual-licensed under the MIT and Apache 2.0
