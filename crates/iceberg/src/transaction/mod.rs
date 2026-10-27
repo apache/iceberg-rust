@@ -332,6 +332,26 @@ mod tests {
             .unwrap()
     }
 
+    pub(crate) fn make_v3_minimal_table() -> Table {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV3ValidMinimal.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json")
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIO::new_with_memory())
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
     async fn make_v2_minimal_readonly_table() -> Table {
         let table = make_v2_minimal_table();
         StaticTable::from_metadata(
@@ -379,8 +399,11 @@ mod tests {
 
     /// Helper function to create a test table with retry properties
     pub(super) fn setup_test_table(num_retries: &str) -> Table {
-        let table = make_v2_table();
+        with_retry_properties(make_v2_table(), num_retries)
+    }
 
+    /// Sets fast commit retry properties on `table`.
+    pub(super) fn with_retry_properties(table: Table, num_retries: &str) -> Table {
         // Set retry properties
         let mut props = HashMap::new();
         props.insert("commit.retry.min-wait-ms".to_string(), "10".to_string());
