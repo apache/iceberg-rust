@@ -23,7 +23,7 @@ use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 
-use crate::RestCatalogConfig;
+use crate::RestCatalogProperties;
 use crate::auth::AuthSession;
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
@@ -89,30 +89,22 @@ impl HttpClient {
         HttpResponse::read(response).await
     }
 
-    /// Create a new http client.
-    pub(crate) fn new(cfg: &RestCatalogConfig) -> Result<Self> {
-        Ok(HttpClient {
-            client: cfg.client(),
-            extra_headers: cfg.extra_headers()?,
-            disable_header_redaction: cfg.disable_header_redaction(),
-        })
+    /// Creates an HTTP client with typed catalog settings.
+    pub(crate) fn new(client: Client, cfg: &RestCatalogProperties) -> Self {
+        HttpClient {
+            client,
+            extra_headers: cfg.extra_headers(),
+            disable_header_redaction: cfg.disable_header_redaction,
+        }
     }
 
-    /// Update the http client with new configuration.
-    ///
-    /// If cfg carries new value, we will use cfg instead.
-    /// Otherwise, we will keep the old value.
-    pub(crate) fn update_with(self, cfg: &RestCatalogConfig) -> Result<Self> {
-        let extra_headers = (!cfg.extra_headers()?.is_empty())
-            .then(|| cfg.extra_headers())
-            .transpose()?
-            .unwrap_or(self.extra_headers);
-        Ok(HttpClient {
-            // `cfg.client()` returns the same shared client.
-            client: cfg.client(),
-            extra_headers,
-            disable_header_redaction: cfg.disable_header_redaction(),
-        })
+    /// Applies resolved catalog settings to the shared HTTP transport.
+    pub(crate) fn update_with(self, cfg: &RestCatalogProperties) -> Self {
+        HttpClient {
+            client: self.client,
+            extra_headers: cfg.extra_headers(),
+            disable_header_redaction: cfg.disable_header_redaction,
+        }
     }
 
     /// Testing only: the bearer token `session` would attach.
@@ -254,6 +246,7 @@ pub(crate) fn deserialize_unexpected_catalog_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalog::RestCatalogTestFixture;
 
     #[tokio::test]
     async fn test_a_truncated_body_error_names_the_url() {
@@ -274,7 +267,10 @@ mod tests {
         });
 
         let url = format!("http://{addr}/token");
-        let err = HttpClient::new(&RestCatalogConfig::builder().uri(url.clone()).build())
+        let err = RestCatalogTestFixture::builder()
+            .uri(url.clone())
+            .build()
+            .http_client()
             .unwrap()
             .post_form(&url, &HeaderMap::new(), &HashMap::new())
             .await
@@ -294,7 +290,10 @@ mod tests {
             .create_async()
             .await;
 
-        let response = HttpClient::new(&RestCatalogConfig::builder().uri(server.url()).build())
+        let response = RestCatalogTestFixture::builder()
+            .uri(server.url())
+            .build()
+            .http_client()
             .unwrap()
             .post_form(
                 &format!("{}/token", server.url()),
@@ -347,23 +346,22 @@ mod tests {
             .create_async()
             .await;
 
-        HttpClient::new(
-            &RestCatalogConfig::builder()
-                .uri(server.url())
-                .props(HashMap::from([(
-                    "header.authorization".to_string(),
-                    "Basic xyz".to_string(),
-                )]))
-                .build(),
-        )
-        .unwrap()
-        .post_form(
-            &format!("{}/token", server.url()),
-            &HeaderMap::new(),
-            &HashMap::new(),
-        )
-        .await
-        .unwrap();
+        RestCatalogTestFixture::builder()
+            .uri(server.url())
+            .props(HashMap::from([(
+                "header.authorization".to_string(),
+                "Basic xyz".to_string(),
+            )]))
+            .build()
+            .http_client()
+            .unwrap()
+            .post_form(
+                &format!("{}/token", server.url()),
+                &HeaderMap::new(),
+                &HashMap::new(),
+            )
+            .await
+            .unwrap();
 
         mock.assert_async().await;
     }
@@ -391,7 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_http_client_debug_redacts_headers() {
-        let config = RestCatalogConfig::builder()
+        let config = RestCatalogTestFixture::builder()
             .uri("http://localhost".to_string())
             .props(HashMap::from([
                 ("header.authorization".to_string(), "Basic xyz".to_string()),
@@ -405,7 +403,7 @@ mod tests {
                 ),
             ]))
             .build();
-        let client = HttpClient::new(&config).unwrap();
+        let client = config.http_client().unwrap();
 
         let out = format!("{client:?}");
         assert!(!out.contains("Basic xyz"));

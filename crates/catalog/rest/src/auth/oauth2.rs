@@ -27,10 +27,7 @@ use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
 use super::{AuthManager, AuthSession, HttpRequest};
-use crate::catalog::{
-    REST_CATALOG_PROP_URI, RestCatalogConfig, credential_from_props, default_token_endpoint,
-    explicit_headers_from_props,
-};
+use crate::catalog::{REST_CATALOG_PROP_URI, RestCatalogProperties, default_token_endpoint};
 use crate::client::HttpClient;
 use crate::types::{ErrorResponse, TokenResponse};
 
@@ -105,17 +102,17 @@ impl OAuth2Manager {
         self
     }
 
-    pub(crate) fn from_config(cfg: &RestCatalogConfig) -> Result<Self> {
-        Ok(Self {
-            token: Arc::new(Mutex::new(cfg.token().map(SensitiveString::from))),
+    pub(crate) fn from_properties(cfg: &RestCatalogProperties) -> Self {
+        Self {
+            token: Arc::new(Mutex::new(cfg.token.clone())),
             init_params: OAuth2Params {
-                extra_headers: cfg.extra_headers()?,
+                extra_headers: cfg.extra_headers(),
                 token_endpoint: cfg.get_token_endpoint(),
-                credential: cfg.credential().map(|(id, secret)| (id, secret.into())),
+                credential: cfg.credential.clone(),
                 extra_oauth_params: cfg.extra_oauth_params(),
             },
-            endpoint_is_default: cfg.explicit_oauth2_server_uri().is_none(),
-        })
+            endpoint_is_default: cfg.oauth2_server_uri.is_none(),
+        }
     }
 }
 
@@ -156,34 +153,30 @@ impl OAuth2Manager {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<OAuth2Session> {
+        let properties = RestCatalogProperties::for_handshake(props)?;
         // The properties may carry a new token (or restate the user's).
-        if let Some(token) = props.get("token") {
-            *self.token.lock().await = Some(SensitiveString::from(token.clone()));
+        if let Some(token) = &properties.token {
+            *self.token.lock().await = Some(token.clone());
         }
 
         let mut extra_headers = self.init_params.extra_headers.clone();
-        extra_headers.extend(explicit_headers_from_props(props)?);
+        extra_headers.extend(properties.headers.0.clone());
 
         let mut extra_oauth_params = self.init_params.extra_oauth_params.clone();
-        for key in ["scope", "audience", "resource"] {
-            if let Some(value) = props.get(key) {
-                extra_oauth_params.insert(key.to_string(), value.to_string());
-            }
-        }
+        extra_oauth_params.extend(properties.explicit_oauth_params());
 
-        let token_endpoint = match props.get("oauth2-server-uri") {
+        let token_endpoint = match &properties.oauth2_server_uri {
             Some(uri) if !uri.is_empty() => uri.clone(),
-            // A default endpoint follows the merged catalog URI (which
-            // `/v1/config` may have overridden); explicit ones are kept.
-            _ if self.endpoint_is_default => props
-                .get(REST_CATALOG_PROP_URI)
-                .map(|uri| default_token_endpoint(uri))
-                .unwrap_or_else(|| self.init_params.token_endpoint.clone()),
+            // A default endpoint follows the merged catalog URI; an injected
+            // manager keeps its explicit endpoint.
+            _ if self.endpoint_is_default && props.contains_key(REST_CATALOG_PROP_URI) => {
+                default_token_endpoint(&properties.uri)
+            }
             _ => self.init_params.token_endpoint.clone(),
         };
 
-        let credential = credential_from_props(props)
-            .map(|(id, secret)| (id, secret.into()))
+        let credential = properties
+            .credential
             .or_else(|| self.init_params.credential.clone());
 
         Ok(OAuth2Session {
@@ -348,15 +341,14 @@ mod tests {
     use reqwest::Client;
 
     use super::*;
-    use crate::RestCatalogConfig;
+    use crate::catalog::RestCatalogTestFixture;
 
     fn test_client() -> HttpClient {
-        HttpClient::new(
-            &RestCatalogConfig::builder()
-                .uri("http://localhost".to_string())
-                .build(),
-        )
-        .unwrap()
+        RestCatalogTestFixture::builder()
+            .uri("http://localhost".to_string())
+            .build()
+            .http_client()
+            .unwrap()
     }
 
     #[tokio::test]
