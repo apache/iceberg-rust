@@ -37,7 +37,7 @@ mod hf;
 mod oss;
 mod s3;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 pub use azdls::*;
 pub use gcs::*;
@@ -46,19 +46,22 @@ pub use hf::*;
 pub use oss::*;
 pub use s3::*;
 use serde::{Deserialize, Serialize};
+use typed_builder::TypedBuilder;
 
 /// Configuration properties for storage backends.
 ///
 /// This struct contains only configuration properties without specifying
 /// which storage backend to use. The storage type is determined by the
 /// explicit factory selection.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default, TypedBuilder)]
 pub struct StorageConfig {
     /// Configuration properties for the storage backend
+    #[builder(default)]
     props: HashMap<String, String>,
     /// Credentials that apply to locations under their prefixes
+    #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    storage_credentials: Vec<StorageCredential>,
+    pub(crate) storage_credentials: Vec<StorageCredential>,
 }
 
 impl StorageConfig {
@@ -130,20 +133,11 @@ impl StorageConfig {
     }
 
     /// Get the credentials that apply to locations under their prefixes.
-    pub fn storage_credentials(&self) -> &[StorageCredential] {
-        &self.storage_credentials
-    }
-
-    /// Add credentials that apply to locations under their prefixes.
     ///
     /// A factory that supports them overlays the props with the config of a
     /// location's longest matching credential.
-    pub fn with_storage_credentials(
-        mut self,
-        credentials: impl IntoIterator<Item = StorageCredential>,
-    ) -> Self {
-        self.storage_credentials.extend(credentials);
-        self
+    pub fn storage_credentials(&self) -> &[StorageCredential] {
+        &self.storage_credentials
     }
 }
 
@@ -180,10 +174,9 @@ impl StorageCredential {
 // The config values are secrets.
 impl std::fmt::Debug for StorageCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let config_keys: BTreeSet<_> = self.config.keys().collect();
         f.debug_struct("StorageCredential")
             .field("prefix", &self.prefix)
-            .field("config_keys", &config_keys)
+            .field("config_keys", &self.config.keys())
             .finish()
     }
 }
@@ -267,12 +260,16 @@ mod tests {
 
     #[test]
     fn test_storage_config_serialization_keeps_storage_credentials() {
-        let config = StorageConfig::new()
-            .with_prop("region", "us-east-1")
-            .with_storage_credentials([StorageCredential::new(
+        let config = StorageConfig::builder()
+            .props(HashMap::from([(
+                "region".to_string(),
+                "us-east-1".to_string(),
+            )]))
+            .storage_credentials(vec![StorageCredential::new(
                 "s3://bucket/table",
                 HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]),
-            )]);
+            )])
+            .build();
 
         let serialized = serde_json::to_string(&config).unwrap();
         let deserialized: StorageConfig = serde_json::from_str(&serialized).unwrap();
@@ -284,15 +281,12 @@ mod tests {
     fn test_storage_credential_debug_omits_config_values() {
         let credential = StorageCredential::new(
             "s3://bucket/table",
-            HashMap::from([
-                ("s3.secret-access-key".to_string(), "secret".to_string()),
-                ("s3.access-key-id".to_string(), "key".to_string()),
-            ]),
+            HashMap::from([("s3.secret-access-key".to_string(), "secret".to_string())]),
         );
 
         assert_eq!(
             format!("{credential:?}"),
-            r#"StorageCredential { prefix: "s3://bucket/table", config_keys: {"s3.access-key-id", "s3.secret-access-key"} }"#
+            r#"StorageCredential { prefix: "s3://bucket/table", config_keys: ["s3.secret-access-key"] }"#
         );
     }
 

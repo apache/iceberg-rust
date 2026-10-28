@@ -278,12 +278,12 @@ impl FileIOBuilder {
 
     /// Add credentials that apply to locations under their prefixes.
     ///
-    /// See [`StorageConfig::with_storage_credentials`].
+    /// See [`StorageConfig::storage_credentials`].
     pub fn with_storage_credentials(
         mut self,
         credentials: impl IntoIterator<Item = StorageCredential>,
     ) -> Self {
-        self.config = self.config.with_storage_credentials(credentials);
+        self.config.storage_credentials.extend(credentials);
         self
     }
 

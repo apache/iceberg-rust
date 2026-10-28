@@ -160,7 +160,7 @@ fn build_storage_for_scheme(
 /// delegates operations to the appropriate [`OpenDalStorage`] variant based on
 /// the path scheme.
 ///
-/// Supports [storage credentials](iceberg::io::StorageConfig::with_storage_credentials).
+/// Supports [storage credentials](iceberg::io::StorageConfig::storage_credentials).
 ///
 /// # Serialization
 ///
