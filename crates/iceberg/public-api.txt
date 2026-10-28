@@ -2413,8 +2413,8 @@ pub iceberg::spec::MapType::key_field: iceberg::spec::NestedFieldRef
 pub iceberg::spec::MapType::value_field: iceberg::spec::NestedFieldRef
 impl iceberg::spec::MapType
 pub fn iceberg::spec::MapType::new(key_field: iceberg::spec::NestedFieldRef, value_field: iceberg::spec::NestedFieldRef) -> Self
-pub fn iceberg::spec::MapType::optional(key_id: i32, key_type: iceberg::spec::Type, value_id: i32, value_type: iceberg::spec::Type) -> Self
-pub fn iceberg::spec::MapType::required(key_id: i32, key_type: iceberg::spec::Type, value_id: i32, value_type: iceberg::spec::Type) -> Self
+pub fn iceberg::spec::MapType::optional(key_id: i32, key_type: impl core::convert::Into<iceberg::spec::Type>, value_id: i32, value_type: impl core::convert::Into<iceberg::spec::Type>) -> Self
+pub fn iceberg::spec::MapType::required(key_id: i32, key_type: impl core::convert::Into<iceberg::spec::Type>, value_id: i32, value_type: impl core::convert::Into<iceberg::spec::Type>) -> Self
 impl core::clone::Clone for iceberg::spec::MapType
 pub fn iceberg::spec::MapType::clone(&self) -> iceberg::spec::MapType
 impl core::cmp::Eq for iceberg::spec::MapType
@@ -2486,12 +2486,12 @@ pub iceberg::spec::NestedField::name: alloc::string::String
 pub iceberg::spec::NestedField::required: bool
 pub iceberg::spec::NestedField::write_default: core::option::Option<iceberg::spec::Literal>
 impl iceberg::spec::NestedField
-pub fn iceberg::spec::NestedField::list_element(id: i32, field_type: iceberg::spec::Type, required: bool) -> Self
-pub fn iceberg::spec::NestedField::map_key_element(id: i32, field_type: iceberg::spec::Type) -> Self
-pub fn iceberg::spec::NestedField::map_value_element(id: i32, field_type: iceberg::spec::Type, required: bool) -> Self
-pub fn iceberg::spec::NestedField::new(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type, required: bool) -> Self
-pub fn iceberg::spec::NestedField::optional(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type) -> Self
-pub fn iceberg::spec::NestedField::required(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type) -> Self
+pub fn iceberg::spec::NestedField::list_element(id: i32, field_type: impl core::convert::Into<iceberg::spec::Type>, required: bool) -> Self
+pub fn iceberg::spec::NestedField::map_key_element(id: i32, field_type: impl core::convert::Into<iceberg::spec::Type>) -> Self
+pub fn iceberg::spec::NestedField::map_value_element(id: i32, field_type: impl core::convert::Into<iceberg::spec::Type>, required: bool) -> Self
+pub fn iceberg::spec::NestedField::new(id: i32, name: impl alloc::string::ToString, field_type: impl core::convert::Into<iceberg::spec::Type>, required: bool) -> Self
+pub fn iceberg::spec::NestedField::optional(id: i32, name: impl alloc::string::ToString, field_type: impl core::convert::Into<iceberg::spec::Type>) -> Self
+pub fn iceberg::spec::NestedField::required(id: i32, name: impl alloc::string::ToString, field_type: impl core::convert::Into<iceberg::spec::Type>) -> Self
 pub fn iceberg::spec::NestedField::with_doc(self, doc: impl alloc::string::ToString) -> Self
 pub fn iceberg::spec::NestedField::with_initial_default(self, value: iceberg::spec::Literal) -> Self
 pub fn iceberg::spec::NestedField::with_write_default(self, value: iceberg::spec::Literal) -> Self

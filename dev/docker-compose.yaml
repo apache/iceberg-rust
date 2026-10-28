@@ -28,10 +28,12 @@ services:
   # Object store - S3-compatible storage backed by RustFS (shared by all tests)
   # =============================================================================
   object-store:
-    image: rustfs/rustfs:1.0.0
+    image: rustfs/rustfs:1.0.3
     environment:
       - RUSTFS_ACCESS_KEY=admin
       - RUSTFS_SECRET_KEY=password
+      - RUSTFS_OBS_LOG_STDOUT_ENABLED=true
+      - RUSTFS_CONSOLE_ENABLE=false
       - RUSTFS_SERVER_DOMAINS=object-store
     hostname: object-store
     networks:
@@ -43,7 +45,6 @@ services:
           - bucket1.object-store
     ports:
       - "9000:9000"
-      - "9001:9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/health/ready"]
       interval: 5s
@@ -56,7 +57,7 @@ services:
     depends_on:
       object-store:
         condition: service_healthy
-    image: rustfs/rustfs:1.0.0
+    image: rustfs/rustfs:1.0.3
     entrypoint: >
       /bin/sh -c "
         curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/icebergdata &&
