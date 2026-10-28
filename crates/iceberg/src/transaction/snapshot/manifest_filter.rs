@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use super::{manifest_path, new_manifest_writer};
 use crate::error::{Result, invalid_data};
+use crate::io::object_cache::ManifestKey;
 use crate::spec::{DataFile, FormatVersion, ManifestContentType, ManifestFile};
 use crate::table::Table;
 
@@ -30,21 +31,24 @@ use crate::table::Table;
 ///
 /// One manager lives for one logical execution of an action and is driven
 /// once per attempt via [`ManifestFilterManager::filter`]. A manifest that
-/// references none of the requested files passes through untouched. One that
-/// does is rewritten with those entries marked `Deleted` and the rest
-/// `Existing`; the rewrite is keyed by the source manifest's path, which is
-/// immutable, so a rebase only rewrites manifests not seen before.
+/// references none of the files passes through untouched. One that does is
+/// rewritten with those entries marked `Deleted` and the rest `Existing`.
+///
+/// A rewrite is reused across attempts while its inputs are unchanged. Its
+/// entries carry the sequence numbers and row ids the source's entries
+/// inherited from the manifest list when they were read, so the reuse key is
+/// the source's [`ManifestKey`], not its path alone: a transaction-local
+/// source manifest keeps its path across attempts but inherits new values
+/// after a rebase.
 pub(crate) struct ManifestFilterManager {
     content: ManifestContentType,
     /// Paths of the files to remove. Fixed for the execution.
-    requested_paths: HashSet<String>,
-    /// Source manifest path → rewritten result.
-    filtered: HashMap<String, FilteredManifest>,
+    files_to_remove: HashSet<String>,
+    /// Source manifest → rewritten result.
+    filtered: HashMap<ManifestKey, FilteredManifest>,
     /// Format version the rewrites were written under. Per spec, v1 entries
     /// cannot inherit sequence numbers, so an upgrade invalidates them.
     format_version: Option<FormatVersion>,
-    /// Metadata files written by this manager.
-    owned_artifacts: HashSet<String>,
 }
 
 /// One rewritten manifest and the files it marked as deleted.
@@ -64,32 +68,27 @@ pub(crate) struct Filtered {
 }
 
 impl ManifestFilterManager {
-    pub(crate) fn new(content: ManifestContentType, removed_files: &[DataFile]) -> Self {
+    pub(crate) fn new(content: ManifestContentType, files_to_remove: &[DataFile]) -> Self {
         Self {
             content,
-            requested_paths: removed_files
+            files_to_remove: files_to_remove
                 .iter()
                 .map(|f| f.file_path().to_string())
                 .collect(),
             filtered: HashMap::new(),
             format_version: None,
-            owned_artifacts: HashSet::new(),
         }
     }
 
-    /// Metadata files written by this manager so far.
-    pub(crate) fn owned_artifacts(&self) -> &HashSet<String> {
-        &self.owned_artifacts
-    }
-
     /// Applies the removals to `manifests`, rewriting those of this manager's
-    /// content type that reference a requested file.
+    /// content type that reference a file to remove.
     ///
-    /// Fails if a requested file is not live in any manifest: it was never in
+    /// Fails if a file to remove is not live in any manifest: it was never in
     /// the table, or a concurrent commit already removed it.
     ///
-    /// `next_manifest_number` allocates paths for rewritten manifests from the
-    /// producer's counter, so they never collide with other manifests it writes.
+    /// Rewritten manifests take their paths from `next_manifest_number` and are
+    /// recorded in `owned_artifacts` before being written, so a failed write
+    /// still leaves its path tracked for cleanup.
     pub(crate) async fn filter(
         &mut self,
         table: &Table,
@@ -97,8 +96,9 @@ impl ManifestFilterManager {
         commit_uuid: Uuid,
         manifests: Vec<ManifestFile>,
         next_manifest_number: &mut u64,
+        owned_artifacts: &mut HashSet<String>,
     ) -> Result<Filtered> {
-        if self.requested_paths.is_empty() {
+        if self.files_to_remove.is_empty() {
             return Ok(Filtered {
                 manifests,
                 removed_files: Vec::new(),
@@ -120,7 +120,8 @@ impl ManifestFilterManager {
                 continue;
             }
 
-            let result = match self.filtered.get(&source.manifest_path) {
+            let key = ManifestKey::new(&source);
+            let result = match self.filtered.get(&key) {
                 Some(cached) => cached.clone(),
                 None => {
                     let result = self
@@ -130,10 +131,10 @@ impl ManifestFilterManager {
                             commit_uuid,
                             &source,
                             next_manifest_number,
+                            owned_artifacts,
                         )
                         .await?;
-                    self.filtered
-                        .insert(source.manifest_path.clone(), result.clone());
+                    self.filtered.insert(key, result.clone());
                     result
                 }
             };
@@ -144,7 +145,7 @@ impl ManifestFilterManager {
 
         let found: HashSet<&str> = removed_files.iter().map(|f| f.file_path()).collect();
         let mut missing: Vec<&str> = self
-            .requested_paths
+            .files_to_remove
             .iter()
             .map(String::as_str)
             .filter(|p| !found.contains(p))
@@ -163,22 +164,23 @@ impl ManifestFilterManager {
         })
     }
 
-    /// Reads `source` and, if it references any requested file, writes a copy
+    /// Reads `source` and, if it references any file to remove, writes a copy
     /// with those entries marked `Deleted` and the rest `Existing`.
     async fn rewrite(
-        &mut self,
+        &self,
         table: &Table,
         snapshot_id: i64,
         commit_uuid: Uuid,
         source: &ManifestFile,
         next_manifest_number: &mut u64,
+        owned_artifacts: &mut HashSet<String>,
     ) -> Result<FilteredManifest> {
         let manifest = table.object_cache().get_manifest(source).await?;
 
         let removed_files: Vec<DataFile> = manifest
             .entries()
             .iter()
-            .filter(|e| e.is_alive() && self.requested_paths.contains(e.file_path()))
+            .filter(|e| e.is_alive() && self.files_to_remove.contains(e.file_path()))
             .map(|e| e.data_file().clone())
             .collect();
         if removed_files.is_empty() {
@@ -188,10 +190,9 @@ impl ManifestFilterManager {
             });
         }
 
-        // Allocate the path before writing so a partial write is still owned.
         let path = manifest_path(table, commit_uuid, *next_manifest_number)?;
         *next_manifest_number += 1;
-        self.owned_artifacts.insert(path.clone());
+        owned_artifacts.insert(path.clone());
 
         // Keep the source manifest's spec: its entries' partition values are
         // laid out for that spec, not the table's current default.
@@ -209,7 +210,7 @@ impl ManifestFilterManager {
                 continue;
             }
             let entry = (**entry).clone();
-            if self.requested_paths.contains(entry.file_path()) {
+            if self.files_to_remove.contains(entry.file_path()) {
                 writer.add_delete_entry(entry)?;
             } else {
                 writer.add_existing_entry(entry)?;
