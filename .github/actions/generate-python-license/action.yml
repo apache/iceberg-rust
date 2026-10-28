@@ -30,7 +30,12 @@ runs:
       shell: bash
       working-directory: bindings/python
       run: |
-        cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml about.hbs > cargo-about-output.txt
+        # --fail misses warnings and license template fallbacks.
+        cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml -o cargo-about-output.txt about.hbs 2>&1 | tee "$RUNNER_TEMP/cargo-about.log"
+        if [[ -s "$RUNNER_TEMP/cargo-about.log" ]] || grep -n '<year>' cargo-about-output.txt; then
+          echo "::error::bindings/python/about.toml needs an update, see bindings/python/LICENSING.md"
+          exit 1
+        fi
         # Both are symlinks to the root files, remove them so the redirects don't write through.
         rm LICENSE NOTICE
         cat ../../LICENSE cargo-about-output.txt third-party-licenses.txt > LICENSE
