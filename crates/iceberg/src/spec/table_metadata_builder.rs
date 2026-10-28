@@ -2478,13 +2478,15 @@ mod tests {
         // PartitionSpec.checkCompatibility, which skips void fields.
         let void_spec = UnboundPartitionSpec {
             spec_id: None,
-            fields: vec![UnboundPartitionField::builder()
-                .source_ids(vec![2])
-                .field_id(1000)
-                .name("y_void")
-                .transform(Transform::Void)
-                .build()
-                .unwrap()],
+            fields: vec![
+                UnboundPartitionField::builder()
+                    .source_ids(vec![2])
+                    .field_id(1000)
+                    .name("y_void")
+                    .transform(Transform::Void)
+                    .build()
+                    .unwrap(),
+            ],
         };
         let metadata = builder_without_changes(FormatVersion::V1)
             .add_default_partition_spec(void_spec)
