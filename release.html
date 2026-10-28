@@ -307,7 +307,7 @@ You may use generative AI to assist making this update, but please review the pr
 The changelog should reflect a summary of each commit in the new release.</p>
 <h4 id="verify-dependency-licenses"><a class="header" href="#verify-dependency-licenses">Verify dependency licenses</a></h4>
 <p>Run the following command to verify the licenses meet the project's policy.</p>
-<pre><code class="language-shell">python3 dev/release/licenses.py dependencies check
+<pre><code class="language-shell">make check-dependency-licenses
 </code></pre>
 <h4 id="check-pyiceberg-core-license-and-notice"><a class="header" href="#check-pyiceberg-core-license-and-notice">Check pyiceberg-core LICENSE and NOTICE</a></h4>
 <p>The <code>pyiceberg-core</code> wheels bundle third-party licenses and notices, and some of the entries are maintained by hand.
