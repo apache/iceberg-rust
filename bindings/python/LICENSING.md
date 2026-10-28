@@ -38,7 +38,7 @@ The action is used in these workflows:
 
 - [`release_python.yml`](../../.github/workflows/release_python.yml): the release wheels published to PyPI.
 - [`release_python_nightly.yml`](../../.github/workflows/release_python_nightly.yml): the nightly wheels published to TestPyPI.
-- [`bindings_python_ci.yml`](../../.github/workflows/bindings_python_ci.yml): pull requests, on Linux only. It only checks that generation doesn't fail. The generated files are not published.
+- [`bindings_python_ci.yml`](../../.github/workflows/bindings_python_ci.yml): pull requests. It only checks that generation doesn't fail. The generated files are not published.
 
 Note that in the repository, `bindings/python/LICENSE` and `NOTICE` are symlinks to the root files, so builds outside the release workflows ship the plain root files.
 

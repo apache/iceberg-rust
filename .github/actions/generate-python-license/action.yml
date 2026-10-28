@@ -30,7 +30,9 @@ runs:
       shell: bash
       working-directory: bindings/python
       run: |
-        # --fail misses warnings and license template fallbacks. Set up the toolchain first, or rustup's output fails this check.
+        # rustup's install output would fail the stderr check below.
+        rustup toolchain install --no-self-update
+        # --fail misses warnings and license template fallbacks.
         cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml -o cargo-about-output.txt about.hbs 2>&1 | tee "$RUNNER_TEMP/cargo-about.log"
         if [[ -s "$RUNNER_TEMP/cargo-about.log" ]] || grep -n '<year>' cargo-about-output.txt; then
           echo "::error::bindings/python/about.toml needs an update, see bindings/python/LICENSING.md"
