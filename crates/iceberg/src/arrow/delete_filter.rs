@@ -695,7 +695,8 @@ pub(crate) mod tests {
                     .with_file_format(DataFileFormat::Parquet)
                     .with_partition_spec_id(0)
                     .with_equality_ids(Some(vec![1]))
-                    .build(),
+                    .build()
+                    .unwrap(),
             ])
             .with_case_sensitive(false)
             .build()
