@@ -60,10 +60,14 @@ Note that in the repository, `bindings/python/LICENSE` and `NOTICE` are symlinks
 
 ## Keeping entries up to date
 
-Pull request CI runs the action, so it fails when generation fails, for example on a license that isn't in `accepted`. It also fails when `cargo-about` prints a warning, such as for a stale clarification, and on `<year>` in the output, which means no license file was matched. Run this from `bindings/python` to check locally:
+Pull request CI checks `about.toml`. It fails on a license that isn't in `accepted`, on a `cargo about` warning such as a stale clarification, and on `<year>` in the output, which means no license file was found. To reproduce a failure, run this from `bindings/python`:
 
 ```shell
 make -s cargo-about | grep -n '<year>'
 ```
 
-Everything else needs a manual check and update before every release: `targets` in `about.toml`, `third-party-licenses.txt` and `third-party-notices.txt`. They don't change with the dependencies.
+CI doesn't check the other entries. Before each release, from `bindings/python`, check that:
+
+- `targets` in `about.toml` matches the wheel targets in `release_python.yml` and `release_python_nightly.yml`.
+- Each crate in `third-party-licenses.txt` is in the `make -s cargo-about` output at the version the entry names. If the version changed, re-check the entry against the new version. If the crate is gone, remove the entry.
+- `third-party-notices.txt` matches the `NOTICE` files of the dependencies, found with the command in [Relevant files](#relevant-files).
