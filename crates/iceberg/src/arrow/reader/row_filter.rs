@@ -36,7 +36,7 @@ use crate::expr::BoundPredicate;
 use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
-use crate::spec::{Schema, SchemaRef};
+use crate::spec::Schema;
 use crate::{Error, ErrorKind};
 
 impl ArrowReader {
@@ -45,7 +45,7 @@ impl ArrowReader {
         parquet_schema: &SchemaDescriptor,
         iceberg_field_ids: &HashSet<i32>,
         field_id_map: &HashMap<i32, usize>,
-        snapshot_schema: SchemaRef,
+        snapshot_schema: &Schema,
     ) -> Result<RowFilter> {
         // Collect Parquet column indices from field ids, keeping each column's field id.
         // If the field id is not found in Parquet schema, it will be ignored due to schema evolution.
@@ -73,9 +73,18 @@ impl ArrowReader {
         let mut predicate_func = visit(&mut converter, predicates)?;
         // Predicates are bound to the table schema, so evaluate them on the filter columns
         // converted to it, as the reader's output is (e.g. a file written before an `int` ->
-        // `long` promotion).
+        // `long` promotion). The transformer's schema holds only the top-level filter fields, so
+        // its per-file setup does not grow with the table's width.
+        let filter_schema = Schema::builder()
+            .with_schema_id(snapshot_schema.schema_id())
+            .with_fields(
+                field_ids
+                    .iter()
+                    .filter_map(|id| snapshot_schema.as_struct().field_by_id(*id).cloned()),
+            )
+            .build()?;
         let mut transformer =
-            RecordBatchTransformerBuilder::new(snapshot_schema, &field_ids).build();
+            RecordBatchTransformerBuilder::new(Arc::new(filter_schema), &field_ids).build();
         let arrow_predicate = ArrowPredicateFn::new(projection_mask, move |batch| {
             let batch = transformer
                 .process_record_batch(batch)
