@@ -26,7 +26,7 @@ use super::{
     ONE_MINUTE_MS, PartitionField, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
     Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
     SortOrderRef, StatisticsFile, StructType, TableMetadata, TableProperties, Transform,
-    UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionField, UnboundPartitionSpec,
+    UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result, invalid_data};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
@@ -201,6 +201,9 @@ impl TableMetadataBuilder {
     /// stays readable through the columns both schemas share; new columns get ids above
     /// `last_column_id`, never a dropped column's id.
     ///
+    /// Partition fields reuse the highest id an equivalent field has in any of the table's specs,
+    /// and other fields get ids above `last_partition_id`.
+    ///
     /// `location` moves the table, `None` leaves it in place. `properties` are applied on top of
     /// the existing ones. `format-version` upgrades the table without being persisted; other
     /// reserved properties are ignored.
@@ -250,12 +253,14 @@ impl TableMetadataBuilder {
 
         let (fresh_spec, fresh_sort_order) =
             Self::rebind_to_schema(&previous_id_to_name, &fresh_schema, spec, sort_order)?;
-        // Cleared so add_partition_spec can reuse the ids of equivalent fields in existing specs.
-        let fresh_spec = Self::forget_partition_field_ids(fresh_spec)?;
+        let fresh_spec = self.reassign_partition_field_ids(fresh_spec)?;
 
-        let builder = self
-            .upgrade_format_version(format_version)?
-            .remove_ref(MAIN_BRANCH)
+        let mut builder = self.upgrade_format_version(format_version)?;
+        if builder.metadata.refs.contains_key(MAIN_BRANCH) {
+            builder = builder.remove_ref(MAIN_BRANCH);
+        }
+
+        let builder = builder
             .add_current_schema(fresh_schema)?
             .add_default_partition_spec(fresh_spec)?
             .add_default_sort_order(fresh_sort_order)?;
@@ -1311,20 +1316,26 @@ impl TableMetadataBuilder {
             .collect()
     }
 
-    /// Returns `spec` with its partition field ids cleared, for [`Self::add_partition_spec`] to
-    /// reassign.
-    fn forget_partition_field_ids(spec: PartitionSpec) -> Result<UnboundPartitionSpec> {
-        let fields = spec
-            .fields()
-            .iter()
-            .map(|field| {
-                UnboundPartitionField::builder()
-                    .source_ids(vec![field.source_id])
-                    .name(field.name.clone())
-                    .transform(field.transform)
-                    .build()
-            })
-            .collect::<Result<Vec<_>>>()?;
+    /// Gives each field of `spec` the highest id an equivalent field has in the table's specs, or
+    /// the next id above `last_partition_id`.
+    fn reassign_partition_field_ids(&self, spec: PartitionSpec) -> Result<UnboundPartitionSpec> {
+        let mut field_ids = Self::highest_equivalent_field_ids(
+            self.metadata
+                .partition_specs
+                .values()
+                .flat_map(|spec| spec.fields()),
+        );
+        let mut last_partition_id = self.metadata.last_partition_id;
+
+        let fields = spec.fields().iter().map(|field| {
+            let field_id = *field_ids
+                .entry((vec![field.source_id], field.transform))
+                .or_insert_with(|| {
+                    last_partition_id += 1;
+                    last_partition_id
+                });
+            field.clone().into_unbound().with_field_id(field_id)
+        });
 
         UnboundPartitionSpec::builder()
             .add_partition_fields(fields)
@@ -4355,7 +4366,7 @@ mod tests {
             .unwrap()
             .build();
 
-        let metadata = partition_replacement_builder(FormatVersion::V2)
+        let result = partition_replacement_builder(FormatVersion::V2)
             .build_replacement(
                 updated_schema,
                 updated_spec,
@@ -4365,8 +4376,8 @@ mod tests {
             )
             .unwrap()
             .build()
-            .unwrap()
-            .metadata;
+            .unwrap();
+        let metadata = &result.metadata;
 
         let expected_spec = PartitionSpec::builder(metadata.current_schema().clone())
             .with_spec_id(1)
@@ -4379,6 +4390,9 @@ mod tests {
             .unwrap();
         assert_eq!(metadata.default_partition_spec().as_ref(), &expected_spec);
         assert_eq!(metadata.last_partition_id, 1002);
+        assert!(result.changes.contains(&TableUpdate::AddSpec {
+            spec: expected_spec.into_unbound()
+        }));
     }
 
     #[test]
@@ -4555,9 +4569,6 @@ mod tests {
         assert_eq!(result.changes, vec![
             TableUpdate::UpgradeFormatVersion {
                 format_version: FormatVersion::V3
-            },
-            TableUpdate::RemoveSnapshotRef {
-                ref_name: MAIN_BRANCH.to_string()
             },
             TableUpdate::AddSchema { schema },
             TableUpdate::AddSpec { spec },
