@@ -20,6 +20,10 @@ description: 'Regenerates bindings/python/LICENSE and NOTICE with the root files
 runs:
   using: "composite"
   steps:
+    # rustup's install output would otherwise fail the cargo about stderr check.
+    - name: Setup Rust toolchain
+      uses: $/.github/actions/setup-builder
+
     - name: Install cargo-about
       # Keep version in sync with the install-cargo-about target in bindings/python/Makefile.
       uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
@@ -30,8 +34,6 @@ runs:
       shell: bash
       working-directory: bindings/python
       run: |
-        # rustup's install output would fail the stderr check below.
-        rustup toolchain install --no-self-update
         # --fail misses warnings and license template fallbacks.
         cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml -o cargo-about-output.txt about.hbs 2>&1 | tee "$RUNNER_TEMP/cargo-about.log"
         if [[ -s "$RUNNER_TEMP/cargo-about.log" ]] || grep -n '<year>' cargo-about-output.txt; then
