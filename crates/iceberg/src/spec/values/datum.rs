@@ -33,7 +33,9 @@ use super::decimal_utils::{
     decimal_precision, decimal_scale, i128_from_be_bytes, i128_to_be_bytes_min,
 };
 use super::literal::Literal;
-use super::primitive::PrimitiveLiteral;
+use super::primitive::{
+    MICROSECONDS_PER_DAY, NANOSECONDS_PER_DAY, PrimitiveLiteral, date_to_timestamp,
+};
 use super::serde::_serde::RawLiteral;
 use super::temporal::{date, time, timestamp, timestamptz};
 use crate::ensure_data_valid;
@@ -422,13 +424,31 @@ impl Datum {
             PrimitiveType::Date => PrimitiveLiteral::Int(i32::from_le_bytes(bytes.try_into()?)),
             PrimitiveType::Time => PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?)),
             PrimitiveType::Timestamp => {
-                PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+                if bytes.len() == 4 {
+                    // Bound written as a date under a later timestamp schema.
+                    date_to_timestamp(
+                        i32::from_le_bytes(bytes.try_into()?),
+                        MICROSECONDS_PER_DAY,
+                        &data_type,
+                    )?
+                } else {
+                    PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+                }
             }
             PrimitiveType::Timestamptz => {
                 PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::TimestampNs => {
-                PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+                if bytes.len() == 4 {
+                    // Bound written as a date under a later timestamp_ns schema.
+                    date_to_timestamp(
+                        i32::from_le_bytes(bytes.try_into()?),
+                        NANOSECONDS_PER_DAY,
+                        &data_type,
+                    )?
+                } else {
+                    PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+                }
             }
             PrimitiveType::TimestamptzNs => {
                 PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
@@ -1230,14 +1250,45 @@ impl Datum {
     }
 
     /// Returns a copy whose literal is widened to `target` for the value
-    /// promotions `int` -> `long` and `float` -> `double`, so a value written
-    /// under the narrower type compares against a predicate bound to the wider
-    /// one. Returns `None` when `target` does not widen this value (decimals
-    /// already compare across precisions), so callers can avoid a copy.
-    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Option<Datum> {
-        self.literal
-            .promote_to(target)
-            .map(|literal| Datum::new(target.clone(), literal))
+    /// promotions `int` -> `long`, `float` -> `double`, and `date` -> `timestamp` /
+    /// `timestamp_ns`, so a value written under the narrower type compares against
+    /// a predicate bound to the wider one. Returns `Ok(None)` when `target` does not
+    /// widen this value (decimals already compare across precisions), so callers
+    /// can avoid a copy.
+    ///
+    /// Matches on `(self.data_type(), target)` so an `int` literal is not treated as
+    /// a date.
+    ///
+    /// # Errors
+    /// Returns `DataInvalid` if a date is outside the range of the target timestamp
+    /// type.
+    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Result<Option<Datum>> {
+        match (self.data_type(), target) {
+            (PrimitiveType::Int, PrimitiveType::Long)
+            | (PrimitiveType::Float, PrimitiveType::Double) => Ok(self
+                .literal
+                .widen()
+                .map(|literal| Datum::new(target.clone(), literal))),
+            (PrimitiveType::Date, PrimitiveType::Timestamp) => {
+                let PrimitiveLiteral::Int(days) = self.literal else {
+                    return Ok(None);
+                };
+                Ok(Some(Datum::new(
+                    target.clone(),
+                    date_to_timestamp(days, MICROSECONDS_PER_DAY, target)?,
+                )))
+            }
+            (PrimitiveType::Date, PrimitiveType::TimestampNs) => {
+                let PrimitiveLiteral::Int(days) = self.literal else {
+                    return Ok(None);
+                };
+                Ok(Some(Datum::new(
+                    target.clone(),
+                    date_to_timestamp(days, NANOSECONDS_PER_DAY, target)?,
+                )))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Returns true if the Literal represents a primitive type

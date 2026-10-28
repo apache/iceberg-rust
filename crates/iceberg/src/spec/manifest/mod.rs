@@ -1907,6 +1907,98 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_manifest_promotes_date_bounds_under_timestamp_schema() {
+        // Under a timestamp / timestamp_ns schema, a 4-byte bound is a date. Promotion
+        // does not rewrite bounds, so a merged manifest can carry date bytes that must
+        // decode to midnight of that day rather than failing to load.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                        .into(),
+                    NestedField::optional(2, "ns", Type::Primitive(PrimitiveType::TimestampNs))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+        let metadata = ManifestMetadata {
+            schema_id: 0,
+            schema,
+            partition_spec,
+            content: ManifestContentType::Data,
+            format_version: FormatVersion::V2,
+        };
+        let days = 19_723_i32;
+        let mut entry = expected_entry(Struct::empty());
+        entry.data_file.lower_bounds =
+            HashMap::from([(1, Datum::date(days)), (2, Datum::date(days))]);
+        entry.data_file.upper_bounds =
+            HashMap::from([(1, Datum::date(days)), (2, Datum::date(days))]);
+
+        let partition_type = metadata
+            .partition_spec
+            .partition_type(&metadata.schema)
+            .unwrap();
+        let avro_schema = manifest_schema_v2(&partition_type).unwrap();
+        let mut writer = Writer::with_codec(&avro_schema, Vec::new(), Codec::Snappy).unwrap();
+        for (key, value) in [
+            ("schema", to_vec(&metadata.schema).unwrap()),
+            ("schema-id", metadata.schema_id.to_string().into_bytes()),
+            (
+                "partition-spec",
+                to_vec(&metadata.partition_spec.fields()).unwrap(),
+            ),
+            (
+                "partition-spec-id",
+                metadata.partition_spec.spec_id().to_string().into_bytes(),
+            ),
+            (
+                "format-version",
+                (metadata.format_version as u8).to_string().into_bytes(),
+            ),
+            ("content", metadata.content.to_string().into_bytes()),
+        ] {
+            writer.add_user_metadata(key.to_string(), value).unwrap();
+        }
+        let value = to_value(
+            _serde::ManifestEntryV2::try_from(entry, &Type::Struct(partition_type)).unwrap(),
+        )
+        .unwrap()
+        .resolve(&avro_schema)
+        .unwrap();
+        writer.append_value(value).unwrap();
+        let bs = writer.into_inner().unwrap();
+
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+        let file = &manifest.entries()[0].data_file;
+        assert_eq!(
+            file.lower_bounds.get(&1),
+            Some(&Datum::timestamp_micros(i64::from(days) * 86_400_000_000))
+        );
+        assert_eq!(
+            file.lower_bounds.get(&2),
+            Some(&Datum::timestamp_nanos(
+                i64::from(days) * 86_400_000_000_000
+            ))
+        );
+        assert_eq!(
+            file.upper_bounds.get(&1),
+            Some(&Datum::timestamp_micros(i64::from(days) * 86_400_000_000))
+        );
+        assert_eq!(
+            file.upper_bounds.get(&2),
+            Some(&Datum::timestamp_nanos(
+                i64::from(days) * 86_400_000_000_000
+            ))
+        );
+    }
+
+    #[test]
     fn test_parse_manifest_reads_required_writer_fields_as_optional() {
         // Fields that are optional in the reader schema are written without a
         // union.

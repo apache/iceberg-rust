@@ -21,6 +21,8 @@ use std::cmp::Ordering;
 
 use ordered_float::{FloatCore, OrderedFloat};
 
+use crate::Result;
+use crate::error::invalid_data;
 use crate::spec::PrimitiveType;
 
 /// Values present in iceberg type
@@ -158,4 +160,19 @@ impl PrimitiveLiteral {
             _ => false,
         }
     }
+}
+
+pub(crate) const MICROSECONDS_PER_DAY: i64 = 86_400_000_000;
+pub(crate) const NANOSECONDS_PER_DAY: i64 = 86_400_000_000_000;
+
+/// Converts `days` from the epoch to a timestamp literal in units of `units_per_day`.
+pub(crate) fn date_to_timestamp(
+    days: i32,
+    units_per_day: i64,
+    target: &PrimitiveType,
+) -> Result<PrimitiveLiteral> {
+    i64::from(days)
+        .checked_mul(units_per_day)
+        .map(PrimitiveLiteral::Long)
+        .ok_or_else(|| invalid_data!("Date {days} (days from epoch) is out of range for {target}"))
 }
