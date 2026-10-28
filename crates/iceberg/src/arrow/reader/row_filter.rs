@@ -246,8 +246,8 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::{
-        ArrayRef, Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
-        LargeStringArray, RecordBatch, StringArray,
+        ArrayRef, Date32Array, Decimal128Array, Float32Array, Float64Array, Int32Array, Int64Array,
+        LargeStringArray, RecordBatch, StringArray, TimestampMicrosecondArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
@@ -478,50 +478,36 @@ mod tests {
         }
     }
 
-    /// Writes `column` as field 1, reads it back as `iceberg_type` under each predicate, and
-    /// checks the values that survive (`None` when no row does).
+    /// Writes `column` as field 1, with and without a field id, reads it back as `iceberg_type`
+    /// under each predicate, and checks the values that survive (`None` when no row does).
     async fn assert_promoted_reads(
         column: ArrayRef,
         iceberg_type: PrimitiveType,
         cases: Vec<(Predicate, Option<ArrayRef>)>,
     ) {
         let tmp = TempDir::new().unwrap();
-        let path = format!("{}/column.parquet", tmp.path().to_str().unwrap());
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
-            "v",
-            column.data_type().clone(),
-            1,
-        )]));
-        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![column]).unwrap();
-        write_row_groups(&path, arrow_schema, vec![batch], false);
-
         let schema = value_schema(Type::Primitive(iceberg_type));
-        let file_size = std::fs::metadata(&path).unwrap().len();
-        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
-        for (predicate, expected) in cases {
-            let task = FileScanTask::builder()
-                .with_file_size_in_bytes(file_size)
-                .with_start(0)
-                .with_length(0)
-                .with_data_file_path(path.clone())
-                .with_data_file_format(DataFileFormat::Parquet)
-                .with_schema(schema.clone())
-                .with_project_field_ids(vec![1])
-                .with_predicate(Some(predicate.bind(schema.clone(), true).unwrap()))
-                .with_case_sensitive(true)
-                .build()
-                .unwrap();
-            let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-            let batches: Vec<RecordBatch> = reader
-                .clone()
-                .read(tasks)
-                .unwrap()
-                .stream()
-                .try_collect()
-                .await
-                .unwrap();
-            let actual = collapse(&batches).map(|batch| Arc::clone(batch.column(0)));
-            assert_eq!(actual, expected, "{predicate}");
+        for with_field_id in [true, false] {
+            // Without a field id, the reader assigns one by position.
+            let path = format!("{}/{with_field_id}.parquet", tmp.path().to_str().unwrap());
+            let field = if with_field_id {
+                field_with_id("v", column.data_type().clone(), 1)
+            } else {
+                Field::new("v", column.data_type().clone(), false)
+            };
+            let arrow_schema = Arc::new(ArrowSchema::new(vec![field]));
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![column.clone()]).unwrap();
+            write_row_groups(&path, arrow_schema, vec![batch], false);
+
+            for (predicate, expected) in &cases {
+                let (batches, _) =
+                    read_once(&path, schema.clone(), vec![1], predicate.clone(), false).await;
+                let actual = collapse(&batches).map(|batch| Arc::clone(batch.column(0)));
+                assert_eq!(
+                    &actual, expected,
+                    "{predicate}, with_field_id = {with_field_id}"
+                );
+            }
         }
     }
 
@@ -557,6 +543,16 @@ mod tests {
                 (v().greater_than(Datum::double(0.1)), Some(promoted)),
                 (v().equal_to(Datum::double(0.1)), None),
             ],
+        )
+        .await;
+
+        // 2024-01-01 promotes to midnight, which is before noon on that day.
+        let noon = || Datum::timestamp_from_str("2024-01-01T12:00:00").unwrap();
+        let midnight = Arc::new(TimestampMicrosecondArray::from(vec![1_704_067_200_000_000]));
+        assert_promoted_reads(
+            Arc::new(Date32Array::from(vec![19723])),
+            PrimitiveType::Timestamp,
+            vec![(v().less_than(noon()), Some(midnight as ArrayRef))],
         )
         .await;
     }

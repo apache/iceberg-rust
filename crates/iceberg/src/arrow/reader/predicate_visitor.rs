@@ -653,6 +653,7 @@ fn try_cast_literal(
         return Ok(Arc::clone(literal));
     }
 
+    // `safe: false` makes arrow return an error where the default would produce null.
     let options = CastOptions {
         safe: false,
         ..Default::default()
