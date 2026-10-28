@@ -32,13 +32,14 @@ use parquet::schema::types::SchemaDescriptor;
 
 use super::{ArrowReader, PredicateConverter};
 use crate::arrow::caching_delete_file_loader::{EqDeleteKey, EqDeleteSet};
+use crate::arrow::record_batch_transformer::constants_map;
 use crate::arrow::{arrow_primitive_to_literal, arrow_type_to_type};
 use crate::error::Result;
 use crate::expr::BoundPredicate;
 use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
-use crate::spec::{Datum, Literal, PrimitiveType, Schema, Type};
+use crate::spec::{Datum, Literal, PartitionSpec, PrimitiveType, Schema, Struct, Type};
 use crate::{Error, ErrorKind};
 
 /// One equality-delete key column of a decoded batch
@@ -86,14 +87,28 @@ impl ArrowReader {
     /// Builds one Arrow row-filter predicate per equality-delete set. The predicate is based
     /// on a hash-set lookup (see `EqDeleteSet`). It keeps a row unless its key tuple is present
     /// in that set. A row is deleted when it matches any set (the predicates are AND-ed by the `RowFilter`).
+    ///
+    /// A key column the data file does not store reads as the value projection gives it (see
+    /// [`missing_field_values`]), the same for every row of the file.
     pub(super) fn build_equality_delete_predicates(
         sets: &[Arc<EqDeleteSet>],
         parquet_schema: &SchemaDescriptor,
         arrow_schema: &ArrowSchemaRef,
         use_position_fallback: bool,
+        schema: &Schema,
+        partition_spec: Option<&PartitionSpec>,
+        partition: Option<&Struct>,
     ) -> Result<Vec<Box<dyn ArrowPredicate>>> {
         let field_id_map =
             Self::resolve_field_id_map(parquet_schema, arrow_schema, use_position_fallback)?;
+
+        let missing_field_ids: HashSet<i32> = sets
+            .iter()
+            .flat_map(|set| set.fields.iter().map(|(_, id, _)| *id))
+            .filter(|id| !field_id_map.contains_key(id))
+            .collect();
+        let missing_values =
+            missing_field_values(&missing_field_ids, schema, partition_spec, partition)?;
 
         let mut predicates: Vec<Box<dyn ArrowPredicate>> = Vec::new();
         for set in sets {
@@ -109,13 +124,37 @@ impl ArrowReader {
                 .map(|(_, id, _)| field_id_map.get(id).copied())
                 .collect();
 
-            // Every key column may be absent from this file, leaving `column_indices`
-            // empty. `ProjectionMask::leaves(schema, [])` still yields a zero-column batch
-            // with the correct row count, so the probe returns one boolean per row.
+            // The probe key with the value of every column this file does not store filled in.
+            // Columns the file stores stay `None` here and are set per row.
+            let constant_key = EqDeleteKey(
+                set.fields
+                    .iter()
+                    .zip(&leaf_indices)
+                    .map(|((_, id, _), leaf)| match leaf {
+                        Some(_) => None,
+                        None => missing_values.get(id).cloned(),
+                    })
+                    .collect(),
+            );
+
             let mut column_indices: Vec<usize> = leaf_indices.iter().flatten().copied().collect();
             column_indices.sort_unstable();
             column_indices.dedup();
             let projection_mask = ProjectionMask::leaves(parquet_schema, column_indices.clone());
+
+            // Every key column is missing, so every row has the same key and one lookup
+            // decides the whole file: drop all rows on a match, otherwise skip the predicate.
+            // `ProjectionMask::leaves(schema, [])` still yields a zero-column batch with the
+            // correct row count.
+            if column_indices.is_empty() {
+                if set.keys.contains(&constant_key) {
+                    predicates.push(Box::new(ArrowPredicateFn::new(
+                        projection_mask,
+                        |batch: RecordBatch| Ok(BooleanArray::from(vec![false; batch.num_rows()])),
+                    )));
+                }
+                continue;
+            }
 
             // Position of each key column within the projected batch (parquet-rs presents the
             // masked leaves in ascending leaf-index order).
@@ -134,7 +173,7 @@ impl ArrowReader {
 
                     let mut columns: Vec<Option<KeyColumn>> = Vec::with_capacity(num_cols);
                     for (i, target_type) in target_types.iter().enumerate() {
-                        // A column absent from this file (schema evolution)
+                        // A column missing from this file; its value is in `constant_key`.
                         let Some(pos) = batch_positions[i] else {
                             columns.push(None);
                             continue;
@@ -163,11 +202,10 @@ impl ArrowReader {
 
                     // One hash lookup per row.
                     let mut keep = Vec::with_capacity(num_rows);
-                    let mut probe = EqDeleteKey(vec![None; num_cols]);
+                    let mut probe = constant_key.clone();
                     for row in 0..num_rows {
                         for (i, column) in columns.iter_mut().enumerate() {
                             let Some(column) = column else {
-                                probe.0[i] = None;
                                 continue;
                             };
                             // we can `take` because each cell is probed once.
@@ -359,6 +397,52 @@ impl ArrowReader {
     }
 }
 
+/// Returns the value each top-level field in `field_ids` reads as in a data file that does not
+/// store it, per the spec's column projection rules: the identity partition value, otherwise the
+/// field's `initial-default`. Fields with neither read as null and are left out. Nested fields are
+/// left out too, because a nested field also reads as null in any row where an ancestor struct is
+/// null.
+pub(super) fn missing_field_values(
+    field_ids: &HashSet<i32>,
+    schema: &Schema,
+    partition_spec: Option<&PartitionSpec>,
+    partition: Option<&Struct>,
+) -> Result<HashMap<i32, Datum>> {
+    if field_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let partition_constants = match (partition_spec, partition) {
+        (Some(spec), Some(data)) => constants_map(spec, data, schema)?,
+        _ => HashMap::new(),
+    };
+
+    let mut values = HashMap::new();
+    for field in schema.as_struct().fields() {
+        if !field_ids.contains(&field.id) {
+            continue;
+        }
+        if let Some(datum) = partition_constants.get(&field.id) {
+            values.insert(field.id, datum.clone());
+            continue;
+        }
+        let Some(default) = &field.initial_default else {
+            continue;
+        };
+        let (Type::Primitive(ty), Literal::Primitive(value)) = (&*field.field_type, default) else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Field {} has a non-primitive initial-default: {default:?}",
+                    field.id
+                ),
+            ));
+        };
+        values.insert(field.id, Datum::new(ty.clone(), value.clone()));
+    }
+    Ok(values)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -386,8 +470,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, Literal, NestedField, PrimitiveType, Schema,
-        SchemaRef, Type,
+        DataContentType, DataFileFormat, Datum, Literal, NestedField, PartitionSpec, PrimitiveType,
+        Schema, SchemaRef, Struct, Transform, Type,
     };
 
     async fn test_perform_read(
@@ -1707,12 +1791,14 @@ mod tests {
             deletes,
             None,
             false,
+            None,
         )
         .await
     }
 
-    /// `eqd_read` plus the two things that interact with equality-delete predicates: a
-    /// scan predicate (pushed as a second `ArrowPredicate`) and the row-selection path.
+    /// `eqd_read` plus the things that interact with equality-delete predicates: a scan
+    /// predicate (pushed as a second `ArrowPredicate`), the row-selection path, and the
+    /// task's partition, which supplies identity partition values for missing columns.
     async fn eqd_read_with(
         data_path: &str,
         table_schema: SchemaRef,
@@ -1720,6 +1806,7 @@ mod tests {
         deletes: Vec<FileScanTaskDeleteFile>,
         predicate: Option<BoundPredicate>,
         row_selection_enabled: bool,
+        partition: Option<(Arc<PartitionSpec>, Struct)>,
     ) -> Vec<RecordBatch> {
         let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
@@ -1736,6 +1823,8 @@ mod tests {
             .with_deletes(deletes)
             .with_case_sensitive(false)
             .with_predicate(predicate)
+            .with_partition_spec(partition.as_ref().map(|(spec, _)| spec.clone()))
+            .with_partition(partition.map(|(_, data)| data))
             .build()
             .unwrap();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
@@ -2065,6 +2154,7 @@ mod tests {
                 vec![eqd_delete_file(&del_path, vec![1])],
                 Some(predicate),
                 row_selection_enabled,
+                None,
             )
             .await;
 
@@ -2156,6 +2246,7 @@ mod tests {
                 vec![pos_del.clone(), eqd_delete_file(&eq_del_path, vec![1])],
                 Some(predicate),
                 row_selection_enabled,
+                None,
             )
             .await;
 
@@ -2168,38 +2259,47 @@ mod tests {
     }
 
     // An equality-delete key column absent from the data file (added by later schema
-    // evolution). The probe reads it as null for every row, so nothing matches and the
-    // delete file removes no rows -- it does NOT resolve `initial_default`, which the spec
-    // asks for via normal projection rules. Pinned here so the divergence is visible and a
-    // later fix has something to change.
+    // evolution) reads as its projected value for every row: the identity partition value,
+    // otherwise `initial_default`, otherwise null.
     #[tokio::test]
     async fn test_eq_delete_on_column_absent_from_data_file() {
         let tmp = TempDir::new().unwrap();
         let loc = tmp.path().to_str().unwrap();
 
         // `added` exists in the table schema but not in the data file below.
-        let required_with_default = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-                    NestedField::required(2, "added", Type::Primitive(PrimitiveType::Long))
-                        .with_initial_default(Literal::long(7))
-                        .into(),
-                ])
-                .build()
-                .unwrap(),
+        let schema_with = |added: NestedField| {
+            Arc::new(
+                Schema::builder()
+                    .with_schema_id(1)
+                    .with_fields(vec![
+                        NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                        added.into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+        };
+        let required_default_7 = schema_with(
+            NestedField::required(2, "added", Type::Primitive(PrimitiveType::Long))
+                .with_initial_default(Literal::long(7)),
         );
-        let optional_no_default = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-                    NestedField::optional(2, "added", Type::Primitive(PrimitiveType::Long)).into(),
-                ])
+        let optional_no_default = schema_with(NestedField::optional(
+            2,
+            "added",
+            Type::Primitive(PrimitiveType::Long),
+        ));
+        let identity_on_added = |schema: &SchemaRef, value: i64| {
+            let spec = PartitionSpec::builder(schema.clone())
+                .with_spec_id(1)
+                .add_partition_field("added", "added", Transform::Identity)
+                .unwrap()
                 .build()
-                .unwrap(),
-        );
+                .unwrap();
+            Some((
+                Arc::new(spec),
+                Struct::from_iter([Some(Literal::long(value))]),
+            ))
+        };
 
         let data_path = format!("{loc}/data.parquet");
         eqd_write(
@@ -2213,11 +2313,10 @@ mod tests {
             vec![Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef],
         );
 
-        // Keyed on `added` with the value that IS the initial default: if the probe ever
-        // resolves defaults, every row matches and this expectation flips to empty.
-        let del_path = format!("{loc}/eq-del.parquet");
+        // Keyed on `added` alone, so one lookup decides the whole file.
+        let added_7 = format!("{loc}/eq-del-added-7.parquet");
         eqd_write(
-            &del_path,
+            &added_7,
             Arc::new(ArrowSchema::new(vec![eqd_field(
                 "added",
                 DataType::Int64,
@@ -2226,22 +2325,101 @@ mod tests {
             )])),
             vec![Arc::new(Int64Array::from(vec![7])) as ArrayRef],
         );
+        let added_null = format!("{loc}/eq-del-added-null.parquet");
+        eqd_write(
+            &added_null,
+            Arc::new(ArrowSchema::new(vec![eqd_field(
+                "added",
+                DataType::Int64,
+                2,
+                true,
+            )])),
+            vec![Arc::new(Int64Array::from(vec![None::<i64>])) as ArrayRef],
+        );
+        // Keyed on (`id`, `added`): `id` is read per row, `added` is the file's constant.
+        let id_and_added = format!("{loc}/eq-del-id-added.parquet");
+        eqd_write(
+            &id_and_added,
+            Arc::new(ArrowSchema::new(vec![
+                eqd_field("id", DataType::Int64, 1, false),
+                eqd_field("added", DataType::Int64, 2, false),
+            ])),
+            vec![
+                Arc::new(Int64Array::from(vec![2, 3])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![7, 8])) as ArrayRef,
+            ],
+        );
 
-        for (label, schema) in [
-            ("required with initial_default", required_with_default),
-            ("optional without default", optional_no_default),
-        ] {
-            let result = eqd_read(&data_path, schema, vec![1], vec![eqd_delete_file(
-                &del_path,
+        let cases = [
+            (
+                "initial_default matches",
+                required_default_7.clone(),
+                None,
+                &added_7,
                 vec![2],
-            )])
-            .await;
-
-            assert_eq!(
-                eqd_collect_i64(&result, 0),
+                vec![],
+            ),
+            (
+                "no default reads as null",
+                optional_no_default.clone(),
+                None,
+                &added_7,
+                vec![2],
                 vec![1, 2, 3],
-                "{label}: absent key column probes as null, so nothing is deleted"
-            );
+            ),
+            (
+                "null key matches null",
+                optional_no_default.clone(),
+                None,
+                &added_null,
+                vec![2],
+                vec![],
+            ),
+            (
+                "identity partition value matches",
+                optional_no_default.clone(),
+                identity_on_added(&optional_no_default, 7),
+                &added_7,
+                vec![2],
+                vec![],
+            ),
+            (
+                "identity partition value wins over initial_default",
+                required_default_7.clone(),
+                identity_on_added(&required_default_7, 8),
+                &added_7,
+                vec![2],
+                vec![1, 2, 3],
+            ),
+            (
+                "constant column combined with a stored column",
+                required_default_7.clone(),
+                None,
+                &id_and_added,
+                vec![1, 2],
+                vec![1, 3],
+            ),
+        ];
+
+        for (label, schema, partition, del_path, equality_ids, expected) in cases {
+            for row_selection_enabled in [false, true] {
+                let result = eqd_read_with(
+                    &data_path,
+                    schema.clone(),
+                    vec![1],
+                    vec![eqd_delete_file(del_path, equality_ids.clone())],
+                    None,
+                    row_selection_enabled,
+                    partition.clone(),
+                )
+                .await;
+
+                assert_eq!(
+                    eqd_collect_i64(&result, 0),
+                    expected,
+                    "{label}, row_selection_enabled={row_selection_enabled}"
+                );
+            }
         }
     }
 

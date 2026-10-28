@@ -585,6 +585,9 @@ impl FileScanTaskReader {
                 record_batch_stream_builder.parquet_schema(),
                 record_batch_stream_builder.schema(),
                 use_position_fallback,
+                task.schema(),
+                task.partition_spec().map(Arc::as_ref),
+                task.partition(),
             )?);
         }
 
