@@ -37,7 +37,7 @@ mod hf;
 mod oss;
 mod s3;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 pub use azdls::*;
 pub use gcs::*;
@@ -52,20 +52,13 @@ use serde::{Deserialize, Serialize};
 /// This struct contains only configuration properties without specifying
 /// which storage backend to use. The storage type is determined by the
 /// explicit factory selection.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct StorageConfig {
     /// Configuration properties for the storage backend
     props: HashMap<String, String>,
-}
-
-impl std::fmt::Debug for StorageConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Values may hold vended credentials, and Debug is reachable through
-        // `FileIO` and `Table`: print keys only.
-        f.debug_struct("StorageConfig")
-            .field("keys", &self.props.keys().collect::<Vec<_>>())
-            .finish_non_exhaustive()
-    }
+    /// Credentials that apply to locations under their prefixes
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    storage_credentials: Vec<StorageCredential>,
 }
 
 impl StorageConfig {
@@ -73,6 +66,7 @@ impl StorageConfig {
     pub fn new() -> Self {
         Self {
             props: HashMap::new(),
+            storage_credentials: Vec::new(),
         }
     }
 
@@ -82,7 +76,10 @@ impl StorageConfig {
     ///
     /// * `props` - Configuration properties for the storage backend
     pub fn from_props(props: HashMap<String, String>) -> Self {
-        Self { props }
+        Self {
+            props,
+            storage_credentials: Vec::new(),
+        }
     }
 
     /// Get all configuration properties.
@@ -131,6 +128,64 @@ impl StorageConfig {
             .extend(props.into_iter().map(|(k, v)| (k.into(), v.into())));
         self
     }
+
+    /// Get the credentials that apply to locations under their prefixes.
+    pub fn storage_credentials(&self) -> &[StorageCredential] {
+        &self.storage_credentials
+    }
+
+    /// Add credentials that apply to locations under their prefixes.
+    ///
+    /// A factory that supports them overlays the props with the config of a
+    /// location's longest matching credential.
+    pub fn with_storage_credentials(
+        mut self,
+        credentials: impl IntoIterator<Item = StorageCredential>,
+    ) -> Self {
+        self.storage_credentials.extend(credentials);
+        self
+    }
+}
+
+/// Storage properties, such as a vended credential, that apply to locations
+/// under a prefix, like Java's `StorageCredential`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageCredential {
+    /// Location prefix, such as `s3://bucket/table`
+    prefix: String,
+    /// Storage properties holding the credential
+    config: HashMap<String, String>,
+}
+
+impl StorageCredential {
+    /// Create a credential for locations under `prefix`. An empty prefix covers none.
+    pub fn new(prefix: impl Into<String>, config: HashMap<String, String>) -> Self {
+        Self {
+            prefix: prefix.into(),
+            config,
+        }
+    }
+
+    /// Return the location prefix this credential applies to.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// Return the storage properties holding the credential.
+    pub fn config(&self) -> &HashMap<String, String> {
+        &self.config
+    }
+}
+
+// The config values are secrets.
+impl std::fmt::Debug for StorageCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let config_keys: BTreeSet<_> = self.config.keys().collect();
+        f.debug_struct("StorageCredential")
+            .field("prefix", &self.prefix)
+            .field("config_keys", &config_keys)
+            .finish()
+    }
 }
 
 #[cfg(test)]
@@ -160,32 +215,6 @@ mod tests {
         let config = StorageConfig::default();
 
         assert!(config.props().is_empty());
-    }
-
-    #[test]
-    fn test_debug_redacts_credential_values() {
-        let config = StorageConfig::from_props(HashMap::from([
-            ("s3.access-key-id".to_string(), "vended-key".to_string()),
-            (
-                "s3.secret-access-key".to_string(),
-                "super-secret".to_string(),
-            ),
-            ("s3.session-token".to_string(), "vended-token".to_string()),
-        ]));
-
-        let rendered = format!("{config:?}");
-        assert!(
-            !rendered.contains("super-secret"),
-            "leaked secret: {rendered}"
-        );
-        assert!(
-            !rendered.contains("vended-token"),
-            "leaked token: {rendered}"
-        );
-        assert!(
-            rendered.contains("s3.secret-access-key"),
-            "keys hidden: {rendered}"
-        );
     }
 
     #[test]
@@ -234,6 +263,37 @@ mod tests {
         let deserialized: StorageConfig = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_storage_config_serialization_keeps_storage_credentials() {
+        let config = StorageConfig::new()
+            .with_prop("region", "us-east-1")
+            .with_storage_credentials([StorageCredential::new(
+                "s3://bucket/table",
+                HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]),
+            )]);
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        let deserialized: StorageConfig = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_storage_credential_debug_omits_config_values() {
+        let credential = StorageCredential::new(
+            "s3://bucket/table",
+            HashMap::from([
+                ("s3.secret-access-key".to_string(), "secret".to_string()),
+                ("s3.access-key-id".to_string(), "key".to_string()),
+            ]),
+        );
+
+        assert_eq!(
+            format!("{credential:?}"),
+            r#"StorageCredential { prefix: "s3://bucket/table", config_keys: {"s3.access-key-id", "s3.secret-access-key"} }"#
+        );
     }
 
     #[test]

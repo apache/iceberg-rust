@@ -21,13 +21,14 @@
 //! Each test uses unique file paths based on module path to avoid conflicts.
 #[cfg(feature = "opendal-s3")]
 mod tests {
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     use bytes::Bytes;
     use futures::StreamExt;
     use iceberg::io::{
         FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION,
-        S3_SECRET_ACCESS_KEY,
+        S3_SECRET_ACCESS_KEY, StorageCredential,
     };
     use iceberg_storage_opendal::{
         AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
@@ -280,5 +281,31 @@ mod tests {
         let stream = futures::stream::empty().boxed();
         // Should succeed with no-op
         file_io.delete_stream(stream).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_file_io_s3_storage_credential_authorizes_its_prefix() {
+        set_up();
+        let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: None,
+        }))
+        .with_props(vec![
+            (S3_ENDPOINT, get_object_store_endpoint()),
+            (S3_ACCESS_KEY_ID, "invalid".to_string()),
+            (S3_SECRET_ACCESS_KEY, "invalid".to_string()),
+            (S3_REGION, "us-east-1".to_string()),
+            (S3_PATH_STYLE_ACCESS, "true".to_string()),
+        ])
+        .with_storage_credentials([StorageCredential::new(
+            "s3://bucket1/vended/",
+            HashMap::from([
+                (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
+                (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
+            ]),
+        )])
+        .build();
+
+        assert!(!file_io.exists("s3://bucket1/vended/f").await.unwrap());
+        assert!(file_io.exists("s3://bucket1/other/f").await.is_err());
     }
 }
