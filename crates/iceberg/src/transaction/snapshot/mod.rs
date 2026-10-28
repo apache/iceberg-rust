@@ -180,6 +180,21 @@ pub(crate) async fn current_manifests(table: &Table) -> Result<Vec<ManifestFile>
         .collect())
 }
 
+/// The manifests a producer wrote for one execution's added files.
+///
+/// Reusable while the table's format version is unchanged. Per spec, sequence
+/// number inheritance does not apply to v1 manifests, so one written before a
+/// concurrent upgrade cannot carry the v2 sequence number a retry assigns and
+/// must be rewritten. The schema is not a guard: the manifest's embedded schema
+/// describes the files it was written for, which do not change. Nor is the
+/// default partition spec: the files name their own spec, which stays valid.
+pub(crate) struct AddedManifests {
+    /// One per content type today. Several once added files are grouped by
+    /// partition spec (#3500) or rolled over at a target size (#3499).
+    pub manifests: Vec<ManifestFile>,
+    pub format_version: FormatVersion,
+}
+
 /// Writes one manifest at `path` holding `files` as `Added` entries, all of
 /// which must belong to `partition_spec_id`, and returns its manifest-list entry.
 pub(crate) async fn write_added_manifest(
@@ -547,17 +562,25 @@ pub(crate) mod tests {
             snapshot_properties: HashMap::new(),
             data_files,
         });
-        let snapshot = producer
-            .apply(table)
-            .await
-            .unwrap()
+        let commit = producer.apply(table).await.unwrap();
+        with_snapshot(table, added_snapshot(commit))
+    }
+
+    /// Extracts the snapshot an `ActionCommit` adds.
+    pub(super) fn added_snapshot(mut commit: ActionCommit) -> SnapshotRef {
+        commit
             .take_updates()
             .into_iter()
             .find_map(|u| match u {
                 TableUpdate::AddSnapshot { snapshot } => Some(SnapshotRef::new(snapshot)),
                 _ => None,
             })
-            .expect("append should add a snapshot");
+            .expect("commit should add a snapshot")
+    }
+
+    /// Returns `table` with `snapshot` added and set as current, as a local
+    /// `TableCommit::apply` would.
+    pub(super) fn with_snapshot(table: &Table, snapshot: SnapshotRef) -> Table {
         let metadata = table
             .metadata()
             .clone()

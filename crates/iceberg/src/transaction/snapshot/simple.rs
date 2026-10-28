@@ -22,11 +22,12 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use super::{
-    SnapshotCommitInput, current_manifests, generate_snapshot_id, manifest_list_path,
-    manifest_path, validate_partition_value, write_added_manifest, write_snapshot_commit,
+    AddedManifests, SnapshotCommitInput, current_manifests, generate_snapshot_id,
+    manifest_list_path, manifest_path, validate_partition_value, write_added_manifest,
+    write_snapshot_commit,
 };
 use crate::error::{Result, invalid_data};
-use crate::spec::{DataFile, FormatVersion, ManifestContentType, ManifestFile, Operation};
+use crate::spec::{DataFile, ManifestContentType, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::ActionCommit;
 
@@ -71,20 +72,6 @@ pub(crate) struct SimpleSnapshotProducer {
     // this set.
     #[allow(dead_code)]
     owned_artifacts: HashSet<String>,
-}
-
-/// The manifests written for one append's added files.
-///
-/// Reusable while the table's format version is unchanged. Per spec, sequence
-/// number inheritance does not apply to v1 manifests, so one written before a
-/// concurrent upgrade cannot carry the v2 sequence number a retry assigns and
-/// must be rewritten. The schema is not a guard: the manifest's embedded schema
-/// describes the files it was written for, which do not change.
-struct AddedManifests {
-    /// One manifest today. Several once added files are grouped by partition
-    /// spec (#3500) or rolled over at a target size (#3499).
-    manifests: Vec<ManifestFile>,
-    format_version: FormatVersion,
 }
 
 impl SimpleSnapshotProducer {

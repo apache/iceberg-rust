@@ -24,8 +24,9 @@ use uuid::Uuid;
 
 use super::manifest_filter::ManifestFilterManager;
 use super::{
-    SnapshotCommitInput, current_manifests, generate_snapshot_id, manifest_list_path,
-    manifest_path, validate_partition_value, write_added_manifest, write_snapshot_commit,
+    AddedManifests, SnapshotCommitInput, current_manifests, generate_snapshot_id,
+    manifest_list_path, manifest_path, validate_partition_value, write_added_manifest,
+    write_snapshot_commit,
 };
 use crate::error::{Result, invalid_data};
 use crate::spec::{DataFile, FormatVersion, ManifestContentType, ManifestFile, Operation};
@@ -81,15 +82,6 @@ pub(crate) struct MergingSnapshotProducer {
     owned_artifacts: HashSet<String>,
 }
 
-/// The manifests written for one execution's added data and delete files.
-///
-/// Reusable while the table's format version is unchanged; see
-/// `simple::AddedManifests` for why.
-struct AddedManifests {
-    manifests: Vec<ManifestFile>,
-    format_version: FormatVersion,
-}
-
 impl MergingSnapshotProducer {
     pub(crate) fn new(intent: MergingIntent) -> Self {
         Self {
@@ -128,6 +120,7 @@ impl MergingSnapshotProducer {
                 self.commit_uuid,
                 manifests,
                 &mut self.manifest_counter,
+                &mut self.owned_artifacts,
             )
             .await?;
         let deletes = self
@@ -138,13 +131,10 @@ impl MergingSnapshotProducer {
                 self.commit_uuid,
                 data.manifests,
                 &mut self.manifest_counter,
+                &mut self.owned_artifacts,
             )
             .await?;
         let mut manifests = deletes.manifests;
-        self.owned_artifacts
-            .extend(self.data_filter.owned_artifacts().iter().cloned());
-        self.owned_artifacts
-            .extend(self.delete_filter.owned_artifacts().iter().cloned());
 
         manifests.extend(self.added_manifests(table, snapshot_id).await?);
 
@@ -527,6 +517,281 @@ mod tests {
             .err()
             .expect("file already removed concurrently must not be removed twice");
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    /// Multi-action replay (RFC §5.2): action A's manifest keeps its path across
+    /// attempts, but after a rebase the manifest list assigns it a new sequence
+    /// number. Action B's rewrite of that manifest bakes the inherited sequence
+    /// numbers into its `Existing`/`Deleted` entries, so B must not reuse a
+    /// rewrite made under the previous sequence number.
+    #[tokio::test]
+    async fn test_rewrite_is_not_reused_when_source_manifest_sequence_number_changes() {
+        use super::super::simple::{AppendIntent, SimpleSnapshotProducer};
+        use super::super::tests::with_snapshot;
+
+        let s0 = make_v2_minimal_table();
+
+        // Action A appends x and y; action B removes x from A's manifest.
+        let mut a = SimpleSnapshotProducer::new(AppendIntent {
+            commit_uuid: None,
+            snapshot_properties: HashMap::new(),
+            data_files: vec![
+                data_file(&s0, "test/x.parquet", 1),
+                data_file(&s0, "test/y.parquet", 1),
+            ],
+        });
+        let mut b_intent = intent(Operation::Delete);
+        b_intent.removed_data_files = vec![data_file(&s0, "test/x.parquet", 1)];
+        let mut b = MergingSnapshotProducer::new(b_intent);
+
+        // Attempt 0 on S0.
+        let sa0 = added_snapshot(&mut a.apply(&s0).await.unwrap());
+        let after_a0 = with_snapshot(&s0, sa0.clone());
+        let sb0 = added_snapshot(&mut b.apply(&after_a0).await.unwrap());
+
+        // A concurrent commit lands on S0, taking the next sequence number. The
+        // retry rebases onto it: A reuses its manifest but it now inherits a new
+        // sequence number, and B sees the same manifest path under it.
+        let s1 = append_to(&s0, vec![data_file(&s0, "test/other.parquet", 1)]).await;
+        let sa1 = added_snapshot(&mut a.apply(&s1).await.unwrap());
+        let after_a1 = with_snapshot(&s1, sa1.clone());
+        let sb1 = added_snapshot(&mut b.apply(&after_a1).await.unwrap());
+        assert_eq!(sa1.sequence_number(), sa0.sequence_number() + 1);
+
+        // B's rewritten manifest in each attempt.
+        let rewritten_in = |table: Table, snapshot: SnapshotRef| async move {
+            let list = table.manifest_list_reader(&snapshot).load().await.unwrap();
+            let rewritten = list
+                .entries()
+                .iter()
+                .find(|m| m.added_snapshot_id == snapshot.snapshot_id())
+                .cloned()
+                .unwrap();
+            let manifest = table.manifest_reader().read(&rewritten).await.unwrap();
+            let y = manifest
+                .entries()
+                .iter()
+                .find(|e| e.file_path() == "test/y.parquet")
+                .unwrap();
+            (rewritten.manifest_path.clone(), y.sequence_number())
+        };
+        let (path0, y_seq0) = rewritten_in(after_a0, sb0).await;
+        let (path1, y_seq1) = rewritten_in(after_a1, sb1).await;
+
+        // `y` stays live under A's snapshot, whose sequence number moved; the
+        // rewrite that keeps it as `Existing` must carry the new one.
+        assert_eq!(y_seq0, Some(sa0.sequence_number()));
+        assert_eq!(y_seq1, Some(sa1.sequence_number()));
+        assert_ne!(
+            path0, path1,
+            "a rewrite under a different sequence number is a new file"
+        );
+    }
+
+    /// Removing a data file from a v1 table: v1 entries read with sequence
+    /// number 0, which satisfies the writer, and v1 serialization drops the
+    /// field again. The rewritten manifest is readable and `b` stays live.
+    #[tokio::test]
+    async fn test_remove_data_file_from_v1_table() {
+        let base = make_v1_table();
+        let table = append_to(&base, vec![
+            data_file(&base, "test/a.parquet", 1),
+            data_file(&base, "test/b.parquet", 1),
+        ])
+        .await;
+
+        let mut i = intent(Operation::Delete);
+        i.removed_data_files = vec![data_file(&base, "test/a.parquet", 1)];
+        let mut commit = MergingSnapshotProducer::new(i).apply(&table).await.unwrap();
+        let snapshot = added_snapshot(&mut commit);
+
+        let list = table.manifest_list_reader(&snapshot).load().await.unwrap();
+        let rewritten = list
+            .entries()
+            .iter()
+            .find(|m| m.added_snapshot_id == snapshot.snapshot_id())
+            .unwrap();
+        let manifest = table.manifest_reader().read(rewritten).await.unwrap();
+        let mut live: Vec<_> = manifest
+            .entries()
+            .iter()
+            .filter(|e| e.is_alive())
+            .map(|e| e.file_path().to_string())
+            .collect();
+        live.sort();
+        assert_eq!(live, vec!["test/b.parquet".to_string()]);
+        // Both the rewritten entries and the snapshot stay at v1's sequence number 0.
+        assert!(
+            manifest
+                .entries()
+                .iter()
+                .all(|e| e.sequence_number() == Some(0))
+        );
+        assert_eq!(snapshot.sequence_number(), 0);
+        assert_eq!(
+            snapshot
+                .summary()
+                .additional_properties
+                .get("deleted-data-files")
+                .unwrap(),
+            "1"
+        );
+    }
+
+    /// A manifest written under an earlier schema is rewritten under the
+    /// current one; its partition spec still binds because partition source
+    /// columns cannot be dropped.
+    #[tokio::test]
+    async fn test_rewrite_manifest_written_under_earlier_schema() {
+        use crate::spec::{NestedField, PrimitiveType, Type};
+
+        let base = make_v2_minimal_table();
+        let table = append_to(&base, vec![
+            data_file(&base, "test/a.parquet", 1),
+            data_file(&base, "test/b.parquet", 1),
+        ])
+        .await;
+
+        // Evolve the schema after the manifest was written.
+        let new_schema = table
+            .metadata()
+            .current_schema()
+            .as_ref()
+            .clone()
+            .into_builder()
+            .with_fields([
+                NestedField::optional(100, "added", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .add_current_schema(new_schema)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let evolved = table.clone().with_metadata(std::sync::Arc::new(metadata));
+        assert_ne!(
+            evolved.metadata().current_schema_id(),
+            table.metadata().current_schema_id()
+        );
+
+        let mut i = intent(Operation::Delete);
+        i.removed_data_files = vec![data_file(&base, "test/a.parquet", 1)];
+        let mut commit = MergingSnapshotProducer::new(i)
+            .apply(&evolved)
+            .await
+            .unwrap();
+        let snapshot = added_snapshot(&mut commit);
+
+        let list = evolved
+            .manifest_list_reader(&snapshot)
+            .load()
+            .await
+            .unwrap();
+        let rewritten = list
+            .entries()
+            .iter()
+            .find(|m| m.added_snapshot_id == snapshot.snapshot_id())
+            .unwrap();
+        assert_eq!(
+            rewritten.partition_spec_id,
+            table.metadata().default_partition_spec_id()
+        );
+        assert_eq!(entries_of(&evolved, rewritten).await, vec![
+            (ManifestStatus::Deleted, "test/a.parquet".to_string()),
+            (ManifestStatus::Existing, "test/b.parquet".to_string()),
+        ]);
+        // Partition values survive the rewrite under the new schema.
+        let manifest = evolved.manifest_reader().read(rewritten).await.unwrap();
+        for entry in manifest.entries() {
+            assert_eq!(
+                entry.data_file().partition(),
+                &Struct::from_iter([Some(Literal::long(300))])
+            );
+        }
+    }
+
+    /// On v3, existing entries keep the row ids they were assigned when first
+    /// committed, and the rewritten manifest gets its own range from the list
+    /// writer.
+    #[tokio::test]
+    async fn test_rewrite_preserves_first_row_ids_on_v3() {
+        use crate::transaction::tests::make_v3_minimal_table;
+
+        let base = make_v3_minimal_table();
+        let table = append_to(&base, vec![
+            data_file(&base, "test/a.parquet", 5),
+            data_file(&base, "test/b.parquet", 7),
+        ])
+        .await;
+        let before = table.metadata().current_snapshot().unwrap();
+        let before_list = table.manifest_list_reader(before).load().await.unwrap();
+        let before_manifest = table
+            .manifest_reader()
+            .read(&before_list.entries()[0])
+            .await
+            .unwrap();
+        let b_row_id = before_manifest
+            .entries()
+            .iter()
+            .find(|e| e.file_path() == "test/b.parquet")
+            .unwrap()
+            .data_file()
+            .first_row_id();
+        assert_eq!(b_row_id, Some(5));
+
+        let mut i = intent(Operation::Delete);
+        i.removed_data_files = vec![data_file(&base, "test/a.parquet", 5)];
+        let mut commit = MergingSnapshotProducer::new(i).apply(&table).await.unwrap();
+        let snapshot = added_snapshot(&mut commit);
+
+        let list = table.manifest_list_reader(&snapshot).load().await.unwrap();
+        let rewritten = list
+            .entries()
+            .iter()
+            .find(|m| m.added_snapshot_id == snapshot.snapshot_id())
+            .unwrap();
+        let manifest = table.manifest_reader().read(rewritten).await.unwrap();
+        let b = manifest
+            .entries()
+            .iter()
+            .find(|e| e.file_path() == "test/b.parquet")
+            .unwrap();
+        assert_eq!(b.data_file().first_row_id(), b_row_id);
+        // The new snapshot starts its range where the table's next_row_id was.
+        assert_eq!(
+            snapshot.first_row_id(),
+            Some(table.metadata().next_row_id())
+        );
+    }
+
+    /// Every manifest the producer writes, including rewrites, is recorded as
+    /// owned before the write starts.
+    #[tokio::test]
+    async fn test_owned_artifacts_cover_rewrites_and_added_manifests() {
+        let base = make_v2_minimal_table();
+        let table = append_to(&base, vec![data_file(&base, "test/a.parquet", 1)]).await;
+
+        let mut i = intent(Operation::Overwrite);
+        i.removed_data_files = vec![data_file(&base, "test/a.parquet", 1)];
+        i.added_data_files = vec![data_file(&base, "test/x.parquet", 1)];
+        let mut producer = MergingSnapshotProducer::new(i);
+        let mut commit = producer.apply(&table).await.unwrap();
+        let snapshot = added_snapshot(&mut commit);
+
+        let list = table.manifest_list_reader(&snapshot).load().await.unwrap();
+        for m in list.entries() {
+            if m.added_snapshot_id == snapshot.snapshot_id() {
+                assert!(producer.owned_artifacts.contains(&m.manifest_path));
+            }
+        }
+        assert!(producer.owned_artifacts.contains(snapshot.manifest_list()));
+        // One rewrite, one added manifest, one manifest list.
+        assert_eq!(producer.owned_artifacts.len(), 3);
     }
 
     #[tokio::test]

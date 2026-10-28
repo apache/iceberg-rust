@@ -52,6 +52,10 @@ pub(crate) enum CachedObjectKey {
     Manifest(ManifestKey),
 }
 
+/// Identifies a parsed manifest: its path plus every manifest-list value the
+/// reader inherits onto its entries. Two references to one physical manifest
+/// with different inherited values parse to different entries, so anything
+/// derived from parsed entries must be keyed by this, not by path alone.
 #[derive(Clone, Debug, Hash, Eq, PartialEq)]
 pub(crate) struct ManifestKey {
     path: String,
@@ -61,7 +65,7 @@ pub(crate) struct ManifestKey {
 }
 
 impl ManifestKey {
-    fn new(manifest_file: &ManifestFile) -> Self {
+    pub(crate) fn new(manifest_file: &ManifestFile) -> Self {
         Self {
             path: manifest_file.manifest_path.clone(),
             added_snapshot_id: manifest_file.added_snapshot_id,
