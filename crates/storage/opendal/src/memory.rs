@@ -24,3 +24,32 @@ use crate::utils::from_opendal_error;
 pub(crate) fn memory_config_build() -> Result<Operator> {
     Operator::from_config(MemoryConfig::default()).map_err(from_opendal_error)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{OpenDalClientConfig, OpenDalStorage, default_memory_operator};
+
+    #[test]
+    fn test_default_memory_operator() {
+        let op = default_memory_operator();
+        assert_eq!(op.info().scheme().to_string(), "memory");
+    }
+
+    #[test]
+    fn test_relativize_path_memory() {
+        let storage = OpenDalStorage::Memory {
+            operator: default_memory_operator(),
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        assert_eq!(
+            storage.relativize_path("memory:/path/to/file").unwrap(),
+            "path/to/file"
+        );
+        // Without the scheme prefix, falls back to stripping the leading slash
+        assert_eq!(
+            storage.relativize_path("/path/to/file").unwrap(),
+            "path/to/file"
+        );
+    }
+}
