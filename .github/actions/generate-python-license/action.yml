@@ -31,7 +31,7 @@ runs:
       working-directory: bindings/python
       run: |
         # cargo about exits 0 after warnings and when it falls back to a license template. Set up the toolchain first, as rustup writes to stderr when installing it.
-        cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml about.hbs 2>&1 > cargo-about-output.txt | tee "$RUNNER_TEMP/cargo-about.log"
+        cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml -o cargo-about-output.txt about.hbs 2>&1 | tee "$RUNNER_TEMP/cargo-about.log"
         if [[ -s "$RUNNER_TEMP/cargo-about.log" ]] || grep -n '<year>' cargo-about-output.txt; then
           echo "::error::bindings/python/about.toml needs an update, see bindings/python/LICENSING.md"
           exit 1
