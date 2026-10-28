@@ -119,7 +119,7 @@ async fn test_append_data_file_conflict() {
         .select_all()
         .build()
         .unwrap()
-        .to_arrow()
+        .to_arrow(Default::default())
         .await
         .unwrap();
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();

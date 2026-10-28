@@ -80,6 +80,7 @@ use futures::TryStreamExt;
 pub use plan::CowRewriteFile;
 pub use rewriter::{CowBatchRewrite, CowBatchRewriter};
 
+use crate::arrow::ArrowReaderOptions;
 use crate::expr::Predicate;
 use crate::scan::FileScanTaskStream;
 use crate::spec::{DataFile, PartitionKey};
@@ -273,7 +274,11 @@ impl<'a> CowRewriteBuilder<'a> {
             // candidates are fetched once per file.
             let mut reader_builder = self.table.reader_builder();
             if let Some(batch_size) = self.batch_size {
-                reader_builder = reader_builder.with_batch_size(batch_size);
+                reader_builder = reader_builder.with_options(
+                    ArrowReaderOptions::builder()
+                        .with_batch_size(batch_size)
+                        .build(),
+                );
             }
 
             let mut batches = reader_builder.build().read(tasks)?.stream();

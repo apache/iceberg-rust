@@ -71,14 +71,45 @@ pub struct iceberg::arrow::ArrowReaderBuilder
 impl iceberg::arrow::ArrowReaderBuilder
 pub fn iceberg::arrow::ArrowReaderBuilder::build(self) -> iceberg::arrow::ArrowReader
 pub fn iceberg::arrow::ArrowReaderBuilder::new(file_io: iceberg::io::FileIO, runtime: iceberg::Runtime) -> Self
-pub fn iceberg::arrow::ArrowReaderBuilder::with_batch_size(self, batch_size: usize) -> Self
-pub fn iceberg::arrow::ArrowReaderBuilder::with_bloom_filter_enabled(self, bloom_filter_enabled: bool) -> Self
-pub fn iceberg::arrow::ArrowReaderBuilder::with_data_file_concurrency_limit(self, val: usize) -> Self
-pub fn iceberg::arrow::ArrowReaderBuilder::with_metadata_size_hint(self, metadata_size_hint: usize) -> Self
-pub fn iceberg::arrow::ArrowReaderBuilder::with_range_coalesce_bytes(self, range_coalesce_bytes: u64) -> Self
-pub fn iceberg::arrow::ArrowReaderBuilder::with_range_fetch_concurrency(self, range_fetch_concurrency: usize) -> Self
-pub fn iceberg::arrow::ArrowReaderBuilder::with_row_group_filtering_enabled(self, row_group_filtering_enabled: bool) -> Self
-pub fn iceberg::arrow::ArrowReaderBuilder::with_row_selection_enabled(self, row_selection_enabled: bool) -> Self
+pub fn iceberg::arrow::ArrowReaderBuilder::with_options(self, options: iceberg::arrow::ArrowReaderOptions) -> Self
+pub fn iceberg::arrow::ArrowReaderBuilder::with_parquet_options(self, options: iceberg::arrow::ParquetReadOptions) -> Self
+pub struct iceberg::arrow::ArrowReaderOptions
+impl iceberg::arrow::ArrowReaderOptions
+pub fn iceberg::arrow::ArrowReaderOptions::batch_size(&self) -> core::option::Option<usize>
+pub fn iceberg::arrow::ArrowReaderOptions::bloom_filter_enabled(&self) -> bool
+pub fn iceberg::arrow::ArrowReaderOptions::data_file_concurrency_limit(&self) -> core::option::Option<usize>
+pub fn iceberg::arrow::ArrowReaderOptions::parquet_options(&self) -> &iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ArrowReaderOptions::row_group_filtering_enabled(&self) -> bool
+pub fn iceberg::arrow::ArrowReaderOptions::row_selection_enabled(&self) -> bool
+impl core::clone::Clone for iceberg::arrow::ArrowReaderOptions
+pub fn iceberg::arrow::ArrowReaderOptions::clone(&self) -> iceberg::arrow::ArrowReaderOptions
+impl core::default::Default for iceberg::arrow::ArrowReaderOptions
+pub fn iceberg::arrow::ArrowReaderOptions::default() -> Self
+impl core::fmt::Debug for iceberg::arrow::ArrowReaderOptions
+pub fn iceberg::arrow::ArrowReaderOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::arrow::ArrowReaderOptions
+pub fn iceberg::arrow::ArrowReaderOptions::builder() -> ArrowReaderOptionsBuilder<((), (), (), (), (), ())>
+impl serde_core::ser::Serialize for iceberg::arrow::ArrowReaderOptions
+pub fn iceberg::arrow::ArrowReaderOptions::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::arrow::ArrowReaderOptions where iceberg::arrow::ArrowReaderOptions: core::default::Default
+pub fn iceberg::arrow::ArrowReaderOptions::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::arrow::ParquetReadOptions
+impl iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::metadata_size_hint(&self) -> usize
+pub fn iceberg::arrow::ParquetReadOptions::range_coalesce_bytes(&self) -> u64
+pub fn iceberg::arrow::ParquetReadOptions::range_fetch_concurrency(&self) -> usize
+impl core::clone::Clone for iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::clone(&self) -> iceberg::arrow::ParquetReadOptions
+impl core::default::Default for iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::default() -> Self
+impl core::fmt::Debug for iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::builder() -> ParquetReadOptionsBuilder<((), (), ())>
+impl serde_core::ser::Serialize for iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::arrow::ParquetReadOptions where iceberg::arrow::ParquetReadOptions: core::default::Default
+pub fn iceberg::arrow::ParquetReadOptions::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::arrow::PartitionValueCalculator
 impl iceberg::arrow::PartitionValueCalculator
 pub fn iceberg::arrow::PartitionValueCalculator::calculate(&self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<arrow_array::array::ArrayRef>
@@ -1437,7 +1468,7 @@ impl iceberg::scan::TableScan
 pub fn iceberg::scan::TableScan::column_names(&self) -> core::option::Option<&[alloc::string::String]>
 pub async fn iceberg::scan::TableScan::plan_files(&self) -> iceberg::Result<iceberg::scan::FileScanTaskStream>
 pub fn iceberg::scan::TableScan::snapshot(&self) -> core::option::Option<&iceberg::spec::SnapshotRef>
-pub async fn iceberg::scan::TableScan::to_arrow(&self) -> iceberg::Result<iceberg::scan::ArrowRecordBatchStream>
+pub async fn iceberg::scan::TableScan::to_arrow(&self, options: iceberg::arrow::ArrowReaderOptions) -> iceberg::Result<iceberg::scan::ArrowRecordBatchStream>
 impl core::fmt::Debug for iceberg::scan::TableScan
 pub fn iceberg::scan::TableScan::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::scan::TableScanBuilder<'a>
@@ -1448,15 +1479,10 @@ pub fn iceberg::scan::TableScanBuilder<'a>::select(self, column_names: impl core
 pub fn iceberg::scan::TableScanBuilder<'a>::select_all(self) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::select_empty(self) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::snapshot_id(self, snapshot_id: i64) -> Self
-pub fn iceberg::scan::TableScanBuilder<'a>::with_batch_size(self, batch_size: core::option::Option<usize>) -> Self
-pub fn iceberg::scan::TableScanBuilder<'a>::with_bloom_filter_enabled(self, bloom_filter_enabled: bool) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_case_sensitive(self, case_sensitive: bool) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_concurrency_limit(self, limit: usize) -> Self
-pub fn iceberg::scan::TableScanBuilder<'a>::with_data_file_concurrency_limit(self, limit: usize) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_filter(self, predicate: iceberg::expr::Predicate) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_manifest_entry_concurrency_limit(self, limit: usize) -> Self
-pub fn iceberg::scan::TableScanBuilder<'a>::with_row_group_filtering_enabled(self, row_group_filtering_enabled: bool) -> Self
-pub fn iceberg::scan::TableScanBuilder<'a>::with_row_selection_enabled(self, row_selection_enabled: bool) -> Self
 pub type iceberg::scan::ArrowRecordBatchStream = futures_core::stream::BoxStream<'static, iceberg::Result<arrow_array::record_batch::RecordBatch>>
 pub type iceberg::scan::FileScanTaskStream = futures_core::stream::BoxStream<'static, iceberg::Result<iceberg::scan::FileScanTask>>
 pub mod iceberg::sensitive
