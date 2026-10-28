@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   validate-release-tag:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       cargo-version: ${{ steps.validate.outputs.cargo-version }}
       is-rc: ${{ steps.validate.outputs.is-rc }}
@@ -103,7 +103,7 @@ jobs:
           echo "is-rc=$IS_RC" >> $GITHUB_OUTPUT
 
   sdist:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [validate-release-tag]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -142,16 +142,18 @@ jobs:
     strategy:
       max-parallel: 15
       matrix:
+        # Keep `targets` in bindings/python/about.toml in sync with these.
         include:
           - { os: windows-latest }
+          - { os: windows-11-arm }
           - { os: macos-latest, target: "universal2-apple-darwin" }
-          - { os: ubuntu-latest, target: "x86_64" }
+          - { os: ubuntu-24.04, target: "x86_64" }
           - {
-              os: ubuntu-latest,
+              os: ubuntu-24.04,
               target: "aarch64",
               manylinux: "manylinux_2_28",
             }
-          - { os: ubuntu-latest, target: "armv7l" }
+          - { os: ubuntu-24.04, target: "armv7l" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -183,6 +185,7 @@ jobs:
         uses: $/.github/actions/setup-builder
         with:
           rust-version: ${{ steps.get-msrv.outputs.msrv }}
+      - uses: $/.github/actions/generate-python-license
       - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           target: ${{ matrix.target }}
@@ -212,7 +215,7 @@ jobs:
   pypi-publish:
     name: Publish Python 🐍 distribution 📦 to Pypi
     needs: [sdist, wheels]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     environment:
       name: pypi
@@ -229,7 +232,7 @@ jobs:
           merge-multiple: true
           path: bindings/python/dist
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           skip-existing: true
           packages-dir: bindings/python/dist
