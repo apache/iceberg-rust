@@ -715,6 +715,120 @@ mod tests {
         }
     }
 
+    /// A manifest's partition values are encoded for the partition type its
+    /// spec had when it was written. Promoting the source column (`int` to
+    /// `long`) changes that type under the current schema; the rewrite must
+    /// keep the entries readable and their partition values intact.
+    #[tokio::test]
+    async fn test_rewrite_manifest_after_partition_source_type_promotion() {
+        use crate::TableIdent;
+        use crate::io::FileIO;
+        use crate::spec::{
+            FormatVersion, NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder,
+            TableMetadataBuilder, Transform, Type,
+        };
+        use crate::test_utils::test_runtime;
+
+        let int_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        let spec = PartitionSpec::builder(int_schema.clone())
+            .add_partition_field("x", "x", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let metadata = TableMetadataBuilder::new(
+            int_schema,
+            spec,
+            SortOrder::unsorted_order(),
+            "memory:///table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+        let base = Table::builder()
+            .metadata(metadata)
+            .metadata_location("memory:///table/metadata/v1.json")
+            .identifier(TableIdent::from_strs(["ns", "t"]).unwrap())
+            .file_io(FileIO::new_with_memory())
+            .runtime(test_runtime())
+            .build()
+            .unwrap();
+
+        let int_file = |path: &str| {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path(path.to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(100)
+                .record_count(1)
+                .partition_spec_id(base.metadata().default_partition_spec_id())
+                .partition(Struct::from_iter([Some(Literal::int(7))]))
+                .build()
+                .unwrap()
+        };
+        let table = append_to(&base, vec![
+            int_file("test/a.parquet"),
+            int_file("test/b.parquet"),
+        ])
+        .await;
+
+        // Promote x: int -> long.
+        let long_schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .add_current_schema(long_schema)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let promoted = table.clone().with_metadata(std::sync::Arc::new(metadata));
+
+        let mut i = intent(Operation::Delete);
+        i.removed_data_files = vec![int_file("test/a.parquet")];
+        let mut commit = MergingSnapshotProducer::new(i)
+            .apply(&promoted)
+            .await
+            .unwrap();
+        let snapshot = added_snapshot(&mut commit);
+
+        let list = promoted
+            .manifest_list_reader(&snapshot)
+            .load()
+            .await
+            .unwrap();
+        let rewritten = list
+            .entries()
+            .iter()
+            .find(|m| m.added_snapshot_id == snapshot.snapshot_id())
+            .unwrap();
+        assert_eq!(entries_of(&promoted, rewritten).await, vec![
+            (ManifestStatus::Deleted, "test/a.parquet".to_string()),
+            (ManifestStatus::Existing, "test/b.parquet".to_string()),
+        ]);
+        let manifest = promoted.manifest_reader().read(rewritten).await.unwrap();
+        for entry in manifest.entries() {
+            assert_eq!(
+                entry.data_file().partition(),
+                &Struct::from_iter([Some(Literal::int(7))])
+            );
+        }
+    }
+
     /// On v3, existing entries keep the row ids they were assigned when first
     /// committed, and the rewritten manifest gets its own range from the list
     /// writer.

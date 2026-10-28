@@ -221,6 +221,9 @@ impl Transform {
             (Self::Hour, PrimitiveLiteral::Int(ordinal)) => Self::human_hour(ordinal),
             (_, value) => {
                 let field_type = field_type.as_primitive_type().unwrap();
+                // A value written before its source column was promoted (`int`
+                // to `long`, `float` to `double`) still carries the old type.
+                let value = value.promote_to(field_type).unwrap_or(value);
                 Datum::new(field_type.clone(), value).to_human_string()
             }
         }
@@ -1319,6 +1322,21 @@ mod tests {
                 Some(&Literal::string("unformatted"))
             ),
             "unformatted"
+        );
+    }
+
+    /// A partition value written before its source column was promoted keeps
+    /// the old literal type; rendering it under the promoted type must widen it
+    /// rather than panic.
+    #[test]
+    fn test_to_human_string_promotes_value_to_declared_type() {
+        assert_eq!(human(Transform::Identity, PrimitiveType::Long, 7), "7");
+        assert_eq!(
+            Transform::Identity.to_human_string(
+                &Type::Primitive(PrimitiveType::Double),
+                Some(&Literal::float(1.5_f32))
+            ),
+            "1.5"
         );
     }
 
