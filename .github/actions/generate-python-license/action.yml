@@ -20,7 +20,6 @@ description: 'Regenerates bindings/python/LICENSE and NOTICE with the root files
 runs:
   using: "composite"
   steps:
-    # rustup's install output would otherwise fail the cargo about stderr check.
     - name: Setup Rust toolchain
       uses: $/.github/actions/setup-builder
 
