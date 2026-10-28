@@ -138,9 +138,6 @@ pub struct FileScanTask {
     #[builder(default)]
     sort_order: Option<SortOrderRef>,
 
-    /// The data file's column statistics for the columns requested with
-    /// [`TableScanBuilder::with_column_stats`](crate::scan::TableScanBuilder::with_column_stats).
-    /// `None` if no statistics were requested.
     #[builder(default, setter(transform = |stats: Option<FileScanTaskColumnStats>| stats.map(Box::new)))]
     column_stats: Option<Box<FileScanTaskColumnStats>>,
 
@@ -829,32 +826,29 @@ impl From<FileScanTaskDeleteFile> for Result<FileScanTaskDeleteFile> {
 /// Column statistics of a [`FileScanTask`]'s data file, keyed by field id and limited to the
 /// columns requested for the scan.
 ///
-/// A requested column missing from a map has unknown statistics of that kind, for example when
-/// the table's metrics mode records no bounds. Bounds are inclusive even when truncated. A
-/// manifest written before a type promotion stores the narrower type, so bounds are promoted to
-/// the column's type in the scan schema (`int` to `long`, `float` to `double`, a decimal to a
-/// wider precision), and a bound that cannot be promoted is omitted. All statistics cover the
-/// whole file, before delete files, the scan's filter or task splits.
+/// A requested column missing from a map has unknown statistics of that kind. Bounds are
+/// inclusive, and all statistics cover the whole file, not the scan's filter, delete files or
+/// task splits.
+///
+/// A manifest written before a type promotion stores the narrower type, so bounds are promoted to
+/// the column's type in the scan schema: `int` to `long`, `float` to `double`, and a decimal to a
+/// wider precision with the same scale. A bound of any other type is omitted, including a `date`
+/// bound under a `timestamp` column, which is not converted yet.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TypedBuilder)]
 #[builder(field_defaults(default, setter(prefix = "with_")))]
 pub struct FileScanTaskColumnStats {
-    /// Size in bytes of each column's data in the file, per field id.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     column_sizes: HashMap<i32, u64>,
 
-    /// Number of values per field id, including nulls and NaNs.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     value_counts: HashMap<i32, u64>,
 
-    /// Number of null values per field id.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     null_value_counts: HashMap<i32, u64>,
 
-    /// Number of NaN values per field id.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     nan_value_counts: HashMap<i32, u64>,
 
-    /// Inclusive lower bound per field id.
     #[serde(
         default,
         skip_serializing_if = "HashMap::is_empty",
@@ -862,7 +856,6 @@ pub struct FileScanTaskColumnStats {
     )]
     lower_bounds: HashMap<i32, Datum>,
 
-    /// Inclusive upper bound per field id.
     #[serde(
         default,
         skip_serializing_if = "HashMap::is_empty",
@@ -871,20 +864,18 @@ pub struct FileScanTaskColumnStats {
     upper_bounds: HashMap<i32, Datum>,
 }
 
-/// Returns `bound` typed as column `field_id` of `schema`, or `None` if it cannot be promoted to
-/// that type. A decimal is retyped only to a wider precision with the same scale.
-fn bound_as_column_type(bound: &Datum, schema: &Schema, field_id: i32) -> Option<Datum> {
-    let target = schema
-        .field_by_id(field_id)?
-        .field_type
-        .as_primitive_type()?;
-    if bound.data_type() == target {
+/// The field id and type of each column whose statistics a scan keeps.
+pub(crate) type ColumnStatsColumns = Arc<[(i32, PrimitiveType)]>;
+
+/// Returns `bound` typed as `column_type`, or `None` if it cannot be promoted to it.
+fn bound_as_column_type(bound: &Datum, column_type: &PrimitiveType) -> Option<Datum> {
+    if bound.data_type() == column_type {
         return Some(bound.clone());
     }
-    if let Some(promoted) = bound.promote_to(target) {
+    if let Some(promoted) = bound.promote_to(column_type) {
         return Some(promoted);
     }
-    match (bound.data_type(), target) {
+    match (bound.data_type(), column_type) {
         (
             PrimitiveType::Decimal {
                 precision: from_precision,
@@ -892,50 +883,52 @@ fn bound_as_column_type(bound: &Datum, schema: &Schema, field_id: i32) -> Option
             },
             PrimitiveType::Decimal { precision, scale },
         ) if from_scale == scale && from_precision <= precision => {
-            Some(Datum::new(target.clone(), bound.literal().clone()))
+            Some(Datum::new(column_type.clone(), bound.literal().clone()))
         }
         _ => None,
     }
 }
 
 impl FileScanTaskColumnStats {
-    pub(crate) fn from_data_file(data_file: &DataFile, field_ids: &[i32], schema: &Schema) -> Self {
-        fn retain<V: Clone>(map: &HashMap<i32, V>, field_ids: &[i32]) -> HashMap<i32, V> {
+    pub(crate) fn from_data_file(data_file: &DataFile, columns: &[(i32, PrimitiveType)]) -> Self {
+        fn retain<V: Clone>(
+            map: &HashMap<i32, V>,
+            columns: &[(i32, PrimitiveType)],
+        ) -> HashMap<i32, V> {
             if map.is_empty() {
                 return HashMap::new();
             }
-            let mut retained = HashMap::with_capacity(field_ids.len().min(map.len()));
+            let mut retained = HashMap::with_capacity(columns.len().min(map.len()));
             retained.extend(
-                field_ids
+                columns
                     .iter()
-                    .filter_map(|id| map.get(id).map(|value| (*id, value.clone()))),
+                    .filter_map(|(id, _)| map.get(id).map(|value| (*id, value.clone()))),
             );
             retained
         }
 
         fn retain_bounds(
             bounds: &HashMap<i32, Datum>,
-            field_ids: &[i32],
-            schema: &Schema,
+            columns: &[(i32, PrimitiveType)],
         ) -> HashMap<i32, Datum> {
             if bounds.is_empty() {
                 return HashMap::new();
             }
-            let mut retained = HashMap::with_capacity(field_ids.len().min(bounds.len()));
-            retained.extend(field_ids.iter().filter_map(|id| {
-                let bound = bound_as_column_type(bounds.get(id)?, schema, *id)?;
+            let mut retained = HashMap::with_capacity(columns.len().min(bounds.len()));
+            retained.extend(columns.iter().filter_map(|(id, column_type)| {
+                let bound = bound_as_column_type(bounds.get(id)?, column_type)?;
                 Some((*id, bound))
             }));
             retained
         }
 
         Self {
-            column_sizes: retain(data_file.column_sizes(), field_ids),
-            value_counts: retain(data_file.value_counts(), field_ids),
-            null_value_counts: retain(data_file.null_value_counts(), field_ids),
-            nan_value_counts: retain(data_file.nan_value_counts(), field_ids),
-            lower_bounds: retain_bounds(data_file.lower_bounds(), field_ids, schema),
-            upper_bounds: retain_bounds(data_file.upper_bounds(), field_ids, schema),
+            column_sizes: retain(data_file.column_sizes(), columns),
+            value_counts: retain(data_file.value_counts(), columns),
+            null_value_counts: retain(data_file.null_value_counts(), columns),
+            nan_value_counts: retain(data_file.nan_value_counts(), columns),
+            lower_bounds: retain_bounds(data_file.lower_bounds(), columns),
+            upper_bounds: retain_bounds(data_file.upper_bounds(), columns),
         }
     }
 
@@ -1404,14 +1397,8 @@ mod tests {
         ];
 
         for (bound, column_type, expected) in cases {
-            let schema = Schema::builder()
-                .with_fields(vec![
-                    NestedField::required(1, "c", column_type.clone()).into(),
-                ])
-                .build()
-                .unwrap();
             assert_eq!(
-                bound_as_column_type(&bound, &schema, 1),
+                bound_as_column_type(&bound, &column_type),
                 expected,
                 "{bound:?} as {column_type:?}"
             );

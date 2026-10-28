@@ -108,11 +108,12 @@ fn collect_scan_field_ids(
         .collect()
 }
 
-fn collect_column_stats_field_ids(
+/// Resolves the columns to keep statistics for into their field ids and types.
+fn resolve_column_stats_columns(
     schema: &Schema,
     column_names: Option<&[String]>,
     case_sensitive: bool,
-) -> Result<Option<Arc<[i32]>>> {
+) -> Result<Option<ColumnStatsColumns>> {
     column_names
         .map(|column_names| {
             column_names
@@ -124,15 +125,15 @@ fn collect_column_stats_field_ids(
                         ));
                     }
                     let field_id = require_field_id(schema, column_name, case_sensitive)?;
-                    if !schema
+                    let column_type = schema
                         .field_by_id(field_id)
-                        .is_some_and(|field| field.field_type.is_primitive())
-                    {
-                        return Err(invalid_data!(
-                            "Column {column_name} is not a primitive field and has no column statistics"
-                        ));
-                    }
-                    Ok(field_id)
+                        .and_then(|field| field.field_type.as_primitive_type())
+                        .ok_or_else(|| {
+                            invalid_data!(
+                                "Column {column_name} is not a primitive field and has no column statistics"
+                            )
+                        })?;
+                    Ok((field_id, column_type.clone()))
                 })
                 .collect()
         })
@@ -259,7 +260,8 @@ impl<'a> TableScanBuilder<'a> {
     /// [`FileScanTask`], exposed as [`FileScanTask::column_stats`].
     ///
     /// Names resolve against the scan's schema with the scan's case sensitivity and must name
-    /// primitive fields, which may be nested. By default, tasks carry no statistics.
+    /// primitive fields, such as `s.f` for a field of struct `s`. By default, tasks carry no
+    /// statistics.
     ///
     /// [`build`](Self::build) fails if a name matches no field, matches more than one field when
     /// the scan is case-insensitive, or names a struct, list, map or metadata column.
@@ -450,7 +452,7 @@ impl<'a> TableScanBuilder<'a> {
         };
         let field_ids =
             collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
-        let column_stats_field_ids = collect_column_stats_field_ids(
+        let column_stats_columns = resolve_column_stats_columns(
             &schema,
             self.column_stats_names.as_deref(),
             self.case_sensitive,
@@ -490,7 +492,7 @@ impl<'a> TableScanBuilder<'a> {
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
             unified_partition_type,
             sort_orders,
-            column_stats_field_ids,
+            column_stats_columns,
         };
 
         Ok(TableScan {
@@ -839,7 +841,7 @@ mod tests {
     use parquet::arrow::ArrowWriter;
     use uuid::Uuid;
 
-    use super::{collect_column_stats_field_ids, resolve_field_id};
+    use super::{resolve_column_stats_columns, resolve_field_id};
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::FileIO;
@@ -849,7 +851,7 @@ mod tests {
     };
     use crate::scan::{FileScanTask, FileScanTaskColumnStats, FileScanTaskDeleteFile, TableScan};
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, MAIN_BRANCH,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MAIN_BRANCH,
         ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, MappedField,
         NameMapping, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
         Snapshot, SortDirection, SortField, SortOrder, Struct, StructType, Summary,
@@ -913,8 +915,8 @@ mod tests {
         );
     }
 
-    /// A schema with a struct `s` (field id 1) whose only child is `f` (field id 2).
-    fn struct_schema() -> Schema {
+    /// A schema with a struct `s`, a list `l` and a long `n`, whose field ids are 1 to 5.
+    fn nested_schema() -> Schema {
         Schema::builder()
             .with_fields(vec![
                 NestedField::required(
@@ -925,30 +927,70 @@ mod tests {
                     ])),
                 )
                 .into(),
+                NestedField::required(
+                    3,
+                    "l",
+                    Type::List(ListType::new(
+                        NestedField::list_element(4, PrimitiveType::Long, true).into(),
+                    )),
+                )
+                .into(),
+                NestedField::required(5, "n", PrimitiveType::Long).into(),
             ])
             .build()
             .unwrap()
     }
 
+    fn column_names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
     #[test]
-    fn test_collect_column_stats_field_ids_resolves_nested_field() {
+    fn test_resolve_column_stats_columns_resolves_primitive_names() {
+        let schema = nested_schema();
+        let long = PrimitiveType::Long;
+
         assert_eq!(
-            collect_column_stats_field_ids(&struct_schema(), Some(&["s.f".to_string()]), true)
+            resolve_column_stats_columns(&schema, Some(&column_names(&["s.f", "n"])), true)
                 .unwrap(),
-            Some(Arc::<[i32]>::from([2]))
+            Some(Arc::<[_]>::from([(2, long.clone()), (5, long.clone())]))
+        );
+        assert_eq!(
+            resolve_column_stats_columns(&schema, Some(&column_names(&["N"])), false).unwrap(),
+            Some(Arc::<[_]>::from([(5, long)]))
+        );
+        assert_eq!(
+            resolve_column_stats_columns(&schema, None, true).unwrap(),
+            None
         );
     }
 
     #[test]
-    fn test_collect_column_stats_field_ids_rejects_struct_field() {
-        let err = collect_column_stats_field_ids(&struct_schema(), Some(&["s".to_string()]), true)
-            .unwrap_err();
+    fn test_resolve_column_stats_columns_rejects_names_without_statistics() {
+        let schema = nested_schema();
+        let cases = [
+            (
+                "s",
+                "Column s is not a primitive field and has no column statistics",
+            ),
+            (
+                "l",
+                "Column l is not a primitive field and has no column statistics",
+            ),
+            (
+                RESERVED_COL_NAME_FILE,
+                "Metadata column _file has no column statistics",
+            ),
+            ("missing", "Column missing not found in table"),
+            ("N", "Column N not found in table"),
+        ];
 
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert_eq!(
-            err.message(),
-            "Column s is not a primitive field and has no column statistics"
-        );
+        for (name, expected) in cases {
+            let err = resolve_column_stats_columns(&schema, Some(&column_names(&[name])), true)
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "{name}");
+            assert!(err.message().starts_with(expected), "{name}: {err}");
+        }
     }
 
     #[test]
@@ -1688,18 +1730,25 @@ mod tests {
         );
     }
 
-    /// One column's statistics: field id, column size, value count, null count, NaN count,
-    /// lower bound and upper bound.
-    type ColumnStat = (i32, u64, u64, u64, Option<u64>, Datum, Datum);
-
-    fn column_stats(columns: &[ColumnStat]) -> FileScanTaskColumnStats {
+    /// Statistics for long columns `field_ids`, with values derived from each id so that a
+    /// column's statistics do not depend on which other columns are present.
+    fn column_stats(field_ids: &[i32]) -> FileScanTaskColumnStats {
+        let counts = |count: fn(u64) -> u64| -> HashMap<i32, u64> {
+            field_ids.iter().map(|&id| (id, count(id as u64))).collect()
+        };
+        let bounds = |offset: i64| -> HashMap<i32, Datum> {
+            field_ids
+                .iter()
+                .map(|&id| (id, Datum::long(offset + i64::from(id))))
+                .collect()
+        };
         FileScanTaskColumnStats::builder()
-            .with_column_sizes(columns.iter().map(|c| (c.0, c.1)).collect())
-            .with_value_counts(columns.iter().map(|c| (c.0, c.2)).collect())
-            .with_null_value_counts(columns.iter().map(|c| (c.0, c.3)).collect())
-            .with_nan_value_counts(columns.iter().filter_map(|c| Some((c.0, c.4?))).collect())
-            .with_lower_bounds(columns.iter().map(|c| (c.0, c.5.clone())).collect())
-            .with_upper_bounds(columns.iter().map(|c| (c.0, c.6.clone())).collect())
+            .with_column_sizes(counts(|id| 8 * id))
+            .with_value_counts(counts(|id| 10 + id))
+            .with_null_value_counts(counts(|id| id))
+            .with_nan_value_counts(counts(|id| 2 * id))
+            .with_lower_bounds(bounds(0))
+            .with_upper_bounds(bounds(100))
             .build()
     }
 
@@ -1719,33 +1768,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plan_files_retains_requested_column_stats() {
+    async fn test_plan_files_retains_only_requested_column_stats() {
         let mut fixture = TableTestFixture::new();
-
-        let x: ColumnStat = (1, 8, 1, 0, None, Datum::long(1), Datum::long(10));
-        let a: ColumnStat = (
-            4,
-            9,
-            1,
-            0,
-            None,
-            Datum::string("apple"),
-            Datum::string("pear"),
-        );
-        let dbl: ColumnStat = (5, 8, 1, 0, Some(1), Datum::double(1.5), Datum::double(2.5));
-
-        // The second file has no statistics for `x`.
+        // The second file has no statistics for `x` (field id 1).
         fixture
             .setup_manifest_files_with_column_stats(&[(None, vec![
-                column_stats(&[x.clone(), a.clone(), dbl.clone()]),
-                column_stats(&[a.clone(), dbl.clone()]),
+                column_stats(&[1, 2, 7]),
+                column_stats(&[2, 7]),
             ])])
+            .await;
+
+        let scan = fixture
+            .table
+            .scan()
+            .with_column_stats(["x", "i64"])
+            .build()
+            .unwrap();
+
+        assert_eq!(column_stats_by_file(scan).await, vec![
+            Some(column_stats(&[1, 7])),
+            Some(column_stats(&[7]))
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_carries_column_stats_only_when_requested() {
+        let mut fixture = TableTestFixture::new();
+        fixture
+            .setup_manifest_files_with_column_stats(&[(None, vec![column_stats(&[1])])])
             .await;
         let table = &fixture.table;
 
         assert_eq!(
             column_stats_by_file(table.scan().build().unwrap()).await,
-            vec![None, None]
+            vec![None]
         );
         assert_eq!(
             column_stats_by_file(
@@ -1756,68 +1812,52 @@ mod tests {
                     .unwrap()
             )
             .await,
-            vec![Some(column_stats(&[])), Some(column_stats(&[]))]
+            vec![Some(FileScanTaskColumnStats::default())]
         );
-        assert_eq!(
-            column_stats_by_file(
-                table
-                    .scan()
-                    .with_column_stats(["x", "dbl"])
-                    .build()
-                    .unwrap()
-            )
-            .await,
-            vec![
-                Some(column_stats(&[x, dbl.clone()])),
-                Some(column_stats(&[dbl])),
-            ]
-        );
-        assert_eq!(
-            column_stats_by_file(
-                table
-                    .scan()
-                    .with_case_sensitive(false)
-                    .with_column_stats(["A"])
-                    .build()
-                    .unwrap()
-            )
-            .await,
-            vec![
-                Some(column_stats(std::slice::from_ref(&a))),
-                Some(column_stats(&[a])),
-            ]
-        );
+    }
 
-        for column in ["unknown", "A"] {
-            let err = table
-                .scan()
-                .with_column_stats([column])
-                .build()
-                .unwrap_err();
-            assert_eq!(err.kind(), ErrorKind::DataInvalid);
-            assert!(
-                err.message()
-                    .starts_with(&format!("Column {column} not found in table")),
-                "unexpected error: {err}"
-            );
-        }
+    #[tokio::test]
+    async fn test_plan_files_resolves_column_stats_names_with_scan_case_sensitivity() {
+        let mut fixture = TableTestFixture::new();
+        fixture
+            .setup_manifest_files_with_column_stats(&[(None, vec![column_stats(&[1, 2])])])
+            .await;
+
+        let scan = fixture
+            .table
+            .scan()
+            .with_case_sensitive(false)
+            .with_column_stats(["X"])
+            .build()
+            .unwrap();
+
+        assert_eq!(column_stats_by_file(scan).await, vec![Some(column_stats(
+            &[1]
+        ))]);
+    }
+
+    #[test]
+    fn test_build_rejects_unknown_column_stats_name() {
+        let table = TableTestFixture::new().table;
 
         let err = table
             .scan()
-            .with_column_stats([RESERVED_COL_NAME_FILE])
+            .with_column_stats(["unknown"])
             .build()
             .unwrap_err();
+
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert_eq!(
-            err.message(),
-            format!("Metadata column {RESERVED_COL_NAME_FILE} has no column statistics")
-        );
     }
 
     #[tokio::test]
     async fn test_plan_files_promotes_bounds_to_scan_schema_type() {
         let mut fixture = TableTestFixture::new();
-
+        let y_bounds = |lower: Datum, upper: Datum| {
+            FileScanTaskColumnStats::builder()
+                .with_lower_bounds(HashMap::from([(2, lower)]))
+                .with_upper_bounds(HashMap::from([(2, upper)]))
+                .build()
+        };
         // `y` is a `long` in the table schema. The first manifest was written when it was an `int`.
         let int_schema = Arc::new(
             Schema::builder()
@@ -1828,28 +1868,28 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let written_as_int = column_stats(&[(2, 4, 1, 0, None, Datum::int(5), Datum::int(7))]);
-        let written_as_long = column_stats(&[(2, 4, 1, 0, None, Datum::long(6), Datum::long(9))]);
+        let written_as_long = y_bounds(Datum::long(6), Datum::long(9));
         fixture
             .setup_manifest_files_with_column_stats(&[
-                (Some(int_schema), vec![written_as_int]),
+                (Some(int_schema), vec![y_bounds(
+                    Datum::int(5),
+                    Datum::int(7),
+                )]),
                 (None, vec![written_as_long.clone()]),
             ])
             .await;
 
-        let promoted = column_stats(&[(2, 4, 1, 0, None, Datum::long(5), Datum::long(7))]);
-        assert_eq!(
-            column_stats_by_file(
-                fixture
-                    .table
-                    .scan()
-                    .with_column_stats(["y"])
-                    .build()
-                    .unwrap()
-            )
-            .await,
-            vec![Some(promoted), Some(written_as_long)]
-        );
+        let scan = fixture
+            .table
+            .scan()
+            .with_column_stats(["y"])
+            .build()
+            .unwrap();
+
+        assert_eq!(column_stats_by_file(scan).await, vec![
+            Some(y_bounds(Datum::long(5), Datum::long(7))),
+            Some(written_as_long)
+        ]);
     }
 
     #[tokio::test]
