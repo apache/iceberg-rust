@@ -720,11 +720,6 @@ impl TableScan {
         F: Fn(ManifestEntryContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
-        }
-
         // abort the plan if we encounter a manifest entry for a delete file
         if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
             return Err(Error::new(
@@ -777,11 +772,6 @@ impl TableScan {
         manifest_entry_context: ManifestEntryContext,
         mut delete_file_ctx_tx: Sender<DeleteFileContext>,
     ) -> Result<()> {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
-        }
-
         // abort the plan if we encounter a manifest entry that is not for a delete file
         if manifest_entry_context.manifest_entry.content_type() == DataContentType::Data {
             return Err(Error::new(
@@ -2058,35 +2048,6 @@ mod tests {
         assert_eq!(tasks[0].deletes().len(), 1);
     }
 
-    /// Evolves `table` so its historical `identity(x)` spec outlives the source column:
-    /// makes the default spec unpartitioned and drops `x` (field id 1) from the schema,
-    /// so the manifests' spec resolves `x` to `unknown`.
-    fn drop_promoted_partition_source(table: Table) -> Table {
-        let evolved_schema = Schema::builder()
-            .with_fields(
-                table
-                    .metadata()
-                    .current_schema()
-                    .as_struct()
-                    .fields()
-                    .iter()
-                    .filter(|field| field.id != 1)
-                    .cloned(),
-            )
-            .with_identifier_field_ids(vec![2])
-            .build()
-            .unwrap();
-        let metadata = TableMetadataBuilder::new_from_metadata(table.metadata().clone(), None)
-            .add_default_partition_spec(UnboundPartitionSpec::builder().build())
-            .unwrap()
-            .add_current_schema(evolved_schema)
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
-        table.with_metadata(Arc::new(metadata))
-    }
-
     #[tokio::test]
     async fn test_scan_keeps_eq_delete_after_dropping_promoted_source() {
         // Partition source `x` promoted int -> long, then dropped. The data file (int)
@@ -2094,7 +2055,8 @@ mod tests {
         // so the delete stays attached; otherwise it silently detaches.
         let mut fixture = TableTestFixture::new();
         fixture.setup_promoted_partition_with_eq_delete(false).await;
-        let table = drop_promoted_partition_source(fixture.table);
+        fixture.drop_partition_source(1);
+        let table = fixture.table;
 
         let tasks: Vec<FileScanTask> = table
             .scan()
@@ -2116,7 +2078,8 @@ mod tests {
         // source the DV partition check errors (long(7) vs int(7)).
         let mut fixture = TableTestFixture::new();
         fixture.setup_promoted_partition_with_dv().await;
-        let table = drop_promoted_partition_source(fixture.table);
+        fixture.drop_partition_source(1);
+        let table = fixture.table;
 
         let tasks: Vec<FileScanTask> = table
             .scan()
