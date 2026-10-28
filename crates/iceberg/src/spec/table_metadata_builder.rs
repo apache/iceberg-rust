@@ -4222,8 +4222,20 @@ mod tests {
             ))
     }
 
+    fn replaced_schema() -> Schema {
+        Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(4, "w", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
     #[test]
-    fn test_build_replacement_keeps_the_field_ids_of_columns_the_table_already_has() {
+    fn test_build_replacement_keeps_existing_field_ids_and_assigns_new_ones_above_last_column_id() {
         let metadata = builder_without_changes(FormatVersion::V2)
             .build_replacement(
                 replacement_schema(),
@@ -4237,28 +4249,68 @@ mod tests {
             .unwrap()
             .metadata;
 
-        let schema = metadata.current_schema();
-        assert_eq!(schema.field_by_name("z").unwrap().id, 3);
-        assert_eq!(schema.field_by_name("x").unwrap().id, 1);
-        // A fresh id, not 2 — that one belonged to the dropped `y`.
-        assert_eq!(schema.field_by_name("w").unwrap().id, 4);
+        assert_eq!(metadata.current_schema().as_ref(), &replaced_schema());
         assert_eq!(metadata.last_column_id, 4);
     }
 
     #[test]
-    fn test_build_replacement_rebinds_the_partition_spec_and_sort_order() {
-        // Source ids refer to the replacement schema, where `w` is 3; it becomes 4 once assigned.
+    fn test_build_replacement_does_not_reuse_the_id_of_a_dropped_column() {
+        let without_y = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+        let replacement = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "w", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = partition_replacement_builder(FormatVersion::V2)
+            .add_current_schema(without_y)
+            .unwrap()
+            .build_replacement(
+                replacement,
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let expected = Schema::builder()
+            .with_schema_id(2)
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(3, "w", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        assert_eq!(metadata.current_schema().as_ref(), &expected);
+        assert_eq!(metadata.last_column_id, 3);
+    }
+
+    #[test]
+    fn test_build_replacement_resolves_spec_and_sort_order_source_ids_against_the_replacement_schema()
+     {
         let spec = UnboundPartitionSpec::builder()
             .add_partition_field(unbound_field(3, "w", Transform::Identity))
             .unwrap()
             .build();
+        let sort_field = SortField {
+            source_id: 3,
+            transform: Transform::Identity,
+            direction: SortDirection::Ascending,
+            null_order: NullOrder::First,
+        };
         let sort_order = SortOrder::builder()
-            .with_sort_field(SortField {
-                source_id: 3,
-                transform: Transform::Identity,
-                direction: SortDirection::Ascending,
-                null_order: NullOrder::First,
-            })
+            .with_sort_field(sort_field.clone())
             .build(&replacement_schema())
             .unwrap();
 
@@ -4269,14 +4321,22 @@ mod tests {
             .unwrap()
             .metadata;
 
-        let w_id = metadata.current_schema().field_by_name("w").unwrap().id;
-        assert_eq!(w_id, 4);
-        assert_eq!(
-            metadata.default_partition_spec().fields()[0].source_id,
-            w_id
-        );
-        assert_eq!(metadata.default_partition_spec().fields()[0].field_id, 1001);
-        assert_eq!(metadata.default_sort_order().fields[0].source_id, w_id);
+        let expected_spec = PartitionSpec::builder(replaced_schema())
+            .with_spec_id(1)
+            .add_unbound_field(unbound_field(4, "w", Transform::Identity).with_field_id(1001))
+            .unwrap()
+            .build()
+            .unwrap();
+        let expected_sort_order = SortOrder::builder()
+            .with_order_id(2)
+            .with_sort_field(SortField {
+                source_id: 4,
+                ..sort_field
+            })
+            .build(&replaced_schema())
+            .unwrap();
+        assert_eq!(metadata.default_partition_spec().as_ref(), &expected_spec);
+        assert_eq!(metadata.default_sort_order().as_ref(), &expected_sort_order);
     }
 
     #[test]
@@ -4308,31 +4368,23 @@ mod tests {
             .unwrap()
             .metadata;
 
-        let fields = metadata
-            .default_partition_spec()
-            .fields()
-            .iter()
-            .map(|field| {
-                (
-                    field.source_id,
-                    field.field_id,
-                    field.name.as_str(),
-                    field.transform,
-                )
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(metadata.default_partition_spec().spec_id(), 1);
-        assert_eq!(fields, vec![
-            (3, 1002, "z_bucket", Transform::Bucket(8)),
-            (1, 1000, "x", Transform::Identity),
-        ]);
+        let expected_spec = PartitionSpec::builder(metadata.current_schema().clone())
+            .with_spec_id(1)
+            .add_unbound_fields([
+                unbound_field(3, "z_bucket", Transform::Bucket(8)).with_field_id(1002),
+                unbound_field(1, "x", Transform::Identity).with_field_id(1000),
+            ])
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(metadata.default_partition_spec().as_ref(), &expected_spec);
         assert_eq!(metadata.last_partition_id, 1002);
     }
 
     #[test]
     fn test_build_replacement_keeps_the_table_and_its_snapshots_but_not_its_current_one() {
         let base = populated_builder();
-        let uuid = base.metadata.table_uuid;
+        let previous = base.metadata.clone();
 
         let metadata = base
             .build_replacement(
@@ -4347,15 +4399,12 @@ mod tests {
             .unwrap()
             .metadata;
 
-        assert_eq!(metadata.table_uuid, uuid);
-        assert_eq!(metadata.location, TEST_LOCATION);
+        assert_eq!(metadata.table_uuid, previous.table_uuid);
+        assert_eq!(metadata.location, previous.location);
         assert_eq!(metadata.current_snapshot_id, None);
-        assert!(metadata.snapshot_by_id(1).is_some());
-        assert_eq!(metadata.snapshot_log.len(), 1);
-        assert_eq!(metadata.snapshot_log[0].snapshot_id, 1);
-        // The old schema is kept so the retained snapshots stay readable.
-        assert_eq!(metadata.schemas.len(), 2);
-        assert_ne!(metadata.current_schema_id, 0);
+        assert_eq!(metadata.snapshots, previous.snapshots);
+        assert_eq!(metadata.snapshot_log, previous.snapshot_log);
+        assert_eq!(metadata.schema_by_id(0), previous.schema_by_id(0));
     }
 
     #[test]
@@ -4373,34 +4422,29 @@ mod tests {
             .unwrap()
             .changes;
 
-        assert!(changes.contains(&TableUpdate::RemoveSnapshotRef {
-            ref_name: MAIN_BRANCH.to_string()
-        }));
-        assert!(
-            changes
-                .iter()
-                .any(|c| matches!(c, TableUpdate::AddSchema { .. }))
-        );
-        assert!(
-            changes
-                .iter()
-                .any(|c| matches!(c, TableUpdate::SetCurrentSchema { .. }))
-        );
-        assert!(
-            changes
-                .iter()
-                .any(|c| matches!(c, TableUpdate::SetDefaultSpec { .. }))
-        );
-        assert!(
-            changes
-                .iter()
-                .any(|c| matches!(c, TableUpdate::SetDefaultSortOrder { .. }))
-        );
-        assert!(
-            !changes
-                .iter()
-                .any(|c| matches!(c, TableUpdate::SetLocation { .. }))
-        );
+        assert_eq!(changes, vec![
+            TableUpdate::RemoveSnapshotRef {
+                ref_name: MAIN_BRANCH.to_string()
+            },
+            TableUpdate::AddSchema {
+                schema: replaced_schema()
+            },
+            TableUpdate::SetCurrentSchema {
+                schema_id: TableMetadataBuilder::LAST_ADDED
+            },
+            TableUpdate::AddSpec {
+                spec: UnboundPartitionSpec::builder().with_spec_id(1).build()
+            },
+            TableUpdate::SetDefaultSpec {
+                spec_id: TableMetadataBuilder::LAST_ADDED
+            },
+            TableUpdate::AddSortOrder {
+                sort_order: SortOrder::unsorted_order()
+            },
+            TableUpdate::SetDefaultSortOrder {
+                sort_order_id: TableMetadataBuilder::LAST_ADDED as i64
+            },
+        ]);
     }
 
     #[test]
@@ -4451,50 +4495,44 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.metadata.format_version, FormatVersion::V3);
-        assert!(result.metadata.default_partition_spec().fields().is_empty());
-        assert_eq!(result.metadata.properties.get("existing").unwrap(), "value");
-        assert_eq!(result.metadata.properties.get("new").unwrap(), "value");
-        assert!(
-            !result
-                .metadata
-                .properties
-                .contains_key(TableProperties::PROPERTY_FORMAT_VERSION)
+        assert_eq!(
+            result.metadata.properties,
+            HashMap::from_iter([
+                ("existing".to_string(), "value".to_string()),
+                ("new".to_string(), "value".to_string()),
+            ])
         );
-        assert!(
-            !result
-                .metadata
-                .properties
-                .contains_key(TableProperties::PROPERTY_UUID)
-        );
-        assert!(result.changes.iter().any(|change| matches!(
-            change,
-            TableUpdate::UpgradeFormatVersion {
-                format_version: FormatVersion::V3
-            }
-        )));
+        assert!(result.changes.contains(&TableUpdate::UpgradeFormatVersion {
+            format_version: FormatVersion::V3
+        }));
+        assert!(result.changes.contains(&TableUpdate::SetProperties {
+            updates: HashMap::from_iter([("new".to_string(), "value".to_string())])
+        }));
     }
 
     #[test]
     fn test_build_replacement_with_everything_unchanged_reuses_the_existing_ids() {
-        let base = builder_without_changes(FormatVersion::V2).build().unwrap();
-        let schema = base.metadata.current_schema().as_ref().clone();
+        let base = builder_without_changes(FormatVersion::V2)
+            .build()
+            .unwrap()
+            .metadata;
+        let schema = base.current_schema().as_ref().clone();
         let spec = base
-            .metadata
             .default_partition_spec()
             .as_ref()
             .clone()
             .into_unbound();
-        let sort_order = base.metadata.default_sort_order().as_ref().clone();
+        let sort_order = base.default_sort_order().as_ref().clone();
 
         let result = base
-            .metadata
+            .clone()
             .into_builder(Some(
                 "s3://bucket/test/location/metadata/metadata2.json".to_string(),
             ))
             .build_replacement(
-                schema,
-                spec,
-                sort_order,
+                schema.clone(),
+                spec.clone(),
+                sort_order.clone(),
                 None,
                 HashMap::from_iter([(
                     TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
@@ -4505,27 +4543,26 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(result.metadata.format_version, FormatVersion::V3);
-        assert_eq!(result.metadata.current_schema_id, 0);
-        assert_eq!(result.metadata.schemas.len(), 1);
-        assert_eq!(result.metadata.default_partition_spec().spec_id(), 0);
-        assert_eq!(result.metadata.partition_specs.len(), 1);
-        assert_eq!(
-            result.metadata.default_partition_spec().fields()[0].field_id,
-            1000
-        );
-        assert_eq!(result.metadata.last_column_id, LAST_ASSIGNED_COLUMN_ID);
-        assert_eq!(result.metadata.last_partition_id, 1000);
-        assert_eq!(result.metadata.default_sort_order_id, 1);
-        assert_eq!(result.metadata.sort_orders.len(), 1);
-        // No SetCurrentSchema, since the schema is unchanged. Java is the same; its REST
-        // catalog appends one itself.
-        assert!(
-            !result
-                .changes
-                .iter()
-                .any(|c| matches!(c, TableUpdate::SetCurrentSchema { .. }))
-        );
+        let metadata = &result.metadata;
+        assert_eq!(metadata.schemas, base.schemas);
+        assert_eq!(metadata.current_schema_id, base.current_schema_id);
+        assert_eq!(metadata.last_column_id, base.last_column_id);
+        assert_eq!(metadata.partition_specs, base.partition_specs);
+        assert_eq!(metadata.default_spec, base.default_spec);
+        assert_eq!(metadata.last_partition_id, base.last_partition_id);
+        assert_eq!(metadata.sort_orders, base.sort_orders);
+        assert_eq!(metadata.default_sort_order_id, base.default_sort_order_id);
+        assert_eq!(result.changes, vec![
+            TableUpdate::UpgradeFormatVersion {
+                format_version: FormatVersion::V3
+            },
+            TableUpdate::RemoveSnapshotRef {
+                ref_name: MAIN_BRANCH.to_string()
+            },
+            TableUpdate::AddSchema { schema },
+            TableUpdate::AddSpec { spec },
+            TableUpdate::AddSortOrder { sort_order },
+        ]);
     }
 
     #[test]
@@ -4540,8 +4577,13 @@ mod tests {
             )
             .unwrap_err();
 
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
-        assert!(err.to_string().contains("format version 1"), "{err}");
+        assert_eq!(
+            (err.kind(), err.message()),
+            (
+                ErrorKind::FeatureUnsupported,
+                "Table replacement is not supported for format version 1"
+            )
+        );
     }
 
     #[test]
@@ -4559,8 +4601,34 @@ mod tests {
             )
             .unwrap_err();
 
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
-        assert!(err.to_string().contains("format version 1"), "{err}");
+        assert_eq!(
+            (err.kind(), err.message()),
+            (
+                ErrorKind::FeatureUnsupported,
+                "Table replacement is not supported for format version 1"
+            )
+        );
+    }
+
+    #[test]
+    fn test_build_replacement_rejects_an_invalid_format_version() {
+        let err = builder_without_changes(FormatVersion::V2)
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::from_iter([(
+                    TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
+                    "abc".to_string(),
+                )]),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            (err.kind(), err.message()),
+            (ErrorKind::DataInvalid, "Unsupported format version: abc")
+        );
     }
 
     #[test]
@@ -4578,7 +4646,13 @@ mod tests {
             )
             .unwrap_err();
 
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            (err.kind(), err.message()),
+            (
+                ErrorKind::DataInvalid,
+                "Cannot find source column with id 99 for partition column nope in schema."
+            )
+        );
     }
 
     #[test]
