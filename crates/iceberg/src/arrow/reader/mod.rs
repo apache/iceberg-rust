@@ -43,9 +43,7 @@ mod projection;
 mod row_filter;
 mod row_lineage;
 pub use file_reader::ArrowFileReader;
-pub use options::{
-    ArrowReaderOptions, ArrowReaderOptionsBuilder, ParquetReadOptions, ParquetReadOptionsBuilder,
-};
+pub use options::{ArrowReaderOptions, ParquetReadOptions};
 use predicate_visitor::{CollectFieldIdVisitor, PredicateConverter};
 use projection::{
     add_fallback_field_ids_to_arrow_schema, apply_name_mapping_to_arrow_schema,
@@ -69,80 +67,6 @@ impl ArrowReaderBuilder {
         }
     }
 
-    /// Sets the max number of in flight data files that are being fetched
-    pub fn with_data_file_concurrency_limit(mut self, val: usize) -> Self {
-        self.options.set_data_file_concurrency_limit(Some(val));
-        self
-    }
-
-    /// Sets the desired size of batches in the response
-    /// to something other than the default
-    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
-        self.options.set_batch_size(Some(batch_size));
-        self
-    }
-
-    /// Determines whether to enable row group filtering.
-    pub fn with_row_group_filtering_enabled(mut self, row_group_filtering_enabled: bool) -> Self {
-        self.options
-            .set_row_group_filtering_enabled(row_group_filtering_enabled);
-        self
-    }
-
-    /// Determines whether to enable row selection.
-    pub fn with_row_selection_enabled(mut self, row_selection_enabled: bool) -> Self {
-        self.options
-            .set_row_selection_enabled(row_selection_enabled);
-        self
-    }
-
-    /// Determines whether to enable bloom filter-based row group filtering.
-    ///
-    /// When enabled, if a read is performed with an equality or IN predicate,
-    /// the bloom filter for relevant columns in each row group is read and
-    /// checked. Row groups where the bloom filter proves the value is absent
-    /// are skipped entirely.
-    ///
-    /// Defaults to disabled. Each bloom filter is a separate read, and they are
-    /// issued serially — one round trip per relevant column per row group, before
-    /// any data is read. TODO(#3191)
-    pub fn with_bloom_filter_enabled(mut self, bloom_filter_enabled: bool) -> Self {
-        self.options.set_bloom_filter_enabled(bloom_filter_enabled);
-        self
-    }
-
-    /// Provide a hint as to the number of bytes to prefetch for parsing the Parquet metadata
-    ///
-    /// This hint can help reduce the number of fetch requests. For more details see the
-    /// [ParquetMetaDataReader documentation](https://docs.rs/parquet/latest/parquet/file/metadata/struct.ParquetMetaDataReader.html#method.with_prefetch_hint).
-    pub fn with_metadata_size_hint(mut self, metadata_size_hint: usize) -> Self {
-        self.options
-            .parquet_options_mut()
-            .set_metadata_size_hint(Some(metadata_size_hint));
-        self
-    }
-
-    /// Sets the gap threshold for merging nearby byte ranges into a single request.
-    /// Ranges with gaps smaller than this value will be coalesced.
-    ///
-    /// Defaults to 1 MiB, matching object_store's OBJECT_STORE_COALESCE_DEFAULT.
-    pub fn with_range_coalesce_bytes(mut self, range_coalesce_bytes: u64) -> Self {
-        self.options
-            .parquet_options_mut()
-            .set_range_coalesce_bytes(range_coalesce_bytes);
-        self
-    }
-
-    /// Sets the maximum number of merged byte ranges to fetch concurrently.
-    ///
-    /// Defaults to 10, matching object_store's OBJECT_STORE_COALESCE_PARALLEL.
-    pub fn with_range_fetch_concurrency(mut self, range_fetch_concurrency: usize) -> Self {
-        self.options
-            .parquet_options_mut()
-            .set_range_fetch_concurrency(range_fetch_concurrency);
-        self
-    }
-
     /// Replaces all reader settings while preserving local I/O and runtime resources.
     pub fn with_options(mut self, options: ArrowReaderOptions) -> Self {
         self.options = options;
@@ -160,7 +84,8 @@ impl ArrowReaderBuilder {
         let concurrency_limit_data_files = self
             .options
             .data_file_concurrency_limit()
-            .unwrap_or_else(|| available_parallelism().get());
+            .unwrap_or_else(|| available_parallelism().get())
+            .max(1);
         ArrowReader {
             batch_size: self.options.batch_size(),
             file_io: self.file_io.clone(),
@@ -173,7 +98,7 @@ impl ArrowReaderBuilder {
             row_group_filtering_enabled: self.options.row_group_filtering_enabled(),
             row_selection_enabled: self.options.row_selection_enabled(),
             bloom_filter_enabled: self.options.bloom_filter_enabled(),
-            parquet_read_options: *self.options.parquet_options(),
+            parquet_read_options: self.options.parquet_options().clone(),
         }
     }
 }

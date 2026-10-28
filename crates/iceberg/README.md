@@ -71,7 +71,7 @@ Pass reader settings separately from file planning:
 
 ```rust
 let options = iceberg::arrow::ArrowReaderOptions::builder()
-    .with_batch_size(Some(1024))
+    .with_batch_size(1024)
     .with_row_selection_enabled(true)
     .with_parquet_options(
         iceberg::arrow::ParquetReadOptions::builder()
@@ -86,13 +86,14 @@ When upgrading, move reader-setting calls from `TableScanBuilder` to
 `ArrowReaderOptions::builder()` and pass the result to `to_arrow(options)`.
 Use `to_arrow(Default::default())` for default settings. Scan
 `with_concurrency_limit()` controls manifest planning only; set
-`with_data_file_concurrency_limit(Some(limit))` on the reader options to also
+`with_data_file_concurrency_limit(limit)` on the reader options to also
 limit data-file reads. An unset data-file limit uses execution-host parallelism.
 
 Locally constructed readers accept the same options through
 `ArrowReaderBuilder::with_options(options)`, including Parquet I/O tuning.
-This replaces the complete configuration; subsequent convenience setters override
-individual settings. `with_parquet_options()` replaces only the nested Parquet
+This replaces the complete configuration. Configure individual settings through
+the options builders; per-field setters on `ArrowReaderBuilder` have been removed.
+`with_parquet_options()` replaces only the nested Parquet
 configuration.
 
 ## Storage Backends

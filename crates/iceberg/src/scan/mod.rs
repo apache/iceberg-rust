@@ -1936,8 +1936,8 @@ mod tests {
             .build()
             .unwrap();
         let options = ArrowReaderOptions::builder()
-            .with_batch_size(Some(17))
-            .with_data_file_concurrency_limit(Some(1))
+            .with_batch_size(17)
+            .with_data_file_concurrency_limit(1)
             .with_parquet_options(
                 ParquetReadOptions::builder()
                     .with_metadata_size_hint(4096)
@@ -1945,6 +1945,7 @@ mod tests {
                     .build(),
             )
             .with_row_selection_enabled(true)
+            .with_bloom_filter_enabled(true)
             .build();
         let expected: Vec<_> = scan
             .to_arrow(options.clone())
@@ -1966,11 +1967,13 @@ mod tests {
             serde_json::json!({
                 "batch_size": 17, "data_file_concurrency_limit": 1,
                 "row_group_filtering_enabled": true, "row_selection_enabled": true,
-                "bloom_filter_enabled": false,
+                "bloom_filter_enabled": true,
                 "parquet_options": { "metadata_size_hint": 4096, "range_coalesce_bytes": 1048576, "range_fetch_concurrency": 2 },
             })
         );
-        let options: ArrowReaderOptions = serde_json::from_value(serialized).unwrap();
+        let deserialized: ArrowReaderOptions = serde_json::from_value(serialized).unwrap();
+        assert_eq!(deserialized, options);
+        let options = deserialized;
         drop(scan);
         let reader =
             ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::try_current().unwrap())

@@ -588,7 +588,7 @@ mod tests {
     use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
-    use crate::arrow::{ArrowReader, ArrowReaderBuilder};
+    use crate::arrow::{ArrowReader, ArrowReaderBuilder, ArrowReaderOptions as ReaderOptions};
     use crate::expr::{Bind, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
@@ -1127,8 +1127,12 @@ message schema {
         let predicate = Reference::new("name").equal_to(Datum::string("Alice"));
 
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-            .with_row_group_filtering_enabled(true)
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(true)
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let tasks = Box::pin(futures::stream::iter(
@@ -1972,8 +1976,12 @@ message schema {
 
         // Enable both row_group_filtering and row_selection - triggered the panic
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-            .with_row_group_filtering_enabled(true)
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(true)
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let tasks = Box::pin(futures::stream::iter(
@@ -2327,8 +2335,12 @@ message schema {
         let predicate = Reference::new("id").greater_than(Datum::int(1));
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_group_filtering_enabled(true)
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(true)
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let tasks = Box::pin(futures::stream::iter(
