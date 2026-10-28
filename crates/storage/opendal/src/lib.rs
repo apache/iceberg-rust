@@ -220,7 +220,7 @@ fn parse_positive_ms(value: &str) -> Result<NonZeroU64> {
 /// Maps scheme to the corresponding OpenDalStorage storage variant.
 /// Use this factory with `FileIOBuilder::new(factory)` to create FileIO instances.
 ///
-/// Supports [storage credentials](iceberg::io::StorageConfig::with_storage_credentials).
+/// Supports [storage credentials](iceberg::io::StorageConfig::storage_credentials).
 ///
 /// # Serialization
 ///

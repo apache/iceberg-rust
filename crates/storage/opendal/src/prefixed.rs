@@ -104,7 +104,11 @@ impl PrefixedStorage {
 // A backend's Debug may print the credentials it was built with.
 impl Debug for PrefixedStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let prefixes: Vec<_> = self.prefixed.iter().map(|(prefix, _)| prefix).collect();
+        let prefixes = fmt::from_fn(|f| {
+            f.debug_list()
+                .entries(self.prefixed.iter().map(|(prefix, _)| prefix))
+                .finish()
+        });
         f.debug_struct("PrefixedStorage")
             .field("default", &self.default)
             .field("prefixes", &prefixes)
@@ -261,14 +265,16 @@ mod tests {
 
     /// A storage with `scope` "default" and a credential per (prefix, scope).
     fn recording_storage(credentials: &[(&str, &str)]) -> (PrefixedStorage, CallLog) {
-        let config = StorageConfig::new()
-            .with_prop("scope", "default")
-            .with_storage_credentials(credentials.iter().map(|(prefix, scope)| {
-                StorageCredential::new(
-                    *prefix,
-                    HashMap::from([("scope".to_string(), scope.to_string())]),
-                )
-            }));
+        let scope = |scope: &str| HashMap::from([("scope".to_string(), scope.to_string())]);
+        let config = StorageConfig::builder()
+            .props(scope("default"))
+            .storage_credentials(
+                credentials
+                    .iter()
+                    .map(|(prefix, credential)| StorageCredential::new(*prefix, scope(credential)))
+                    .collect(),
+            )
+            .build();
         let calls = CallLog::default();
         let storage = PrefixedStorage::new(&config, |config| {
             Ok(Arc::new(RecordingStorage {

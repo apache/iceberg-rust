@@ -28,7 +28,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{
-    ADLS_SAS_TOKEN, FileIO, FileIOBuilder, GCS_TOKEN, S3_SESSION_TOKEN, StorageFactory,
+    ADLS_SAS_TOKEN, FileIO, FileIOBuilder, GCS_TOKEN, S3_SESSION_TOKEN, StorageCredential,
+    StorageFactory,
 };
 use iceberg::table::Table;
 use iceberg::{
@@ -55,7 +56,7 @@ use crate::response::HttpResponse;
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
-    NamespaceResponse, RegisterTableRequest, RenameTableRequest, StorageCredential,
+    NamespaceResponse, RegisterTableRequest, RenameTableRequest,
 };
 
 /// REST catalog URI
@@ -1022,9 +1023,7 @@ impl RestSessionCatalog {
 
         let file_io = FileIOBuilder::new(factory)
             .with_props(props)
-            .with_storage_credentials(storage_credentials.into_iter().flatten().map(|credential| {
-                iceberg::io::StorageCredential::new(credential.prefix, credential.config)
-            }))
+            .with_storage_credentials(storage_credentials.into_iter().flatten())
             .build();
 
         Ok(file_io)
@@ -4788,8 +4787,8 @@ mod tests {
     }
 
     /// A `loadTable` body vending a storage credential, and that credential.
-    fn load_table_body_with_credential() -> (serde_json::Value, iceberg::io::StorageCredential) {
-        let credential = iceberg::io::StorageCredential::new(
+    fn load_table_body_with_credential() -> (serde_json::Value, StorageCredential) {
+        let credential = StorageCredential::new(
             "s3://warehouse/database/table",
             HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]),
         );
