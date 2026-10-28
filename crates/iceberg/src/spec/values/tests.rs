@@ -187,6 +187,75 @@ fn json_double() {
     );
 }
 
+const FLOAT_VALUES: [f32; 6] = [
+    100.1,
+    123.456,
+    -123.456,
+    f32::MAX,
+    f32::MIN,
+    f32::from_bits(1),
+];
+
+#[test]
+fn raw_literal_json_number_to_float() {
+    for value in FLOAT_VALUES {
+        let raw: RawLiteral = serde_json::from_str(&format!("{value:e}")).unwrap();
+
+        assert_eq!(
+            raw.try_into(&Primitive(PrimitiveType::Float)).unwrap(),
+            Some(Literal::float(value))
+        );
+    }
+}
+
+#[test]
+fn raw_literal_avro_double_to_float() {
+    for value in FLOAT_VALUES {
+        for double in [f64::from(value), format!("{value:e}").parse().unwrap()] {
+            let raw: RawLiteral = apache_avro::from_value(&Value::Double(double)).unwrap();
+
+            assert_eq!(
+                raw.try_into(&Primitive(PrimitiveType::Float)).unwrap(),
+                Some(Literal::float(value))
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_literal_double_without_exact_float_narrows_to_nearest() {
+    for (double, expected) in [(16777217.0_f64, 16777216.0_f32), (1.0000000001, 1.0)] {
+        let raw: RawLiteral = serde_json::from_str(&format!("{double:?}")).unwrap();
+
+        assert_eq!(
+            raw.try_into(&Primitive(PrimitiveType::Float)).unwrap(),
+            Some(Literal::float(expected))
+        );
+    }
+}
+
+#[test]
+fn raw_literal_avro_non_finite_and_negative_zero_double_to_float() {
+    for (double, expected) in [
+        (f64::NAN, f32::NAN),
+        (f64::INFINITY, f32::INFINITY),
+        (f64::NEG_INFINITY, f32::NEG_INFINITY),
+        (-0.0, -0.0_f32),
+    ] {
+        let raw: RawLiteral = apache_avro::from_value(&Value::Double(double)).unwrap();
+        let value = match raw.try_into(&Primitive(PrimitiveType::Float)).unwrap() {
+            Some(Literal::Primitive(PrimitiveLiteral::Float(value))) => value.0,
+            _ => panic!("unexpected literal type"),
+        };
+
+        if expected.is_nan() {
+            assert!(value.is_nan());
+        } else {
+            assert_eq!(value.to_bits(), expected.to_bits());
+        }
+    }
+}
+
 #[test]
 fn json_date() {
     let record = r#""2017-11-16""#;

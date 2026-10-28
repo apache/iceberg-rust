@@ -1097,6 +1097,10 @@ pub const iceberg::io::GCS_PROJECT_ID: &str
 pub const iceberg::io::GCS_SERVICE_HOST: &str
 pub const iceberg::io::GCS_TOKEN: &str
 pub const iceberg::io::GCS_USER_PROJECT: &str
+pub const iceberg::io::HDFS_HADOOP_CONF_PREFIX: &str
+pub const iceberg::io::HDFS_HOST: &str
+pub const iceberg::io::HDFS_NAME_NODE: &str
+pub const iceberg::io::HDFS_PORT: &str
 pub const iceberg::io::HF_ENDPOINT: &str
 pub const iceberg::io::HF_REVISION: &str
 pub const iceberg::io::HF_TOKEN: &str
@@ -1440,6 +1444,7 @@ impl core::fmt::Debug for iceberg::scan::TableScan
 pub fn iceberg::scan::TableScan::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg::scan::TableScanBuilder<'a>
 impl<'a> iceberg::scan::TableScanBuilder<'a>
+pub fn iceberg::scan::TableScanBuilder<'a>::as_of_time(self, timestamp_ms: i64) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::build(self) -> iceberg::Result<iceberg::scan::TableScan>
 pub fn iceberg::scan::TableScanBuilder<'a>::select(self, column_names: impl core::iter::traits::collect::IntoIterator<Item = impl alloc::string::ToString>) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::select_all(self) -> Self
@@ -2408,8 +2413,8 @@ pub iceberg::spec::MapType::key_field: iceberg::spec::NestedFieldRef
 pub iceberg::spec::MapType::value_field: iceberg::spec::NestedFieldRef
 impl iceberg::spec::MapType
 pub fn iceberg::spec::MapType::new(key_field: iceberg::spec::NestedFieldRef, value_field: iceberg::spec::NestedFieldRef) -> Self
-pub fn iceberg::spec::MapType::optional(key_id: i32, key_type: iceberg::spec::Type, value_id: i32, value_type: iceberg::spec::Type) -> Self
-pub fn iceberg::spec::MapType::required(key_id: i32, key_type: iceberg::spec::Type, value_id: i32, value_type: iceberg::spec::Type) -> Self
+pub fn iceberg::spec::MapType::optional(key_id: i32, key_type: impl core::convert::Into<iceberg::spec::Type>, value_id: i32, value_type: impl core::convert::Into<iceberg::spec::Type>) -> Self
+pub fn iceberg::spec::MapType::required(key_id: i32, key_type: impl core::convert::Into<iceberg::spec::Type>, value_id: i32, value_type: impl core::convert::Into<iceberg::spec::Type>) -> Self
 impl core::clone::Clone for iceberg::spec::MapType
 pub fn iceberg::spec::MapType::clone(&self) -> iceberg::spec::MapType
 impl core::cmp::Eq for iceberg::spec::MapType
@@ -2481,12 +2486,12 @@ pub iceberg::spec::NestedField::name: alloc::string::String
 pub iceberg::spec::NestedField::required: bool
 pub iceberg::spec::NestedField::write_default: core::option::Option<iceberg::spec::Literal>
 impl iceberg::spec::NestedField
-pub fn iceberg::spec::NestedField::list_element(id: i32, field_type: iceberg::spec::Type, required: bool) -> Self
-pub fn iceberg::spec::NestedField::map_key_element(id: i32, field_type: iceberg::spec::Type) -> Self
-pub fn iceberg::spec::NestedField::map_value_element(id: i32, field_type: iceberg::spec::Type, required: bool) -> Self
-pub fn iceberg::spec::NestedField::new(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type, required: bool) -> Self
-pub fn iceberg::spec::NestedField::optional(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type) -> Self
-pub fn iceberg::spec::NestedField::required(id: i32, name: impl alloc::string::ToString, field_type: iceberg::spec::Type) -> Self
+pub fn iceberg::spec::NestedField::list_element(id: i32, field_type: impl core::convert::Into<iceberg::spec::Type>, required: bool) -> Self
+pub fn iceberg::spec::NestedField::map_key_element(id: i32, field_type: impl core::convert::Into<iceberg::spec::Type>) -> Self
+pub fn iceberg::spec::NestedField::map_value_element(id: i32, field_type: impl core::convert::Into<iceberg::spec::Type>, required: bool) -> Self
+pub fn iceberg::spec::NestedField::new(id: i32, name: impl alloc::string::ToString, field_type: impl core::convert::Into<iceberg::spec::Type>, required: bool) -> Self
+pub fn iceberg::spec::NestedField::optional(id: i32, name: impl alloc::string::ToString, field_type: impl core::convert::Into<iceberg::spec::Type>) -> Self
+pub fn iceberg::spec::NestedField::required(id: i32, name: impl alloc::string::ToString, field_type: impl core::convert::Into<iceberg::spec::Type>) -> Self
 pub fn iceberg::spec::NestedField::with_doc(self, doc: impl alloc::string::ToString) -> Self
 pub fn iceberg::spec::NestedField::with_initial_default(self, value: iceberg::spec::Literal) -> Self
 pub fn iceberg::spec::NestedField::with_write_default(self, value: iceberg::spec::Literal) -> Self
@@ -3406,6 +3411,7 @@ pub fn iceberg::table::Table::metadata_ref(&self) -> iceberg::spec::TableMetadat
 pub fn iceberg::table::Table::reader_builder(&self) -> iceberg::arrow::ArrowReaderBuilder
 pub fn iceberg::table::Table::readonly(&self) -> bool
 pub fn iceberg::table::Table::scan(&self) -> iceberg::scan::TableScanBuilder<'_>
+pub fn iceberg::table::Table::with_runtime(self, runtime: iceberg::Runtime) -> Self
 impl core::clone::Clone for iceberg::table::Table
 pub fn iceberg::table::Table::clone(&self) -> iceberg::table::Table
 impl core::fmt::Debug for iceberg::table::Table
@@ -3515,6 +3521,7 @@ pub mod iceberg::util::location
 pub mod iceberg::util::snapshot
 pub fn iceberg::util::snapshot::ancestors_between(table_metadata: &iceberg::spec::TableMetadataRef, latest_snapshot_id: i64, oldest_snapshot_id: core::option::Option<i64>) -> impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::SnapshotRef> + core::marker::Send
 pub fn iceberg::util::snapshot::ancestors_of(table_metadata: &iceberg::spec::TableMetadataRef, snapshot_id: i64) -> impl core::iter::traits::iterator::Iterator<Item = iceberg::spec::SnapshotRef> + core::marker::Send
+pub fn iceberg::util::snapshot::snapshot_id_as_of_time(table_metadata: &iceberg::spec::TableMetadataRef, timestamp_ms: i64) -> iceberg::Result<i64>
 pub mod iceberg::writer
 pub mod iceberg::writer::base_writer
 pub mod iceberg::writer::base_writer::data_file_writer
