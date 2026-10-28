@@ -27,7 +27,9 @@ use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
 use super::{AuthManager, AuthSession, HttpRequest};
-use crate::catalog::{REST_CATALOG_PROP_URI, RestCatalogProperties, default_token_endpoint};
+use crate::catalog::{
+    OAuth2Credential, REST_CATALOG_PROP_URI, RestCatalogProperties, default_token_endpoint,
+};
 use crate::client::HttpClient;
 use crate::types::{ErrorResponse, TokenResponse};
 
@@ -35,7 +37,7 @@ use crate::types::{ErrorResponse, TokenResponse};
 struct OAuth2Params {
     extra_headers: HeaderMap,
     token_endpoint: String,
-    credential: Option<(Option<String>, SensitiveString)>,
+    credential: Option<OAuth2Credential>,
     extra_oauth_params: HashMap<String, String>,
 }
 
@@ -84,7 +86,7 @@ impl OAuth2Manager {
 
     /// Sets the client credential exchanged for a token at the token endpoint.
     pub fn with_credential(mut self, client_id: Option<String>, client_secret: String) -> Self {
-        self.init_params.credential = Some((client_id, client_secret.into()));
+        self.init_params.credential = Some(OAuth2Credential::new(client_id, client_secret.into()));
         self
     }
 
@@ -241,7 +243,7 @@ enum TokenSource {
 
 struct ClientCredentialsConfig {
     client: HttpClient,
-    credential: (Option<String>, SensitiveString),
+    credential: OAuth2Credential,
     token_endpoint: String,
     extra_headers: HeaderMap,
     extra_oauth_params: HashMap<String, String>,
@@ -259,14 +261,12 @@ impl Debug for OAuth2Session {
 
 impl ClientCredentialsConfig {
     async fn exchange_credential_for_token(&self) -> Result<String> {
-        let (client_id, client_secret) = &self.credential;
-
         let mut params = HashMap::with_capacity(4);
         params.insert("grant_type", "client_credentials");
-        if let Some(client_id) = client_id {
+        if let Some(client_id) = self.credential.client_id() {
             params.insert("client_id", client_id);
         }
-        params.insert("client_secret", client_secret.expose());
+        params.insert("client_secret", self.credential.client_secret().expose());
         params.extend(
             self.extra_oauth_params
                 .iter()

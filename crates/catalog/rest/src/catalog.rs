@@ -190,26 +190,32 @@ pub(crate) struct RestCatalogProperties {
     /// Catalog URI.
     #[property(key = REST_CATALOG_PROP_URI, default = "", getter)]
     uri: String,
-    #[property(key = REST_CATALOG_PROP_WAREHOUSE, default = None)]
+    /// Warehouse location or identifier.
+    #[property(key = REST_CATALOG_PROP_WAREHOUSE, default = None, getter)]
     warehouse: Option<String>,
-    #[property(key = "prefix", default = None)]
+    /// Catalog endpoint prefix.
+    #[property(key = "prefix", default = None, getter)]
     prefix: Option<String>,
-    #[property(key = REST_CATALOG_PROP_AUTH_TYPE, default = None)]
+    /// Explicit authentication scheme.
+    #[property(key = REST_CATALOG_PROP_AUTH_TYPE, default = None, getter)]
     auth_type: Option<AuthType>,
     /// Configured bearer token.
     #[property(key = "token", default = None, parse_with = parse_sensitive_string, getter)]
     token: Option<SensitiveString>,
     /// Configured OAuth2 client ID and secret.
     #[property(key = "credential", default = None, parse_with = parse_credential, getter)]
-    credential: Option<(Option<String>, SensitiveString)>,
+    credential: Option<OAuth2Credential>,
     /// Explicit OAuth2 token endpoint.
     #[property(key = "oauth2-server-uri", default = None, getter)]
     oauth2_server_uri: Option<String>,
-    #[property(key = "scope", default = None)]
+    /// Explicit OAuth2 scope.
+    #[property(key = "scope", default = None, getter)]
     scope: Option<String>,
-    #[property(key = "audience", default = None)]
+    /// OAuth2 audience.
+    #[property(key = "audience", default = None, getter)]
     audience: Option<String>,
-    #[property(key = "resource", default = None)]
+    /// OAuth2 resource.
+    #[property(key = "resource", default = None, getter)]
     resource: Option<String>,
     /// Explicit headers added to requests.
     #[property(nested, getter)]
@@ -222,20 +228,51 @@ pub(crate) struct RestCatalogProperties {
         getter
     )]
     disable_header_redaction: bool,
-    #[property(key = REST_CATALOG_PROP_PAGE_SIZE, default = None, parse_with = parse_page_size)]
+    /// Requested page size for namespace and table listings.
+    #[property(key = REST_CATALOG_PROP_PAGE_SIZE, default = None, parse_with = parse_page_size, getter)]
     page_size: Option<NonZeroU32>,
-    #[property(key = REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES, default = TABLE_CACHE_MAX_ENTRIES_DEFAULT)]
+    /// Maximum number of cached tables.
+    #[property(key = REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES, default = TABLE_CACHE_MAX_ENTRIES_DEFAULT, getter)]
     table_cache_max_entries: u64,
+    /// How long a loaded table stays cached.
     #[property(
         key = REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS,
         default = Duration::from_millis(TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT),
-        parse_with = parse_cache_expiry
+        parse_with = parse_cache_expiry,
+        getter
     )]
     table_cache_expire_after_write: Duration,
 }
 
+/// OAuth2 client credentials.
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum AuthType {
+pub(crate) struct OAuth2Credential {
+    client_id: Option<String>,
+    client_secret: SensitiveString,
+}
+
+impl OAuth2Credential {
+    /// Creates a credential from a client ID and secret.
+    pub(crate) fn new(client_id: Option<String>, client_secret: SensitiveString) -> Self {
+        Self {
+            client_id,
+            client_secret,
+        }
+    }
+
+    /// Returns the optional client ID.
+    pub(crate) fn client_id(&self) -> Option<&str> {
+        self.client_id.as_deref()
+    }
+
+    /// Returns the client secret.
+    pub(crate) fn client_secret(&self) -> &SensitiveString {
+        &self.client_secret
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AuthType {
     None,
     OAuth2,
     Custom(String),
@@ -291,7 +328,7 @@ impl RestCatalogProperties {
     fn url_prefixed(&self, parts: &[&str]) -> String {
         [&self.uri, PATH_V1]
             .into_iter()
-            .chain(self.prefix.as_deref())
+            .chain(self.prefix().as_deref())
             .chain(parts.iter().cloned())
             .join("/")
     }
@@ -364,9 +401,9 @@ impl RestCatalogProperties {
 
     pub(crate) fn explicit_oauth_params(&self) -> HashMap<String, String> {
         [
-            ("scope", &self.scope),
-            ("audience", &self.audience),
-            ("resource", &self.resource),
+            ("scope", self.scope()),
+            ("audience", self.audience()),
+            ("resource", self.resource()),
         ]
         .into_iter()
         .filter_map(|(key, value)| value.as_ref().map(|value| (key.to_string(), value.clone())))
@@ -374,16 +411,16 @@ impl RestCatalogProperties {
     }
 
     fn table_cache(&self) -> Option<TableCache> {
-        (self.table_cache_max_entries > 0).then(|| {
+        (self.table_cache_max_entries() > 0).then(|| {
             TableCache::builder()
-                .max_capacity(self.table_cache_max_entries)
-                .time_to_live(self.table_cache_expire_after_write)
+                .max_capacity(self.table_cache_max_entries())
+                .time_to_live(*self.table_cache_expire_after_write())
                 .build()
         })
     }
 
-    fn auth_type(&self) -> &AuthType {
-        self.auth_type.as_ref().unwrap_or_else(|| {
+    fn resolved_auth_type(&self) -> &AuthType {
+        self.auth_type().as_ref().unwrap_or_else(|| {
             if self.token.is_some() || self.credential.is_some() || self.oauth2_server_uri.is_some()
             {
                 &AuthType::OAuth2
@@ -398,10 +435,12 @@ fn parse_sensitive_string(value: &str) -> Result<SensitiveString> {
     Ok(value.to_string().into())
 }
 
-fn parse_credential(value: &str) -> Result<(Option<String>, SensitiveString)> {
+fn parse_credential(value: &str) -> Result<OAuth2Credential> {
     Ok(match value.split_once(':') {
-        Some((id, secret)) => (Some(id.to_string()), secret.to_string().into()),
-        None => (None, value.to_string().into()),
+        Some((id, secret)) => {
+            OAuth2Credential::new(Some(id.to_string()), secret.to_string().into())
+        }
+        None => OAuth2Credential::new(None, value.to_string().into()),
     })
 }
 
@@ -593,7 +632,7 @@ impl RestCatalogClient {
     ) -> Result<CatalogConfig> {
         let mut request_builder = http_client.request(Method::GET, user_config.config_endpoint());
 
-        if let Some(warehouse_location) = &user_config.warehouse {
+        if let Some(warehouse_location) = user_config.warehouse() {
             request_builder = request_builder.query(&[("warehouse", warehouse_location)]);
         }
 
@@ -853,10 +892,10 @@ impl RestSessionCatalog {
             return Ok(auth_manager.clone());
         }
         let config = RestCatalogProperties::for_handshake(&self.props)?;
-        let auth_type = config.auth_type();
+        let auth_type = config.resolved_auth_type();
         // Java parity (`AuthManagers`): make the inference visible so users
         // configure the type explicitly.
-        if *auth_type == AuthType::OAuth2 && config.auth_type.is_none() {
+        if *auth_type == AuthType::OAuth2 && config.auth_type().is_none() {
             tracing::warn!(
                 "Inferring {REST_CATALOG_PROP_AUTH_TYPE}={AUTH_TYPE_OAUTH2} from the configured \
                  OAuth properties; set it explicitly to avoid this warning"
@@ -930,7 +969,7 @@ impl RestSessionCatalog {
 
         // If the warehouse is a logical identifier instead of a URL we don't want
         // to raise an exception
-        let warehouse_path = match self.client().await?.config.warehouse.as_deref() {
+        let warehouse_path = match self.client().await?.config.warehouse().as_deref() {
             Some(url) if Url::parse(url).is_ok() => Some(url),
             Some(_) => None,
             None => None,
@@ -973,12 +1012,12 @@ impl SessionCatalog for RestSessionCatalog {
         let endpoint = client.config.namespaces_endpoint();
         let mut namespaces = Vec::new();
         // An empty initial token explicitly opts in to pagination.
-        let mut next_token = client.config.page_size.map(|_| String::new());
+        let mut next_token = client.config.page_size().map(|_| String::new());
 
         loop {
             let mut request = client.http_client.request(Method::GET, endpoint.clone());
 
-            if let Some(page_size) = client.config.page_size {
+            if let Some(page_size) = client.config.page_size() {
                 request = request.query(&[("pageSize", page_size)]);
             }
 
@@ -1163,12 +1202,12 @@ impl SessionCatalog for RestSessionCatalog {
         let endpoint = client.config.tables_endpoint(namespace);
         let mut identifiers = Vec::new();
         // An empty initial token explicitly opts in to pagination.
-        let mut next_token = client.config.page_size.map(|_| String::new());
+        let mut next_token = client.config.page_size().map(|_| String::new());
 
         loop {
             let mut request = client.http_client.request(Method::GET, endpoint.clone());
 
-            if let Some(page_size) = client.config.page_size {
+            if let Some(page_size) = client.config.page_size() {
                 request = request.query(&[("pageSize", page_size)]);
             }
 
@@ -1884,7 +1923,10 @@ mod tests {
             prefix: Some("catalog".to_string()),
             auth_type: Some(AuthType::OAuth2),
             token: Some("secret".to_string().into()),
-            credential: Some((Some("client".to_string()), "secret".to_string().into())),
+            credential: Some(OAuth2Credential {
+                client_id: Some("client".to_string()),
+                client_secret: "secret".to_string().into(),
+            }),
             oauth2_server_uri: Some("http://localhost:8181/token".to_string()),
             scope: Some("custom-scope".to_string()),
             audience: Some("custom-audience".to_string()),
@@ -1959,19 +2001,41 @@ mod tests {
     }
 
     #[test]
-    fn test_credential_without_client_id_and_redaction_fallback() {
-        let properties = RestCatalogProperties::from_properties(&HashMap::from([
-            ("credential".to_string(), "secret".to_string()),
+    fn test_credential_parsing_and_redaction_fallback() {
+        for (value, client_id, secret) in [
+            ("secret", None, "secret"),
             (
-                REST_CATALOG_PROP_DISABLE_HEADER_REDACTION.to_string(),
-                "invalid".to_string(),
+                "client:secret:with:colons",
+                Some("client"),
+                "secret:with:colons",
             ),
-        ]))
-        .unwrap();
-        assert_eq!(
-            (properties.credential, properties.disable_header_redaction),
-            (Some((None, "secret".to_string().into())), false),
-        );
+            (":secret", Some(""), "secret"),
+            ("client:", Some("client"), ""),
+            ("", None, ""),
+        ] {
+            let properties = RestCatalogProperties::from_properties(&HashMap::from([
+                ("credential".to_string(), value.to_string()),
+                (
+                    REST_CATALOG_PROP_DISABLE_HEADER_REDACTION.to_string(),
+                    "invalid".to_string(),
+                ),
+            ]))
+            .unwrap();
+            let expected = (
+                Some(OAuth2Credential {
+                    client_id: client_id.map(str::to_string),
+                    client_secret: secret.to_string().into(),
+                }),
+                false,
+            );
+            assert_eq!(
+                (
+                    properties.credential().clone(),
+                    properties.disable_header_redaction()
+                ),
+                expected,
+            );
+        }
     }
 
     #[tokio::test]
