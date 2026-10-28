@@ -194,16 +194,17 @@ impl ManifestFilterManager {
         *next_manifest_number += 1;
         owned_artifacts.insert(path.clone());
 
-        // Keep the source manifest's spec: its entries' partition values are
-        // laid out for that spec, not the table's current default.
-        let spec = manifest.metadata().partition_spec().clone();
+        // Write under the source manifest's own schema and spec: its entries'
+        // partition values and column bounds were encoded for that schema's
+        // types, which the table's current schema may since have promoted.
+        let source_metadata = manifest.metadata();
         let mut writer = new_manifest_writer(
             table,
             path,
             snapshot_id,
             self.content,
-            table.metadata().current_schema().clone(),
-            spec.into(),
+            source_metadata.schema().clone(),
+            source_metadata.partition_spec().clone().into(),
         )?;
         for entry in manifest.entries() {
             if !entry.is_alive() {
