@@ -27,7 +27,7 @@ use crate::arrow::scan_metrics::ScanMetrics;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{Schema, SchemaRef};
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, Result};
 
 /// Delete File Loader
 #[allow(unused)]
@@ -88,7 +88,7 @@ impl BasicDeleteFileLoader {
         let record_batch_stream =
             ParquetRecordBatchStreamBuilder::new_with_metadata(parquet_file_reader, arrow_metadata)
                 .build()?
-                .map_err(|e| Error::new(ErrorKind::Unexpected, format!("{e}")));
+                .map_err(Error::from);
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
     }
@@ -171,6 +171,51 @@ mod tests {
         let result = result.try_collect::<Vec<_>>().await.unwrap();
 
         assert_eq!(result.len(), 1);
+    }
+
+    /// A delete file whose footer reads but whose pages do not decode fails
+    /// while streaming. The `ParquetError` stays the error's source, so a
+    /// caller can still see the typed cause (for example a storage error the
+    /// `FileIO` returned).
+    #[tokio::test]
+    async fn test_stream_error_keeps_the_parquet_error_as_source() {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_scan_tasks = setup(tmp_dir.path());
+        let delete_file = &file_scan_tasks[0].deletes()[0];
+
+        // Overwrite the first column chunk, so the metadata and page index
+        // still load and only that chunk's pages are broken.
+        let mut bytes = std::fs::read(delete_file.file_path()).unwrap();
+        let reader =
+            parquet::file::reader::SerializedFileReader::new(bytes::Bytes::from(bytes.clone()))
+                .unwrap();
+        let (start, len) = parquet::file::reader::FileReader::metadata(&reader)
+            .row_group(0)
+            .column(0)
+            .byte_range();
+        bytes[start as usize..(start + len) as usize].fill(0xFF);
+        std::fs::write(delete_file.file_path(), &bytes).unwrap();
+
+        let delete_file_loader =
+            BasicDeleteFileLoader::new(FileIO::new_with_fs(), ScanMetrics::new());
+        let stream = delete_file_loader
+            .read_delete_file(delete_file, file_scan_tasks[0].schema_ref())
+            .await
+            .expect("the footer is intact, so opening succeeds");
+        let err = stream
+            .try_collect::<Vec<_>>()
+            .await
+            .expect_err("the pages do not decode");
+
+        assert_eq!(err.kind(), crate::ErrorKind::Unexpected);
+        assert_eq!(err.message(), "Failed to read a Parquet file");
+        let source = std::error::Error::source(&err).expect("the error keeps its source");
+        assert!(
+            source
+                .downcast_ref::<parquet::errors::ParquetError>()
+                .is_some(),
+            "expected a ParquetError source, got: {source:?}"
+        );
     }
 
     #[tokio::test]
