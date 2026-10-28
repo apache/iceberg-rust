@@ -20,9 +20,6 @@ description: 'Regenerates bindings/python/LICENSE and NOTICE with the root files
 runs:
   using: "composite"
   steps:
-    - name: Setup Rust toolchain
-      uses: $/.github/actions/setup-builder
-
     - name: Install cargo-about
       # Keep version in sync with the install-cargo-about target in bindings/python/Makefile.
       uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
