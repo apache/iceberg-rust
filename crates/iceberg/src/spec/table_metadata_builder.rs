@@ -2472,6 +2472,53 @@ mod tests {
     }
 
     #[test]
+    fn test_build_accepts_default_void_spec_after_source_column_dropped() {
+        // Replacing a removed partition field with void (v1) leaves a default
+        // spec whose source id is gone. build() must re-bind that like Java's
+        // PartitionSpec.checkCompatibility, which skips void fields.
+        let void_spec = UnboundPartitionSpec {
+            spec_id: None,
+            fields: vec![UnboundPartitionField::builder()
+                .source_ids(vec![2])
+                .field_id(1000)
+                .name("y_void")
+                .transform(Transform::Void)
+                .build()
+                .unwrap()],
+        };
+        let metadata = builder_without_changes(FormatVersion::V1)
+            .add_default_partition_spec(void_spec)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let schema_without_y = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(3, "z", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = metadata
+            .into_builder(None)
+            .add_current_schema(schema_without_y.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert!(metadata.current_schema().field_by_id(2).is_none());
+        assert_eq!(
+            metadata.default_partition_spec().fields()[0].transform,
+            Transform::Void
+        );
+        assert_eq!(metadata.default_partition_spec().fields()[0].source_id, 2);
+    }
+
+    #[test]
     fn test_add_partition_spec_accepts_void_fields_of_removed_fields() {
         let builder = builder_without_changes(FormatVersion::V1);
         let void_field = |field_id: i32, name: &str| {
