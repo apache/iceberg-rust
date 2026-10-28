@@ -44,6 +44,7 @@ use iceberg_property_macro::Properties;
 use opendal::Operator;
 use opendal::layers::{RetryLayer, TimeoutLayer};
 use opendal::options::WriteOptions;
+use prefixed::PrefixedStorage;
 use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
 
@@ -109,6 +110,7 @@ cfg_if! {
     }
 }
 
+mod prefixed;
 mod resolving;
 pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 
@@ -218,6 +220,8 @@ fn parse_positive_ms(value: &str) -> Result<NonZeroU64> {
 /// Maps scheme to the corresponding OpenDalStorage storage variant.
 /// Use this factory with `FileIOBuilder::new(factory)` to create FileIO instances.
 ///
+/// Supports [storage credentials](iceberg::io::StorageConfig::with_storage_credentials).
+///
 /// # Serialization
 ///
 /// The receiving binary must enable the feature corresponding to the serialized backend variant.
@@ -277,8 +281,14 @@ where
 
 #[typetag::serde(name = "OpenDalStorageFactory")]
 impl StorageFactory for OpenDalStorageFactory {
-    #[allow(unused_variables)]
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+        PrefixedStorage::build(config, |config| self.build_storage(config))
+    }
+}
+
+impl OpenDalStorageFactory {
+    #[allow(unused_variables)]
+    fn build_storage(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         let client_config = OpenDalClientConfig::from_properties(config.props())?;
         match self {
             #[cfg(feature = "opendal-memory")]
