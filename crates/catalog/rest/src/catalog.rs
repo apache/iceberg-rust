@@ -1908,7 +1908,7 @@ mod tests {
             ("audience", "custom-audience"),
             ("resource", "custom-resource"),
             ("header.x-custom", "value"),
-            (REST_CATALOG_PROP_DISABLE_HEADER_REDACTION, "TrUe"),
+            (REST_CATALOG_PROP_DISABLE_HEADER_REDACTION, "TRUE"),
             (REST_CATALOG_PROP_PAGE_SIZE, "25"),
             (REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES, "10"),
             (REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS, "500"),
