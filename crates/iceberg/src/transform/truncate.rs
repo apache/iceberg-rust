@@ -50,17 +50,21 @@ impl Truncate {
 
     #[inline]
     fn truncate_i32(v: i32, width: i32) -> i32 {
-        v - v.rem_euclid(width)
+        // Match Java TruncateUtil, including int overflow wrapping.
+        v.wrapping_sub((v % width).wrapping_add(width) % width)
     }
 
     #[inline]
     fn truncate_i64(v: i64, width: i64) -> i64 {
-        v - (((v % width) + width) % width)
+        // Match Java TruncateUtil, including long overflow wrapping.
+        v.wrapping_sub((v % width).wrapping_add(width) % width)
     }
 
     #[inline]
     fn truncate_decimal_i128(v: i128, width: i128) -> i128 {
-        v - (((v % width) + width) % width)
+        // Match Java TruncateUtil. Java uses BigInteger here, so wrapping only keeps
+        // out-of-range i128 values from panicking.
+        v.wrapping_sub((v % width).wrapping_add(width) % width)
     }
 }
 
@@ -903,6 +907,29 @@ mod test {
     }
 
     #[test]
+    fn test_truncate_long_min_matches_java() {
+        // Expected values computed with Iceberg Java's `TruncateUtil.truncateLong`
+        // (iceberg 1.11.0, JDK 17).
+        for (width, value, expected) in [
+            (1000, i64::MIN, 9_223_372_036_854_775_616),
+            (i32::MAX as u32, i64::MIN, 9_223_372_034_707_292_163),
+        ] {
+            let truncate = super::Truncate::new(width);
+            let input = Arc::new(Int64Array::from(vec![Some(value), None]));
+            let result = truncate.transform(input).unwrap();
+            let expected_array = Int64Array::from(vec![Some(expected), None]);
+            assert_eq!(
+                result.as_any().downcast_ref::<Int64Array>(),
+                Some(&expected_array)
+            );
+            assert_eq!(
+                truncate.transform_literal(&Datum::long(value)).unwrap(),
+                Some(Datum::long(expected))
+            );
+        }
+    }
+
+    #[test]
     fn test_string_truncate() {
         let test1 = "イロハニホヘト";
         let test1_2_expected = "イロ";
@@ -969,6 +996,34 @@ mod test {
     }
 
     #[test]
+    fn test_truncate_int_matches_java() {
+        // Expected values computed with Iceberg Java's `TruncateUtil.truncateInt`
+        // (iceberg 1.11.0, JDK 17).
+        for (width, value, expected) in [
+            (2_000_000_000, 1_500_000_000, -2_000_000_000),
+            (i32::MAX as u32, i32::MAX - 1, -2_147_483_647),
+            (1000, i32::MIN, 2_147_483_296),
+            // Smallest width where `(v % w) + w` can overflow i32.
+            (1_073_741_825, 1_073_741_824, 2_147_483_646),
+            // Tiny value, max width: Java wraps to 2.
+            (i32::MAX as u32, 1, 2),
+        ] {
+            let truncate = super::Truncate::new(width);
+            let input = Arc::new(Int32Array::from(vec![Some(value), None]));
+            let result = truncate.transform(input).unwrap();
+            let expected_array = Int32Array::from(vec![Some(expected), None]);
+            assert_eq!(
+                result.as_any().downcast_ref::<Int32Array>(),
+                Some(&expected_array)
+            );
+            assert_eq!(
+                truncate.transform_literal(&Datum::int(value)).unwrap(),
+                Some(Datum::int(expected))
+            );
+        }
+    }
+
+    #[test]
     fn test_literal_long() {
         let input = Datum::long(1);
         let res = super::Truncate::new(10)
@@ -1008,6 +1063,14 @@ mod test {
                 "input: {input:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_truncate_decimal_i128_min_does_not_panic() {
+        // `i128::MIN` is outside the range of a 38-digit Iceberg decimal, and Java's
+        // `TruncateUtil.truncateDecimal` works on `BigInteger`, so there is no wrapping
+        // result to match. This only pins that debug builds do not panic.
+        super::Truncate::truncate_decimal_i128(i128::MIN, 1000);
     }
 
     #[test]
