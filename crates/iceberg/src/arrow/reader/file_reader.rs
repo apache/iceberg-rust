@@ -34,6 +34,7 @@ use crate::io::{FileMetadata, FileRead};
 pub struct ArrowFileReader {
     meta: FileMetadata,
     parquet_read_options: ParquetReadOptions,
+    preload_page_index: bool,
     r: Box<dyn FileRead>,
 }
 
@@ -43,8 +44,14 @@ impl ArrowFileReader {
         Self {
             meta,
             parquet_read_options: ParquetReadOptions::builder().build(),
+            preload_page_index: false,
             r,
         }
+    }
+
+    pub(super) fn with_preload_page_index(mut self, enabled: bool) -> Self {
+        self.preload_page_index = enabled;
+        self
     }
 
     /// Configure all Parquet read options.
@@ -118,17 +125,11 @@ impl AsyncFileReader for ArrowFileReader {
 
         async move {
             let reader = ParquetMetaDataReader::new()
-                .with_prefetch_hint(self.parquet_read_options.metadata_size_hint())
+                .with_prefetch_hint(Some(self.parquet_read_options.metadata_size_hint()))
                 // Set the page policy first because it updates both column and offset policies.
-                .with_page_index_policy(PageIndexPolicy::from(
-                    self.parquet_read_options.preload_page_index(),
-                ))
-                .with_column_index_policy(PageIndexPolicy::from(
-                    self.parquet_read_options.preload_column_index(),
-                ))
-                .with_offset_index_policy(PageIndexPolicy::from(
-                    self.parquet_read_options.preload_offset_index(),
-                ))
+                .with_page_index_policy(PageIndexPolicy::from(self.preload_page_index))
+                .with_column_index_policy(PageIndexPolicy::from(true))
+                .with_offset_index_policy(PageIndexPolicy::from(true))
                 .with_metadata_options(metadata_options)
                 .with_decryption_properties(decryption_properties);
             let size = self.meta.size;
