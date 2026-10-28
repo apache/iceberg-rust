@@ -177,7 +177,9 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::spec::{NestedField, PrimitiveType, Transform, Type, UnboundPartitionSpec};
+    use crate::spec::{
+        NestedField, PrimitiveType, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
+    };
 
     fn test_schema() -> Schema {
         Schema::builder()
@@ -199,7 +201,14 @@ mod tests {
         let mut builder = UnboundPartitionSpec::builder().with_spec_id(spec_id);
         for (source_id, name, transform) in fields {
             builder = builder
-                .add_partition_field(source_id, name, transform)
+                .add_partition_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![source_id])
+                        .name(name)
+                        .transform(transform)
+                        .build()
+                        .unwrap(),
+                )
                 .unwrap();
         }
         builder.build().bind(schema.clone()).unwrap()
@@ -261,12 +270,15 @@ mod tests {
         // Spec 0: old name
         let spec_v0 = PartitionSpec::builder(Arc::new(schema.clone()))
             .with_spec_id(0)
-            .add_unbound_field(crate::spec::UnboundPartitionField {
-                source_id: 4,
-                field_id: Some(1000),
-                name: "cat_old".to_string(),
-                transform: Transform::Identity,
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(1000)
+                    .name("cat_old".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -274,12 +286,15 @@ mod tests {
         // Spec 1: newer name, same field_id
         let spec_v1 = PartitionSpec::builder(Arc::new(schema.clone()))
             .with_spec_id(1)
-            .add_unbound_field(crate::spec::UnboundPartitionField {
-                source_id: 4,
-                field_id: Some(1000),
-                name: "cat_new".to_string(),
-                transform: Transform::Identity,
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(1000)
+                    .name("cat_new".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -297,12 +312,15 @@ mod tests {
         // Spec 0 (older): category partitioned by identity
         let spec_v0 = PartitionSpec::builder(Arc::new(schema.clone()))
             .with_spec_id(0)
-            .add_unbound_field(crate::spec::UnboundPartitionField {
-                source_id: 4,
-                field_id: Some(1000),
-                name: "category".to_string(),
-                transform: Transform::Identity,
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(1000)
+                    .name("category".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -310,12 +328,15 @@ mod tests {
         // Spec 1 (newer): same field_id voided (partition dropped)
         let spec_v1 = PartitionSpec::builder(Arc::new(schema.clone()))
             .with_spec_id(1)
-            .add_unbound_field(crate::spec::UnboundPartitionField {
-                source_id: 4,
-                field_id: Some(1000),
-                name: "category_v2".to_string(),
-                transform: Transform::Void,
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(1000)
+                    .name("category_v2".to_string())
+                    .transform(Transform::Void)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -371,12 +392,15 @@ mod tests {
         // Spec 1: partition by category + ts_year
         let spec_v1 = PartitionSpec::builder(Arc::new(schema.clone()))
             .with_spec_id(1)
-            .add_unbound_field(crate::spec::UnboundPartitionField {
-                source_id: 4,
-                field_id: Some(spec_v0.fields()[0].field_id),
-                name: "category".to_string(),
-                transform: Transform::Identity,
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(spec_v0.fields()[0].field_id)
+                    .name("category".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .add_partition_field("ts", "ts_year", Transform::Year)
             .unwrap()

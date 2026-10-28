@@ -30,7 +30,8 @@ use crate::scan::{
 };
 use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
-    PartitionSpecRef, SchemaRef, SnapshotRef, SortOrderRef, StructType, TableMetadataRef,
+    PartitionSpecRef, PrimitiveType, SchemaRef, SnapshotRef, SortOrderRef, StructType,
+    TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -73,9 +74,30 @@ pub(crate) struct ManifestEntryContext {
     pub sort_order: Option<SortOrderRef>,
 }
 
+/// Returns whether any `int` or `float` field of `written` is widened in `current`, to
+/// `long`/`double` or to `unknown` once its source column is dropped, i.e. partition
+/// values written with `written` need normalizing before they compare against predicates
+/// bound to the current schema or against delete-file partitions.
+fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
+    current.fields().iter().zip(written.fields()).any(|(c, w)| {
+        matches!(
+            (
+                w.field_type.as_primitive_type(),
+                c.field_type.as_primitive_type()
+            ),
+            (
+                Some(PrimitiveType::Int),
+                Some(PrimitiveType::Long | PrimitiveType::Unknown)
+            ) | (
+                Some(PrimitiveType::Float),
+                Some(PrimitiveType::Double | PrimitiveType::Unknown)
+            )
+        )
+    })
+}
+
 impl ManifestFileContext {
-    /// Consumes this [`ManifestFileContext`], fetching its Manifest from FileIO and then
-    /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
+    /// Fetches the manifest and streams its live entries to the context's channel.
     pub(crate) async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
         let ManifestFileContext {
             object_cache,
@@ -95,7 +117,37 @@ impl ManifestFileContext {
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
+        // A manifest written under an older schema stores partition values in that
+        // schema's (narrower) types. When the current partition type widens the one the
+        // manifest was written with (e.g. an int source column promoted to long), widen
+        // each entry's partition tuple here so the pruning evaluator and the delete-file
+        // index compare like-typed values. The gate compares the partition types
+        // themselves, not schema ids, since v1 may omit them (defaulting to 0). Column
+        // bounds are widened lazily where the metrics evaluator compares them.
+        let promotion_target: Option<(StructType, StructType)> = match partition_spec.as_ref() {
+            Some(spec) => {
+                let current = spec.partition_type(&snapshot_schema)?;
+                let written = spec.partition_type(manifest.metadata().schema())?;
+                partition_types_differ(&current, &written).then_some((current, written))
+            }
+            None => None,
+        };
+
         for manifest_entry in manifest.entries() {
+            if !manifest_entry.is_alive() {
+                continue;
+            }
+
+            let manifest_entry = match promotion_target.as_ref() {
+                Some((current, written)) => {
+                    let mut entry = manifest_entry.as_ref().clone();
+                    entry.data_file.partition =
+                        entry.data_file.promoted_partition(current, written)?;
+                    Arc::new(entry)
+                }
+                None => manifest_entry.clone(),
+            };
+
             // Carry the raw id through unresolved, then resolve it to an order for the
             // reader. The resolved order is `None` for the unsorted order (empty fields) so
             // that `Some` always means genuinely sorted, matching Java's `isSorted()` gate;
@@ -108,8 +160,7 @@ impl ManifestFileContext {
                 .cloned();
 
             let manifest_entry_context = ManifestEntryContext {
-                // TODO: refactor to avoid the expensive ManifestEntry clone
-                manifest_entry: manifest_entry.clone(),
+                manifest_entry,
                 expression_evaluator_cache: expression_evaluator_cache.clone(),
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
@@ -172,6 +223,23 @@ impl ManifestEntryContext {
             .with_sort_order(self.sort_order)
             .build()
     }
+
+    /// Consume this `ManifestEntryContext`, returning a COW rewrite file candidate.
+    ///
+    /// The scan task keeps everything planned for a normal read (projection,
+    /// delete files, partition metadata, ...) except the row predicate: the
+    /// candidate was already selected by that predicate during planning, and
+    /// the rewrite must read the whole file.
+    pub(crate) async fn into_cow_rewrite_file(self) -> Result<crate::cow_rewrite::CowRewriteFile> {
+        let old_data_file = self.manifest_entry.data_file().clone();
+        let mut scan_task = self.into_file_scan_task().await?;
+        scan_task.clear_predicate();
+
+        Ok(crate::cow_rewrite::CowRewriteFile {
+            old_data_file,
+            scan_task,
+        })
+    }
 }
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
@@ -181,6 +249,9 @@ pub(crate) struct PlanContext {
     pub snapshot: SnapshotRef,
 
     pub table_metadata: TableMetadataRef,
+    /// The schema the scan projects. For a scan of the current state, this is
+    /// the table's current schema, not the snapshot's; for time travel, it is
+    /// the schema the snapshot was written with.
     pub snapshot_schema: SchemaRef,
     pub case_sensitive: bool,
     pub predicate: Option<Arc<Predicate>>,
