@@ -27,9 +27,7 @@ use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
 use super::{AuthManager, AuthSession, HttpRequest};
-use crate::catalog::{
-    OAuth2Credential, REST_CATALOG_PROP_URI, RestCatalogProperties, default_token_endpoint,
-};
+use crate::catalog::{OAuth2Credential, REST_CATALOG_PROP_URI, RestCatalogProperties};
 use crate::client::HttpClient;
 use crate::types::{ErrorResponse, TokenResponse};
 
@@ -109,7 +107,7 @@ impl OAuth2Manager {
             token: Arc::new(Mutex::new(cfg.token().clone())),
             init_params: OAuth2Params {
                 extra_headers: cfg.extra_headers(),
-                token_endpoint: cfg.get_token_endpoint(),
+                token_endpoint: cfg.get_token_endpoint().to_string(),
                 credential: cfg.credential().clone(),
                 extra_oauth_params: cfg.extra_oauth_params(),
             },
@@ -172,7 +170,7 @@ impl OAuth2Manager {
             // A default endpoint follows the merged catalog URI; an injected
             // manager keeps its explicit endpoint.
             _ if self.endpoint_is_default && props.contains_key(REST_CATALOG_PROP_URI) => {
-                default_token_endpoint(properties.uri())
+                properties.endpoints().default_token_endpoint().to_string()
             }
             _ => self.init_params.token_endpoint.clone(),
         };

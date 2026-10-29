@@ -23,13 +23,13 @@ use std::future::Future;
 use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 use async_trait::async_trait;
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{
     ADLS_SAS_TOKEN, FileIO, FileIOBuilder, GCS_TOKEN, S3_SESSION_TOKEN, StorageFactory,
 };
+use iceberg::properties::{BoolProp, DurationMsProp, U32Prop};
 use iceberg::sensitive::SensitiveString;
 use iceberg::table::Table;
 use iceberg::{
@@ -103,7 +103,7 @@ const REST_CATALOG_PROP_HEADER_PREFIX: &str = "header.";
 const TABLE_CACHE_MAX_ENTRIES_DEFAULT: u64 = 100;
 const TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT: u64 = 5 * 60 * 1000;
 /// moka panics on a time-to-live beyond 1000 years.
-const TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX: Duration = Duration::from_secs(1000 * 365 * 24 * 3600);
+const TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX_MS: u64 = 1000 * 365 * 24 * 3600 * 1000;
 
 /// Tables loaded with an `ETag`, keyed by session id and identifier. Loads that
 /// vend short-lived storage credentials are not cached, since a `304` cannot
@@ -199,8 +199,8 @@ impl RestCatalogBuilder {
 }
 
 /// Typed REST catalog properties.
-#[derive(Clone, Properties)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
+// PartialEq supports whole-configuration assertions in parsing tests.
+#[derive(Clone, Properties, PartialEq)]
 pub(crate) struct RestCatalogProperties {
     /// Catalog URI.
     #[property(key = REST_CATALOG_PROP_URI, default = "", getter)]
@@ -235,33 +235,34 @@ pub(crate) struct RestCatalogProperties {
     /// Explicit headers added to requests.
     #[property(nested, getter)]
     headers: RestHeaders,
+    /// Fixed catalog endpoints.
+    #[property(nested, getter)]
+    endpoints: RestEndpoints,
     /// Whether header redaction is disabled.
     #[property(
         key = REST_CATALOG_PROP_DISABLE_HEADER_REDACTION,
-        default = false,
-        parse_with = parse_header_redaction,
+        default = BoolProp::from(false),
         getter
     )]
-    disable_header_redaction: bool,
+    disable_header_redaction: BoolProp,
     /// Requested page size for namespace and table listings.
-    #[property(key = REST_CATALOG_PROP_PAGE_SIZE, default = None, parse_with = parse_page_size, getter)]
-    page_size: Option<NonZeroU32>,
+    #[property(key = REST_CATALOG_PROP_PAGE_SIZE, default = None, getter)]
+    page_size: Option<U32Prop<1, { i32::MAX as u32 }>>,
     /// Maximum number of cached tables.
     #[property(key = REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES, default = TABLE_CACHE_MAX_ENTRIES_DEFAULT, getter)]
     table_cache_max_entries: u64,
     /// How long a loaded table stays cached.
     #[property(
         key = REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS,
-        default = Duration::from_millis(TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT),
-        parse_with = parse_cache_expiry,
+        default = DurationMsProp::try_from(TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT).unwrap(),
         getter
     )]
-    table_cache_expire_after_write: Duration,
+    table_cache_expire_after_write: DurationMsProp<1, TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX_MS>,
 }
 
 /// OAuth2 client credentials.
-#[derive(Clone, Debug)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
+// PartialEq supports comparing credentials in property parsing tests.
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct OAuth2Credential {
     client_id: Option<String>,
     client_secret: SensitiveString,
@@ -353,25 +354,21 @@ impl RestCatalogProperties {
     }
 
     fn url_prefixed(&self, parts: &[&str]) -> String {
-        [&self.uri, PATH_V1]
-            .into_iter()
-            .chain(self.prefix().as_deref())
-            .chain(parts.iter().cloned())
+        std::iter::once(self.endpoints.base.as_str())
+            .chain(parts.iter().copied())
             .join("/")
     }
 
-    fn config_endpoint(&self) -> String {
-        [&self.uri, PATH_V1, "config"].join("/")
+    fn config_endpoint(&self) -> &str {
+        &self.endpoints.config
     }
 
-    pub(crate) fn get_token_endpoint(&self) -> String {
-        self.oauth2_server_uri
-            .clone()
-            .unwrap_or_else(|| default_token_endpoint(&self.uri))
+    pub(crate) fn get_token_endpoint(&self) -> &str {
+        &self.endpoints.token
     }
 
-    fn namespaces_endpoint(&self) -> String {
-        self.url_prefixed(&["namespaces"])
+    fn namespaces_endpoint(&self) -> &str {
+        &self.endpoints.namespaces
     }
 
     fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
@@ -382,8 +379,8 @@ impl RestCatalogProperties {
         self.url_prefixed(&["namespaces", &ns.to_url_string(), "tables"])
     }
 
-    fn rename_table_endpoint(&self) -> String {
-        self.url_prefixed(&["tables", "rename"])
+    fn rename_table_endpoint(&self) -> &str {
+        &self.endpoints.rename_table
     }
 
     fn register_table_endpoint(&self, ns: &NamespaceIdent) -> String {
@@ -441,7 +438,7 @@ impl RestCatalogProperties {
         (self.table_cache_max_entries() > 0).then(|| {
             TableCache::builder()
                 .max_capacity(self.table_cache_max_entries())
-                .time_to_live(*self.table_cache_expire_after_write())
+                .time_to_live(self.table_cache_expire_after_write().get())
                 .build()
         })
     }
@@ -458,48 +455,49 @@ impl RestCatalogProperties {
     }
 }
 
-fn parse_header_redaction(value: &str) -> Result<bool> {
-    Ok(value.eq_ignore_ascii_case("true"))
+// PartialEq supports whole-configuration assertions in parsing tests.
+#[derive(Clone, PartialEq)]
+pub(crate) struct RestEndpoints {
+    base: String,
+    config: String,
+    token: String,
+    default_token: String,
+    namespaces: String,
+    rename_table: String,
 }
 
-fn parse_page_size(value: &str) -> Result<NonZeroU32> {
-    let invalid = || {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid {REST_CATALOG_PROP_PAGE_SIZE}: {value}"),
-        )
-    };
-    let page_size = value
-        .parse::<NonZeroU32>()
-        .map_err(|error| invalid().with_source(error))?;
-    if page_size.get() > i32::MAX as u32 {
-        return Err(invalid());
+impl RestEndpoints {
+    fn from_properties(props: &HashMap<String, String>) -> Result<Self> {
+        let uri = props
+            .get(REST_CATALOG_PROP_URI)
+            .map(String::as_str)
+            .unwrap_or_default();
+        let base = [uri, PATH_V1]
+            .into_iter()
+            .chain(props.get(REST_CATALOG_PROP_PREFIX).map(String::as_str))
+            .join("/");
+        let default_token = [uri, PATH_V1, "oauth", "tokens"].join("/");
+        Ok(Self {
+            config: [uri, PATH_V1, "config"].join("/"),
+            token: props
+                .get(REST_CATALOG_PROP_OAUTH2_SERVER_URI)
+                .cloned()
+                .unwrap_or_else(|| default_token.clone()),
+            default_token,
+            namespaces: [&base, "namespaces"].join("/"),
+            rename_table: [&base, "tables", "rename"].join("/"),
+            base,
+        })
     }
-    Ok(page_size)
-}
 
-fn parse_cache_expiry(value: &str) -> Result<Duration> {
-    let millis = value.parse::<u64>().map_err(|error| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid {REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS}: {value}"),
-        )
-        .with_source(error)
-    })?;
-    let duration = Duration::from_millis(millis);
-    if duration.is_zero() || duration > TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Invalid {REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS}: {millis} (must be between 1 ms and 1000 years)"
-            ),
-        ));
+    /// Returns the OAuth2 token endpoint derived from the catalog URI.
+    pub(crate) fn default_token_endpoint(&self) -> &str {
+        &self.default_token
     }
-    Ok(duration)
 }
 
-#[derive(Clone)]
-#[cfg_attr(test, derive(PartialEq, Eq))]
+// PartialEq supports whole-configuration assertions in parsing tests.
+#[derive(Clone, PartialEq)]
 pub(crate) struct RestHeaders(pub(crate) HeaderMap);
 
 impl RestHeaders {
@@ -528,11 +526,6 @@ impl RestHeaders {
         }
         Ok(Self(headers))
     }
-}
-
-/// The default OAuth2 token endpoint for a catalog `uri`.
-pub(crate) fn default_token_endpoint(uri: &str) -> String {
-    [uri, PATH_V1, "oauth", "tokens"].join("/")
 }
 
 struct RestCatalogClient {
@@ -1030,10 +1023,10 @@ impl SessionCatalog for RestSessionCatalog {
         let mut next_token = client.config.page_size().map(|_| String::new());
 
         loop {
-            let mut request = client.http_client.request(Method::GET, endpoint.clone());
+            let mut request = client.http_client.request(Method::GET, endpoint);
 
             if let Some(page_size) = client.config.page_size() {
-                request = request.query(&[("pageSize", page_size)]);
+                request = request.query(&[("pageSize", page_size.get())]);
             }
 
             // Filter on `parent={namespace}` if a parent namespace exists.
@@ -1223,7 +1216,7 @@ impl SessionCatalog for RestSessionCatalog {
             let mut request = client.http_client.request(Method::GET, endpoint.clone());
 
             if let Some(page_size) = client.config.page_size() {
-                request = request.query(&[("pageSize", page_size)]);
+                request = request.query(&[("pageSize", page_size.get())]);
             }
 
             if let Some(token) = next_token {
@@ -1863,6 +1856,7 @@ mod tests {
     use std::fs::File;
     use std::io::BufReader;
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     use chrono::{TimeZone, Utc};
     use iceberg::io::LocalFsStorageFactory;
@@ -1952,10 +1946,18 @@ mod tests {
                 HeaderName::from_static("x-custom"),
                 HeaderValue::from_static("value"),
             )])),
-            disable_header_redaction: true,
-            page_size: NonZeroU32::new(25),
+            endpoints: RestEndpoints {
+                base: "http://localhost:8181/v1/catalog".to_string(),
+                config: "http://localhost:8181/v1/config".to_string(),
+                token: "http://localhost:8181/token".to_string(),
+                default_token: "http://localhost:8181/v1/oauth/tokens".to_string(),
+                namespaces: "http://localhost:8181/v1/catalog/namespaces".to_string(),
+                rename_table: "http://localhost:8181/v1/catalog/tables/rename".to_string(),
+            },
+            disable_header_redaction: BoolProp::from(true),
+            page_size: Some(U32Prop::try_from(25).unwrap()),
             table_cache_max_entries: 10,
-            table_cache_expire_after_write: Duration::from_millis(500),
+            table_cache_expire_after_write: DurationMsProp::try_from(500).unwrap(),
         };
 
         assert_eq!(
@@ -1978,10 +1980,18 @@ mod tests {
             audience: None,
             resource: None,
             headers: RestHeaders(HeaderMap::new()),
-            disable_header_redaction: false,
+            endpoints: RestEndpoints {
+                base: "/v1".to_string(),
+                config: "/v1/config".to_string(),
+                token: "/v1/oauth/tokens".to_string(),
+                default_token: "/v1/oauth/tokens".to_string(),
+                namespaces: "/v1/namespaces".to_string(),
+                rename_table: "/v1/tables/rename".to_string(),
+            },
+            disable_header_redaction: BoolProp::from(false),
             page_size: None,
             table_cache_max_entries: 100,
-            table_cache_expire_after_write: Duration::from_secs(300),
+            table_cache_expire_after_write: DurationMsProp::try_from(300_000).unwrap(),
         };
 
         assert_eq!(
@@ -2048,7 +2058,7 @@ mod tests {
             assert_eq!(
                 (
                     properties.credential().clone(),
-                    properties.disable_header_redaction()
+                    properties.disable_header_redaction().get()
                 ),
                 expected,
             );
@@ -2097,7 +2107,7 @@ mod tests {
             assert_eq!(
                 (
                     config.table_cache_max_entries,
-                    config.table_cache_expire_after_write
+                    config.table_cache_expire_after_write.get()
                 ),
                 (expected, Duration::from_millis(expected)),
             );
@@ -2593,10 +2603,8 @@ mod tests {
                     .await
                     .unwrap_err();
                 assert_eq!(err.kind(), ErrorKind::DataInvalid);
-                assert_eq!(
-                    err.message(),
-                    format!("Invalid {REST_CATALOG_PROP_PAGE_SIZE}: {value}")
-                );
+                assert!(err.message().contains(REST_CATALOG_PROP_PAGE_SIZE));
+                assert!(err.message().contains(value));
                 config_mock.assert_async().await;
             }
         }
