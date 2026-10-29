@@ -832,8 +832,7 @@ impl From<FileScanTaskDeleteFile> for Result<FileScanTaskDeleteFile> {
 ///
 /// A manifest written before a type promotion stores the narrower type, so bounds are promoted to
 /// the column's type in the scan schema: `int` to `long`, `float` to `double`, and a decimal to a
-/// wider precision with the same scale. A bound of any other type is omitted, including a `date`
-/// bound under a `timestamp` column, which is not converted yet.
+/// wider precision with the same scale. A bound of any other type is omitted.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, TypedBuilder)]
 #[builder(field_defaults(default, setter(prefix = "with_")))]
 pub struct FileScanTaskColumnStats {
