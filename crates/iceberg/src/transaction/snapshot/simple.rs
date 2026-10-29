@@ -22,14 +22,12 @@ use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use super::{
-    SnapshotCommitInput, current_manifests, generate_snapshot_id, manifest_list_path,
-    manifest_path, new_manifest_writer, validate_partition_value, write_snapshot_commit,
+    AddedManifests, SnapshotCommitInput, current_manifests, generate_snapshot_id,
+    manifest_list_path, manifest_path, validate_partition_value, write_added_manifest,
+    write_snapshot_commit,
 };
 use crate::error::{Result, invalid_data};
-use crate::spec::{
-    DataFile, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile, ManifestStatus,
-    Operation,
-};
+use crate::spec::{DataFile, ManifestContentType, ManifestFile, Operation};
 use crate::table::Table;
 use crate::transaction::ActionCommit;
 
@@ -76,20 +74,6 @@ pub(crate) struct SimpleSnapshotProducer {
     owned_artifacts: HashSet<String>,
 }
 
-/// The manifests written for one append's added files.
-///
-/// Reusable while the table's format version is unchanged. Per spec, sequence
-/// number inheritance does not apply to v1 manifests, so one written before a
-/// concurrent upgrade cannot carry the v2 sequence number a retry assigns and
-/// must be rewritten. The schema is not a guard: the manifest's embedded schema
-/// describes the files it was written for, which do not change.
-struct AddedManifests {
-    /// One manifest today. Several once added files are grouped by partition
-    /// spec (#3500) or rolled over at a target size (#3499).
-    manifests: Vec<ManifestFile>,
-    format_version: FormatVersion,
-}
-
 impl SimpleSnapshotProducer {
     pub(crate) fn new(intent: AppendIntent) -> Self {
         Self {
@@ -122,6 +106,7 @@ impl SimpleSnapshotProducer {
             properties: self.intent.snapshot_properties.clone(),
             added_files: &self.intent.data_files,
             removed_files: &[],
+            removed_delete_files: &[],
             manifests,
             truncate_full_table: false,
         })
@@ -197,6 +182,7 @@ impl SimpleSnapshotProducer {
                 table,
                 path,
                 snapshot_id,
+                ManifestContentType::Data,
                 table.metadata().default_partition_spec_id(),
                 &self.intent.data_files,
             )
@@ -209,45 +195,6 @@ impl SimpleSnapshotProducer {
         });
         Ok(manifests)
     }
-}
-
-/// Writes one data manifest at `path` for `data_files`, all of which must
-/// belong to `partition_spec_id`, and returns its manifest-list entry.
-async fn write_added_manifest(
-    table: &Table,
-    path: String,
-    snapshot_id: i64,
-    partition_spec_id: i32,
-    data_files: &[DataFile],
-) -> Result<ManifestFile> {
-    let metadata = table.metadata();
-    let partition_spec = metadata
-        .partition_spec_by_id(partition_spec_id)
-        .ok_or_else(|| invalid_data!("Unknown partition spec id {partition_spec_id}"))?;
-
-    let mut writer = new_manifest_writer(
-        table,
-        path,
-        snapshot_id,
-        ManifestContentType::Data,
-        metadata.current_schema().clone(),
-        partition_spec.clone(),
-    )?;
-    let format_version = metadata.format_version();
-    for data_file in data_files {
-        let builder = ManifestEntry::builder()
-            .status(ManifestStatus::Added)
-            .data_file(data_file.clone());
-        let entry = if format_version == FormatVersion::V1 {
-            builder.snapshot_id(snapshot_id).build()
-        } else {
-            // For format version > 1, the snapshot id is inherited from the
-            // manifest list, so a rebase does not require rewriting the manifest.
-            builder.build()
-        };
-        writer.add_entry(entry)?;
-    }
-    writer.write_manifest_file().await
 }
 
 #[cfg(test)]
