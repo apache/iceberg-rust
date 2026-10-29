@@ -43,8 +43,6 @@ use reqwest::header::{
 };
 use reqwest::{Client, Method, StatusCode, Url};
 use tokio::sync::OnceCell;
-#[cfg(test)]
-use typed_builder::TypedBuilder;
 
 use crate::auth::{
     AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, AuthSession, NoopAuthManager, OAuth2Manager,
@@ -65,6 +63,20 @@ use crate::types::{
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 /// REST catalog warehouse location
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
+/// REST catalog endpoint prefix.
+pub const REST_CATALOG_PROP_PREFIX: &str = "prefix";
+/// Bearer token used to authenticate REST catalog requests.
+pub const REST_CATALOG_PROP_TOKEN: &str = "token";
+/// OAuth2 client secret, optionally prefixed by a client ID and colon.
+pub const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
+/// OAuth2 token endpoint URI.
+pub const REST_CATALOG_PROP_OAUTH2_SERVER_URI: &str = "oauth2-server-uri";
+/// OAuth2 scope requested when exchanging credentials.
+pub const REST_CATALOG_PROP_SCOPE: &str = "scope";
+/// OAuth2 audience requested when exchanging credentials.
+pub const REST_CATALOG_PROP_AUDIENCE: &str = "audience";
+/// OAuth2 resource requested when exchanging credentials.
+pub const REST_CATALOG_PROP_RESOURCE: &str = "resource";
 /// Requested page size for namespace and table listings; see
 /// [`RestSessionCatalogBuilder::with_page_size`].
 pub const REST_CATALOG_PROP_PAGE_SIZE: &str = "rest-page-size";
@@ -85,6 +97,8 @@ pub const REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES: &str = "rest-table-cache.ma
 /// milliseconds (defaults to 5 minutes; must be positive and at most 1000 years).
 pub const REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS: &str =
     "rest-table-cache.expire-after-write-ms";
+
+const REST_CATALOG_PROP_HEADER_PREFIX: &str = "header.";
 
 const TABLE_CACHE_MAX_ENTRIES_DEFAULT: u64 = 100;
 const TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT: u64 = 5 * 60 * 1000;
@@ -185,7 +199,8 @@ impl RestCatalogBuilder {
 }
 
 /// Typed REST catalog properties.
-#[derive(Clone, Properties, PartialEq, Eq)]
+#[derive(Clone, Properties)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct RestCatalogProperties {
     /// Catalog URI.
     #[property(key = REST_CATALOG_PROP_URI, default = "", getter)]
@@ -194,28 +209,28 @@ pub(crate) struct RestCatalogProperties {
     #[property(key = REST_CATALOG_PROP_WAREHOUSE, default = None, getter)]
     warehouse: Option<String>,
     /// Catalog endpoint prefix.
-    #[property(key = "prefix", default = None, getter)]
+    #[property(key = REST_CATALOG_PROP_PREFIX, default = None, getter)]
     prefix: Option<String>,
     /// Explicit authentication scheme.
     #[property(key = REST_CATALOG_PROP_AUTH_TYPE, default = None, getter)]
     auth_type: Option<AuthType>,
     /// Configured bearer token.
-    #[property(key = "token", default = None, parse_with = parse_sensitive_string, getter)]
+    #[property(key = REST_CATALOG_PROP_TOKEN, default = None, getter)]
     token: Option<SensitiveString>,
     /// Configured OAuth2 client ID and secret.
-    #[property(key = "credential", default = None, parse_with = parse_credential, getter)]
+    #[property(key = REST_CATALOG_PROP_CREDENTIAL, default = None, getter)]
     credential: Option<OAuth2Credential>,
     /// Explicit OAuth2 token endpoint.
-    #[property(key = "oauth2-server-uri", default = None, getter)]
+    #[property(key = REST_CATALOG_PROP_OAUTH2_SERVER_URI, default = None, getter)]
     oauth2_server_uri: Option<String>,
     /// Explicit OAuth2 scope.
-    #[property(key = "scope", default = None, getter)]
+    #[property(key = REST_CATALOG_PROP_SCOPE, default = None, getter)]
     scope: Option<String>,
     /// OAuth2 audience.
-    #[property(key = "audience", default = None, getter)]
+    #[property(key = REST_CATALOG_PROP_AUDIENCE, default = None, getter)]
     audience: Option<String>,
     /// OAuth2 resource.
-    #[property(key = "resource", default = None, getter)]
+    #[property(key = REST_CATALOG_PROP_RESOURCE, default = None, getter)]
     resource: Option<String>,
     /// Explicit headers added to requests.
     #[property(nested, getter)]
@@ -245,7 +260,8 @@ pub(crate) struct RestCatalogProperties {
 }
 
 /// OAuth2 client credentials.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct OAuth2Credential {
     client_id: Option<String>,
     client_secret: SensitiveString,
@@ -268,6 +284,17 @@ impl OAuth2Credential {
     /// Returns the client secret.
     pub(crate) fn client_secret(&self) -> &SensitiveString {
         &self.client_secret
+    }
+}
+
+impl FromStr for OAuth2Credential {
+    type Err = std::convert::Infallible;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(match value.split_once(':') {
+            Some((id, secret)) => Self::new(Some(id.to_string()), secret.to_string().into()),
+            None => Self::new(None, value.to_string().into()),
+        })
     }
 }
 
@@ -394,16 +421,16 @@ impl RestCatalogProperties {
     pub(crate) fn extra_oauth_params(&self) -> HashMap<String, String> {
         let mut params = self.explicit_oauth_params();
         params
-            .entry("scope".to_string())
+            .entry(REST_CATALOG_PROP_SCOPE.to_string())
             .or_insert_with(|| "catalog".to_string());
         params
     }
 
     pub(crate) fn explicit_oauth_params(&self) -> HashMap<String, String> {
         [
-            ("scope", self.scope()),
-            ("audience", self.audience()),
-            ("resource", self.resource()),
+            (REST_CATALOG_PROP_SCOPE, self.scope()),
+            (REST_CATALOG_PROP_AUDIENCE, self.audience()),
+            (REST_CATALOG_PROP_RESOURCE, self.resource()),
         ]
         .into_iter()
         .filter_map(|(key, value)| value.as_ref().map(|value| (key.to_string(), value.clone())))
@@ -429,19 +456,6 @@ impl RestCatalogProperties {
             }
         })
     }
-}
-
-fn parse_sensitive_string(value: &str) -> Result<SensitiveString> {
-    Ok(value.to_string().into())
-}
-
-fn parse_credential(value: &str) -> Result<OAuth2Credential> {
-    Ok(match value.split_once(':') {
-        Some((id, secret)) => {
-            OAuth2Credential::new(Some(id.to_string()), secret.to_string().into())
-        }
-        None => OAuth2Credential::new(None, value.to_string().into()),
-    })
 }
 
 fn parse_header_redaction(value: &str) -> Result<bool> {
@@ -484,16 +498,17 @@ fn parse_cache_expiry(value: &str) -> Result<Duration> {
     Ok(duration)
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(crate) struct RestHeaders(pub(crate) HeaderMap);
 
 impl RestHeaders {
     fn from_properties(props: &HashMap<String, String>) -> Result<Self> {
         let mut headers = HeaderMap::new();
-        for (key, value) in props
-            .iter()
-            .filter_map(|(key, value)| key.strip_prefix("header.").map(|key| (key, value)))
-        {
+        for (key, value) in props.iter().filter_map(|(key, value)| {
+            key.strip_prefix(REST_CATALOG_PROP_HEADER_PREFIX)
+                .map(|key| (key, value))
+        }) {
             headers.insert(
                 HeaderName::from_str(key).map_err(|error| {
                     Error::new(
@@ -1841,35 +1856,7 @@ impl RestSessionCatalogBuilder {
 }
 
 #[cfg(test)]
-#[derive(TypedBuilder)]
-pub(crate) struct RestCatalogTestFixture {
-    uri: String,
-    #[builder(default, setter(strip_option))]
-    warehouse: Option<String>,
-    #[builder(default)]
-    props: HashMap<String, String>,
-}
-
-#[cfg(test)]
-impl RestCatalogTestFixture {
-    fn into_props(mut self) -> HashMap<String, String> {
-        self.props
-            .insert(REST_CATALOG_PROP_URI.to_string(), self.uri);
-        if let Some(warehouse) = self.warehouse {
-            self.props
-                .insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse);
-        }
-        self.props
-    }
-
-    pub(crate) fn properties(self) -> Result<RestCatalogProperties> {
-        RestCatalogProperties::from_properties(&self.into_props())
-    }
-
-    pub(crate) fn http_client(self) -> Result<HttpClient> {
-        Ok(HttpClient::new(Client::default(), &self.properties()?))
-    }
-}
+pub(crate) use tests::RestCatalogTestFixture;
 
 #[cfg(test)]
 mod tests {
@@ -1888,11 +1875,41 @@ mod tests {
     use iceberg_test_utils::test_runtime;
     use mockito::{Matcher, Mock, Server, ServerGuard};
     use serde_json::json;
+    use typed_builder::TypedBuilder;
     use uuid::uuid;
 
     use super::*;
     use crate::auth::AuthSession;
     use crate::request::HttpRequest;
+
+    #[derive(TypedBuilder)]
+    pub(crate) struct RestCatalogTestFixture {
+        uri: String,
+        #[builder(default, setter(strip_option))]
+        warehouse: Option<String>,
+        #[builder(default)]
+        props: HashMap<String, String>,
+    }
+
+    impl RestCatalogTestFixture {
+        pub(super) fn into_props(mut self) -> HashMap<String, String> {
+            self.props
+                .insert(REST_CATALOG_PROP_URI.to_string(), self.uri);
+            if let Some(warehouse) = self.warehouse {
+                self.props
+                    .insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse);
+            }
+            self.props
+        }
+
+        pub(crate) fn properties(self) -> Result<RestCatalogProperties> {
+            RestCatalogProperties::from_properties(&self.into_props())
+        }
+
+        pub(crate) fn http_client(self) -> Result<HttpClient> {
+            Ok(HttpClient::new(Client::default(), &self.properties()?))
+        }
+    }
 
     #[test]
     fn test_catalog_properties() {

@@ -1493,6 +1493,9 @@ pub fn iceberg::sensitive::SensitiveString::from(value: alloc::string::String) -
 impl core::fmt::Debug for iceberg::sensitive::SensitiveString
 pub fn iceberg::sensitive::SensitiveString::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::sensitive::SensitiveString
+impl core::str::traits::FromStr for iceberg::sensitive::SensitiveString
+pub type iceberg::sensitive::SensitiveString::Err = core::convert::Infallible
+pub fn iceberg::sensitive::SensitiveString::from_str(value: &str) -> core::result::Result<Self, Self::Err>
 pub mod iceberg::spec
 pub use iceberg::spec::ByteBuf
 pub mod iceberg::spec::geospatial
