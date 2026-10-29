@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, RecordBatch, StructArray, make_array};
 use arrow_buffer::NullBuffer;
+use arrow_cast::cast;
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 
 use crate::arrow::schema::{schema_to_arrow_schema, try_get_field_id_from_metadata};
@@ -150,11 +151,23 @@ impl RecordBatchProjector {
 
     /// Do projection with record batch
     pub(crate) fn project_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        RecordBatch::try_new(
-            self.projected_schema.clone(),
-            self.project_column(batch.columns())?,
-        )
-        .map_err(|err| invalid_data!("{err}"))
+        let columns = self
+            .project_column(batch.columns())?
+            .into_iter()
+            .zip(self.projected_schema.fields())
+            .map(
+                |(column, field)| match (column.data_type(), field.data_type()) {
+                    (DataType::LargeBinary, DataType::Binary) => cast(&column, &DataType::Binary)
+                        .map_err(|err| {
+                            invalid_data!("Failed to cast column {} to Binary", field.name())
+                                .with_source(err)
+                        }),
+                    _ => Ok(column),
+                },
+            )
+            .collect::<Result<Vec<_>>>()?;
+        RecordBatch::try_new(self.projected_schema.clone(), columns)
+            .map_err(|err| invalid_data!("{err}"))
     }
 
     /// Do projection with columns
