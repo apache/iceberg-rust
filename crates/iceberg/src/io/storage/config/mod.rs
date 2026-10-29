@@ -61,7 +61,7 @@ pub struct StorageConfig {
     /// Credentials that apply to locations under their prefixes
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(crate) storage_credentials: Vec<StorageCredential>,
+    storage_credentials: Vec<StorageCredential>,
 }
 
 impl StorageConfig {

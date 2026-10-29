@@ -28,8 +28,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{
-    ADLS_SAS_TOKEN, FileIO, FileIOBuilder, GCS_TOKEN, S3_SESSION_TOKEN, StorageCredential,
-    StorageFactory,
+    ADLS_SAS_TOKEN, FileIO, FileIOBuilder, GCS_TOKEN, S3_SESSION_TOKEN, StorageConfig,
+    StorageCredential, StorageFactory,
 };
 use iceberg::table::Table;
 use iceberg::{
@@ -1021,10 +1021,11 @@ impl RestSessionCatalog {
                 )
             })?;
 
-        let file_io = FileIOBuilder::new(factory)
-            .with_props(props)
-            .with_storage_credentials(storage_credentials.into_iter().flatten())
+        let config = StorageConfig::builder()
+            .props(props)
+            .storage_credentials(storage_credentials.unwrap_or_default())
             .build();
+        let file_io = FileIOBuilder::new(factory).with_config(config).build();
 
         Ok(file_io)
     }

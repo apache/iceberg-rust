@@ -28,7 +28,7 @@ mod tests {
     use futures::StreamExt;
     use iceberg::io::{
         FileIO, FileIOBuilder, S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION,
-        S3_SECRET_ACCESS_KEY, StorageCredential,
+        S3_SECRET_ACCESS_KEY, StorageConfig, StorageCredential,
     };
     use iceberg_storage_opendal::{
         AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
@@ -286,23 +286,26 @@ mod tests {
     #[tokio::test]
     async fn test_file_io_s3_storage_credential_authorizes_its_prefix() {
         set_up();
+        let config = StorageConfig::builder()
+            .props(HashMap::from([
+                (S3_ENDPOINT.to_string(), get_object_store_endpoint()),
+                (S3_ACCESS_KEY_ID.to_string(), "invalid".to_string()),
+                (S3_SECRET_ACCESS_KEY.to_string(), "invalid".to_string()),
+                (S3_REGION.to_string(), "us-east-1".to_string()),
+                (S3_PATH_STYLE_ACCESS.to_string(), "true".to_string()),
+            ]))
+            .storage_credentials(vec![StorageCredential::new(
+                "s3://bucket1/vended/",
+                HashMap::from([
+                    (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
+                    (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
+                ]),
+            )])
+            .build();
         let file_io = FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
             customized_credential_load: None,
         }))
-        .with_props(vec![
-            (S3_ENDPOINT, get_object_store_endpoint()),
-            (S3_ACCESS_KEY_ID, "invalid".to_string()),
-            (S3_SECRET_ACCESS_KEY, "invalid".to_string()),
-            (S3_REGION, "us-east-1".to_string()),
-            (S3_PATH_STYLE_ACCESS, "true".to_string()),
-        ])
-        .with_storage_credentials([StorageCredential::new(
-            "s3://bucket1/vended/",
-            HashMap::from([
-                (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
-                (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
-            ]),
-        )])
+        .with_config(config)
         .build();
 
         assert!(!file_io.exists("s3://bucket1/vended/f").await.unwrap());
