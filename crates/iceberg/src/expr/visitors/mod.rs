@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use fnv::FnvHashSet;
+
+use crate::spec::Datum;
+
+pub(crate) mod bloom_filter_evaluator;
 pub(crate) mod bound_predicate_visitor;
 pub(crate) mod expression_evaluator;
 pub(crate) mod inclusive_metrics_evaluator;
@@ -26,3 +31,126 @@ pub(crate) mod rewrite_not;
 pub(crate) mod row_group_metrics_evaluator;
 pub(crate) mod strict_metrics_evaluator;
 pub(crate) mod strict_projection;
+
+/// Returns true if every literal is provably outside the inclusive `[lower, upper]`
+/// range, so rows cannot match. Missing bounds are treated as unbounded on that side.
+///
+/// Returns false when there are no bounds, or when a literal does not compare
+/// with a bound. Incomparable values must not be pruned.
+pub(crate) fn all_literals_outside_bounds(
+    lower: Option<&Datum>,
+    upper: Option<&Datum>,
+    literals: &FnvHashSet<Datum>,
+) -> bool {
+    match (lower, upper) {
+        (Some(lower), Some(upper)) => literals
+            .iter()
+            .all(|datum| datum.lt(lower) || datum.gt(upper)),
+        (Some(lower), None) => literals.iter().all(|datum| datum.lt(lower)),
+        (None, Some(upper)) => literals.iter().all(|datum| datum.gt(upper)),
+        (None, None) => false,
+    }
+}
+
+/// Drops a NaN bound so that side is treated as unbounded.
+///
+/// A NaN min or max is unreliable, but the other bound may still prune.
+/// Inclusive evaluators in Java and PyIceberg bail to might-match when
+/// either bound is NaN. Dropping only the NaN side is a deliberate
+/// divergence: `total_cmp` treats NaN as the maximum, so the remaining
+/// finite bound is still a valid prune.
+pub(crate) fn finite_bound(bound: Option<&Datum>) -> Option<&Datum> {
+    bound.filter(|datum| !datum.is_nan())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn floats(vals: &[f32]) -> FnvHashSet<Datum> {
+        vals.iter().copied().map(Datum::float).collect()
+    }
+
+    #[test]
+    fn both_bounds_require_a_literal_inside_the_range() {
+        let lower = Datum::float(4.0_f32);
+        let upper = Datum::float(6.0_f32);
+        assert!(all_literals_outside_bounds(
+            Some(&lower),
+            Some(&upper),
+            &floats(&[2.0, 8.0])
+        ));
+        assert!(!all_literals_outside_bounds(
+            Some(&lower),
+            Some(&upper),
+            &floats(&[2.0, 5.0])
+        ));
+    }
+
+    #[test]
+    fn lower_only_prunes_literals_below_the_bound() {
+        let lower = Datum::float(4.0_f32);
+        assert!(all_literals_outside_bounds(
+            Some(&lower),
+            None,
+            &floats(&[2.0, 3.0])
+        ));
+        assert!(!all_literals_outside_bounds(
+            Some(&lower),
+            None,
+            &floats(&[2.0, 4.0])
+        ));
+    }
+
+    #[test]
+    fn upper_only_prunes_literals_above_the_bound() {
+        let upper = Datum::float(1.0_f32);
+        assert!(all_literals_outside_bounds(
+            None,
+            Some(&upper),
+            &floats(&[2.0, 3.0])
+        ));
+        assert!(!all_literals_outside_bounds(
+            None,
+            Some(&upper),
+            &floats(&[0.5, 3.0])
+        ));
+    }
+
+    #[test]
+    fn neither_bound_cannot_prune() {
+        assert!(!all_literals_outside_bounds(
+            None,
+            None,
+            &floats(&[2.0, 3.0])
+        ));
+    }
+
+    #[test]
+    fn incomparable_literal_blocks_pruning() {
+        let lower = Datum::int(1);
+        let upper = Datum::int(3);
+        let string_only: FnvHashSet<Datum> = [Datum::string("a")].into_iter().collect();
+        assert!(!all_literals_outside_bounds(
+            Some(&lower),
+            Some(&upper),
+            &string_only
+        ));
+
+        let mixed: FnvHashSet<Datum> = [Datum::int(0), Datum::string("a")].into_iter().collect();
+        assert!(!all_literals_outside_bounds(
+            Some(&lower),
+            Some(&upper),
+            &mixed
+        ));
+    }
+
+    #[test]
+    fn finite_bound_drops_nan() {
+        let nan = Datum::float(f32::NAN);
+        let finite = Datum::float(4.0_f32);
+        assert!(finite_bound(Some(&nan)).is_none());
+        assert_eq!(finite_bound(Some(&finite)), Some(&finite));
+        assert!(finite_bound(None).is_none());
+    }
+}

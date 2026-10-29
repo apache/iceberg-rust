@@ -45,7 +45,7 @@ impl PuffinReader {
     /// reader operates over plaintext offsets and length, so all blob and
     /// footer positions match those written to the unencrypted file.
     pub async fn new_from_encrypted(encrypted_input: EncryptedInputFile) -> Result<Self> {
-        let file_length = encrypted_input.metadata().await?.size;
+        let file_length = encrypted_input.metadata()?.size;
         let file_read = encrypted_input.reader().await?;
         Ok(Self::from_parts(file_read, file_length))
     }

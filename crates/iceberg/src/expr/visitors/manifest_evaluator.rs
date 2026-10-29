@@ -189,7 +189,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             Some(bound_bytes) => {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
-                    *reference.field().field_type.clone(),
+                    &reference.field().field_type,
                 );
                 if datum <= &bound {
                     ROWS_CANNOT_MATCH
@@ -212,7 +212,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             Some(bound_bytes) => {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
-                    *reference.field().field_type.clone(),
+                    &reference.field().field_type,
                 );
                 if datum < &bound {
                     ROWS_CANNOT_MATCH
@@ -235,7 +235,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             Some(bound_bytes) => {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
-                    *reference.field().field_type.clone(),
+                    &reference.field().field_type,
                 );
                 if datum >= &bound {
                     ROWS_CANNOT_MATCH
@@ -258,7 +258,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             Some(bound_bytes) => {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
-                    *reference.field().field_type.clone(),
+                    &reference.field().field_type,
                 );
                 if datum > &bound {
                     ROWS_CANNOT_MATCH
@@ -285,7 +285,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         if let Some(lower_bound_bytes) = &field.lower_bound {
             let lower_bound = ManifestFilterVisitor::bytes_to_datum(
                 lower_bound_bytes,
-                *reference.field().field_type.clone(),
+                &reference.field().field_type,
             );
             if &lower_bound > datum {
                 return ROWS_CANNOT_MATCH;
@@ -295,7 +295,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         if let Some(upper_bound_bytes) = &field.upper_bound {
             let upper_bound = ManifestFilterVisitor::bytes_to_datum(
                 upper_bound_bytes,
-                *reference.field().field_type.clone(),
+                &reference.field().field_type,
             );
             if &upper_bound < datum {
                 return ROWS_CANNOT_MATCH;
@@ -401,6 +401,9 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
         let field = self.field_summary_for_reference(reference);
+        // A missing lower_bound covers all-null, all-NaN, and mixed null+NaN
+        // summaries (Iceberg spec). Those cases prune here and never reach
+        // all_literals_outside_bounds.
         if field.lower_bound.is_none() {
             return ROWS_CANNOT_MATCH;
         }
@@ -409,24 +412,16 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_MIGHT_MATCH;
         }
 
-        if let Some(lower_bound) = &field.lower_bound {
-            let lower_bound = ManifestFilterVisitor::bytes_to_datum(
-                lower_bound,
-                *reference.field().clone().field_type,
-            );
-            if literals.iter().all(|datum| &lower_bound > datum) {
-                return ROWS_CANNOT_MATCH;
-            }
-        }
+        let lower_bound = field.lower_bound.as_ref().map(|bound| {
+            ManifestFilterVisitor::bytes_to_datum(bound, reference.field().field_type.as_ref())
+        });
+        let upper_bound = field.upper_bound.as_ref().map(|bound| {
+            ManifestFilterVisitor::bytes_to_datum(bound, reference.field().field_type.as_ref())
+        });
 
-        if let Some(upper_bound) = &field.upper_bound {
-            let upper_bound = ManifestFilterVisitor::bytes_to_datum(
-                upper_bound,
-                *reference.field().clone().field_type,
-            );
-            if literals.iter().all(|datum| &upper_bound < datum) {
-                return ROWS_CANNOT_MATCH;
-            }
+        if super::all_literals_outside_bounds(lower_bound.as_ref(), upper_bound.as_ref(), literals)
+        {
+            return ROWS_CANNOT_MATCH;
         }
 
         ROWS_MIGHT_MATCH
@@ -474,7 +469,7 @@ impl ManifestFilterVisitor<'_> {
         Ok(bound)
     }
 
-    fn bytes_to_datum(bytes: &ByteBuf, t: Type) -> Datum {
+    fn bytes_to_datum(bytes: &ByteBuf, t: &Type) -> Datum {
         let p = t.as_primitive_type().unwrap();
         Datum::try_from_bytes(bytes, p.clone()).unwrap()
     }
@@ -1372,6 +1367,30 @@ mod test {
             "Should read: id equal to lower bound (30 == 30)"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_straddling_bounds() -> Result<()> {
+        let case_sensitive = true;
+        let schema = create_schema()?;
+        let manifest_file = create_manifest_file(create_partitions());
+
+        let filter = Predicate::Set(SetExpression::new(
+            PredicateOperator::In,
+            Reference::new("id"),
+            FnvHashSet::from_iter(vec![
+                Datum::int(INT_MIN_VALUE - 25),
+                Datum::int(INT_MAX_VALUE + 25),
+            ]),
+        ))
+        .bind(schema.clone(), case_sensitive)?;
+        assert!(
+            !ManifestEvaluator::builder(filter)
+                .build()
+                .eval(&manifest_file)?,
+            "Should not read: id in (5, 104), summary is [30, 79]"
+        );
         Ok(())
     }
 

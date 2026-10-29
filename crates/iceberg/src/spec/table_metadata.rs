@@ -35,11 +35,11 @@ pub use super::table_metadata_builder::{TableMetadataBuildResult, TableMetadataB
 use super::{
     DEFAULT_PARTITION_SPEC_ID, PartitionSpecRef, PartitionStatisticsFile, Schema, SchemaId,
     SchemaRef, SnapshotRef, SnapshotRetention, SortOrder, SortOrderRef, StatisticsFile, StructType,
-    TableProperties,
+    TableProperties, Transform,
 };
 use crate::catalog::{METADATA_FOLDER_NAME, MetadataLocation};
 use crate::compression::CompressionCodec;
-use crate::error::{Result, timestamp_ms_to_utc};
+use crate::error::{Result, invalid_data, timestamp_ms_to_utc};
 use crate::io::FileIO;
 use crate::partitioning::compute_unified_partition_type;
 use crate::spec::EncryptedKey;
@@ -151,14 +151,6 @@ impl TableMetadata {
     #[must_use]
     pub fn into_builder(self, current_file_location: Option<String>) -> TableMetadataBuilder {
         TableMetadataBuilder::new_from_metadata(self, current_file_location)
-    }
-
-    /// Check if a partition field name exists in any partition spec.
-    #[inline]
-    pub(crate) fn partition_name_exists(&self, name: &str) -> bool {
-        self.partition_specs
-            .values()
-            .any(|spec| spec.fields().iter().any(|pf| pf.name == name))
     }
 
     /// Check if a field name exists in any schema.
@@ -487,12 +479,9 @@ impl TableMetadata {
             let decompressed_data = CompressionCodec::gzip_default()
                 .decompress(metadata_content.to_vec())
                 .map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Trying to read compressed metadata file",
-                    )
-                    .with_context("file_path", metadata_location)
-                    .with_source(e)
+                    invalid_data!("Trying to read compressed metadata file")
+                        .with_context("file_path", metadata_location)
+                        .with_source(e)
                 })?;
             serde_json::from_slice(&decompressed_data)?
         } else {
@@ -514,13 +503,10 @@ impl TableMetadata {
         let codec = self.table_properties().metadata_compression_codec()?;
 
         if codec != metadata_location.compression_codec() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Compression codec mismatch: metadata_location has {:?}, but table properties specify {:?}",
-                    metadata_location.compression_codec(),
-                    codec
-                ),
+            return Err(invalid_data!(
+                "Compression codec mismatch: metadata_location has {:?}, but table properties specify {:?}",
+                metadata_location.compression_codec(),
+                codec
             ));
         }
 
@@ -529,9 +515,8 @@ impl TableMetadata {
             CompressionCodec::Gzip(_) => codec.compress(json_data)?,
             CompressionCodec::None => json_data,
             _ => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Unsupported metadata compression codec: {codec:?}"),
+                return Err(invalid_data!(
+                    "Unsupported metadata compression codec: {codec:?}"
                 ));
             }
         };
@@ -565,8 +550,23 @@ impl TableMetadata {
         Ok(self)
     }
 
-    /// If the default partition spec is not present in specs, add it
+    /// Validate active default-spec sources and add the spec if it is not present.
     fn try_normalize_partition_spec(&mut self) -> Result<()> {
+        for field in self.default_spec.fields() {
+            // Historical specs may reference dropped columns, but active default-spec
+            // fields need a source for new writes. Void fields do not read their source.
+            if field.transform != Transform::Void
+                && self.current_schema().field_by_id(field.source_id).is_none()
+            {
+                return Err(invalid_data!(
+                    "Default partition spec {} references missing source field {} in current schema {}",
+                    self.default_spec.spec_id(),
+                    field.source_id,
+                    self.current_schema_id
+                ));
+            }
+        }
+
         if self
             .partition_spec_by_id(self.default_spec.spec_id())
             .is_none()
@@ -600,12 +600,9 @@ impl TableMetadata {
         }
 
         if self.default_sort_order_id != SortOrder::UNSORTED_ORDER_ID {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "No sort order exists with the default sort order id {}.",
-                    self.default_sort_order_id
-                ),
+            return Err(invalid_data!(
+                "No sort order exists with the default sort order id {}.",
+                self.default_sort_order_id
             ));
         }
 
@@ -618,12 +615,9 @@ impl TableMetadata {
     /// Validate the current schema is set and exists.
     fn validate_current_schema(&self) -> Result<()> {
         if self.schema_by_id(self.current_schema_id).is_none() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "No schema exists with the current schema id {}.",
-                    self.current_schema_id
-                ),
+            return Err(invalid_data!(
+                "No schema exists with the current schema id {}.",
+                self.current_schema_id
             ));
         }
         Ok(())
@@ -635,11 +629,8 @@ impl TableMetadata {
             if current_snapshot_id == EMPTY_SNAPSHOT_ID {
                 self.current_snapshot_id = None;
             } else if self.snapshot_by_id(current_snapshot_id).is_none() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Snapshot for current snapshot id {current_snapshot_id} does not exist in the existing snapshots list"
-                    ),
+                return Err(invalid_data!(
+                    "Snapshot for current snapshot id {current_snapshot_id} does not exist in the existing snapshots list"
                 ));
             }
         }
@@ -650,11 +641,8 @@ impl TableMetadata {
     fn validate_refs(&self) -> Result<()> {
         for (name, snapshot_ref) in self.refs.iter() {
             if self.snapshot_by_id(snapshot_ref.snapshot_id).is_none() {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Snapshot for reference {name} does not exist in the existing snapshots list"
-                    ),
+                return Err(invalid_data!(
+                    "Snapshot for reference {name} does not exist in the existing snapshots list"
                 ));
             }
         }
@@ -664,19 +652,15 @@ impl TableMetadata {
             if let Some(main_ref) = main_ref
                 && main_ref.snapshot_id != self.current_snapshot_id.unwrap_or_default()
             {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Current snapshot id does not match main branch ({:?} != {:?})",
-                        self.current_snapshot_id.unwrap_or_default(),
-                        main_ref.snapshot_id
-                    ),
+                return Err(invalid_data!(
+                    "Current snapshot id does not match main branch ({:?} != {:?})",
+                    self.current_snapshot_id.unwrap_or_default(),
+                    main_ref.snapshot_id
                 ));
             }
         } else if main_ref.is_some() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Current snapshot is not set, but main branch exists",
+            return Err(invalid_data!(
+                "Current snapshot is not set, but main branch exists"
             ));
         }
 
@@ -686,12 +670,9 @@ impl TableMetadata {
     /// Validate that for V1 Metadata the last_sequence_number is 0
     fn validate_snapshot_sequence_number(&self) -> Result<()> {
         if self.format_version < FormatVersion::V2 && self.last_sequence_number != 0 {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Last sequence number must be 0 in v1. Found {}",
-                    self.last_sequence_number
-                ),
+            return Err(invalid_data!(
+                "Last sequence number must be 0 in v1. Found {}",
+                self.last_sequence_number
             ));
         }
 
@@ -701,14 +682,11 @@ impl TableMetadata {
                 .values()
                 .find(|snapshot| snapshot.sequence_number() > self.last_sequence_number)
         {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid snapshot with id {} and sequence number {} greater than last sequence number {}",
-                    snapshot.snapshot_id(),
-                    snapshot.sequence_number(),
-                    self.last_sequence_number
-                ),
+            return Err(invalid_data!(
+                "Invalid snapshot with id {} and sequence number {} greater than last sequence number {}",
+                snapshot.snapshot_id(),
+                snapshot.sequence_number(),
+                self.last_sequence_number
             ));
         }
 
@@ -722,10 +700,7 @@ impl TableMetadata {
             // commits can happen concurrently from different machines.
             // A tolerance helps us avoid failure for small clock skew
             if curr.timestamp_ms - prev.timestamp_ms < -ONE_MINUTE_MS {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Expected sorted snapshot log entries",
-                ));
+                return Err(invalid_data!("Expected sorted snapshot log entries"));
             }
         }
 
@@ -733,12 +708,10 @@ impl TableMetadata {
             // commits can happen concurrently from different machines.
             // A tolerance helps us avoid failure for small clock skew
             if self.last_updated_ms - last.timestamp_ms < -ONE_MINUTE_MS {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid update timestamp {}: before last snapshot log entry at {}",
-                        self.last_updated_ms, last.timestamp_ms
-                    ),
+                return Err(invalid_data!(
+                    "Invalid update timestamp {}: before last snapshot log entry at {}",
+                    self.last_updated_ms,
+                    last.timestamp_ms
                 ));
             }
         }
@@ -751,10 +724,7 @@ impl TableMetadata {
             // commits can happen concurrently from different machines.
             // A tolerance helps us avoid failure for small clock skew
             if curr.timestamp_ms - prev.timestamp_ms < -ONE_MINUTE_MS {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Expected sorted metadata log entries",
-                ));
+                return Err(invalid_data!("Expected sorted metadata log entries"));
             }
         }
 
@@ -762,12 +732,10 @@ impl TableMetadata {
             // commits can happen concurrently from different machines.
             // A tolerance helps us avoid failure for small clock skew
             if self.last_updated_ms - last.timestamp_ms < -ONE_MINUTE_MS {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid update timestamp {}: before last metadata log entry at {}",
-                        self.last_updated_ms, last.timestamp_ms
-                    ),
+                return Err(invalid_data!(
+                    "Invalid update timestamp {}: before last metadata log entry at {}",
+                    self.last_updated_ms,
+                    last.timestamp_ms
                 ));
             }
         }
@@ -803,12 +771,13 @@ pub(super) mod _serde {
         DEFAULT_PARTITION_SPEC_ID, EMPTY_SNAPSHOT_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
         SnapshotLog, TableMetadata,
     };
+    use crate::error::invalid_data;
     use crate::spec::schema::_serde::{SchemaV1, SchemaV2};
     use crate::spec::snapshot::_serde::{SnapshotV1, SnapshotV2, SnapshotV3};
     use crate::spec::{
         EncryptedKey, INITIAL_ROW_ID, PartitionField, PartitionSpec, PartitionSpecRef,
         PartitionStatisticsFile, Schema, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
-        SortOrder, StatisticsFile,
+        SortOrder, StatisticsFile, UnboundPartitionSpec,
     };
     use crate::{Error, ErrorKind};
 
@@ -1000,12 +969,9 @@ pub(super) mod _serde {
 
             let current_schema: &SchemaRef =
                 schemas.get(&value.current_schema_id).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "No schema exists with the current schema id {}.",
-                            value.current_schema_id
-                        ),
+                    invalid_data!(
+                        "No schema exists with the current schema id {}.",
+                        value.current_schema_id
                     )
                 })?;
             let partition_specs = HashMap::from_iter(
@@ -1022,12 +988,7 @@ pub(super) mod _serde {
                     (DEFAULT_PARTITION_SPEC_ID == default_spec_id)
                         .then(PartitionSpec::unpartition_spec)
                 })
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Default partition spec {default_spec_id} not found"),
-                    )
-                })?
+                .ok_or_else(|| invalid_data!("Default partition spec {default_spec_id} not found"))?
                 .into();
             let default_partition_type = default_spec.partition_type(current_schema)?;
 
@@ -1113,12 +1074,9 @@ pub(super) mod _serde {
 
             let current_schema: &SchemaRef =
                 schemas.get(&value.current_schema_id).ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "No schema exists with the current schema id {}.",
-                            value.current_schema_id
-                        ),
+                    invalid_data!(
+                        "No schema exists with the current schema id {}.",
+                        value.current_schema_id
                     )
                 })?;
             let partition_specs = HashMap::from_iter(
@@ -1135,12 +1093,7 @@ pub(super) mod _serde {
                     (DEFAULT_PARTITION_SPEC_ID == default_spec_id)
                         .then(PartitionSpec::unpartition_spec)
                 })
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Default partition spec {default_spec_id} not found"),
-                    )
-                })?
+                .ok_or_else(|| invalid_data!("Default partition spec {default_spec_id} not found"))?
                 .into();
             let default_partition_type = default_spec.partition_type(current_schema)?;
 
@@ -1230,9 +1183,8 @@ pub(super) mod _serde {
                     let schema = schema_map
                         .get(&schema_id)
                         .ok_or_else(|| {
-                            Error::new(
-                                ErrorKind::DataInvalid,
-                                format!("No schema exists with the current schema id {schema_id}."),
+                            invalid_data!(
+                                "No schema exists with the current schema id {schema_id}."
                             )
                         })?
                         .clone();
@@ -1246,9 +1198,8 @@ pub(super) mod _serde {
                     (schema_map, schema_id, schema_arc)
                 } else {
                     // Option 3: No valid schema configuration found
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "No valid schema configuration found in table metadata",
+                    return Err(invalid_data!(
+                        "No valid schema configuration found in table metadata"
                     ));
                 };
 
@@ -1261,10 +1212,14 @@ pub(super) mod _serde {
                     .collect::<HashMap<_, _>>()
             } else if let Some(partition_spec) = value.partition_spec {
                 // Option 2: Fall back to 'partition_spec'
-                let spec = PartitionSpec::builder(current_schema.clone())
-                    .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
-                    .add_unbound_fields(partition_spec.into_iter().map(|f| f.into_unbound()))?
-                    .build()?;
+                let spec = UnboundPartitionSpec {
+                    spec_id: Some(DEFAULT_PARTITION_SPEC_ID),
+                    fields: partition_spec
+                        .into_iter()
+                        .map(|f| f.into_unbound())
+                        .collect(),
+                }
+                .bind(current_schema.clone())?;
 
                 HashMap::from_iter(vec![(DEFAULT_PARTITION_SPEC_ID, Arc::new(spec))])
             } else {
@@ -1285,12 +1240,7 @@ pub(super) mod _serde {
             let default_spec: PartitionSpecRef = partition_specs
                 .get(&default_spec_id)
                 .map(|x| Arc::unwrap_or_clone(x.clone()))
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Default partition spec {default_spec_id} not found"),
-                    )
-                })?
+                .ok_or_else(|| invalid_data!("Default partition spec {default_spec_id} not found"))?
                 .into();
             let default_partition_type = default_spec.partition_type(&current_schema)?;
 
@@ -1767,12 +1717,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "ts_day".to_string(),
-                transform: Transform::Day,
-                source_id: 4,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(1000)
+                    .name("ts_day".to_string())
+                    .transform(Transform::Day)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -1915,12 +1868,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "ts_day".to_string(),
-                transform: Transform::Day,
-                source_id: 4,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![4])
+                    .field_id(1000)
+                    .name("ts_day".to_string())
+                    .transform(Transform::Day)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -2991,12 +2947,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -3088,12 +3047,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema2.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -3217,12 +3179,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -3303,12 +3268,15 @@ mod tests {
 
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
-            .add_unbound_field(UnboundPartitionField {
-                name: "x".to_string(),
-                transform: Transform::Identity,
-                source_id: 1,
-                field_id: Some(1000),
-            })
+            .add_unbound_field(
+                UnboundPartitionField::builder()
+                    .source_ids(vec![1])
+                    .field_id(1000)
+                    .name("x".to_string())
+                    .transform(Transform::Identity)
+                    .build()
+                    .unwrap(),
+            )
             .unwrap()
             .build()
             .unwrap();
@@ -3343,6 +3311,33 @@ mod tests {
         };
 
         check_table_metadata_serde(&metadata, expected);
+    }
+
+    #[test]
+    fn test_table_metadata_v1_legacy_partition_spec_with_void_fields() {
+        let mut metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap(),
+        )
+        .unwrap();
+        // What a format version 1 spec keeps after identity(x) was removed twice.
+        metadata["partition-spec"] = serde_json::json!([
+            {"name": "x", "transform": "void", "source-id": 1, "field-id": 1000},
+            {"name": "x_null", "transform": "void", "source-id": 1, "field-id": 1001},
+        ]);
+
+        let metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
+
+        let fields = metadata.default_partition_spec().fields();
+        assert_eq!(
+            fields
+                .iter()
+                .map(|f| (f.field_id, f.name.as_str(), f.transform))
+                .collect::<Vec<_>>(),
+            vec![
+                (1000, "x", Transform::Void),
+                (1001, "x_null", Transform::Void)
+            ]
+        );
     }
 
     #[test]
@@ -3544,6 +3539,70 @@ mod tests {
         assert!(FormatVersion::V1 < FormatVersion::V2);
         assert_eq!(FormatVersion::V1, FormatVersion::V1);
         assert_eq!(FormatVersion::V2, FormatVersion::V2);
+    }
+
+    #[test]
+    fn test_deserialize_default_partition_spec_with_dropped_source() {
+        for version in [1, 2, 3] {
+            for transform in ["identity", "truncate[4]", "bucket[16]"] {
+                let mut metadata = serde_json::json!({
+                    "format-version": version,
+                    "table-uuid": "9c12d441-03fe-4693-9a96-a0705ddf69c1",
+                    "location": "s3://bucket/table",
+                    "last-sequence-number": 0,
+                    "last-updated-ms": 1602638573590_i64,
+                    "last-column-id": 2,
+                    "current-schema-id": 1,
+                    "schemas": [
+                        {
+                            "schema-id": 0,
+                            "type": "struct",
+                            "fields": [
+                                {"id": 1, "name": "x", "required": false, "type": "long"},
+                                {"id": 2, "name": "y", "required": false, "type": "long"}
+                            ]
+                        },
+                        {
+                            "schema-id": 1,
+                            "type": "struct",
+                            "fields": [
+                                {"id": 2, "name": "y", "required": false, "type": "long"}
+                            ]
+                        }
+                    ],
+                    "default-spec-id": 0,
+                    "partition-specs": [{"spec-id": 0, "fields": [{
+                        "source-id": 1, "field-id": 1000, "name": "x_partition",
+                        "transform": transform
+                    }]}],
+                    "last-partition-id": 1000,
+                    "default-sort-order-id": 0,
+                    "sort-orders": [{"order-id": 0, "fields": []}],
+                    "next-row-id": 0
+                });
+
+                // Retaining the source in history does not make it writable using
+                // the current schema and default spec.
+                let err = serde_json::from_value::<TableMetadata>(metadata.clone()).unwrap_err();
+                assert!(err.to_string().contains(
+                    "Default partition spec 0 references missing source field 1 in current schema 1"
+                ));
+
+                // The same spec is allowed once it becomes historical.
+                metadata["partition-specs"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!({"spec-id": 1, "fields": []}));
+                metadata["default-spec-id"] = serde_json::json!(1);
+                serde_json::from_value::<TableMetadata>(metadata.clone()).unwrap();
+
+                // A voided field does not require its dropped source, even in the default spec.
+                metadata["default-spec-id"] = serde_json::json!(0);
+                metadata["partition-specs"][0]["fields"][0]["transform"] =
+                    serde_json::json!("void");
+                serde_json::from_value::<TableMetadata>(metadata).unwrap();
+            }
+        }
     }
 
     #[test]
@@ -3764,82 +3823,6 @@ mod tests {
     }
 
     #[test]
-    fn test_partition_name_exists() {
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(2, "partition_col", Type::Primitive(PrimitiveType::Int))
-                    .into(),
-            ])
-            .build()
-            .unwrap();
-
-        let spec1 = PartitionSpec::builder(schema.clone())
-            .with_spec_id(1)
-            .add_partition_field("data", "data_partition", Transform::Identity)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let spec2 = PartitionSpec::builder(schema.clone())
-            .with_spec_id(2)
-            .add_partition_field("partition_col", "partition_bucket", Transform::Bucket(16))
-            .unwrap()
-            .build()
-            .unwrap();
-
-        // Build metadata with these specs
-        let metadata = TableMetadataBuilder::new(
-            schema,
-            spec1.clone().into_unbound(),
-            SortOrder::unsorted_order(),
-            "s3://test/location".to_string(),
-            FormatVersion::V2,
-            HashMap::new(),
-        )
-        .unwrap()
-        .add_partition_spec(spec2.into_unbound())
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-
-        assert!(metadata.partition_name_exists("data_partition"));
-        assert!(metadata.partition_name_exists("partition_bucket"));
-
-        assert!(!metadata.partition_name_exists("nonexistent_field"));
-        assert!(!metadata.partition_name_exists("data")); // schema field name, not partition field name
-        assert!(!metadata.partition_name_exists(""));
-    }
-
-    #[test]
-    fn test_partition_name_exists_empty_specs() {
-        // Create metadata with no partition specs (unpartitioned table)
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()
-            .unwrap();
-
-        let metadata = TableMetadataBuilder::new(
-            schema,
-            PartitionSpec::unpartition_spec().into_unbound(),
-            SortOrder::unsorted_order(),
-            "s3://test/location".to_string(),
-            FormatVersion::V2,
-            HashMap::new(),
-        )
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-
-        assert!(!metadata.partition_name_exists("any_field"));
-        assert!(!metadata.partition_name_exists("data"));
-    }
-
-    #[test]
     fn test_name_exists_in_any_schema() {
         // Create multiple schemas with different fields
         let schema1 = Schema::builder()
@@ -3966,8 +3949,6 @@ mod tests {
             .build()
             .unwrap()
             .metadata;
-
-        assert!(!final_metadata.partition_name_exists("nonexistent_partition")); // unpartitioned table
 
         assert!(final_metadata.name_exists_in_any_schema("id")); // exists in both schemas
         assert!(final_metadata.name_exists_in_any_schema("name")); // exists in both schemas
@@ -4463,7 +4444,14 @@ mod tests {
             schema.clone(),
             UnboundPartitionSpec::builder()
                 .with_spec_id(0)
-                .add_partition_field(2, "y", Transform::Identity)
+                .add_partition_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![2])
+                        .name("y")
+                        .transform(Transform::Identity)
+                        .build()
+                        .unwrap(),
+                )
                 .unwrap()
                 .build(),
             SortOrder::unsorted_order(),
@@ -4478,7 +4466,14 @@ mod tests {
         .into_builder(None)
         .add_partition_spec(
             UnboundPartitionSpec::builder()
-                .add_partition_field(3, "z", Transform::Identity)
+                .add_partition_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![3])
+                        .name("z")
+                        .transform(Transform::Identity)
+                        .build()
+                        .unwrap(),
+                )
                 .unwrap()
                 .build(),
         )

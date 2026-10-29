@@ -469,6 +469,47 @@ macro_rules! ensure_data_valid {
     };
 }
 
+/// Helper macro to construct an [`ErrorKind::DataInvalid`] error.
+///
+/// This is a shorthand for `Error::new(ErrorKind::DataInvalid, ...)`, the most
+/// common error constructed in this crate. It returns the [`Error`] value (it
+/// does *not* return from the enclosing function), so it composes with `?`,
+/// `.map_err(...)`, `.ok_or_else(...)`, and explicit `return Err(...)`.
+///
+/// The message may be a plain expression or a format string with arguments.
+///
+/// Unlike the public [`ensure_data_valid!`], this macro is deliberately
+/// crate-internal — adding `#[macro_export]` would commit it to the public API.
+///
+/// # Examples
+///
+/// The `use` path below is crate-internal and only resolves inside this crate.
+///
+/// ```ignore
+/// use crate::error::invalid_data;
+///
+/// // As an expression
+/// let err = invalid_data!("unexpected value: {value}");
+///
+/// // With `.ok_or_else`
+/// let field = fields.get(id).ok_or_else(|| invalid_data!("missing field {id}"))?;
+///
+/// // Attaching a source error
+/// let n: i32 = s.parse().map_err(|e| invalid_data!("not an int: {s}").with_source(e))?;
+/// ```
+macro_rules! invalid_data {
+    // Bare literals stay in `format!` so inline captures like `{id}` still interpolate.
+    ($fmt: literal $(, $($arg:tt)*)?) => {
+        $crate::error::Error::new($crate::error::ErrorKind::DataInvalid, format!($fmt $(, $($arg)*)?))
+    };
+    ($msg: expr $(,)?) => {
+        $crate::error::Error::new($crate::error::ErrorKind::DataInvalid, $msg)
+    };
+}
+
+// Crate-internal macro: re-exported so other modules can `use crate::error::invalid_data;`.
+pub(crate) use invalid_data;
+
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
@@ -530,6 +571,36 @@ Context:
 Source: networking error
 "#
         )
+    }
+
+    #[test]
+    fn test_invalid_data_macro() {
+        // Plain literal.
+        let err = invalid_data!("something is wrong");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(err.message(), "something is wrong");
+
+        // Literal with an inline capture.
+        let value = 42;
+        let err = invalid_data!("unexpected value: {value}");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(err.message(), "unexpected value: 42");
+
+        // Literal with trailing arguments.
+        let err = invalid_data!("unexpected value: {}", value);
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(err.message(), "unexpected value: 42");
+
+        // Non-literal message expression.
+        let computed = String::from("computed");
+        let err = invalid_data!(computed);
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(err.message(), "computed");
+
+        // Composes with builder methods like `.with_source`.
+        let err = invalid_data!("wrapping").with_source(anyhow!("root cause"));
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.source.is_some());
     }
 
     /// Backtrace contains build information, so we just assert the header of error content.

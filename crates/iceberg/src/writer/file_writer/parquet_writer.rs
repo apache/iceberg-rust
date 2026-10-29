@@ -40,6 +40,7 @@ use crate::arrow::{
 };
 use crate::compression::CompressionCodec;
 use crate::encryption::{EncryptionManager, StandardKeyMetadata};
+use crate::error::invalid_data;
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
@@ -155,11 +156,7 @@ fn parquet_compression(codec: CompressionCodec) -> Result<Compression> {
 }
 
 fn invalid_level_error(codec: &str, source: impl Into<anyhow::Error>) -> Error {
-    Error::new(
-        ErrorKind::DataInvalid,
-        format!("Invalid {codec} compression level"),
-    )
-    .with_source(source)
+    invalid_data!("Invalid {codec} compression level").with_source(source)
 }
 
 impl FileWriterBuilder for ParquetWriterBuilder {
@@ -288,11 +285,8 @@ impl SchemaVisitor for IndexByParquetPathName {
         let full_name = self.field_names.iter().map(String::as_str).join(".");
         let field_id = self.field_id;
         if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
-                ),
+            return Err(invalid_data!(
+                "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
             ));
         } else {
             self.name_to_id.insert(full_name, field_id);
@@ -360,7 +354,7 @@ impl MinMaxColAggregator {
     }
 
     /// Update statistics
-    fn update(&mut self, field_id: i32, value: Statistics) -> Result<()> {
+    fn update(&mut self, field_id: i32, value: &Statistics) -> Result<()> {
         let Some(ty) = self
             .schema
             .field_by_id(field_id)
@@ -378,25 +372,30 @@ impl MinMaxColAggregator {
         };
 
         if value.min_is_exact() {
-            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, &value)? else {
+            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
                 ));
             };
 
-            self.update_state_min(field_id, min_datum);
+            // Iceberg bounds must not be NaN.
+            if !min_datum.is_nan() {
+                self.update_state_min(field_id, min_datum);
+            }
         }
 
         if value.max_is_exact() {
-            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, &value)? else {
+            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, value)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
                 ));
             };
 
-            self.update_state_max(field_id, max_datum);
+            if !max_datum.is_nan() {
+                self.update_state_max(field_id, max_datum);
+            }
         }
 
         Ok(())
@@ -426,12 +425,10 @@ impl ParquetWriter {
             let reader = input_file.reader().await?;
 
             let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
-            let parquet_metadata = parquet_reader.get_metadata(None).await.map_err(|err| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Error reading Parquet metadata: {err}"),
-                )
-            })?;
+            let parquet_metadata = parquet_reader
+                .get_metadata(None)
+                .await
+                .map_err(|err| invalid_data!("Error reading Parquet metadata: {err}"))?;
             let mut builder = ParquetWriter::parquet_to_data_file_builder(
                 table_metadata.current_schema().clone(),
                 parquet_metadata,
@@ -488,7 +485,7 @@ impl ParquetWriter {
                             *per_col_null_val_num.entry(field_id).or_insert(0) += null_count;
                         }
 
-                        min_max_agg.update(field_id, statistics.clone())?;
+                        min_max_agg.update(field_id, statistics)?;
                     }
                 }
             }
@@ -547,22 +544,19 @@ impl ParquetWriter {
                 upper_bounds.get(&field.source_id),
             ) {
                 if !field.transform.preserves_order() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "cannot infer partition value for non linear partition field (needs to preserve order): {} with transform {}",
-                            field.name, field.transform
-                        ),
+                    return Err(invalid_data!(
+                        "cannot infer partition value for non linear partition field (needs to preserve order): {} with transform {}",
+                        field.name,
+                        field.transform
                     ));
                 }
 
                 if lower != upper {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "multiple partition values for field {}: lower: {:?}, upper: {:?}",
-                            field.name, lower, upper
-                        ),
+                    return Err(invalid_data!(
+                        "multiple partition values for field {}: lower: {:?}, upper: {:?}",
+                        field.name,
+                        lower,
+                        upper
                     ));
                 }
 
@@ -743,9 +737,11 @@ impl ArrowAsyncFileWriter for AsyncFileWriter {
 
     fn complete(&mut self) -> BoxFuture<'_, parquet::errors::Result<()>> {
         Box::pin(async {
+            // TODO(encryption): retain the stored file size in data-file key metadata.
             self.0
                 .close()
                 .await
+                .map(|_| ())
                 .map_err(|err| parquet::errors::ParquetError::External(Box::new(err)))
         })
     }
@@ -2506,6 +2502,79 @@ mod tests {
         assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
     }
 
+    #[tokio::test]
+    async fn test_parquet_writer_uuid_logical_type() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+        let output_file = file_io
+            .new_output(location_gen.generate_location(None, &file_name_gen.generate_file_name()))
+            .unwrap();
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let col = Arc::new(
+            arrow_array::FixedSizeBinaryArray::try_from_iter(
+                [Uuid::from_u128(0), Uuid::from_u128(1)]
+                    .into_iter()
+                    .map(|uuid| uuid.into_bytes()),
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let to_write = RecordBatch::try_new(arrow_schema, vec![col]).unwrap();
+
+        let mut pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema)
+            .build(output_file)
+            .await
+            .unwrap();
+        pw.write(&to_write).await.unwrap();
+        let data_file = pw
+            .close()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        let raw = file_io
+            .new_input(data_file.file_path.clone())
+            .unwrap()
+            .read()
+            .await
+            .unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(raw).unwrap();
+        let column = reader.metadata().file_metadata().schema_descr().column(0);
+        assert_eq!(
+            (
+                column.physical_type(),
+                column.type_length(),
+                column.logical_type_ref()
+            ),
+            (
+                parquet::basic::Type::FIXED_LEN_BYTE_ARRAY,
+                16,
+                Some(&parquet::basic::LogicalType::Uuid)
+            )
+        );
+    }
+
     #[test]
     fn test_min_max_aggregator() {
         let schema = Arc::new(
@@ -2523,22 +2592,56 @@ mod tests {
         let create_statistics =
             |min, max| Statistics::Int32(ValueStatistics::new(min, max, None, None, false));
         min_max_agg
-            .update(0, create_statistics(None, Some(42)))
+            .update(0, &create_statistics(None, Some(42)))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(Some(0), Some(i32::MAX)))
+            .update(0, &create_statistics(Some(0), Some(i32::MAX)))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(Some(i32::MIN), None))
+            .update(0, &create_statistics(Some(i32::MIN), None))
             .unwrap();
         min_max_agg
-            .update(0, create_statistics(None, None))
+            .update(0, &create_statistics(None, None))
             .unwrap();
 
         let (lower_bounds, upper_bounds) = min_max_agg.produce();
 
         assert_eq!(lower_bounds, HashMap::from([(0, Datum::int(i32::MIN))]));
         assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
+    }
+
+    #[test]
+    fn test_min_max_aggregator_skips_nan_bounds() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, "f", Type::Primitive(PrimitiveType::Float)).into(),
+                    NestedField::required(1, "d", Type::Primitive(PrimitiveType::Double)).into(),
+                ])
+                .build()
+                .expect("Failed to create schema"),
+        );
+        let mut min_max_agg = MinMaxColAggregator::new(schema);
+        let float_stats =
+            |min, max| Statistics::Float(ValueStatistics::new(min, max, None, None, false));
+        let double_stats =
+            |min, max| Statistics::Double(ValueStatistics::new(min, max, None, None, false));
+
+        min_max_agg
+            .update(0, &float_stats(Some(-f32::NAN), Some(f32::NAN)))
+            .unwrap();
+        min_max_agg
+            .update(0, &float_stats(Some(1.5), Some(2.5)))
+            .unwrap();
+        min_max_agg
+            .update(1, &double_stats(Some(f64::NAN), Some(f64::NAN)))
+            .unwrap();
+
+        let (lower_bounds, upper_bounds) = min_max_agg.produce();
+
+        assert_eq!(lower_bounds, HashMap::from([(0, Datum::float(1.5_f32))]));
+        assert_eq!(upper_bounds, HashMap::from([(0, Datum::float(2.5_f32))]));
     }
 
     fn cdc_test_schema() -> SchemaRef {
