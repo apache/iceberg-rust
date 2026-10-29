@@ -170,7 +170,7 @@ impl OAuth2Manager {
             // A default endpoint follows the merged catalog URI; an injected
             // manager keeps its explicit endpoint.
             _ if self.endpoint_is_default && props.contains_key(REST_CATALOG_PROP_URI) => {
-                properties.endpoints().default_token_endpoint().to_string()
+                properties.default_token_endpoint().to_string()
             }
             _ => self.init_params.token_endpoint.clone(),
         };

@@ -235,9 +235,9 @@ pub(crate) struct RestCatalogProperties {
     /// Explicit headers added to requests.
     #[property(nested, getter)]
     headers: RestHeaders,
-    /// Fixed catalog endpoints.
+    /// Lazily initialized catalog endpoints.
     #[property(nested, getter)]
-    endpoints: RestEndpoints,
+    endpoint_cache: RestEndpointCache,
     /// Whether header redaction is disabled.
     #[property(
         key = REST_CATALOG_PROP_DISABLE_HEADER_REDACTION,
@@ -354,21 +354,40 @@ impl RestCatalogProperties {
     }
 
     fn url_prefixed(&self, parts: &[&str]) -> String {
-        std::iter::once(self.endpoints.base.as_str())
+        let base = self.endpoint_cache.base.get_or_init(|| {
+            [self.uri().as_str(), PATH_V1]
+                .into_iter()
+                .chain(self.prefix().as_deref())
+                .join("/")
+        });
+        std::iter::once(base.as_str())
             .chain(parts.iter().copied())
             .join("/")
     }
 
     fn config_endpoint(&self) -> &str {
-        &self.endpoints.config
+        self.endpoint_cache
+            .config
+            .get_or_init(|| [self.uri().as_str(), PATH_V1, "config"].join("/"))
     }
 
     pub(crate) fn get_token_endpoint(&self) -> &str {
-        &self.endpoints.token
+        self.oauth2_server_uri()
+            .as_deref()
+            .unwrap_or_else(|| self.default_token_endpoint())
+    }
+
+    /// Returns the OAuth2 token endpoint derived from the catalog URI.
+    pub(crate) fn default_token_endpoint(&self) -> &str {
+        self.endpoint_cache
+            .token
+            .get_or_init(|| [self.uri().as_str(), PATH_V1, "oauth", "tokens"].join("/"))
     }
 
     fn namespaces_endpoint(&self) -> &str {
-        &self.endpoints.namespaces
+        self.endpoint_cache
+            .namespaces
+            .get_or_init(|| self.url_prefixed(&["namespaces"]))
     }
 
     fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
@@ -380,7 +399,9 @@ impl RestCatalogProperties {
     }
 
     fn rename_table_endpoint(&self) -> &str {
-        &self.endpoints.rename_table
+        self.endpoint_cache
+            .rename_table
+            .get_or_init(|| self.url_prefixed(&["tables", "rename"]))
     }
 
     fn register_table_endpoint(&self, ns: &NamespaceIdent) -> String {
@@ -455,44 +476,26 @@ impl RestCatalogProperties {
     }
 }
 
-// PartialEq supports whole-configuration assertions in parsing tests.
-#[derive(Clone, PartialEq)]
-pub(crate) struct RestEndpoints {
-    base: String,
-    config: String,
-    token: String,
-    default_token: String,
-    namespaces: String,
-    rename_table: String,
+#[derive(Clone, Default)]
+pub(crate) struct RestEndpointCache {
+    base: OnceLock<String>,
+    config: OnceLock<String>,
+    token: OnceLock<String>,
+    namespaces: OnceLock<String>,
+    rename_table: OnceLock<String>,
 }
 
-impl RestEndpoints {
-    fn from_properties(props: &HashMap<String, String>) -> Result<Self> {
-        let uri = props
-            .get(REST_CATALOG_PROP_URI)
-            .map(String::as_str)
-            .unwrap_or_default();
-        let base = [uri, PATH_V1]
-            .into_iter()
-            .chain(props.get(REST_CATALOG_PROP_PREFIX).map(String::as_str))
-            .join("/");
-        let default_token = [uri, PATH_V1, "oauth", "tokens"].join("/");
-        Ok(Self {
-            config: [uri, PATH_V1, "config"].join("/"),
-            token: props
-                .get(REST_CATALOG_PROP_OAUTH2_SERVER_URI)
-                .cloned()
-                .unwrap_or_else(|| default_token.clone()),
-            default_token,
-            namespaces: [&base, "namespaces"].join("/"),
-            rename_table: [&base, "tables", "rename"].join("/"),
-            base,
-        })
+impl RestEndpointCache {
+    fn from_properties(_props: &HashMap<String, String>) -> Result<Self> {
+        Ok(Self::default())
     }
+}
 
-    /// Returns the OAuth2 token endpoint derived from the catalog URI.
-    pub(crate) fn default_token_endpoint(&self) -> &str {
-        &self.default_token
+// Endpoints derive only from immutable properties; cache initialization must
+// not change configuration equality.
+impl PartialEq for RestEndpointCache {
+    fn eq(&self, _other: &Self) -> bool {
+        true
     }
 }
 
@@ -1946,14 +1949,7 @@ mod tests {
                 HeaderName::from_static("x-custom"),
                 HeaderValue::from_static("value"),
             )])),
-            endpoints: RestEndpoints {
-                base: "http://localhost:8181/v1/catalog".to_string(),
-                config: "http://localhost:8181/v1/config".to_string(),
-                token: "http://localhost:8181/token".to_string(),
-                default_token: "http://localhost:8181/v1/oauth/tokens".to_string(),
-                namespaces: "http://localhost:8181/v1/catalog/namespaces".to_string(),
-                rename_table: "http://localhost:8181/v1/catalog/tables/rename".to_string(),
-            },
+            endpoint_cache: RestEndpointCache::default(),
             disable_header_redaction: BoolProp::from(true),
             page_size: Some(U32Prop::try_from(25).unwrap()),
             table_cache_max_entries: 10,
@@ -1980,14 +1976,7 @@ mod tests {
             audience: None,
             resource: None,
             headers: RestHeaders(HeaderMap::new()),
-            endpoints: RestEndpoints {
-                base: "/v1".to_string(),
-                config: "/v1/config".to_string(),
-                token: "/v1/oauth/tokens".to_string(),
-                default_token: "/v1/oauth/tokens".to_string(),
-                namespaces: "/v1/namespaces".to_string(),
-                rename_table: "/v1/tables/rename".to_string(),
-            },
+            endpoint_cache: RestEndpointCache::default(),
             disable_header_redaction: BoolProp::from(false),
             page_size: None,
             table_cache_max_entries: 100,
@@ -1998,6 +1987,72 @@ mod tests {
             RestCatalogProperties::from_properties(&HashMap::new()).unwrap(),
             expected
         );
+    }
+
+    #[test]
+    fn test_endpoint_cache_initialization_and_equality() {
+        let default_token = "http://localhost:8181/v1/oauth/tokens";
+        for (token, expected_token) in [
+            (None, default_token),
+            (Some(""), ""),
+            (
+                Some("http://localhost:8181/token"),
+                "http://localhost:8181/token",
+            ),
+        ] {
+            let mut props = HashMap::from([
+                (
+                    REST_CATALOG_PROP_URI.to_string(),
+                    "http://localhost:8181".to_string(),
+                ),
+                (REST_CATALOG_PROP_PREFIX.to_string(), "catalog".to_string()),
+            ]);
+            if let Some(token) = token {
+                props.insert(
+                    REST_CATALOG_PROP_OAUTH2_SERVER_URI.to_string(),
+                    token.to_string(),
+                );
+            }
+            let properties = RestCatalogProperties::from_properties(&props).unwrap();
+            let unchanged = properties.clone();
+            let cache = properties.endpoint_cache();
+            let cells = [
+                &cache.base,
+                &cache.config,
+                &cache.token,
+                &cache.namespaces,
+                &cache.rename_table,
+            ];
+            assert_eq!(cells.map(OnceLock::get), [None; 5]);
+
+            assert_eq!(properties.get_token_endpoint(), expected_token);
+            let expected_cached = [
+                None,
+                None,
+                token.is_none().then_some(default_token),
+                None,
+                None,
+            ];
+            assert_eq!(
+                cells.map(|cell| cell.get().map(String::as_str)),
+                expected_cached
+            );
+            assert_eq!(
+                [
+                    properties.config_endpoint(),
+                    properties.namespaces_endpoint(),
+                    properties.rename_table_endpoint(),
+                    properties.default_token_endpoint(),
+                ],
+                [
+                    "http://localhost:8181/v1/config",
+                    "http://localhost:8181/v1/catalog/namespaces",
+                    "http://localhost:8181/v1/catalog/tables/rename",
+                    default_token,
+                ],
+            );
+            assert_eq!(properties, unchanged);
+        }
     }
 
     #[test]
