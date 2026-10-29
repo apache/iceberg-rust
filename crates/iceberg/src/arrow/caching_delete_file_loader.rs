@@ -1264,6 +1264,7 @@ mod tests {
         let factory = Arc::new(MetadataCountingStorageFactory::default());
         let calls = Arc::clone(&factory.calls);
         let file_io = FileIOBuilder::new(factory).build();
+        let file_io_for_join = file_io.clone();
         let task = &file_scan_tasks[0];
         let unknown: Vec<_> = task
             .deletes()
@@ -1308,6 +1309,19 @@ mod tests {
         let expected = positions(&known);
         assert_eq!(expected.len(), 12);
         assert_eq!(positions(&lazy), expected);
+
+        // Two concurrent loads of the same files on a fresh loader: the second waits on
+        // the first instead of requesting the sizes again.
+        let before = calls.load(Ordering::SeqCst);
+        let loader = CachingDeleteFileLoader::new(file_io_for_join, 10, Runtime::current());
+        let (first, second) = futures::join!(
+            loader.load_deletes(&unknown, task.schema_ref()),
+            loader.load_deletes(&unknown, task.schema_ref())
+        );
+        let (first, second) = (first.unwrap().unwrap(), second.unwrap().unwrap());
+        assert_eq!(calls.load(Ordering::SeqCst) - before, unknown.len());
+        assert_eq!(positions(&first), expected);
+        assert_eq!(positions(&second), expected);
     }
 
     #[tokio::test]
