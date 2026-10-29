@@ -1171,6 +1171,9 @@ mod tests {
     impl Storage for MetadataCountingStorage {
         async fn metadata(&self, path: &str) -> Result<FileMetadata> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+            // `LocalFsStorage::metadata` doesn't yield, so without this the first of two
+            // concurrent loads finishes before the second starts.
+            tokio::task::yield_now().await;
             if self.fail_metadata {
                 return Err(
                     Error::new(ErrorKind::Unexpected, "metadata temporarily unavailable")
