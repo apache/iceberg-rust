@@ -275,7 +275,9 @@ impl SchemaVisitor for SchemaToAvroSchema {
             // already accepts both forms.
             PrimitiveType::Uuid => AvroSchema::Uuid(UuidSchema::String),
             PrimitiveType::Fixed(len) => self.define_once(avro_fixed_schema((*len) as usize)?),
-            PrimitiveType::Binary => AvroSchema::Bytes,
+            PrimitiveType::Binary | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                AvroSchema::Bytes
+            }
             PrimitiveType::Decimal { precision, scale } => {
                 self.define_once(avro_decimal_schema(*precision as usize, *scale as usize)?)
             }
@@ -689,12 +691,12 @@ mod tests {
     fn test_unknown_type_schema_conversion() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "empty", PrimitiveType::Unknown.into()).into(),
+                NestedField::optional(1, "empty", PrimitiveType::Unknown).into(),
                 NestedField::required(
                     2,
                     "unknowns",
                     Type::List(ListType::new(
-                        NestedField::list_element(3, PrimitiveType::Unknown.into(), false).into(),
+                        NestedField::list_element(3, PrimitiveType::Unknown, false).into(),
                     )),
                 )
                 .into(),
@@ -703,9 +705,9 @@ mod tests {
                     "unknown_values",
                     Type::Map(MapType::optional(
                         5,
-                        PrimitiveType::String.into(),
+                        PrimitiveType::String,
                         6,
-                        PrimitiveType::Unknown.into(),
+                        PrimitiveType::Unknown,
                     )),
                 )
                 .into(),
@@ -734,71 +736,57 @@ mod tests {
     #[test]
     fn test_manifest_file_v1_schema() {
         let fields = vec![
-            NestedField::required(500, "manifest_path", PrimitiveType::String.into())
+            NestedField::required(500, "manifest_path", PrimitiveType::String)
                 .with_doc("Location URI with FS scheme")
                 .into(),
-            NestedField::required(501, "manifest_length", PrimitiveType::Long.into())
+            NestedField::required(501, "manifest_length", PrimitiveType::Long)
                 .with_doc("Total file size in bytes")
                 .into(),
-            NestedField::required(502, "partition_spec_id", PrimitiveType::Int.into())
+            NestedField::required(502, "partition_spec_id", PrimitiveType::Int)
                 .with_doc("Spec ID used to write")
                 .into(),
-            NestedField::optional(503, "added_snapshot_id", PrimitiveType::Long.into())
+            NestedField::optional(503, "added_snapshot_id", PrimitiveType::Long)
                 .with_doc("Snapshot ID that added the manifest")
                 .into(),
-            NestedField::optional(504, "added_data_files_count", PrimitiveType::Int.into())
+            NestedField::optional(504, "added_data_files_count", PrimitiveType::Int)
                 .with_doc("Added entry count")
                 .into(),
-            NestedField::optional(505, "existing_data_files_count", PrimitiveType::Int.into())
+            NestedField::optional(505, "existing_data_files_count", PrimitiveType::Int)
                 .with_doc("Existing entry count")
                 .into(),
-            NestedField::optional(506, "deleted_data_files_count", PrimitiveType::Int.into())
+            NestedField::optional(506, "deleted_data_files_count", PrimitiveType::Int)
                 .with_doc("Deleted entry count")
                 .into(),
-            NestedField::optional(
-                507,
-                "partitions",
-                ListType {
-                    element_field: NestedField::list_element(
-                        508,
-                        StructType::new(vec![
-                            NestedField::required(
-                                509,
-                                "contains_null",
-                                PrimitiveType::Boolean.into(),
-                            )
+            NestedField::optional(507, "partitions", ListType {
+                element_field: NestedField::list_element(
+                    508,
+                    StructType::new(vec![
+                        NestedField::required(509, "contains_null", PrimitiveType::Boolean)
                             .with_doc("True if any file has a null partition value")
                             .into(),
-                            NestedField::optional(
-                                518,
-                                "contains_nan",
-                                PrimitiveType::Boolean.into(),
-                            )
+                        NestedField::optional(518, "contains_nan", PrimitiveType::Boolean)
                             .with_doc("True if any file has a nan partition value")
                             .into(),
-                            NestedField::optional(510, "lower_bound", PrimitiveType::Binary.into())
-                                .with_doc("Partition lower bound for all files")
-                                .into(),
-                            NestedField::optional(511, "upper_bound", PrimitiveType::Binary.into())
-                                .with_doc("Partition upper bound for all files")
-                                .into(),
-                        ])
-                        .into(),
-                        true,
-                    )
-                    .into(),
-                }
+                        NestedField::optional(510, "lower_bound", PrimitiveType::Binary)
+                            .with_doc("Partition lower bound for all files")
+                            .into(),
+                        NestedField::optional(511, "upper_bound", PrimitiveType::Binary)
+                            .with_doc("Partition upper bound for all files")
+                            .into(),
+                    ]),
+                    true,
+                )
                 .into(),
-            )
+            })
             .with_doc("Summary for each partition")
             .into(),
-            NestedField::optional(512, "added_rows_count", PrimitiveType::Long.into())
+            NestedField::optional(512, "added_rows_count", PrimitiveType::Long)
                 .with_doc("Added rows count")
                 .into(),
-            NestedField::optional(513, "existing_rows_count", PrimitiveType::Long.into())
+            NestedField::optional(513, "existing_rows_count", PrimitiveType::Long)
                 .with_doc("Existing rows count")
                 .into(),
-            NestedField::optional(514, "deleted_rows_count", PrimitiveType::Long.into())
+            NestedField::optional(514, "deleted_rows_count", PrimitiveType::Long)
                 .with_doc("Deleted rows count")
                 .into(),
         ];
@@ -838,19 +826,10 @@ mod tests {
         let iceberg_schema = {
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::required(
-                        100,
-                        "array_with_string",
-                        ListType {
-                            element_field: NestedField::list_element(
-                                101,
-                                PrimitiveType::String.into(),
-                                true,
-                            )
+                    NestedField::required(100, "array_with_string", ListType {
+                        element_field: NestedField::list_element(101, PrimitiveType::String, true)
                             .into(),
-                        }
-                        .into(),
-                    )
+                    })
                     .into(),
                 ])
                 .build()
@@ -889,19 +868,10 @@ mod tests {
         let iceberg_schema = {
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::required(
-                        100,
-                        "array_with_string",
-                        ListType {
-                            element_field: NestedField::list_element(
-                                101,
-                                PrimitiveType::String.into(),
-                                true,
-                            )
+                    NestedField::required(100, "array_with_string", ListType {
+                        element_field: NestedField::list_element(101, PrimitiveType::String, true)
                             .into(),
-                        }
-                        .into(),
-                    )
+                    })
                     .into(),
                 ])
                 .build()
@@ -954,33 +924,19 @@ mod tests {
         let iceberg_schema = {
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::required(
-                        100,
-                        "array_with_record",
-                        ListType {
-                            element_field: NestedField::list_element(
-                                101,
-                                StructType::new(vec![
-                                    NestedField::required(
-                                        102,
-                                        "contains_null",
-                                        PrimitiveType::Boolean.into(),
-                                    )
+                    NestedField::required(100, "array_with_record", ListType {
+                        element_field: NestedField::list_element(
+                            101,
+                            StructType::new(vec![
+                                NestedField::required(102, "contains_null", PrimitiveType::Boolean)
                                     .into(),
-                                    NestedField::optional(
-                                        103,
-                                        "contains_nan",
-                                        PrimitiveType::Boolean.into(),
-                                    )
+                                NestedField::optional(103, "contains_nan", PrimitiveType::Boolean)
                                     .into(),
-                                ])
-                                .into(),
-                                true,
-                            )
-                            .into(),
-                        }
+                            ]),
+                            true,
+                        )
                         .into(),
-                    )
+                    })
                     .into(),
                 ])
                 .build()
@@ -1011,8 +967,7 @@ mod tests {
                     4,
                     "map",
                     Type::Map(MapType {
-                        key_field: NestedField::map_key_element(5, PrimitiveType::Int.into())
-                            .into(),
+                        key_field: NestedField::map_key_element(5, PrimitiveType::Int).into(),
                         value_field: NestedField::map_value_element(6, decimal, false).into(),
                     }),
                 )
@@ -1036,11 +991,10 @@ mod tests {
         // in code, which keeps `logicalType: map` in apache-avro 0.22.
         let map = |key_id, value_id, value_required| {
             Type::Map(MapType {
-                key_field: NestedField::map_key_element(key_id, PrimitiveType::Boolean.into())
-                    .into(),
+                key_field: NestedField::map_key_element(key_id, PrimitiveType::Boolean).into(),
                 value_field: NestedField::map_value_element(
                     value_id,
-                    PrimitiveType::Boolean.into(),
+                    PrimitiveType::Boolean,
                     value_required,
                 )
                 .into(),
@@ -1145,14 +1099,11 @@ mod tests {
                         100,
                         "optional",
                         Type::Map(MapType {
-                            key_field: NestedField::map_key_element(
-                                102,
-                                PrimitiveType::Boolean.into(),
-                            )
-                            .into(),
+                            key_field: NestedField::map_key_element(102, PrimitiveType::Boolean)
+                                .into(),
                             value_field: NestedField::map_value_element(
                                 103,
-                                PrimitiveType::Boolean.into(),
+                                PrimitiveType::Boolean,
                                 false,
                             )
                             .into(),
@@ -1162,14 +1113,11 @@ mod tests {
                         104,
                         "required",
                         Type::Map(MapType {
-                            key_field: NestedField::map_key_element(
-                                105,
-                                PrimitiveType::Boolean.into(),
-                            )
-                            .into(),
+                            key_field: NestedField::map_key_element(105, PrimitiveType::Boolean)
+                                .into(),
                             value_field: NestedField::map_value_element(
                                 106,
-                                PrimitiveType::Boolean.into(),
+                                PrimitiveType::Boolean,
                                 true,
                             )
                             .into(),
@@ -1179,14 +1127,11 @@ mod tests {
                         107,
                         "string_map",
                         Type::Map(MapType {
-                            key_field: NestedField::map_key_element(
-                                108,
-                                PrimitiveType::String.into(),
-                            )
-                            .into(),
+                            key_field: NestedField::map_key_element(108, PrimitiveType::String)
+                                .into(),
                             value_field: NestedField::map_value_element(
                                 109,
-                                PrimitiveType::Long.into(),
+                                PrimitiveType::Long,
                                 false,
                             )
                             .into(),
@@ -1252,9 +1197,8 @@ mod tests {
 
         let mut converter = AvroSchemaToSchema;
         let iceberg_type = Type::Map(MapType {
-            key_field: NestedField::map_key_element(101, PrimitiveType::String.into()).into(),
-            value_field: NestedField::map_value_element(102, PrimitiveType::Long.into(), false)
-                .into(),
+            key_field: NestedField::map_key_element(101, PrimitiveType::String).into(),
+            value_field: NestedField::map_value_element(102, PrimitiveType::Long, false).into(),
         });
 
         assert_eq!(
@@ -1403,5 +1347,25 @@ mod tests {
             .unwrap();
         let err = schema_to_avro_schema("t", &schema).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+    }
+
+    #[test]
+    fn test_geospatial_to_avro_bytes_schema() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(Default::default())),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let AvroSchema::Record(record) = schema_to_avro_schema("t", &schema).unwrap() else {
+            panic!("expected Avro record schema");
+        };
+        assert_eq!(record.fields[0].schema, AvroSchema::Bytes);
     }
 }
