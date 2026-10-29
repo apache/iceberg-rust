@@ -162,6 +162,7 @@ impl FileScanTaskReader {
 
         // `try_flatten_unordered` stops polling the buffered opens once it holds
         // `concurrency_limit_data_files` streams, so spawn the open (#3276).
+        // Footer and page-index decode also run on the IO runtime.
         // Aborts on drop.
         let path = task.data_file_path().to_string();
         let file_io = self.file_io.clone();
