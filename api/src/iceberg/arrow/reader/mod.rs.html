@@ -160,23 +160,25 @@
 <a href=#160 id=160 data-nosnippet>160</a>            row_selection_enabled: <span class="self">self</span>.row_selection_enabled,
 <a href=#161 id=161 data-nosnippet>161</a>            bloom_filter_enabled: <span class="self">self</span>.bloom_filter_enabled,
 <a href=#162 id=162 data-nosnippet>162</a>            parquet_read_options: <span class="self">self</span>.parquet_read_options,
-<a href=#163 id=163 data-nosnippet>163</a>        }
-<a href=#164 id=164 data-nosnippet>164</a>    }
-<a href=#165 id=165 data-nosnippet>165</a>}
-<a href=#166 id=166 data-nosnippet>166</a>
-<a href=#167 id=167 data-nosnippet>167</a><span class="doccomment">/// Reads data from Parquet files
-<a href=#168 id=168 data-nosnippet>168</a></span><span class="attr">#[derive(Clone)]
-<a href=#169 id=169 data-nosnippet>169</a></span><span class="kw">pub struct </span>ArrowReader {
-<a href=#170 id=170 data-nosnippet>170</a>    batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
-<a href=#171 id=171 data-nosnippet>171</a>    file_io: FileIO,
-<a href=#172 id=172 data-nosnippet>172</a>    delete_file_loader: CachingDeleteFileLoader,
-<a href=#173 id=173 data-nosnippet>173</a>
-<a href=#174 id=174 data-nosnippet>174</a>    <span class="doccomment">/// the maximum number of data files that can be fetched at the same time
-<a href=#175 id=175 data-nosnippet>175</a>    </span>concurrency_limit_data_files: usize,
-<a href=#176 id=176 data-nosnippet>176</a>
-<a href=#177 id=177 data-nosnippet>177</a>    row_group_filtering_enabled: bool,
-<a href=#178 id=178 data-nosnippet>178</a>    row_selection_enabled: bool,
-<a href=#179 id=179 data-nosnippet>179</a>    bloom_filter_enabled: bool,
-<a href=#180 id=180 data-nosnippet>180</a>    parquet_read_options: ParquetReadOptions,
-<a href=#181 id=181 data-nosnippet>181</a>}
+<a href=#163 id=163 data-nosnippet>163</a>            runtime: <span class="self">self</span>.runtime.clone(),
+<a href=#164 id=164 data-nosnippet>164</a>        }
+<a href=#165 id=165 data-nosnippet>165</a>    }
+<a href=#166 id=166 data-nosnippet>166</a>}
+<a href=#167 id=167 data-nosnippet>167</a>
+<a href=#168 id=168 data-nosnippet>168</a><span class="doccomment">/// Reads data from Parquet files
+<a href=#169 id=169 data-nosnippet>169</a></span><span class="attr">#[derive(Clone)]
+<a href=#170 id=170 data-nosnippet>170</a></span><span class="kw">pub struct </span>ArrowReader {
+<a href=#171 id=171 data-nosnippet>171</a>    batch_size: <span class="prelude-ty">Option</span>&lt;usize&gt;,
+<a href=#172 id=172 data-nosnippet>172</a>    file_io: FileIO,
+<a href=#173 id=173 data-nosnippet>173</a>    delete_file_loader: CachingDeleteFileLoader,
+<a href=#174 id=174 data-nosnippet>174</a>
+<a href=#175 id=175 data-nosnippet>175</a>    <span class="doccomment">/// the maximum number of data files that can be fetched at the same time
+<a href=#176 id=176 data-nosnippet>176</a>    </span>concurrency_limit_data_files: usize,
+<a href=#177 id=177 data-nosnippet>177</a>
+<a href=#178 id=178 data-nosnippet>178</a>    row_group_filtering_enabled: bool,
+<a href=#179 id=179 data-nosnippet>179</a>    row_selection_enabled: bool,
+<a href=#180 id=180 data-nosnippet>180</a>    bloom_filter_enabled: bool,
+<a href=#181 id=181 data-nosnippet>181</a>    parquet_read_options: ParquetReadOptions,
+<a href=#182 id=182 data-nosnippet>182</a>    runtime: Runtime,
+<a href=#183 id=183 data-nosnippet>183</a>}
 </code></pre></div></section></main></body></html>
