@@ -481,6 +481,7 @@ pub(crate) mod _serde {
                 RawLiteralEnum::String(v) => match ty {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
                     Type::Primitive(PrimitiveType::Uuid) => Hyphenated::from_str(&v)
+                        // The hyphenated UUID restriction is to match behaviour with Java.
                         .map(|hyphenated_uuid| Some(Literal::uuid(hyphenated_uuid.into_uuid())))
                         .map_err(|_| {
                             invalid_err_with_reason("string", "UUID must be a valid UUID string")
