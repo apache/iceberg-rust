@@ -1965,8 +1965,111 @@ mod tests {
         }
     }
 
-    /// A failing positional delete file ends `load_deletes` early, dropping the load of
-    /// the other file in the same call. The other file still loads later.
+    /// Local filesystem storage that yields before every read, so the loads of several
+    /// delete files in one `load_deletes` call start together, and holds reads of
+    /// `gated.parquet` until the gate is opened, so one of them is still in flight when
+    /// another fails. `LocalFsStorage` never yields, so on the current-thread test
+    /// runtime each load would otherwise finish before the next one starts.
+    mod gated_storage {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        use bytes::Bytes;
+        use futures::stream::BoxStream;
+
+        use crate::Result;
+        use crate::io::{
+            FileMetadata, FileRead, FileWrite, InputFile, LocalFsStorage, OutputFile, Storage,
+            StorageConfig, StorageFactory,
+        };
+
+        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+        pub(super) struct GatedStorage {
+            #[serde(skip)]
+            inner: LocalFsStorage,
+            #[serde(skip)]
+            open: Arc<AtomicBool>,
+        }
+
+        impl GatedStorage {
+            async fn wait_for_gate(&self, path: &str) {
+                tokio::task::yield_now().await;
+                while path.ends_with("gated.parquet") && !self.open.load(Ordering::SeqCst) {
+                    tokio::task::yield_now().await;
+                }
+            }
+        }
+
+        #[async_trait::async_trait]
+        #[typetag::serde(name = "test_gated_storage")]
+        impl Storage for GatedStorage {
+            async fn metadata(&self, path: &str) -> Result<FileMetadata> {
+                self.inner.metadata(path).await
+            }
+
+            fn new_input(&self, path: &str) -> Result<InputFile> {
+                Ok(InputFile::new(Arc::new(self.clone()), path.to_string()))
+            }
+
+            fn new_output(&self, path: &str) -> Result<OutputFile> {
+                Ok(OutputFile::new(Arc::new(self.clone()), path.to_string()))
+            }
+
+            async fn exists(&self, path: &str) -> Result<bool> {
+                self.inner.exists(path).await
+            }
+
+            async fn read(&self, path: &str) -> Result<Bytes> {
+                self.wait_for_gate(path).await;
+                self.inner.read(path).await
+            }
+
+            async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
+                self.wait_for_gate(path).await;
+                self.inner.reader(path).await
+            }
+
+            async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
+                self.inner.write(path, bs).await
+            }
+
+            async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
+                self.inner.writer(path).await
+            }
+
+            async fn delete(&self, path: &str) -> Result<()> {
+                self.inner.delete(path).await
+            }
+
+            async fn delete_prefix(&self, path: &str) -> Result<()> {
+                self.inner.delete_prefix(path).await
+            }
+
+            async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()> {
+                self.inner.delete_stream(paths).await
+            }
+        }
+
+        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+        pub(super) struct GatedStorageFactory {
+            #[serde(skip)]
+            pub(super) open: Arc<AtomicBool>,
+        }
+
+        #[typetag::serde(name = "test_gated_storage_factory")]
+        impl StorageFactory for GatedStorageFactory {
+            fn build(&self, _config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+                Ok(Arc::new(GatedStorage {
+                    inner: LocalFsStorage,
+                    open: Arc::clone(&self.open),
+                }))
+            }
+        }
+    }
+
+    /// A failing positional delete file ends `load_deletes` early while the load of the
+    /// other file in the same call is still in flight, dropping its guard. That file
+    /// still loads later.
     #[tokio::test]
     async fn test_pos_del_load_dropped_by_a_failing_sibling_can_be_loaded_later() {
         let tmp_dir = TempDir::new().unwrap();
@@ -1999,8 +2102,12 @@ mod tests {
                 .unwrap()
         };
         let invalid = write("invalid.parquet", vec![-1]);
-        let valid = write("valid.parquet", vec![1, 3]);
-        let loader = CachingDeleteFileLoader::new(FileIO::new_with_fs(), 10, Runtime::current());
+        // Its read waits for the gate, so its load is in flight when `invalid` fails.
+        let valid = write("gated.parquet", vec![1, 3]);
+        let factory = Arc::new(gated_storage::GatedStorageFactory::default());
+        let gate = Arc::clone(&factory.open);
+        let file_io = crate::io::FileIOBuilder::new(factory).build();
+        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current());
 
         let err = loader
             .load_deletes(&[invalid, valid.clone()], Arc::clone(&schema))
@@ -2010,6 +2117,7 @@ mod tests {
             .unwrap();
         assert!(err.message().contains("negative position"), "{err}");
 
+        gate.store(true, std::sync::atomic::Ordering::SeqCst);
         let filter = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             loader.load_deletes(&[valid], schema),
