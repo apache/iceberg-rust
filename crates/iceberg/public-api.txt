@@ -4029,6 +4029,7 @@ pub fn iceberg::Runtime::cpu(&self) -> &iceberg::RuntimeHandle
 pub fn iceberg::Runtime::current() -> Self
 pub fn iceberg::Runtime::io(&self) -> &iceberg::RuntimeHandle
 pub fn iceberg::Runtime::new(runtime: &tokio::runtime::runtime::Runtime) -> Self
+pub fn iceberg::Runtime::new_with_handles(io_handle: tokio::runtime::handle::Handle, cpu_handle: tokio::runtime::handle::Handle) -> Self
 pub fn iceberg::Runtime::new_with_split(io_runtime: &tokio::runtime::runtime::Runtime, cpu_runtime: &tokio::runtime::runtime::Runtime) -> Self
 pub fn iceberg::Runtime::try_current() -> iceberg::Result<Self>
 impl core::clone::Clone for iceberg::Runtime

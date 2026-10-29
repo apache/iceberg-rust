@@ -165,6 +165,20 @@ impl Runtime {
         }
     }
 
+    /// Create a Runtime from separate Tokio handles for IO and CPU work.
+    ///
+    /// Use this when the application passes runtime handles rather than references
+    /// to the runtimes themselves. The caller must keep both runtimes alive.
+    pub fn new_with_handles(
+        io_handle: tokio::runtime::Handle,
+        cpu_handle: tokio::runtime::Handle,
+    ) -> Self {
+        Self {
+            io: RuntimeHandle::from_tokio_handle(io_handle),
+            cpu: RuntimeHandle::from_tokio_handle(cpu_handle),
+        }
+    }
+
     /// Borrows the tokio runtime the caller is currently running in.
     ///
     /// Panics if called outside a tokio runtime context. Use
@@ -235,6 +249,37 @@ mod tests {
         fn block_on<F: Future>(&self, f: F) -> F::Output {
             self.tokio.block_on(f)
         }
+    }
+
+    #[test]
+    fn test_runtime_from_handles_routes_io_and_cpu() {
+        let io = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("iceberg-handle-io")
+            .enable_all()
+            .build()
+            .unwrap();
+        let cpu = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("iceberg-handle-cpu")
+            .enable_all()
+            .build()
+            .unwrap();
+        let runtime = Runtime::new_with_handles(io.handle().clone(), cpu.handle().clone());
+        io.block_on(async {
+            let io_thread = runtime
+                .io()
+                .spawn(async { std::thread::current().name().unwrap().to_owned() })
+                .await
+                .unwrap();
+            let cpu_thread = runtime
+                .cpu()
+                .spawn(async { std::thread::current().name().unwrap().to_owned() })
+                .await
+                .unwrap();
+            assert_eq!(io_thread, "iceberg-handle-io");
+            assert_eq!(cpu_thread, "iceberg-handle-cpu");
+        });
     }
 
     #[test]
