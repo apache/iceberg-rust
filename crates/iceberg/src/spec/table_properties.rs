@@ -331,6 +331,13 @@ pub struct TableProperties {
         getter
     )]
     write_object_storage_partitioned_paths: bool,
+    /// Whether to delete the oldest tracked metadata files after each commit.
+    #[property(
+        key = Self::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED,
+        default = Self::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED_DEFAULT,
+        getter
+    )]
+    metadata_delete_after_commit_enabled: bool,
     /// The table's default name mapping, used to assign field ids when reading data files
     /// that carry no field id metadata. `None` if `schema.name-mapping.default` is not set.
     #[property(
@@ -375,6 +382,13 @@ impl TableProperties<'_> {
         "write.metadata.previous-versions-max";
     /// Default value for max number of previous versions to keep.
     pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize = 100;
+
+    /// Property key for deleting the previous metadata files that fall out of the metadata log
+    /// (bounded by [`TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX`]) after a commit.
+    pub const PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED: &'static str =
+        "write.metadata.delete-after-commit.enabled";
+    /// Default value for [`TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED`].
+    pub const PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED_DEFAULT: bool = false;
 
     /// Property key for max number of partitions to keep summary stats for.
     pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &'static str =

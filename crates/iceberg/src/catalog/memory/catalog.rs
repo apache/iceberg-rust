@@ -35,7 +35,7 @@ use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
     Catalog, CatalogBuilder, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit,
-    TableCreation, TableIdent,
+    TableCreation, TableIdent, delete_removed_metadata_files,
 };
 
 /// Memory catalog warehouse location
@@ -406,6 +406,7 @@ impl Catalog for MemoryCatalog {
         let current_table = self
             .load_table_from_locked_state(commit.identifier(), &root_namespace_state)
             .await?;
+        let base_metadata = current_table.metadata_ref();
 
         // Apply TableCommit to get staged table
         let staged_table = commit.apply(current_table)?;
@@ -420,6 +421,14 @@ impl Catalog for MemoryCatalog {
 
         // Flip the pointer to reference the new metadata file.
         let updated_table = root_namespace_state.commit_table_update(staged_table)?;
+        drop(root_namespace_state);
+
+        delete_removed_metadata_files(
+            updated_table.file_io(),
+            &base_metadata,
+            updated_table.metadata(),
+        )
+        .await;
 
         Ok(updated_table)
     }
@@ -439,7 +448,9 @@ pub(crate) mod tests {
     use crate::ErrorKind;
     use crate::encryption::kms::MemoryKmsClientFactory;
     use crate::io::{FileIO, LocalFsStorageFactory};
-    use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use crate::spec::{
+        NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, TableProperties, Type,
+    };
     use crate::test_utils::test_runtime;
     use crate::transaction::{ApplyTransactionAction, Transaction};
 
@@ -1980,6 +1991,161 @@ pub(crate) mod tests {
 
         assert!(
             table.metadata().metadata_log().len() < updated_table.metadata().metadata_log().len()
+        );
+    }
+
+    async fn create_table_with_properties<C: Catalog>(
+        catalog: &C,
+        properties: HashMap<String, String>,
+    ) -> Table {
+        let namespace_ident = NamespaceIdent::new("abc".into());
+        create_namespace(catalog, &namespace_ident).await;
+        catalog
+            .create_table(
+                &namespace_ident,
+                TableCreation::builder()
+                    .name("test".into())
+                    .schema(simple_table_schema())
+                    .properties(properties)
+                    .build(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn commit_property_update<C: Catalog>(catalog: &C, table: &Table, value: &str) -> Table {
+        let tx = Transaction::new(table);
+        tx.update_table_properties()
+            .set("key".to_string(), value.to_string())
+            .apply(tx)
+            .unwrap()
+            .commit(catalog)
+            .await
+            .unwrap()
+    }
+
+    /// Commits `num_commits` property updates and returns the metadata location of every
+    /// table version, oldest first.
+    async fn commit_metadata_versions<C: Catalog>(
+        catalog: &C,
+        mut table: Table,
+        num_commits: usize,
+    ) -> Vec<String> {
+        let mut locations = vec![table.metadata_location().unwrap().to_string()];
+        for i in 0..num_commits {
+            table = commit_property_update(catalog, &table, &i.to_string()).await;
+            locations.push(table.metadata_location().unwrap().to_string());
+        }
+        locations
+    }
+
+    async fn existing_files(file_io: &FileIO, locations: &[String]) -> Vec<String> {
+        let mut existing = Vec::new();
+        for location in locations {
+            if file_io.exists(location).await.unwrap() {
+                existing.push(location.clone());
+            }
+        }
+        existing
+    }
+
+    #[tokio::test]
+    async fn test_update_table_deletes_metadata_files_removed_from_log_when_enabled() {
+        let catalog = new_memory_catalog().await;
+        let table = create_table_with_properties(
+            &catalog,
+            HashMap::from([
+                (
+                    TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED.to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                    "1".to_string(),
+                ),
+            ]),
+        )
+        .await;
+        let file_io = table.file_io().clone();
+
+        let locations = commit_metadata_versions(&catalog, table, 3).await;
+
+        // The current metadata file and the one entry left in the metadata log remain.
+        assert_eq!(
+            existing_files(&file_io, &locations).await,
+            locations[2..].to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table_keeps_metadata_files_removed_from_log_when_not_enabled() {
+        for delete_after_commit in [None, Some("false")] {
+            let catalog = new_memory_catalog().await;
+            let mut properties = HashMap::from([(
+                TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                "1".to_string(),
+            )]);
+            if let Some(value) = delete_after_commit {
+                properties.insert(
+                    TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED.to_string(),
+                    value.to_string(),
+                );
+            }
+            let table = create_table_with_properties(&catalog, properties).await;
+            let file_io = table.file_io().clone();
+
+            let locations = commit_metadata_versions(&catalog, table, 3).await;
+
+            assert_eq!(existing_files(&file_io, &locations).await, locations);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_table_succeeds_when_deleting_removed_metadata_file_fails() {
+        let warehouse = TempDir::new().unwrap();
+        let catalog = MemoryCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "memory",
+                HashMap::from([(
+                    MEMORY_CATALOG_WAREHOUSE.to_string(),
+                    warehouse.path().to_str().unwrap().to_string(),
+                )]),
+            )
+            .await
+            .unwrap();
+        let table = create_table_with_properties(
+            &catalog,
+            HashMap::from([
+                (
+                    TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED.to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                    "1".to_string(),
+                ),
+            ]),
+        )
+        .await;
+        let file_io = table.file_io().clone();
+        let v0 = table.metadata_location().unwrap().to_string();
+        let v1_table = commit_property_update(&catalog, &table, "1").await;
+        let v1 = v1_table.metadata_location().unwrap().to_string();
+
+        // A non-empty directory in place of v0 makes its deletion fail.
+        std::fs::remove_file(&v0).unwrap();
+        std::fs::create_dir(&v0).unwrap();
+        std::fs::write(format!("{v0}/blocker"), b"").unwrap();
+
+        let v2_table = commit_property_update(&catalog, &v1_table, "2").await;
+        let v2 = v2_table.metadata_location().unwrap().to_string();
+        let v3_table = commit_property_update(&catalog, &v2_table, "3").await;
+        let v3 = v3_table.metadata_location().unwrap().to_string();
+
+        assert_eq!(
+            existing_files(&file_io, &[v0.clone(), v1, v2.clone(), v3.clone()]).await,
+            vec![v0, v2, v3]
         );
     }
 

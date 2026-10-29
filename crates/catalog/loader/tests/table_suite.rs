@@ -24,7 +24,7 @@ mod common;
 use std::collections::HashMap;
 
 use common::{CatalogKind, TableMode, cleanup_namespace_dyn, load_catalog, table_creation};
-use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct};
+use iceberg::spec::{DataContentType, DataFileBuilder, DataFileFormat, Struct, TableProperties};
 use iceberg::transaction::{ApplyTransactionAction, Transaction};
 use iceberg::{ErrorKind, NamespaceIdent, Result, TableIdent};
 use iceberg_test_utils::normalize_test_name_with_parts;
@@ -207,6 +207,69 @@ async fn test_catalog_update_table_properties(#[case] kind: CatalogKind) -> Resu
         updated.metadata().properties().get("test_property"),
         Some(&"test_value".to_string())
     );
+
+    Ok(())
+}
+
+// Common behavior: catalogs that write metadata files delete the ones that fall out of the
+// metadata log when `write.metadata.delete-after-commit.enabled` is set.
+#[rstest]
+#[case::glue_catalog(CatalogKind::Glue)]
+#[case::sql_catalog(CatalogKind::Sql)]
+#[case::memory_catalog(CatalogKind::Memory)]
+#[tokio::test]
+async fn test_catalog_update_table_deletes_metadata_files_removed_from_log(
+    #[case] kind: CatalogKind,
+) -> Result<()> {
+    let Some(harness) = load_catalog(kind).await else {
+        return Ok(());
+    };
+    let catalog = harness.catalog;
+    let namespace = NamespaceIdent::new(normalize_test_name_with_parts!(
+        "catalog_update_table_deletes_metadata_files",
+        harness.label
+    ));
+
+    cleanup_namespace_dyn(catalog.as_ref(), &namespace).await;
+    catalog.create_namespace(&namespace, HashMap::new()).await?;
+
+    let table_name = normalize_test_name_with_parts!(
+        "catalog_update_table_deletes_metadata_files",
+        harness.label,
+        "table"
+    );
+    let mut creation = table_creation(table_name);
+    creation.properties = HashMap::from([
+        (
+            TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED.to_string(),
+            "true".to_string(),
+        ),
+        (
+            TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+            "1".to_string(),
+        ),
+    ]);
+    let mut table = catalog.create_table(&namespace, creation).await?;
+
+    let mut locations = vec![table.metadata_location_result()?.to_string()];
+    for i in 0..3 {
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_table_properties()
+            .set("test_property".to_string(), i.to_string())
+            .apply(tx)?;
+        table = tx.commit(catalog.as_ref()).await?;
+        locations.push(table.metadata_location_result()?.to_string());
+    }
+
+    let mut existing = Vec::new();
+    for location in &locations {
+        if table.file_io().exists(location).await? {
+            existing.push(location.clone());
+        }
+    }
+    // The current metadata file and the one entry left in the metadata log remain.
+    assert_eq!(existing, locations[2..].to_vec());
 
     Ok(())
 }
