@@ -26,20 +26,22 @@ use arrow_array::{
     FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, Scalar, StringArray,
     TimestampMicrosecondArray, TimestampNanosecondArray,
 };
-use arrow_schema::extension::ExtensionType;
+use arrow_schema::extension::{ExtensionType, Uuid as UuidExtensionType};
 use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit,
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::statistics::Statistics;
+use parquet_geospatial::{WkbEdges, WkbMetadata, WkbType, WkbTypeHint};
 use uuid::Uuid;
 
 use crate::error::{Result, invalid_data};
 use crate::spec::decimal_utils::i128_from_be_bytes;
+use crate::spec::geospatial::EdgeInterpolationAlgorithm;
 use crate::spec::{
-    Datum, FIRST_FIELD_ID, LIST_FIELD_NAME, ListType, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME,
-    MapType, NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor,
-    StructType, Type, VariantType,
+    Datum, FIRST_FIELD_ID, GeographyType, GeometryType, LIST_FIELD_NAME, ListType,
+    MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType, NestedField, NestedFieldRef,
+    PrimitiveLiteral, PrimitiveType, Schema, SchemaVisitor, StructType, Type, VariantType,
 };
 use crate::{Error, ErrorKind};
 
@@ -47,6 +49,7 @@ use crate::{Error, ErrorKind};
 pub const DEFAULT_MAP_FIELD_NAME: &str = "key_value";
 /// UTC time zone for Arrow timestamp type.
 pub const UTC_TIME_ZONE: &str = "+00:00";
+const UNSET_GEOSPATIAL_CRS: &str = "srid:0";
 
 /// The canonical Arrow [`arrow.parquet.variant`] extension type.
 ///
@@ -98,6 +101,59 @@ impl ExtensionType for VariantExtensionType {
     ) -> std::result::Result<Self, ArrowError> {
         Self.supports_data_type(data_type)?;
         Ok(Self)
+    }
+}
+
+fn to_arrow_wkb_edges(algorithm: EdgeInterpolationAlgorithm) -> WkbEdges {
+    match algorithm {
+        EdgeInterpolationAlgorithm::Spherical => WkbEdges::Spherical,
+        EdgeInterpolationAlgorithm::Vincenty => WkbEdges::Vincenty,
+        EdgeInterpolationAlgorithm::Thomas => WkbEdges::Thomas,
+        EdgeInterpolationAlgorithm::Andoyer => WkbEdges::Andoyer,
+        EdgeInterpolationAlgorithm::Karney => WkbEdges::Karney,
+    }
+}
+
+impl From<WkbEdges> for EdgeInterpolationAlgorithm {
+    fn from(edges: WkbEdges) -> Self {
+        match edges {
+            WkbEdges::Spherical => Self::Spherical,
+            WkbEdges::Vincenty => Self::Vincenty,
+            WkbEdges::Thomas => Self::Thomas,
+            WkbEdges::Andoyer => Self::Andoyer,
+            WkbEdges::Karney => Self::Karney,
+        }
+    }
+}
+
+fn iceberg_crs_from_wkb_metadata(metadata: &WkbMetadata) -> Result<String> {
+    match metadata.crs.as_ref() {
+        None => Ok(UNSET_GEOSPATIAL_CRS.to_string()),
+        Some(serde_json::Value::String(crs)) => Ok(crs.clone()),
+        Some(serde_json::Value::Object(crs)) => {
+            let id = crs.get("id");
+            let authority = id
+                .and_then(|id| id.get("authority"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|authority| !authority.is_empty());
+            let code = match id.and_then(|id| id.get("code")) {
+                Some(serde_json::Value::String(code)) => Some(code.clone()),
+                Some(serde_json::Value::Number(code)) => Some(code.to_string()),
+                _ => None,
+            };
+
+            match (authority, code) {
+                (Some(authority), Some(code)) => Ok(format!("{authority}:{code}")),
+                _ => Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Cannot determine Iceberg geospatial type from PROJJSON CRS without an embedded authority/code",
+                )),
+            }
+        }
+        Some(_) => Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Geospatial CRS metadata must be a string or PROJJSON object",
+        )),
     }
 }
 
@@ -184,6 +240,20 @@ pub trait ArrowSchemaVisitor {
     where Self: Sized {
         visit_type(field.data_type(), self)
     }
+
+    /// Called when a field carries the `arrow.uuid` extension type.
+    ///
+    /// The default treats the field as its underlying Arrow storage, preserving
+    /// the behavior of visitors that don't special-case UUIDs. A visitor that
+    /// produces Iceberg types should override this to fold the storage into a
+    /// single logical UUID.
+    ///
+    /// Takes the `&FieldRef` rather than a `&DataType` because the UUID signal
+    /// lives on the field's metadata, not on its data type.
+    fn uuid(&mut self, field: &FieldRef) -> Result<Self::T>
+    where Self: Sized {
+        visit_type(field.data_type(), self)
+    }
 }
 
 /// Visiting a type in post order.
@@ -241,11 +311,15 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
     }
 }
 
-/// Dispatch a field: fold it into a variant when it carries the
-/// `arrow.parquet.variant` extension type, otherwise visit its data type.
+/// Dispatch a field, and fold it into following extension types when carried:
+///  - `arrow.parquet.variant` -- fold into a variant,
+///  - `arrow.uuid` -- fold it into a UUID type,
+///  - and in all other cases we visit it's data.
 fn visit_field<V: ArrowSchemaVisitor>(field: &FieldRef, visitor: &mut V) -> Result<V::T> {
     if field.extension_type_name() == Some(VariantExtensionType::NAME) {
         visitor.variant(field)
+    } else if field.extension_type_name() == Some(UuidExtensionType::NAME) {
+        visitor.uuid(field)
     } else {
         visit_type(field.data_type(), visitor)
     }
@@ -395,7 +469,7 @@ impl ArrowSchemaConverter {
         let mut results = Vec::with_capacity(fields.len());
         for i in 0..fields.len() {
             let field = &fields[i];
-            let field_type = &field_results[i];
+            let field_type = self.apply_arrow_extension(field, field_results[i].clone())?;
             let id = self.get_field_id(field)?;
             let doc = get_field_doc(field);
             let nested_field = NestedField {
@@ -403,13 +477,58 @@ impl ArrowSchemaConverter {
                 doc,
                 name: field.name().clone(),
                 required: !field.is_nullable(),
-                field_type: Box::new(field_type.clone()),
+                field_type: Box::new(field_type),
                 initial_default: None,
                 write_default: None,
             };
             results.push(Arc::new(nested_field));
         }
         Ok(results)
+    }
+
+    fn apply_arrow_extension(&self, arrow_field: &FieldRef, iceberg_type: Type) -> Result<Type> {
+        if arrow_field.extension_type_name() != Some(WkbType::NAME) {
+            return Ok(iceberg_type);
+        }
+
+        if !matches!(&iceberg_type, Type::Primitive(PrimitiveType::Binary)) {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "WKB extension type on field {} requires binary storage, got {iceberg_type}",
+                    arrow_field.name()
+                ),
+            ));
+        }
+
+        let wkb_type = arrow_field.try_extension_type::<WkbType>().map_err(|err| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid geospatial Arrow extension metadata for field {}",
+                    arrow_field.name()
+                ),
+            )
+            .with_source(err)
+        })?;
+
+        let crs = iceberg_crs_from_wkb_metadata(wkb_type.metadata())?;
+
+        match wkb_type.metadata().type_hint() {
+            WkbTypeHint::Geometry => Ok(Type::Primitive(PrimitiveType::Geometry(
+                GeometryType::new(Some(crs))?,
+            ))),
+            WkbTypeHint::Geography => Ok(Type::Primitive(PrimitiveType::Geography(
+                GeographyType::new(
+                    Some(crs),
+                    wkb_type
+                        .metadata()
+                        .algorithm
+                        .unwrap_or(WkbEdges::Spherical)
+                        .into(),
+                )?,
+            ))),
+        }
     }
 }
 
@@ -441,6 +560,7 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             }
         };
 
+        let value = self.apply_arrow_extension(element_field, value)?;
         let id = self.get_field_id(element_field)?;
         let doc = get_field_doc(element_field);
         let mut element_field =
@@ -462,6 +582,8 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
                     let key_field = &fields[0];
                     let value_field = &fields[1];
+                    let key_value = self.apply_arrow_extension(key_field, key_value)?;
+                    let value = self.apply_arrow_extension(value_field, value)?;
 
                     let key_id = self.get_field_id(key_field)?;
                     let key_doc = get_field_doc(key_field);
@@ -562,6 +684,23 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
         // fail. The enclosing field's own id is read by the caller.
         Ok(Type::Variant(VariantType))
     }
+
+    fn uuid(&mut self, field: &FieldRef) -> Result<Self::T> {
+        // The extension expects a fixed size binary.
+        // See: Apache Arrow spec https://arrow.apache.org/docs/format/CanonicalExtensions.html#uuid
+        let field_data_type = field.data_type();
+        let expected_data_type = DataType::FixedSizeBinary(16);
+        if *field_data_type != expected_data_type {
+            let error_message = format!(
+                "{} extension requires {expected_data_type} storage, found {field_data_type}",
+                UuidExtensionType::NAME,
+            );
+
+            return Err(Error::new(ErrorKind::DataInvalid, error_message));
+        }
+
+        Ok(Type::Primitive(PrimitiveType::Uuid))
+    }
 }
 
 struct ToArrowSchemaConverter;
@@ -606,15 +745,33 @@ impl SchemaVisitor for ToArrowSchemaConverter {
         } else {
             HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), field.id.to_string())])
         };
-        let arrow_field =
+        let mut arrow_field =
             Field::new(field.name.clone(), ty, !field.required).with_metadata(metadata);
-        // A variant column's storage is a struct; tag the field with the canonical
-        // `arrow.parquet.variant` extension type so consumers read it as a Variant, not a struct.
-        let arrow_field = if field.field_type.is_variant() {
-            arrow_field.with_extension_type(VariantExtensionType)
-        } else {
-            arrow_field
-        };
+
+        match field.field_type.as_ref() {
+            Type::Variant(_) => {
+                // A variant column's storage is a struct; tag the field with the canonical
+                // `arrow.parquet.variant` extension type so consumers read it as a Variant, not a struct.
+                arrow_field.try_with_extension_type(VariantExtensionType)?;
+            }
+            Type::Primitive(PrimitiveType::Uuid) => {
+                // Preserve the canonical UUID extension on its FixedSizeBinary(16) storage.
+                arrow_field.try_with_extension_type(UuidExtensionType)?;
+            }
+            Type::Primitive(PrimitiveType::Geometry(geometry)) => {
+                let metadata = WkbMetadata::new(Some(geometry.crs()), None);
+                arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
+            }
+            Type::Primitive(PrimitiveType::Geography(geography)) => {
+                let metadata = WkbMetadata::new(
+                    Some(geography.crs()),
+                    Some(to_arrow_wkb_edges(geography.algorithm())),
+                );
+                arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
+            }
+            _ => {}
+        }
+
         Ok(ArrowSchemaOrFieldOrType::Field(arrow_field))
     }
 
@@ -733,7 +890,9 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                     .map(DataType::FixedSizeBinary)
                     .unwrap_or(DataType::LargeBinary),
             )),
-            PrimitiveType::Binary => Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary)),
+            PrimitiveType::Binary | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary))
+            }
         }
     }
 
@@ -1203,6 +1362,9 @@ pub(crate) fn primitive_type_to_arrow_type_with_ree(primitive_type: &PrimitiveTy
         PrimitiveType::Uuid => make_ree(DataType::Binary),
         PrimitiveType::Fixed(_) => make_ree(DataType::Binary),
         PrimitiveType::Binary => make_ree(DataType::Binary),
+        // Match the LargeBinary storage used by schema_to_arrow_schema in the read layer.
+        // Its 64-bit offsets cover the array's total WKB bytes, not only one geometry's size.
+        PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => make_ree(DataType::LargeBinary),
         PrimitiveType::Decimal { precision, scale } => {
             make_ree(DataType::Decimal128(*precision as u8, *scale as i8))
         }
@@ -1389,10 +1551,15 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_schema::extension::ExtensionType;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use parquet_geospatial::WkbEdges;
 
     use super::*;
     use crate::spec::decimal_utils::decimal_new;
+    use crate::spec::geospatial::{
+        DEFAULT_GEOSPATIAL_CRS, EdgeInterpolationAlgorithm as IcebergEdgeInterpolationAlgorithm,
+    };
     use crate::spec::{Literal, Schema};
 
     /// Create a simple field with metadata.
@@ -1695,6 +1862,105 @@ mod tests {
         pretty_assertions::assert_eq!(converted_schema, schema);
     }
 
+    #[test]
+    fn test_converting_uuid_from_arrow_to_iceberg_to_arrow_should_give_uuid() {
+        let arrow_schema = ArrowSchema::new(vec![
+            simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
+                .with_extension_type(UuidExtensionType),
+        ]);
+        let output =
+            schema_to_arrow_schema(&arrow_schema_to_schema(&arrow_schema).unwrap()).unwrap();
+
+        assert_eq!(arrow_schema, output);
+    }
+
+    #[test]
+    fn test_converting_uuid_from_iceberg_to_arrow_to_iceberg_should_give_uuid() {
+        let iceberg_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "uuid_field", Type::Primitive(PrimitiveType::Uuid)).into(),
+            ])
+            .build()
+            .unwrap();
+        let output =
+            arrow_schema_to_schema(&schema_to_arrow_schema(&iceberg_schema).unwrap()).unwrap();
+
+        assert_eq!(iceberg_schema, output);
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_should_convert_uuid_when_fixed_size_binary() {
+        let converted_schema = arrow_schema_to_schema(&ArrowSchema::new(vec![
+            simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
+                .with_extension_type(UuidExtensionType),
+        ]))
+        .unwrap();
+
+        let expected = Schema::builder()
+            .with_fields([NestedField::required(
+                1,
+                "uuid_field",
+                Type::Primitive(PrimitiveType::Uuid),
+            )
+            .into()])
+            .build()
+            .unwrap();
+
+        pretty_assertions::assert_eq!(expected, converted_schema);
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_should_reject_uuid_when_not_a_fixed_size_binary() {
+        // The field must be built correctly, and then changed to the wrong type,
+        // to avoid Arrow's own validation and panic.
+        let field = simple_field_with_uuid_ext(DataType::Utf8);
+
+        let error = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+
+        pretty_assertions::assert_eq!(
+            "arrow.uuid extension requires FixedSizeBinary(16) storage, found Utf8",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_should_reject_uuid_when_fixed_size_binary_that_is_less_than_16()
+    {
+        let field = simple_field_with_uuid_ext(DataType::FixedSizeBinary(8));
+        let error = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+
+        pretty_assertions::assert_eq!(
+            "arrow.uuid extension requires FixedSizeBinary(16) storage, found FixedSizeBinary(8)",
+            error.message()
+        );
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_should_reject_uuid_when_fixed_size_binary_that_is_more_than_16()
+    {
+        let field = simple_field_with_uuid_ext(DataType::FixedSizeBinary(17));
+        let error = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+
+        pretty_assertions::assert_eq!(
+            "arrow.uuid extension requires FixedSizeBinary(16) storage, found FixedSizeBinary(17)",
+            error.message()
+        );
+    }
+
+    fn simple_field_with_uuid_ext(field_data_type: DataType) -> Field {
+        let mut field = simple_field("uuid_field", DataType::FixedSizeBinary(16), false, "1")
+            .with_extension_type(UuidExtensionType);
+
+        // We want to allow setting a UUID extension to the wrong data type.
+        // This is to test our logic against bad schemas.
+        //
+        // To avoid Arrow's own internal validation and panic, we need to build
+        // the field correctly above, and then manually override the type here.
+        field = field.with_data_type(field_data_type);
+
+        field
+    }
+
     fn arrow_schema_for_schema_to_arrow_schema_test() -> ArrowSchema {
         let fields = Fields::from(vec![
             simple_field("key", DataType::Int32, false, "28"),
@@ -1787,7 +2053,8 @@ mod tests {
             ),
             simple_field("map", map, false, "16"),
             simple_field("struct", r#struct, false, "17"),
-            simple_field("uuid", DataType::FixedSizeBinary(16), false, "30"),
+            simple_field("uuid", DataType::FixedSizeBinary(16), false, "30")
+                .with_extension_type(UuidExtensionType),
             Field::new(
                 "v",
                 DataType::Struct(Fields::from(vec![
@@ -2003,10 +2270,10 @@ mod tests {
 
     #[test]
     fn test_schema_to_arrow_schema() {
-        let arrow_schema = arrow_schema_for_schema_to_arrow_schema_test();
+        let expected_arrow_schema = arrow_schema_for_schema_to_arrow_schema_test();
         let schema = iceberg_schema_for_schema_to_arrow_schema();
         let converted_arrow_schema = schema_to_arrow_schema(&schema).unwrap();
-        assert_eq!(converted_arrow_schema, arrow_schema);
+        assert_eq!(converted_arrow_schema, expected_arrow_schema);
     }
 
     #[test]
@@ -2050,6 +2317,27 @@ mod tests {
                 Field::new("value", DataType::Binary, true),
             ]))
         );
+    }
+
+    #[test]
+    fn test_schema_to_arrow_schema_should_convert_uuid_to_arrow_uuid() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "uuid_field", Type::Primitive(PrimitiveType::Uuid)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
+        let field = arrow_schema.field_with_name("uuid_field").unwrap();
+
+        assert_eq!(field.extension_type_name(), Some(UuidExtensionType::NAME));
+        // Attaching the extension type must not clobber the Iceberg field id.
+        assert_eq!(
+            field.metadata().get(PARQUET_FIELD_ID_META_KEY),
+            Some(&"1".to_string())
+        );
+        assert_eq!(*field.data_type(), DataType::FixedSizeBinary(16));
     }
 
     #[test]
@@ -2205,6 +2493,186 @@ mod tests {
             err.to_string().contains("requires Struct storage"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn test_geospatial_arrow_schema_roundtrip() {
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(
+                        GeometryType::new(Some("EPSG:3857".to_string())).unwrap(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    2,
+                    "geog",
+                    Type::Primitive(PrimitiveType::Geography(
+                        GeographyType::new(
+                            Some("OGC:CRS27".to_string()),
+                            IcebergEdgeInterpolationAlgorithm::Karney,
+                        )
+                        .unwrap(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    3,
+                    "geom_list",
+                    Type::List(ListType::new(
+                        NestedField::list_element(
+                            4,
+                            Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
+                            true,
+                        )
+                        .into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
+        let geom = arrow_schema.field(0);
+        assert_eq!(geom.data_type(), &DataType::LargeBinary);
+
+        let geog = arrow_schema.field(1);
+        let geog_wkb = geog.try_extension_type::<WkbType>().unwrap();
+        assert_eq!(geog_wkb.metadata().algorithm, Some(WkbEdges::Karney));
+        let geog_metadata: serde_json::Value =
+            serde_json::from_str(&geog_wkb.serialize_metadata().unwrap()).unwrap();
+        assert_eq!(geog_metadata.get("edges").unwrap(), "karney");
+        assert!(geog_metadata.get("algorithm").is_none());
+
+        let list = arrow_schema.field(2);
+        let DataType::List(element) = list.data_type() else {
+            panic!("Expected list field");
+        };
+        assert!(
+            matches!(
+                element
+                    .try_extension_type::<WkbType>()
+                    .unwrap()
+                    .metadata()
+                    .type_hint(),
+                WkbTypeHint::Geometry
+            ),
+            "Expected list element to retain WKB extension metadata"
+        );
+        assert_eq!(
+            element
+                .try_extension_type::<WkbType>()
+                .unwrap()
+                .metadata()
+                .crs
+                .as_ref()
+                .and_then(serde_json::Value::as_str),
+            Some(DEFAULT_GEOSPATIAL_CRS)
+        );
+
+        let converted = arrow_schema_to_schema(&arrow_schema).unwrap();
+        assert_eq!(converted.as_struct().fields(), schema.as_struct().fields());
+    }
+
+    #[test]
+    fn test_geospatial_arrow_crs_import() {
+        let mut geom = simple_field("geom", DataType::LargeBinary, true, "1");
+        geom.try_with_extension_type(WkbType::new(Some(WkbMetadata::new(
+            Some(r#"{"id":{"authority":"EPSG","code":3857}}"#),
+            None,
+        ))))
+        .unwrap();
+        let mut unset_geom = simple_field("unset_geom", DataType::LargeBinary, true, "2");
+        unset_geom
+            .try_with_extension_type(WkbType::new(Some(WkbMetadata::new(None, None))))
+            .unwrap();
+
+        let arrow_schema = ArrowSchema::new(vec![geom, unset_geom]);
+        let schema = arrow_schema_to_schema(&arrow_schema).unwrap();
+
+        assert_eq!(
+            schema.field_by_id(1).unwrap().field_type.as_ref(),
+            &Type::Primitive(PrimitiveType::Geometry(
+                GeometryType::new(Some("EPSG:3857".to_string())).unwrap()
+            ))
+        );
+        assert_eq!(
+            schema.field_by_id(2).unwrap().field_type.as_ref(),
+            &Type::Primitive(PrimitiveType::Geometry(
+                GeometryType::new(Some(UNSET_GEOSPATIAL_CRS.to_string())).unwrap()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_geospatial_arrow_invalid_crs_is_rejected() {
+        for crs in [r#"{}"#, "42"] {
+            let mut field = simple_field("geom", DataType::LargeBinary, true, "1");
+            field
+                .try_with_extension_type(WkbType::new(Some(WkbMetadata::new(Some(crs), None))))
+                .unwrap();
+
+            let err = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+        }
+    }
+
+    #[test]
+    fn test_geospatial_arrow_extension_requires_binary_storage() {
+        use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+
+        let metadata = WkbType::new(Some(WkbMetadata::new(None, None)))
+            .serialize_metadata()
+            .unwrap();
+        let field =
+            simple_field("geom", DataType::Int32, true, "1").with_metadata(HashMap::from([
+                (PARQUET_FIELD_ID_META_KEY.to_string(), "1".to_string()),
+                (
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    WkbType::NAME.to_string(),
+                ),
+                (EXTENSION_TYPE_METADATA_KEY.to_string(), metadata),
+            ]));
+
+        let err = arrow_schema_to_schema(&ArrowSchema::new(vec![field])).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+        assert!(
+            err.message().contains("requires binary storage"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_geospatial_parquet_statistics_are_ignored() {
+        use parquet::data_type::ByteArray;
+        use parquet::file::statistics::ValueStatistics;
+
+        let stats = Statistics::ByteArray(ValueStatistics::new(
+            Some(ByteArray::from(vec![1, 2, 3])),
+            Some(ByteArray::from(vec![4, 5, 6])),
+            None,
+            None,
+            false,
+        ));
+
+        for primitive_type in [
+            PrimitiveType::Geometry(GeometryType::default()),
+            PrimitiveType::Geography(GeographyType::default()),
+        ] {
+            assert_eq!(
+                get_parquet_stat_min_as_datum(&primitive_type, &stats).unwrap(),
+                None
+            );
+            assert_eq!(
+                get_parquet_stat_max_as_datum(&primitive_type, &stats).unwrap(),
+                None
+            );
+        }
     }
 
     #[test]
@@ -2490,6 +2958,8 @@ mod tests {
             Field::new("id", DataType::Int64, false),
             Field::new("name", DataType::Utf8, true),
             Field::new("price", DataType::Decimal128(10, 2), false),
+            Field::new("uuid", DataType::FixedSizeBinary(16), false)
+                .with_extension_type(UuidExtensionType),
             Field::new(
                 "created_at",
                 DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
@@ -2541,9 +3011,9 @@ mod tests {
         let schema = arrow_schema_to_schema_auto_assign_ids(&arrow_schema).unwrap();
 
         // Build expected schema with exact field IDs following level-order assignment:
-        // Level 0: id=1, name=2, price=3, created_at=4, tags=5, address=6, attributes=7, orders=8
-        // Level 1: tags.element=9, address.{street=10,city=11,zip=12}, attributes.{key=13,value=14}, orders.element=15
-        // Level 2: orders.element.{order_id=16,amount=17}
+        // Level 0: id=1, name=2, price=3, uuid=4, created_at=5, tags=6, address=7, attributes=8, orders=9
+        // Level 1: tags.element=10, address.{street=11,city=12,zip=13}, attributes.{key=14,value=15}, orders.element=16
+        // Level 2: orders.element.{order_id=17,amount=18}
         let expected = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
@@ -2557,14 +3027,15 @@ mod tests {
                     }),
                 )
                 .into(),
-                NestedField::optional(4, "created_at", Type::Primitive(PrimitiveType::Timestamptz))
+                NestedField::required(4, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
+                NestedField::optional(5, "created_at", Type::Primitive(PrimitiveType::Timestamptz))
                     .into(),
                 NestedField::optional(
-                    5,
+                    6,
                     "tags",
                     Type::List(ListType {
                         element_field: NestedField::list_element(
-                            9,
+                            10,
                             Type::Primitive(PrimitiveType::String),
                             false,
                         )
@@ -2573,29 +3044,29 @@ mod tests {
                 )
                 .into(),
                 NestedField::optional(
-                    6,
+                    7,
                     "address",
                     Type::Struct(StructType::new(vec![
-                        NestedField::optional(10, "street", Type::Primitive(PrimitiveType::String))
+                        NestedField::optional(11, "street", Type::Primitive(PrimitiveType::String))
                             .into(),
-                        NestedField::required(11, "city", Type::Primitive(PrimitiveType::String))
+                        NestedField::required(12, "city", Type::Primitive(PrimitiveType::String))
                             .into(),
-                        NestedField::optional(12, "zip", Type::Primitive(PrimitiveType::Int))
+                        NestedField::optional(13, "zip", Type::Primitive(PrimitiveType::Int))
                             .into(),
                     ])),
                 )
                 .into(),
                 NestedField::optional(
-                    7,
+                    8,
                     "attributes",
                     Type::Map(MapType {
                         key_field: NestedField::map_key_element(
-                            13,
+                            14,
                             Type::Primitive(PrimitiveType::String),
                         )
                         .into(),
                         value_field: NestedField::map_value_element(
-                            14,
+                            15,
                             Type::Primitive(PrimitiveType::String),
                             false,
                         )
@@ -2604,20 +3075,20 @@ mod tests {
                 )
                 .into(),
                 NestedField::optional(
-                    8,
+                    9,
                     "orders",
                     Type::List(ListType {
                         element_field: NestedField::list_element(
-                            15,
+                            16,
                             Type::Struct(StructType::new(vec![
                                 NestedField::required(
-                                    16,
+                                    17,
                                     "order_id",
                                     Type::Primitive(PrimitiveType::Long),
                                 )
                                 .into(),
                                 NestedField::required(
-                                    17,
+                                    18,
                                     "amount",
                                     Type::Primitive(PrimitiveType::Double),
                                 )
@@ -2634,7 +3105,7 @@ mod tests {
             .unwrap();
 
         pretty_assertions::assert_eq!(schema, expected);
-        assert_eq!(schema.highest_field_id(), 17);
+        assert_eq!(schema.highest_field_id(), 18);
     }
 
     fn decimal_byte_array_stats(min: Vec<u8>, max: Vec<u8>) -> Statistics {

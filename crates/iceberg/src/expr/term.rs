@@ -433,8 +433,8 @@ mod tests {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
-                    NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
+                    NestedField::optional(1, "id", PrimitiveType::Int).into(),
+                    NestedField::optional(2, "ID", PrimitiveType::Int).into(),
                 ])
                 .build()
                 .unwrap(),
