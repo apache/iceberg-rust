@@ -16,14 +16,12 @@
 // under the License.
 
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
-use iceberg::CatalogBuilder;
 use iceberg::io::{
     S3_ACCESS_KEY_ID, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
-use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalog, RestCatalogBuilder};
-use iceberg_storage_opendal::OpenDalStorageFactory;
+use iceberg_catalog_rest::REST_CATALOG_PROP_URI;
 use iceberg_test_utils::{get_object_store_endpoint, get_rest_catalog_endpoint, set_up};
 
 /// Global test fixture that uses environment-based configuration.

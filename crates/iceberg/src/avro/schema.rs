@@ -38,7 +38,6 @@ const FIELD_ID_PROP: &str = "field-id";
 const KEY_ID: &str = "key-id";
 const VALUE_ID: &str = "value-id";
 const MAP_LOGICAL_TYPE: &str = "map";
-const UUID_LOGICAL_TYPE: &str = "uuid";
 // This const may better to maintain in avro-rs.
 const LOGICAL_TYPE: &str = "logicalType";
 
@@ -55,6 +54,7 @@ impl SchemaToAvroSchema {
     fn define_once(&mut self, schema: AvroSchema) -> AvroSchema {
         let name = match &schema {
             AvroSchema::Fixed(FixedSchema { name, .. })
+            | AvroSchema::Uuid(UuidSchema::Fixed(FixedSchema { name, .. }))
             | AvroSchema::Decimal(DecimalSchema {
                 inner: InnerDecimalSchema::Fixed(FixedSchema { name, .. }),
                 ..
@@ -272,8 +272,6 @@ impl SchemaVisitor for SchemaToAvroSchema {
             PrimitiveType::TimestampNs => AvroSchema::TimestampNanos,
             PrimitiveType::TimestamptzNs => AvroSchema::TimestampNanos,
             PrimitiveType::String => AvroSchema::String,
-            // TODO(#2913): write the spec's `fixed[16]` uuid. The manifest reader
-            // already accepts both forms.
             PrimitiveType::Uuid => self.define_once(avro_uuid_schema()?),
             PrimitiveType::Fixed(len) => self.define_once(avro_fixed_schema((*len) as usize)?),
             PrimitiveType::Binary | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
@@ -336,17 +334,13 @@ pub(crate) fn avro_fixed_schema(len: usize) -> Result<AvroSchema> {
 /// The Iceberg spec maps `uuid` to `{"type": "fixed", "size": 16, "logicalType": "uuid"}`,
 /// i.e. 16 raw bytes, which is what iceberg-java writes.
 fn avro_uuid_schema() -> Result<AvroSchema> {
-    Ok(AvroSchema::Fixed(FixedSchema {
+    Ok(AvroSchema::Uuid(UuidSchema::Fixed(FixedSchema {
         name: Name::new("uuid_fixed")?,
         aliases: None,
         doc: None,
         size: 16,
-        attributes: BTreeMap::from_iter([(
-            LOGICAL_TYPE.to_string(),
-            Value::String(UUID_LOGICAL_TYPE.to_string()),
-        )]),
-        default: None,
-    }))
+        attributes: Default::default(),
+    })))
 }
 
 pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<AvroSchema> {

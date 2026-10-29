@@ -109,6 +109,7 @@ pub(crate) mod _serde {
         Double(f64),
         String(String),
         Bytes(ByteBuf),
+        Uuid(#[serde(serialize_with = "apache_avro::serde::fixed::serialize")] [u8; 16]),
         List(List),
         StringMap(StringMap),
         Record(Record),
@@ -290,6 +291,9 @@ pub(crate) mod _serde {
                     PrimitiveLiteral::Float(v) => RawLiteralEnum::Float(v.0),
                     PrimitiveLiteral::Double(v) => RawLiteralEnum::Double(v.0),
                     PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
+                    PrimitiveLiteral::UInt128(v) if *ty == Type::Primitive(PrimitiveType::Uuid) => {
+                        RawLiteralEnum::Uuid(v.to_be_bytes())
+                    }
                     PrimitiveLiteral::UInt128(v) => {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
                     }
@@ -482,6 +486,12 @@ pub(crate) mod _serde {
                             invalid_err_with_reason("string", "UUID must be a valid UUID string")
                         }),
                     _ => Err(invalid_err("string")),
+                },
+                RawLiteralEnum::Uuid(v) => match ty {
+                    Type::Primitive(PrimitiveType::Uuid) => {
+                        Ok(Some(Literal::uuid(Uuid::from_bytes(v))))
+                    }
+                    _ => Err(invalid_err("uuid")),
                 },
                 RawLiteralEnum::Bytes(v) => match ty {
                     Type::Primitive(PrimitiveType::Binary) => Ok(Some(Literal::binary(v.to_vec()))),
