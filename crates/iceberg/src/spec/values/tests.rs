@@ -1197,13 +1197,13 @@ fn test_avro_should_convert_uuid_as_uuid() {
 }
 
 #[test]
-fn test_avro_should_serialize_uuid_as_fixed_16_bytes() {
+fn test_avro_should_serialize_uuid_as_original_uuid() {
     let uuid = Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap();
 
     check_serialize_avro(
         Literal::uuid(uuid),
         &Primitive(PrimitiveType::Uuid),
-        Value::Fixed(16, uuid.as_bytes().to_vec()),
+        Value::Uuid(uuid),
     );
 }
 
