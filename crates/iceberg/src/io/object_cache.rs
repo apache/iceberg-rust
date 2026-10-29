@@ -126,6 +126,15 @@ impl ObjectCache {
         }
     }
 
+    pub(crate) fn with_file_io(&self, file_io: FileIO) -> Self {
+        Self {
+            cache: self.cache.clone(),
+            file_io,
+            cache_disabled: self.cache_disabled,
+            encryption_manager: self.encryption_manager.clone(),
+        }
+    }
+
     /// Retrieves an Arc [`Manifest`] from the cache
     /// or retrieves one from FileIO and parses it if not present
     pub(crate) async fn get_manifest(&self, manifest_file: &ManifestFile) -> Result<Arc<Manifest>> {
@@ -518,6 +527,62 @@ mod tests {
                 .unwrap(),
             "1.parquet"
         );
+    }
+
+    #[tokio::test]
+    async fn test_table_runtime_rebinding_preserves_cached_manifests() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let snapshot = fixture.table.metadata().current_snapshot().unwrap().clone();
+        let metadata = fixture.table.metadata_ref();
+        let cache = fixture.table.object_cache();
+        let list = cache.get_manifest_list(&snapshot, &metadata).await.unwrap();
+        let file = &list.entries()[0];
+        let manifest = cache.get_manifest(file).await.unwrap();
+
+        // A cache miss now fails. Rebinding must retain the parsed entries, not just capacity.
+        fs::remove_file(snapshot.manifest_list()).unwrap();
+        fs::remove_file(&file.manifest_path).unwrap();
+        let rebound = fixture.table.with_runtime(crate::Runtime::current());
+        let rebound_cache = rebound.object_cache();
+        let cached_list = rebound_cache
+            .get_manifest_list(&snapshot, &metadata)
+            .await
+            .unwrap();
+        let cached_manifest = rebound_cache.get_manifest(file).await.unwrap();
+        assert!(Arc::ptr_eq(&list, &cached_list));
+        assert!(Arc::ptr_eq(&manifest, &cached_manifest));
+    }
+
+    #[tokio::test]
+    async fn test_table_runtime_rebinding_moves_cache_misses() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let snapshot = fixture.table.metadata().current_snapshot().unwrap().clone();
+        let metadata = fixture.table.metadata_ref();
+        let old_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let table = fixture
+            .table
+            .with_runtime(crate::Runtime::new(&old_runtime));
+        old_runtime.shutdown_background();
+
+        // No entries have been cached. The old IO runtime can no longer service a miss.
+        assert!(
+            table
+                .object_cache()
+                .get_manifest_list(&snapshot, &metadata)
+                .await
+                .is_err()
+        );
+        let rebound = table.with_runtime(crate::Runtime::current());
+        let cache = rebound.object_cache();
+        let list = cache.get_manifest_list(&snapshot, &metadata).await.unwrap();
+        assert_eq!(list.entries().len(), 1);
+        let manifest = cache.get_manifest(&list.entries()[0]).await.unwrap();
+        assert_eq!(manifest.entries().len(), 1);
     }
 
     #[tokio::test]

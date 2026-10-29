@@ -412,7 +412,10 @@ impl SqlCatalog {
         install_default_drivers();
         // Forward the complete property map so storage-backend keys reach FileIO.
         // Unrecognized keys are ignored by backends.
-        let fileio = FileIOBuilder::new(factory).with_props(props).build();
+        let fileio = FileIOBuilder::new(factory)
+            .with_props(props)
+            .with_runtime(runtime.clone())
+            .build();
 
         let pool = AnyPoolOptions::new()
             .max_connections(properties.max_connections)

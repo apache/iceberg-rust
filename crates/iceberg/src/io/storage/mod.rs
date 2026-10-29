@@ -20,6 +20,7 @@
 mod config;
 mod local_fs;
 mod memory;
+mod runtime;
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -30,6 +31,7 @@ pub use config::*;
 use futures::stream::BoxStream;
 pub use local_fs::{LocalFsStorage, LocalFsStorageFactory};
 pub use memory::{MemoryStorage, MemoryStorageFactory};
+pub(crate) use runtime::RuntimeStorage;
 
 use super::{FileMetadata, FileRead, FileWrite, InputFile, OutputFile};
 use crate::Result;

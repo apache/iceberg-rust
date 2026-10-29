@@ -162,6 +162,7 @@ impl TableBuilder {
         let encryption_manager =
             EncryptionManager::from_table_metadata(kms_client.as_ref(), &metadata)?;
 
+        let file_io = file_io.with_runtime(runtime.clone());
         let object_cache = if disable_cache {
             Arc::new(ObjectCache::with_disabled_cache(
                 file_io.clone(),
@@ -221,9 +222,12 @@ impl Table {
 
     /// Returns this table bound to `runtime`, sharing its manifest cache.
     ///
-    /// Tasks such as scan planning and reads are spawned on `runtime`. A table rebuilt
-    /// through [`Table::builder`] starts with an empty cache.
+    /// Tasks such as scan planning and reads are spawned on `runtime`. Storage operations,
+    /// including cache misses, use its IO handle. Existing cached manifests remain shared.
+    /// A table rebuilt through [`Table::builder`] starts with an empty cache.
     pub fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.file_io = self.file_io.with_runtime(runtime.clone());
+        self.object_cache = Arc::new(self.object_cache.with_file_io(self.file_io.clone()));
         self.runtime = runtime;
         self
     }
@@ -507,7 +511,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_table_with_runtime_moves_work_and_keeps_object_cache() {
+    async fn test_table_with_runtime_moves_work_and_file_io() {
         let old = tokio::runtime::Builder::new_current_thread()
             .build()
             .unwrap();
@@ -524,7 +528,7 @@ mod tests {
 
         let rebound = table.clone().with_runtime(Runtime::try_current().unwrap());
 
-        assert!(Arc::ptr_eq(&table.object_cache(), &rebound.object_cache()));
+        assert!(!rebound.file_io().exists("memory://missing").await.unwrap());
         assert_eq!(
             rebound.runtime().io().spawn(async { 42 }).await.unwrap(),
             42

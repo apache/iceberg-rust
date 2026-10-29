@@ -244,6 +244,7 @@ impl HmsCatalog {
         })?;
         let file_io = FileIOBuilder::new(factory)
             .with_props(&config.props)
+            .with_runtime(runtime.clone())
             .build();
 
         Ok(Self {
