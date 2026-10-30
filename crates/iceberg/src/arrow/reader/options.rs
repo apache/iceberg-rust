@@ -52,7 +52,7 @@ pub struct ArrowReaderOptions {
     /// Desired batch size, or the reader default when unset.
     #[builder(default = None, setter(strip_option))]
     batch_size: Option<usize>,
-    /// Maximum in-flight data files, or execution-host parallelism when unset.
+    /// Maximum in-flight data files, or the construction path's default when unset.
     #[builder(default = None, setter(strip_option))]
     data_file_concurrency_limit: Option<usize>,
     /// Whether to prune row groups using their statistics.
@@ -73,6 +73,11 @@ impl Default for ArrowReaderOptions {
 }
 
 impl ArrowReaderOptions {
+    pub(crate) fn with_default_data_file_concurrency_limit(mut self, limit: usize) -> Self {
+        self.data_file_concurrency_limit.get_or_insert(limit);
+        self
+    }
+
     /// Returns the configured batch size.
     pub fn batch_size(&self) -> Option<usize> {
         self.batch_size
@@ -80,7 +85,8 @@ impl ArrowReaderOptions {
 
     /// Returns the configured data file concurrency limit.
     ///
-    /// Unset limits use execution-host parallelism; zero is treated as one.
+    /// When unset, `TableScan::to_arrow` inherits the scan's data-file limit, while
+    /// direct reader construction uses execution-host parallelism. Zero is treated as one.
     pub fn data_file_concurrency_limit(&self) -> Option<usize> {
         self.data_file_concurrency_limit
     }
@@ -202,6 +208,27 @@ mod tests {
         .expect("zero concurrency must not stall the task stream")
         .unwrap();
         assert!(batches.is_empty());
+    }
+
+    #[test]
+    fn default_data_file_concurrency_preserves_explicit_options() {
+        for (configured, expected) in [(None, 7), (Some(3), 3), (Some(0), 0)] {
+            let options: ArrowReaderOptions = serde_json::from_value(serde_json::json!({
+                "batch_size": 17,
+                "data_file_concurrency_limit": configured,
+                "row_selection_enabled": true,
+            }))
+            .unwrap();
+            let expected = ArrowReaderOptions::builder()
+                .with_batch_size(17)
+                .with_data_file_concurrency_limit(expected)
+                .with_row_selection_enabled(true)
+                .build();
+            assert_eq!(
+                options.with_default_data_file_concurrency_limit(7),
+                expected
+            );
+        }
     }
 
     #[test]
