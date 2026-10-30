@@ -42,6 +42,7 @@ use crate::arrow::build_partition_constant;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
+use crate::arrow::runtime_file_read::RuntimeFileRead;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::encryption::StandardKeyMetadata;
 use crate::error::{Result, invalid_data};
@@ -169,6 +170,7 @@ impl FileScanTaskReader {
         let file_size_in_bytes = task.file_size_in_bytes();
         let bytes_read = Arc::clone(self.scan_metrics.bytes_read_counter());
         let key_metadata = task.key_metadata().map(|km| km.to_vec());
+        let runtime = self.runtime.clone();
         let opening = self
             .runtime
             .io()
@@ -176,6 +178,7 @@ impl FileScanTaskReader {
                 ArrowReader::open_parquet_file(
                     &path,
                     &file_io,
+                    &runtime,
                     file_size_in_bytes,
                     parquet_read_options,
                     &bytes_read,
@@ -815,14 +818,14 @@ impl ArrowReader {
     pub(crate) async fn open_parquet_file(
         data_file_path: &str,
         file_io: &FileIO,
+        runtime: &Runtime,
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
         bytes_read: &Arc<AtomicU64>,
         key_metadata: Option<&[u8]>,
     ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
-        let parquet_file = file_io.new_input(data_file_path)?;
-        let counting_reader =
-            CountingFileRead::new(parquet_file.reader().await?, Arc::clone(bytes_read));
+        let reader = RuntimeFileRead::open(file_io, data_file_path, runtime.io()).await?;
+        let counting_reader = CountingFileRead::new(reader, Arc::clone(bytes_read));
         Self::build_parquet_reader(
             Box::new(counting_reader),
             file_size_in_bytes,
