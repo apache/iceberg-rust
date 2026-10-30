@@ -545,6 +545,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_overwrite_deletes_every_live_copy_of_a_path() {
+        let catalog = new_memory_catalog().await;
+        let mut table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let file_a = test_data_file(
+            "test/a.parquet",
+            table.metadata().default_partition_spec_id(),
+        );
+        for _ in 0..2 {
+            let tx = Transaction::new(&table);
+            let action = tx
+                .fast_append()
+                .with_check_duplicate(false)
+                .add_data_files(vec![file_a.clone()]);
+            table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+        }
+
+        let tx = Transaction::new(&table);
+        let action = tx.overwrite().delete_data_files(vec![file_a]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let summary = table.metadata().current_snapshot().unwrap().summary();
+        assert_eq!(summary.additional_properties["deleted-data-files"], "2");
+        assert_eq!(summary.additional_properties["total-data-files"], "0");
+    }
+
+    #[tokio::test]
     async fn test_delete_only_overwrite_reports_a_delete_operation() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
