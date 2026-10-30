@@ -177,7 +177,6 @@ impl TransactionAction for OverwriteAction {
         // One per tombstone written, so a path live in several manifests counts each copy.
         let mut removed_files = vec![];
 
-        // TODO: read these manifests concurrently, as `validate_files_not_live` does.
         for manifest_file in current_manifests(table).await? {
             if manifest_file.content == ManifestContentType::Deletes || deleted_files.is_empty() {
                 manifests.push(manifest_file);
