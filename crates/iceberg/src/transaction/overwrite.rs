@@ -644,6 +644,10 @@ mod tests {
         let summary = table.metadata().current_snapshot().unwrap().summary();
         assert_eq!(summary.additional_properties["deleted-data-files"], "2");
         assert_eq!(summary.additional_properties["total-data-files"], "0");
+        assert_eq!(current_manifest_entries(&table).await, [
+            (ManifestStatus::Deleted, "test/a.parquet".to_string()),
+            (ManifestStatus::Deleted, "test/a.parquet".to_string()),
+        ]);
     }
 
     #[tokio::test]
