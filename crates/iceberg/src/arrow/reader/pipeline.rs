@@ -4072,10 +4072,11 @@ mod tests {
         const CONCURRENCY: usize = 2;
         /// Smaller than a footer, so one open takes more than one request.
         const METADATA_SIZE_HINT: usize = 64;
-        /// Bytes one open reads: the hint, then the footer and its indexes.
+        /// Bytes one open reads: the hint, then the rest of the footer. The scan has
+        /// no predicate, so the open skips the page indexes.
         /// The footer stores the writer's `created_by` version, so a `parquet`
         /// upgrade can change this.
-        const OPEN_BYTES: u64 = 547;
+        const OPEN_BYTES: u64 = 514;
         /// Scheduler turns, far more than a request needs. A bound only because
         /// `#[tokio::test]` runs the test and the spawned reads on one thread.
         const YIELDS: usize = 100;
