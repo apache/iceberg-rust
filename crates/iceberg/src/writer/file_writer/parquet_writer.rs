@@ -379,7 +379,10 @@ impl MinMaxColAggregator {
                 ));
             };
 
-            self.update_state_min(field_id, min_datum);
+            // Iceberg bounds must not be NaN.
+            if !min_datum.is_nan() {
+                self.update_state_min(field_id, min_datum);
+            }
         }
 
         if value.max_is_exact() {
@@ -390,7 +393,9 @@ impl MinMaxColAggregator {
                 ));
             };
 
-            self.update_state_max(field_id, max_datum);
+            if !max_datum.is_nan() {
+                self.update_state_max(field_id, max_datum);
+            }
         }
 
         Ok(())
@@ -2497,6 +2502,79 @@ mod tests {
         assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 0);
     }
 
+    #[tokio::test]
+    async fn test_parquet_writer_uuid_logical_type() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+        let output_file = file_io
+            .new_output(location_gen.generate_location(None, &file_name_gen.generate_file_name()))
+            .unwrap();
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, "uuid", Type::Primitive(PrimitiveType::Uuid)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let col = Arc::new(
+            arrow_array::FixedSizeBinaryArray::try_from_iter(
+                [Uuid::from_u128(0), Uuid::from_u128(1)]
+                    .into_iter()
+                    .map(|uuid| uuid.into_bytes()),
+            )
+            .unwrap(),
+        ) as ArrayRef;
+        let to_write = RecordBatch::try_new(arrow_schema, vec![col]).unwrap();
+
+        let mut pw = ParquetWriterBuilder::new(WriterProperties::builder().build(), schema)
+            .build(output_file)
+            .await
+            .unwrap();
+        pw.write(&to_write).await.unwrap();
+        let data_file = pw
+            .close()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        let raw = file_io
+            .new_input(data_file.file_path.clone())
+            .unwrap()
+            .read()
+            .await
+            .unwrap();
+        let reader = ParquetRecordBatchReaderBuilder::try_new(raw).unwrap();
+        let column = reader.metadata().file_metadata().schema_descr().column(0);
+        assert_eq!(
+            (
+                column.physical_type(),
+                column.type_length(),
+                column.logical_type_ref()
+            ),
+            (
+                parquet::basic::Type::FIXED_LEN_BYTE_ARRAY,
+                16,
+                Some(&parquet::basic::LogicalType::Uuid)
+            )
+        );
+    }
+
     #[test]
     fn test_min_max_aggregator() {
         let schema = Arc::new(
@@ -2530,6 +2608,40 @@ mod tests {
 
         assert_eq!(lower_bounds, HashMap::from([(0, Datum::int(i32::MIN))]));
         assert_eq!(upper_bounds, HashMap::from([(0, Datum::int(i32::MAX))]));
+    }
+
+    #[test]
+    fn test_min_max_aggregator_skips_nan_bounds() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, "f", Type::Primitive(PrimitiveType::Float)).into(),
+                    NestedField::required(1, "d", Type::Primitive(PrimitiveType::Double)).into(),
+                ])
+                .build()
+                .expect("Failed to create schema"),
+        );
+        let mut min_max_agg = MinMaxColAggregator::new(schema);
+        let float_stats =
+            |min, max| Statistics::Float(ValueStatistics::new(min, max, None, None, false));
+        let double_stats =
+            |min, max| Statistics::Double(ValueStatistics::new(min, max, None, None, false));
+
+        min_max_agg
+            .update(0, &float_stats(Some(-f32::NAN), Some(f32::NAN)))
+            .unwrap();
+        min_max_agg
+            .update(0, &float_stats(Some(1.5), Some(2.5)))
+            .unwrap();
+        min_max_agg
+            .update(1, &double_stats(Some(f64::NAN), Some(f64::NAN)))
+            .unwrap();
+
+        let (lower_bounds, upper_bounds) = min_max_agg.produce();
+
+        assert_eq!(lower_bounds, HashMap::from([(0, Datum::float(1.5_f32))]));
+        assert_eq!(upper_bounds, HashMap::from([(0, Datum::float(2.5_f32))]));
     }
 
     fn cdc_test_schema() -> SchemaRef {

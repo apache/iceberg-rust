@@ -160,6 +160,7 @@ impl ArrowReaderBuilder {
             row_selection_enabled: self.row_selection_enabled,
             bloom_filter_enabled: self.bloom_filter_enabled,
             parquet_read_options: self.parquet_read_options,
+            runtime: self.runtime.clone(),
         }
     }
 }
@@ -178,4 +179,5 @@ pub struct ArrowReader {
     row_selection_enabled: bool,
     bloom_filter_enabled: bool,
     parquet_read_options: ParquetReadOptions,
+    runtime: Runtime,
 }
