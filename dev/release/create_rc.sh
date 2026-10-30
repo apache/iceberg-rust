@@ -307,7 +307,9 @@ check_rc_tag_available() {
 }
 
 check_dependency_licenses() {
-  "${SCRIPT_DIR}/dependencies.sh" check
+  require_command make
+  require_command python3
+  make -C "${REPO_ROOT}" check-dependency-licenses
 }
 
 # Packages and builds every crate as `cargo publish` would, without uploading,
