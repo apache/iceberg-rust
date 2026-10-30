@@ -34,11 +34,10 @@ use crate::transaction::snapshot::{
 use crate::transaction::{ActionCommit, TransactionAction};
 use crate::{Error, ErrorKind};
 
-/// OverwriteAction is a transaction action for overwriting data files in the table.
+/// Adds data files and removes listed data files by path.
 ///
-/// Creates a snapshot with `Operation::Overwrite` semantics — adds new data files and
-/// optionally removes existing data files by rewriting affected manifests with those
-/// entries marked as `ManifestStatus::Deleted`.
+/// The operation is `Overwrite` when files are both added and removed, otherwise `Delete` or
+/// `Append`. There is no row-filter mode, and files committed concurrently are not checked.
 #[derive(Clone)]
 pub struct OverwriteAction {
     check_duplicate: bool,
@@ -302,13 +301,14 @@ mod tests {
 
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, ManifestListWriter,
-        ManifestStatus, ManifestWriterBuilder, NestedField, Operation, PrimitiveType, Schema,
-        SnapshotRef, Struct, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, Literal,
+        ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, Operation,
+        PrimitiveType, Schema, SnapshotRef, Struct, Transform, Type, UnboundPartitionField,
+        UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::commit_with_fresh_state;
-    use crate::transaction::tests::make_v3_minimal_table_in_catalog;
+    use crate::transaction::tests::{make_v2_minimal_table, make_v3_minimal_table_in_catalog};
     use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
     use crate::{Catalog, ErrorKind, TableCommit, TableCreation, TableUpdate};
 
@@ -386,7 +386,20 @@ mod tests {
     #[tokio::test]
     async fn test_second_overwrite_does_not_resurrect_a_deleted_file() {
         let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let base = make_v3_minimal_table_in_catalog(&catalog).await;
+        let v2 = make_v2_minimal_table();
+        let table = catalog
+            .create_table(
+                base.identifier().namespace(),
+                TableCreation::builder()
+                    .name("v2".to_string())
+                    .schema(v2.metadata().current_schema().as_ref().clone())
+                    .partition_spec(v2.metadata().default_partition_spec().as_ref().clone())
+                    .format_version(FormatVersion::V2)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let spec_id = table.metadata().default_partition_spec_id();
 
         let file_a = test_data_file("test/a.parquet", spec_id);
@@ -411,13 +424,11 @@ mod tests {
             .delete_data_files(vec![file_b.clone()]);
         let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
 
-        let entries = current_manifest_entries(&table).await;
-        assert!(
-            !entries.iter().any(
-                |(status, path)| path == "test/a.parquet" && *status != ManifestStatus::Deleted
-            ),
-            "the first overwrite's delete must not come back, entries: {entries:?}"
-        );
+        assert_eq!(current_manifest_entries(&table).await, vec![
+            (ManifestStatus::Deleted, "test/b.parquet".to_string()),
+            (ManifestStatus::Added, "test/c.parquet".to_string()),
+            (ManifestStatus::Added, "test/d.parquet".to_string()),
+        ]);
     }
 
     #[tokio::test]
@@ -664,7 +675,7 @@ mod tests {
                         .name(format!("promoted-{transform}"))
                         .schema(schema)
                         .partition_spec(spec)
-                        .format_version(crate::spec::FormatVersion::V3)
+                        .format_version(FormatVersion::V3)
                         .build(),
                 )
                 .await
@@ -772,41 +783,49 @@ mod tests {
             .commit(&catalog)
             .await
             .unwrap();
+        let partition_mismatch = |requested: &Struct| {
+            format!(
+                "partition: requested {requested:?}, table has {:?}",
+                file.partition
+            )
+        };
+        let long_partition = Struct::from_iter([Some(Literal::long(999))]);
+        let string_partition = Struct::from_iter([Some(Literal::string("invalid"))]);
         for (incorrect, mismatch) in [
             (
                 DataFile {
                     record_count: 99,
                     ..file.clone()
                 },
-                "record_count: requested 99, table has 1",
+                "record_count: requested 99, table has 1".to_string(),
             ),
             (
                 DataFile {
                     file_size_in_bytes: 999,
                     ..file.clone()
                 },
-                "file_size_in_bytes: requested 999, table has 100",
+                "file_size_in_bytes: requested 999, table has 100".to_string(),
             ),
             (
                 DataFile {
-                    partition: Struct::from_iter([Some(Literal::long(999))]),
+                    partition: long_partition.clone(),
                     ..file.clone()
                 },
-                "partition: requested Struct { fields: [Some(Primitive(Long(999)))] }, table has Struct { fields: [Some(Primitive(Long(300)))] }",
+                partition_mismatch(&long_partition),
             ),
             (
                 DataFile {
                     partition_spec_id: 99,
                     ..file.clone()
                 },
-                "partition_spec_id: requested 99, table has 0",
+                "partition_spec_id: requested 99, table has 0".to_string(),
             ),
             (
                 DataFile {
-                    partition: Struct::from_iter([Some(Literal::string("invalid"))]),
+                    partition: string_partition.clone(),
                     ..file.clone()
                 },
-                "partition: requested",
+                partition_mismatch(&string_partition),
             ),
         ] {
             let action = Transaction::new(&table)
@@ -814,7 +833,7 @@ mod tests {
                 .delete_data_files(vec![incorrect]);
             let err = commit_with_fresh_state(action, &table).await.err().unwrap();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
-            assert!(err.message().contains(mismatch));
+            assert!(err.message().contains(&mismatch), "{err}");
         }
     }
 
