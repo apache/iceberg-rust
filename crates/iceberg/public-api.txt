@@ -824,6 +824,7 @@ impl iceberg::io::FileIOBuilder
 pub fn iceberg::io::FileIOBuilder::build(self) -> iceberg::io::FileIO
 pub fn iceberg::io::FileIOBuilder::config(&self) -> &iceberg::io::StorageConfig
 pub fn iceberg::io::FileIOBuilder::new(factory: alloc::sync::Arc<dyn iceberg::io::StorageFactory>) -> Self
+pub fn iceberg::io::FileIOBuilder::with_config(self, config: iceberg::io::StorageConfig) -> Self
 pub fn iceberg::io::FileIOBuilder::with_prop(self, key: impl alloc::string::ToString, value: impl alloc::string::ToString) -> Self
 pub fn iceberg::io::FileIOBuilder::with_props(self, args: impl core::iter::traits::collect::IntoIterator<Item = (impl alloc::string::ToString, impl alloc::string::ToString)>) -> Self
 impl core::clone::Clone for iceberg::io::FileIOBuilder
@@ -1046,6 +1047,7 @@ pub fn iceberg::io::StorageConfig::from_props(props: std::collections::hash::map
 pub fn iceberg::io::StorageConfig::get(&self, key: &str) -> core::option::Option<&alloc::string::String>
 pub fn iceberg::io::StorageConfig::new() -> Self
 pub fn iceberg::io::StorageConfig::props(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub fn iceberg::io::StorageConfig::storage_credentials(&self) -> &[iceberg::io::StorageCredential]
 pub fn iceberg::io::StorageConfig::with_prop(self, key: impl core::convert::Into<alloc::string::String>, value: impl core::convert::Into<alloc::string::String>) -> Self
 pub fn iceberg::io::StorageConfig::with_props(self, props: impl core::iter::traits::collect::IntoIterator<Item = (impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>)>) -> Self
 impl core::clone::Clone for iceberg::io::StorageConfig
@@ -1073,10 +1075,29 @@ pub fn iceberg::io::StorageConfig::default() -> iceberg::io::StorageConfig
 impl core::fmt::Debug for iceberg::io::StorageConfig
 pub fn iceberg::io::StorageConfig::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::io::StorageConfig
+impl iceberg::io::StorageConfig
+pub fn iceberg::io::StorageConfig::builder() -> StorageConfigBuilder<((), ())>
 impl serde_core::ser::Serialize for iceberg::io::StorageConfig
 pub fn iceberg::io::StorageConfig::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::io::StorageConfig
 pub fn iceberg::io::StorageConfig::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::io::StorageCredential
+impl iceberg::io::StorageCredential
+pub fn iceberg::io::StorageCredential::config(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub fn iceberg::io::StorageCredential::new(prefix: impl core::convert::Into<alloc::string::String>, config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg::io::StorageCredential::prefix(&self) -> &str
+impl core::clone::Clone for iceberg::io::StorageCredential
+pub fn iceberg::io::StorageCredential::clone(&self) -> iceberg::io::StorageCredential
+impl core::cmp::Eq for iceberg::io::StorageCredential
+impl core::cmp::PartialEq for iceberg::io::StorageCredential
+pub fn iceberg::io::StorageCredential::eq(&self, other: &iceberg::io::StorageCredential) -> bool
+impl core::fmt::Debug for iceberg::io::StorageCredential
+pub fn iceberg::io::StorageCredential::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::io::StorageCredential
+impl serde_core::ser::Serialize for iceberg::io::StorageCredential
+pub fn iceberg::io::StorageCredential::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::io::StorageCredential
+pub fn iceberg::io::StorageCredential::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub const iceberg::io::ADLS_ACCOUNT_KEY: &str
 pub const iceberg::io::ADLS_ACCOUNT_NAME: &str
 pub const iceberg::io::ADLS_AUTHORITY_HOST: &str

@@ -28,7 +28,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{
-    ADLS_SAS_TOKEN, FileIO, FileIOBuilder, GCS_TOKEN, S3_SESSION_TOKEN, StorageFactory,
+    ADLS_SAS_TOKEN, FileIO, FileIOBuilder, GCS_TOKEN, S3_SESSION_TOKEN, StorageConfig,
+    StorageCredential, StorageFactory,
 };
 use iceberg::table::Table;
 use iceberg::{
@@ -987,6 +988,7 @@ impl RestSessionCatalog {
         &self,
         metadata_location: Option<&str>,
         extra_config: Option<HashMap<String, String>>,
+        storage_credentials: Option<Vec<StorageCredential>>,
     ) -> Result<FileIO> {
         let mut props = self.client().await?.config.props.clone();
         if let Some(config) = extra_config {
@@ -1019,7 +1021,11 @@ impl RestSessionCatalog {
                 )
             })?;
 
-        let file_io = FileIOBuilder::new(factory).with_props(props).build();
+        let config = StorageConfig::builder()
+            .props(props)
+            .storage_credentials(storage_credentials.unwrap_or_default())
+            .build();
+        let file_io = FileIOBuilder::new(factory).with_config(config).build();
 
         Ok(file_io)
     }
@@ -1342,7 +1348,11 @@ impl SessionCatalog for RestSessionCatalog {
             .collect();
 
         let file_io = self
-            .load_file_io(Some(metadata_location), Some(config))
+            .load_file_io(
+                Some(metadata_location),
+                Some(config),
+                response.storage_credentials,
+            )
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1439,7 +1449,11 @@ impl SessionCatalog for RestSessionCatalog {
             .collect();
 
         let file_io = self
-            .load_file_io(response.metadata_location.as_deref(), Some(config))
+            .load_file_io(
+                response.metadata_location.as_deref(),
+                Some(config),
+                response.storage_credentials,
+            )
             .await?;
 
         let mut table_builder = Table::builder()
@@ -1590,7 +1604,19 @@ impl SessionCatalog for RestSessionCatalog {
             "Metadata location missing in `register_table` response!",
         ))?;
 
-        let file_io = self.load_file_io(Some(metadata_location), None).await?;
+        let config = response
+            .config
+            .into_iter()
+            .chain(self.user_config.props.clone())
+            .collect();
+
+        let file_io = self
+            .load_file_io(
+                Some(metadata_location),
+                Some(config),
+                response.storage_credentials,
+            )
+            .await?;
 
         let mut table_builder = Table::builder()
             .identifier(table_ident.clone())
@@ -1670,7 +1696,7 @@ impl SessionCatalog for RestSessionCatalog {
         };
 
         let file_io = self
-            .load_file_io(Some(&response.metadata_location), None)
+            .load_file_io(Some(&response.metadata_location), None, None)
             .await?;
 
         let mut table_builder = Table::builder()
@@ -4761,6 +4787,49 @@ mod tests {
         load.assert_async().await;
     }
 
+    /// A `loadTable` body vending a storage credential, and that credential.
+    fn load_table_body_with_credential() -> (serde_json::Value, StorageCredential) {
+        let credential = StorageCredential::new(
+            "s3://warehouse/database/table",
+            HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]),
+        );
+        let mut body = load_table_body("v1");
+        body["storage-credentials"] =
+            json!([{ "prefix": credential.prefix(), "config": credential.config() }]);
+        (body, credential)
+    }
+
+    #[tokio::test]
+    async fn test_load_table_passes_vended_credentials_to_file_io() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let (body, credential) = load_table_body_with_credential();
+        let load = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .match_header("x-iceberg-access-delegation", "vended-credentials")
+            .with_status(200)
+            .with_body(body.to_string())
+            .create_async()
+            .await;
+        let catalog = session_catalog(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(HashMap::from([(
+                    "header.X-Iceberg-Access-Delegation".to_string(),
+                    "vended-credentials".to_string(),
+                )]))
+                .build(),
+        );
+
+        let table = catalog
+            .load_table(&SessionContext::empty(), &test_table_ident())
+            .await
+            .unwrap();
+
+        assert_eq!(table.file_io().config().storage_credentials(), [credential]);
+        load.assert_async().await;
+    }
+
     #[test]
     fn test_table_cache_rejects_out_of_range_expiry() {
         for value in ["0", "31536000000001"] {
@@ -5332,6 +5401,34 @@ mod tests {
 
         config_mock.assert_async().await;
         register_table_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_register_table_passes_vended_config_and_credentials_to_file_io() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let (body, credential) = load_table_body_with_credential();
+        let register = server
+            .mock("POST", "/v1/namespaces/ns1/register")
+            .with_status(200)
+            .with_body(body.to_string())
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        let table = catalog
+            .register_table(
+                &SessionContext::empty(),
+                &test_table_ident(),
+                "s3://warehouse/v1.metadata.json".to_string(),
+            )
+            .await
+            .unwrap();
+
+        let config = table.file_io().config();
+        assert_eq!(config.get("region").map(String::as_str), Some("us-west-2"));
+        assert_eq!(config.storage_credentials(), [credential]);
+        register.assert_async().await;
     }
 
     #[tokio::test]

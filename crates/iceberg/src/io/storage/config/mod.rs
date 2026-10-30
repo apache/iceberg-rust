@@ -46,16 +46,22 @@ pub use hf::*;
 pub use oss::*;
 pub use s3::*;
 use serde::{Deserialize, Serialize};
+use typed_builder::TypedBuilder;
 
 /// Configuration properties for storage backends.
 ///
 /// This struct contains only configuration properties without specifying
 /// which storage backend to use. The storage type is determined by the
 /// explicit factory selection.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default, TypedBuilder)]
 pub struct StorageConfig {
     /// Configuration properties for the storage backend
+    #[builder(default)]
     props: HashMap<String, String>,
+    /// Credentials that apply to locations under their prefixes
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    storage_credentials: Vec<StorageCredential>,
 }
 
 impl StorageConfig {
@@ -63,6 +69,7 @@ impl StorageConfig {
     pub fn new() -> Self {
         Self {
             props: HashMap::new(),
+            storage_credentials: Vec::new(),
         }
     }
 
@@ -72,7 +79,10 @@ impl StorageConfig {
     ///
     /// * `props` - Configuration properties for the storage backend
     pub fn from_props(props: HashMap<String, String>) -> Self {
-        Self { props }
+        Self {
+            props,
+            storage_credentials: Vec::new(),
+        }
     }
 
     /// Get all configuration properties.
@@ -120,6 +130,54 @@ impl StorageConfig {
         self.props
             .extend(props.into_iter().map(|(k, v)| (k.into(), v.into())));
         self
+    }
+
+    /// Get the credentials that apply to locations under their prefixes.
+    ///
+    /// A factory that supports them overlays the props with the config of a
+    /// location's longest matching credential.
+    pub fn storage_credentials(&self) -> &[StorageCredential] {
+        &self.storage_credentials
+    }
+}
+
+/// Storage properties, such as a vended credential, that apply to locations
+/// under a prefix, like Java's `StorageCredential`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StorageCredential {
+    /// Location prefix, such as `s3://bucket/table`
+    prefix: String,
+    /// Storage properties holding the credential
+    config: HashMap<String, String>,
+}
+
+impl StorageCredential {
+    /// Create a credential for locations under `prefix`. An empty prefix covers none.
+    pub fn new(prefix: impl Into<String>, config: HashMap<String, String>) -> Self {
+        Self {
+            prefix: prefix.into(),
+            config,
+        }
+    }
+
+    /// Return the location prefix this credential applies to.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// Return the storage properties holding the credential.
+    pub fn config(&self) -> &HashMap<String, String> {
+        &self.config
+    }
+}
+
+// The config values are secrets.
+impl std::fmt::Debug for StorageCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageCredential")
+            .field("prefix", &self.prefix)
+            .field("config_keys", &self.config.keys())
+            .finish()
     }
 }
 
@@ -198,6 +256,38 @@ mod tests {
         let deserialized: StorageConfig = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_storage_config_serialization_keeps_storage_credentials() {
+        let config = StorageConfig::builder()
+            .props(HashMap::from([(
+                "region".to_string(),
+                "us-east-1".to_string(),
+            )]))
+            .storage_credentials(vec![StorageCredential::new(
+                "s3://bucket/table",
+                HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]),
+            )])
+            .build();
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        let deserialized: StorageConfig = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_storage_credential_debug_omits_config_values() {
+        let credential = StorageCredential::new(
+            "s3://bucket/table",
+            HashMap::from([("s3.secret-access-key".to_string(), "secret".to_string())]),
+        );
+
+        assert_eq!(
+            format!("{credential:?}"),
+            r#"StorageCredential { prefix: "s3://bucket/table", config_keys: ["s3.secret-access-key"] }"#
+        );
     }
 
     #[test]

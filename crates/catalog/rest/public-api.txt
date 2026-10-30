@@ -196,7 +196,7 @@ pub struct iceberg_catalog_rest::LoadTableResult
 pub iceberg_catalog_rest::LoadTableResult::config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub iceberg_catalog_rest::LoadTableResult::metadata: iceberg::spec::table_metadata::TableMetadata
 pub iceberg_catalog_rest::LoadTableResult::metadata_location: core::option::Option<alloc::string::String>
-pub iceberg_catalog_rest::LoadTableResult::storage_credentials: core::option::Option<alloc::vec::Vec<iceberg_catalog_rest::StorageCredential>>
+pub iceberg_catalog_rest::LoadTableResult::storage_credentials: core::option::Option<alloc::vec::Vec<iceberg::io::storage::config::StorageCredential>>
 impl core::clone::Clone for iceberg_catalog_rest::LoadTableResult
 pub fn iceberg_catalog_rest::LoadTableResult::clone(&self) -> iceberg_catalog_rest::LoadTableResult
 impl core::cmp::Eq for iceberg_catalog_rest::LoadTableResult
@@ -355,21 +355,6 @@ impl core::fmt::Debug for iceberg_catalog_rest::SigV4Signer
 pub fn iceberg_catalog_rest::SigV4Signer::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg_catalog_rest::SigV4Signer
 pub fn iceberg_catalog_rest::SigV4Signer::builder() -> SigV4SignerBuilder<((), (), ())>
-pub struct iceberg_catalog_rest::StorageCredential
-pub iceberg_catalog_rest::StorageCredential::config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
-pub iceberg_catalog_rest::StorageCredential::prefix: alloc::string::String
-impl core::clone::Clone for iceberg_catalog_rest::StorageCredential
-pub fn iceberg_catalog_rest::StorageCredential::clone(&self) -> iceberg_catalog_rest::StorageCredential
-impl core::cmp::Eq for iceberg_catalog_rest::StorageCredential
-impl core::cmp::PartialEq for iceberg_catalog_rest::StorageCredential
-pub fn iceberg_catalog_rest::StorageCredential::eq(&self, other: &iceberg_catalog_rest::StorageCredential) -> bool
-impl core::fmt::Debug for iceberg_catalog_rest::StorageCredential
-pub fn iceberg_catalog_rest::StorageCredential::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for iceberg_catalog_rest::StorageCredential
-impl serde_core::ser::Serialize for iceberg_catalog_rest::StorageCredential
-pub fn iceberg_catalog_rest::StorageCredential::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
-impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::StorageCredential
-pub fn iceberg_catalog_rest::StorageCredential::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::UpdateNamespacePropertiesRequest
 pub iceberg_catalog_rest::UpdateNamespacePropertiesRequest::removals: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub iceberg_catalog_rest::UpdateNamespacePropertiesRequest::updates: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>

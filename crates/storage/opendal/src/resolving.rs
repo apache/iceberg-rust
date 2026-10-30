@@ -33,6 +33,7 @@ use iceberg::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::prefixed::PrefixedStorage;
 #[cfg(feature = "opendal-s3")]
 use crate::s3::CustomAwsCredentialLoader;
 use crate::{OpenDalClientConfig, OpenDalStorage};
@@ -159,6 +160,8 @@ fn build_storage_for_scheme(
 /// delegates operations to the appropriate [`OpenDalStorage`] variant based on
 /// the path scheme.
 ///
+/// Supports [storage credentials](iceberg::io::StorageConfig::storage_credentials).
+///
 /// # Serialization
 ///
 /// Serialization fails when a custom S3 credential loader is configured because the loader holds
@@ -215,12 +218,14 @@ impl OpenDalResolvingStorageFactory {
 #[typetag::serde]
 impl StorageFactory for OpenDalResolvingStorageFactory {
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
-        Ok(Arc::new(OpenDalResolvingStorage {
-            props: config.props().clone(),
-            storages: RwLock::new(HashMap::new()),
-            #[cfg(feature = "opendal-s3")]
-            customized_credential_load: self.customized_credential_load.clone(),
-        }))
+        PrefixedStorage::build(config, |config| {
+            Ok(Arc::new(OpenDalResolvingStorage {
+                props: config.props().clone(),
+                storages: RwLock::new(HashMap::new()),
+                #[cfg(feature = "opendal-s3")]
+                customized_credential_load: self.customized_credential_load.clone(),
+            }))
+        })
     }
 }
 
