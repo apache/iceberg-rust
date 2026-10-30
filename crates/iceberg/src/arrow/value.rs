@@ -18,10 +18,11 @@
 use std::sync::Arc;
 
 use arrow_array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
-    FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray,
-    LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StructArray,
-    Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray, new_null_array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Decimal128Array,
+    FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array,
+    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray,
+    StructArray, Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
+    new_null_array,
 };
 use arrow_buffer::BooleanBuffer;
 use arrow_schema::{DataType, FieldRef, TimeUnit};
@@ -331,7 +332,7 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                     .map(|v| v.map(|v| Literal::fixed(v.iter().cloned())))
                     .collect())
             }
-            PrimitiveType::Binary => {
+            PrimitiveType::Binary | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
                 if let Some(array) = partner.as_any().downcast_ref::<LargeBinaryArray>() {
                     Ok(array
                         .iter()
@@ -342,14 +343,15 @@ impl SchemaWithPartnerVisitor<ArrayRef> for ArrowArrayToIcebergStructConverter {
                         .iter()
                         .map(|v| v.map(|v| Literal::binary(v.to_vec())))
                         .collect())
+                } else if let Some(array) = partner.as_any().downcast_ref::<BinaryViewArray>() {
+                    Ok(array
+                        .iter()
+                        .map(|v| v.map(|v| Literal::binary(v.to_vec())))
+                        .collect())
                 } else {
                     Err(invalid_data!("The partner is not a binary array"))
                 }
             }
-            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!("Converting {p} Arrow array to an Iceberg literal is not supported yet"),
-            )),
         }
     }
 
@@ -574,6 +576,9 @@ pub(crate) fn create_primitive_array_single_element(
         }
         (DataType::Binary, Some(PrimitiveLiteral::Binary(v))) => {
             Ok(Arc::new(BinaryArray::from_vec(vec![v.as_slice()])))
+        }
+        (DataType::LargeBinary, Some(PrimitiveLiteral::Binary(v))) => {
+            Ok(Arc::new(LargeBinaryArray::from_vec(vec![v.as_slice()])))
         }
         (DataType::Decimal128(precision, scale), Some(PrimitiveLiteral::Int128(v))) => {
             let array = Decimal128Array::from(vec![{ *v }])
@@ -1111,28 +1116,34 @@ mod test {
     }
 
     #[test]
-    fn test_arrow_geospatial_to_literal_is_unsupported() {
-        let values = Arc::new(LargeBinaryArray::from_vec(vec![b"wkb".as_slice()])) as ArrayRef;
-        let struct_array = Arc::new(StructArray::from(vec![(
-            Arc::new(
-                Field::new("geom", DataType::LargeBinary, false).with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    "1".to_string(),
-                )])),
-            ),
-            values,
-        )])) as ArrayRef;
-        let ty = StructType::new(vec![
-            NestedField::required(
-                1,
-                "geom",
-                Type::Primitive(PrimitiveType::Geometry(Default::default())),
-            )
-            .into(),
-        ]);
+    fn test_arrow_geospatial_to_literal() {
+        let values = Arc::new(LargeBinaryArray::from(vec![
+            Some(b"wkb-1".as_slice()),
+            None,
+            Some(b"wkb-2".as_slice()),
+        ])) as ArrayRef;
+        let mut converter = ArrowArrayToIcebergStructConverter;
 
-        let err = arrow_struct_to_literal(&struct_array, &ty).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        let result = converter
+            .primitive(&PrimitiveType::Geometry(Default::default()), &values)
+            .unwrap();
+
+        assert_eq!(result, vec![
+            Some(Literal::binary(b"wkb-1".to_vec())),
+            None,
+            Some(Literal::binary(b"wkb-2".to_vec())),
+        ]);
+    }
+
+    #[test]
+    fn test_arrow_geospatial_binary_view_to_literal() {
+        let wkb = parquet_geospatial::testing::wkb_point_xy(1.0, 2.0);
+        let values = Arc::new(BinaryViewArray::from(vec![Some(wkb.as_slice()), None])) as ArrayRef;
+        let ty = Type::Primitive(PrimitiveType::Geography(Default::default()));
+
+        let result = arrow_primitive_to_literal(&values, &ty).unwrap();
+
+        assert_eq!(result, vec![Some(Literal::binary(wkb)), None]);
     }
 
     #[test]
