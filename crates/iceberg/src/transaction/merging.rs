@@ -223,6 +223,7 @@ pub(crate) struct MergingSnapshotProducer {
     added_data_files: Vec<DataFile>,
     filter_manager: ManifestFilterManager,
     commit_uuid: Uuid,
+    snapshot_id: Option<i64>,
     data_sequence_number: Option<i64>,
     /// Names the manifests this producer writes. It is never reset, so a
     /// commit retry cannot overwrite a manifest an earlier attempt wrote
@@ -247,6 +248,7 @@ impl MergingSnapshotProducer {
             added_data_files,
             filter_manager,
             commit_uuid: Uuid::now_v7(),
+            snapshot_id: None,
             data_sequence_number,
             manifest_counter: 0,
             attempt: 0,
@@ -292,7 +294,9 @@ impl MergingSnapshotProducer {
         self.validate_data_sequence_number(table)?;
         self.validate_added_data_files(table)?;
         validate_files_not_live(table, &self.added_data_files).await?;
-        let snapshot_id = generate_snapshot_id(table);
+        let snapshot_id = *self
+            .snapshot_id
+            .get_or_insert_with(|| generate_snapshot_id(table));
 
         // 1. Load existing manifests from the current snapshot.
         let existing_manifests = match table.metadata().current_snapshot() {
