@@ -66,6 +66,19 @@ All pull requests are squash merged. We generally discourage large pull requests
 
 When a pull request is under review, please avoid using force push as it makes it difficult for reviewer to track changes. If you need to keep the branch up to date with the main branch, consider using `git merge` instead. 
 
+#### Merging an urgent PR
+
+Committers can merge an urgent, approved pull request without waiting for the merge queue or required checks (for example, a security fix while CI is stuck). Use this only when necessary; otherwise, let the merge queue run.
+
+1. Join the [`apache/iceberg-public`](https://github.com/orgs/apache/teams/iceberg-public) team via [Boxer](https://gitbox.apache.org/boxer/) (one-time; membership syncs in about 15 minutes).
+2. Get the pull request approved by a committer.
+3. If the pull request is in the merge queue, click **Remove from queue**.
+4. Merge it directly:
+
+   ```sh
+   gh pr merge <number> --squash --admin
+   ```
+
 ### CI
 
 Currently, iceberg-rust uses GitHub Actions to run tests. The workflows are defined in `.github/workflows`.

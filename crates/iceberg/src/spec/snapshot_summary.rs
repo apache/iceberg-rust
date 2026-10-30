@@ -48,6 +48,7 @@ const TOTAL_RECORDS: &str = "total-records";
 const TOTAL_FILE_SIZE: &str = "total-files-size";
 const CHANGED_PARTITION_COUNT_PROP: &str = "changed-partition-count";
 const CHANGED_PARTITION_PREFIX: &str = "partitions.";
+const ICEBERG_VERSION_PROP: &str = "iceberg-version";
 
 /// `SnapshotSummaryCollector` collects and aggregates snapshot update metrics.
 /// It gathers metrics about added or removed data files and manifests, and tracks
@@ -328,6 +329,14 @@ where T: PartialOrd + Default + ToString {
     if value > T::default() {
         properties.insert(property_name.to_string(), value.to_string());
     }
+}
+
+pub(crate) fn set_iceberg_version(properties: &mut HashMap<String, String>) {
+    let version = env!("CARGO_PKG_VERSION");
+    properties.insert(
+        ICEBERG_VERSION_PROP.to_string(),
+        format!("Apache Iceberg Rust {version}"),
+    );
 }
 
 pub(crate) fn update_snapshot_summaries(

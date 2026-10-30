@@ -177,6 +177,13 @@ impl<'a> RowGroupMetricsEvaluator<'a> {
         }?;
 
         if let Some(bound) = bound {
+            if bound.is_nan() {
+                // NaN indicates unreliable bounds (e.g. parquet-mr <= 1.9 records a
+                // NaN that starts a row group as both min and max).
+                // See the InclusiveMetricsEvaluator docs for more.
+                return ROW_GROUP_MIGHT_MATCH;
+            }
+
             if cmp_fn(&bound, datum) {
                 return ROW_GROUP_MIGHT_MATCH;
             }
@@ -493,29 +500,17 @@ impl BoundPredicateVisitor for RowGroupMetricsEvaluator<'_> {
         let Some((stats, primitive_type)) = self.stats_and_type_for_field_id(field_id)? else {
             return ROW_GROUP_MIGHT_MATCH;
         };
+        let lower_bound = get_parquet_stat_min_as_datum(&primitive_type, stats)?;
+        let upper_bound = get_parquet_stat_max_as_datum(&primitive_type, stats)?;
 
-        if let Some(lower_bound) = get_parquet_stat_min_as_datum(&primitive_type, stats)? {
-            if lower_bound.is_nan() {
-                // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
-                return ROW_GROUP_MIGHT_MATCH;
-            }
-
-            if !literals.iter().any(|datum| datum.ge(&lower_bound)) {
-                // if all values are less than lower bound, rows cannot match.
-                return ROW_GROUP_CANT_MATCH;
-            }
-        }
-
-        if let Some(upper_bound) = get_parquet_stat_max_as_datum(&primitive_type, stats)? {
-            if upper_bound.is_nan() {
-                // NaN indicates unreliable bounds. See the InclusiveMetricsEvaluator docs for more.
-                return ROW_GROUP_MIGHT_MATCH;
-            }
-
-            if !literals.iter().any(|datum| datum.le(&upper_bound)) {
-                // if all values are greater than upper bound, rows cannot match.
-                return ROW_GROUP_CANT_MATCH;
-            }
+        // A NaN bound is unreliable on that side only. Drop it to unbounded
+        // so a valid bound can still prune. See InclusiveMetricsEvaluator.
+        if super::all_literals_outside_bounds(
+            super::finite_bound(lower_bound.as_ref()),
+            super::finite_bound(upper_bound.as_ref()),
+            literals,
+        ) {
+            return ROW_GROUP_CANT_MATCH;
         }
 
         ROW_GROUP_MIGHT_MATCH
@@ -549,7 +544,7 @@ mod tests {
     use rand::Rng;
 
     use super::RowGroupMetricsEvaluator;
-    use crate::expr::{Bind, Reference};
+    use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
     use crate::{ErrorKind, Result};
 
@@ -1724,10 +1719,87 @@ mod tests {
         Ok(())
     }
 
+    // A NaN with the sign bit set sorts below -Inf under `total_cmp`, so it
+    // exercises the `>` / `>=` side of the NaN check as well.
+    const NAN_BOUNDS: [f32; 2] = [f32::NAN, f32::from_bits(0xffc0_0000)];
+
+    fn eval_float_bounds(filter: &Predicate, min: f32, max: f32) -> Result<bool> {
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(
+                Some(min),
+                Some(max),
+                None,
+                Some(0),
+                false,
+            )),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+        let filter = filter.clone().bind(iceberg_schema_ref.clone(), false)?;
+
+        RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )
+    }
+
     #[test]
-    fn eval_true_for_lower_bound_is_nan_filter_is_in() -> Result<()> {
-        // TODO: should this be false, since the max stat
-        //       is lower than the min val in the set?
+    fn eval_true_for_nan_lower_bound_less_than() -> Result<()> {
+        let filter = Reference::new("col_float").less_than(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&filter, nan, nan)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_lower_bound_less_than_or_eq() -> Result<()> {
+        let filter = Reference::new("col_float").less_than_or_equal_to(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&filter, nan, nan)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_lower_bound_finite_upper_bound_less_than() -> Result<()> {
+        let lt = Reference::new("col_float").less_than(Datum::float(5.0_f32));
+        let lt_eq = Reference::new("col_float").less_than_or_equal_to(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&lt, nan, 2.0)?);
+            assert!(eval_float_bounds(&lt_eq, nan, 2.0)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_upper_bound_greater_than() -> Result<()> {
+        let filter = Reference::new("col_float").greater_than(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&filter, nan, nan)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_upper_bound_greater_than_or_eq() -> Result<()> {
+        let filter = Reference::new("col_float").greater_than_or_equal_to(Datum::float(5.0_f32));
+        for nan in NAN_BOUNDS {
+            assert!(eval_float_bounds(&filter, nan, nan)?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_lower_bound_is_nan_all_literals_above_upper_is_in() -> Result<()> {
+        // NaN lower is treated as unbounded. The valid upper bound (1.0)
+        // still prunes IN (2.0, 3.0).
         let row_group_metadata = create_row_group_metadata(
             1,
             1,
@@ -1755,7 +1827,7 @@ mod tests {
             iceberg_schema_ref.as_ref(),
         )?;
 
-        assert!(result);
+        assert!(!result);
         Ok(())
     }
 
@@ -1820,6 +1892,76 @@ mod tests {
     }
 
     #[test]
+    fn eval_false_for_nan_upper_bound_all_literals_below_lower_is_in() -> Result<()> {
+        // NaN upper is treated as unbounded. The valid lower bound (4.0)
+        // still prunes IN (2.0, 3.0).
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(
+                Some(4.0),
+                Some(f32::NAN),
+                None,
+                Some(0),
+                false,
+            )),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_in([Datum::float(2.0_f32), Datum::float(3.0_f32)])
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert!(!result);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_true_for_nan_lower_bound_literal_inside_upper_is_in() -> Result<()> {
+        // NaN lower is treated as unbounded. upper = 3.0 with IN (2.0, 4.0)
+        // must still match because 2.0 is inside the finite upper bound.
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(
+                Some(f32::NAN),
+                Some(3.0),
+                None,
+                Some(0),
+                false,
+            )),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_in([Datum::float(2.0_f32), Datum::float(4.0_f32)])
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert!(result);
+        Ok(())
+    }
+
+    #[test]
     fn eval_false_for_upper_bound_below_all_vals_is_in() -> Result<()> {
         let row_group_metadata = create_row_group_metadata(
             1,
@@ -1839,6 +1981,41 @@ mod tests {
 
         let filter = Reference::new("col_float")
             .is_in([Datum::float(2.0_f32), Datum::float(3.0_f32)])
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert!(!result);
+        Ok(())
+    }
+
+    #[test]
+    fn eval_false_for_literals_straddling_bounds_is_in() -> Result<()> {
+        // Bounds are [4.0, 6.0]; IN (2.0, 8.0) straddles the range with no
+        // literal inside it and must be pruned.
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            Some(Statistics::float(
+                Some(4.0),
+                Some(6.0),
+                None,
+                Some(0),
+                false,
+            )),
+            1,
+            None,
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_float")
+            .is_in([Datum::float(2.0_f32), Datum::float(8.0_f32)])
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let result = RowGroupMetricsEvaluator::eval(

@@ -22,13 +22,17 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::error::{Result, invalid_data};
-use crate::spec::{DataFile, ManifestEntry, ManifestFile, Operation};
+use crate::spec::{DataContentType, DataFile, ManifestContentType, Operation};
 use crate::table::Table;
 use crate::transaction::action::CommitStatus;
+use crate::transaction::snapshot::simple::write_added_manifest;
 use crate::transaction::snapshot::{
-    DefaultManifestProcess, SnapshotProduceOperation, SnapshotProducer,
+    SnapshotCommitInput, current_manifests, generate_snapshot_id, manifest_list_path,
+    manifest_path, new_manifest_writer, validate_files_not_live, validate_partition_value,
+    write_snapshot_commit,
 };
 use crate::transaction::{ActionCommit, TransactionAction};
+use crate::{Error, ErrorKind};
 
 /// OverwriteAction is a transaction action for overwriting data files in the table.
 ///
@@ -41,6 +45,7 @@ pub struct OverwriteAction {
     commit_uuid: Option<Uuid>,
     snapshot_properties: HashMap<String, String>,
     added_data_files: Vec<DataFile>,
+    added_paths: HashSet<String>,
     deleted_data_files: Vec<DataFile>,
 }
 
@@ -51,6 +56,7 @@ impl OverwriteAction {
             commit_uuid: None,
             snapshot_properties: HashMap::default(),
             added_data_files: vec![],
+            added_paths: HashSet::new(),
             deleted_data_files: vec![],
         }
     }
@@ -62,9 +68,13 @@ impl OverwriteAction {
         self
     }
 
-    /// Add data files to the snapshot.
+    /// Add data files to the snapshot. Duplicate paths keep the first occurrence.
     pub fn add_data_files(mut self, data_files: impl IntoIterator<Item = DataFile>) -> Self {
-        self.added_data_files.extend(data_files);
+        for data_file in data_files {
+            if self.added_paths.insert(data_file.file_path.clone()) {
+                self.added_data_files.push(data_file);
+            }
+        }
         self
     }
 
@@ -94,6 +104,42 @@ impl OverwriteAction {
         self.snapshot_properties = snapshot_properties;
         self
     }
+
+    fn validate(&self, table: &Table) -> Result<()> {
+        // TODO: Allowing snapshot property setup with no data files is a workaround.
+        // For details, please refer to https://github.com/apache/iceberg-rust/issues/1548
+        if self.added_data_files.is_empty()
+            && self.deleted_data_files.is_empty()
+            && self.snapshot_properties.is_empty()
+        {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "No added or deleted data files or added snapshot properties found",
+            ));
+        }
+        if let Some(data_file) = self
+            .added_data_files
+            .iter()
+            .chain(&self.deleted_data_files)
+            .find(|f| f.content_type() != DataContentType::Data)
+        {
+            return Err(invalid_data!(
+                "Only data content type is allowed for overwrite, got {:?} for {}",
+                data_file.content_type(),
+                data_file.file_path()
+            ));
+        }
+        let metadata = table.metadata();
+        for data_file in &self.added_data_files {
+            if metadata.default_partition_spec_id() != data_file.partition_spec_id {
+                return Err(invalid_data!(
+                    "Data file partition spec id does not match table default partition spec id"
+                ));
+            }
+            validate_partition_value(data_file.partition(), metadata.default_partition_type())?;
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -103,155 +149,81 @@ impl TransactionAction for OverwriteAction {
     fn new_state(&self) -> Self::State {}
 
     async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
+        self.validate(table)?;
         let mut deleted_files = HashMap::new();
         for file in &self.deleted_data_files {
-            if file.content_type() != crate::spec::DataContentType::Data {
-                return Err(invalid_data!("Only data content type is allowed"));
-            }
-            deleted_files.entry(file.file_path.as_str()).or_insert(file);
+            deleted_files.entry(file.file_path()).or_insert(file);
         }
-        let snapshot_producer = SnapshotProducer::new(
-            table,
-            self.commit_uuid.unwrap_or_else(Uuid::now_v7),
-            self.snapshot_properties.clone(),
-            self.added_data_files.clone(),
-            self.deleted_data_files.clone(),
-        );
-
-        snapshot_producer.validate_added_data_files()?;
-
         if self.check_duplicate {
-            snapshot_producer.validate_duplicate_files().await?;
+            let added: Vec<DataFile> = self
+                .added_data_files
+                .iter()
+                .filter(|f| !deleted_files.contains_key(f.file_path()))
+                .cloned()
+                .collect();
+            validate_files_not_live(table, &added).await?;
         }
 
-        let operation = OverwriteOperation {
-            has_added_data_files: !self.added_data_files.is_empty(),
-            deleted_files,
-        };
-        snapshot_producer
-            .commit(operation, DefaultManifestProcess)
-            .await
-    }
-
-    async fn cleanup(self, _state: (), _table: &Table, _status: CommitStatus) {}
-}
-
-struct OverwriteOperation<'a> {
-    has_added_data_files: bool,
-    deleted_files: HashMap<&'a str, &'a DataFile>,
-}
-
-impl SnapshotProduceOperation for OverwriteOperation<'_> {
-    fn operation(&self) -> Operation {
-        match (self.has_added_data_files, !self.deleted_files.is_empty()) {
-            (true, true) => Operation::Overwrite,
-            (false, true) => Operation::Delete,
-            // Also a properties-only commit, the workaround from #1548.
-            _ => Operation::Append,
-        }
-    }
-
-    // Only the listed files are replaced, so the table totals carry over.
-    fn truncate_full_table(&self) -> bool {
-        false
-    }
-
-    async fn delete_entries(
-        &self,
-        _snapshot_produce: &SnapshotProducer<'_>,
-    ) -> Result<Vec<ManifestEntry>> {
-        Ok(vec![])
-    }
-
-    async fn existing_manifest(
-        &self,
-        snapshot_produce: &SnapshotProducer<'_>,
-    ) -> Result<Vec<ManifestFile>> {
-        let table = snapshot_produce.table;
+        let snapshot_id = generate_snapshot_id(table);
+        let commit_uuid = self.commit_uuid.unwrap_or_else(Uuid::now_v7);
+        let mut manifest_counter = 0;
         let mut manifests = vec![];
-        let mut matched: HashSet<&str> = HashSet::new();
+        // One per tombstone written, so a path live in several manifests counts each copy.
+        let mut removed_files = vec![];
 
-        if let Some(snapshot) = table.metadata().current_snapshot() {
-            let manifest_list = table.manifest_list_reader(snapshot).load().await?;
-            for manifest_file in manifest_list.entries() {
-                // Delete-only manifests record which files were removed and must survive
-                // until `expire_snapshots` cleans them up (see #2148).
-                if !manifest_file.has_added_files()
-                    && !manifest_file.has_existing_files()
-                    && !manifest_file.has_deleted_files()
-                {
-                    continue;
-                }
-                if manifest_file.content == crate::spec::ManifestContentType::Deletes
-                    || self.deleted_files.is_empty()
-                {
-                    manifests.push(manifest_file.clone());
-                    continue;
-                }
-
-                let manifest = table.manifest_reader().read(manifest_file).await?;
-                let mut deletes = vec![];
-                for entry in manifest.entries().iter().filter(|entry| entry.is_alive()) {
-                    if let Some(requested) = self.deleted_files.get(entry.file_path()) {
-                        let actual = entry.data_file();
-                        let mismatch = if requested.record_count != actual.record_count {
-                            format!(
-                                "record_count: requested {}, table has {}",
-                                requested.record_count, actual.record_count
-                            )
-                        } else if requested.file_size_in_bytes != actual.file_size_in_bytes {
-                            format!(
-                                "file_size_in_bytes: requested {}, table has {}",
-                                requested.file_size_in_bytes, actual.file_size_in_bytes
-                            )
-                        } else if requested.partition_spec_id != actual.partition_spec_id {
-                            format!(
-                                "partition_spec_id: requested {}, table has {}",
-                                requested.partition_spec_id, actual.partition_spec_id
-                            )
-                        } else if requested.partition != actual.partition {
-                            format!(
-                                "partition: requested {:?}, table has {:?}",
-                                requested.partition, actual.partition
-                            )
-                        } else {
-                            deletes.push(requested.file_path.as_str());
-                            continue;
-                        };
-                        return Err(invalid_data!(
-                            "Delete file metadata does not match the table: {} ({mismatch})",
-                            entry.file_path()
-                        ));
-                    }
-                }
-                if deletes.is_empty() {
-                    manifests.push(manifest_file.clone());
-                    continue;
-                }
-                matched.extend(deletes);
-
-                let mut writer = snapshot_produce.new_manifest_writer(
-                    manifest_file.content,
-                    manifest.metadata().schema.clone(),
-                    Arc::new(manifest.metadata().partition_spec.clone()),
-                )?;
-                // Like Java, only live entries are carried into the rewrite.
-                for entry in manifest.entries().iter().filter(|entry| entry.is_alive()) {
-                    if self.deleted_files.contains_key(entry.file_path()) {
-                        writer.add_delete_entry(entry.as_ref().clone())?;
-                    } else {
-                        writer.add_existing_entry(entry.as_ref().clone())?;
-                    }
-                }
-                manifests.push(writer.write_manifest_file().await?);
+        // TODO: read these manifests concurrently, as `validate_files_not_live` does.
+        for manifest_file in current_manifests(table).await? {
+            if manifest_file.content == ManifestContentType::Deletes || deleted_files.is_empty() {
+                manifests.push(manifest_file);
+                continue;
             }
+
+            let manifest = table.manifest_reader().read(&manifest_file).await?;
+            let live: Vec<_> = manifest.entries().iter().filter(|e| e.is_alive()).collect();
+            let mut has_deletes = false;
+            for entry in &live {
+                let Some(requested) = deleted_files.get(entry.file_path()) else {
+                    continue;
+                };
+                if let Some(mismatch) = metadata_mismatch(requested, entry.data_file()) {
+                    return Err(invalid_data!(
+                        "Delete file metadata does not match the table: {} ({mismatch})",
+                        entry.file_path()
+                    ));
+                }
+                has_deletes = true;
+            }
+            if !has_deletes {
+                manifests.push(manifest_file);
+                continue;
+            }
+
+            let mut writer = new_manifest_writer(
+                table,
+                manifest_path(table, commit_uuid, manifest_counter)?,
+                snapshot_id,
+                manifest_file.content,
+                manifest.metadata().schema.clone(),
+                Arc::new(manifest.metadata().partition_spec.clone()),
+            )?;
+            manifest_counter += 1;
+            // Like Java, only live entries are carried into the rewrite.
+            for entry in live {
+                if deleted_files.contains_key(entry.file_path()) {
+                    removed_files.push(entry.data_file().clone());
+                    writer.add_delete_entry(entry.as_ref().clone())?;
+                } else {
+                    writer.add_existing_entry(entry.as_ref().clone())?;
+                }
+            }
+            manifests.push(writer.write_manifest_file().await?);
         }
 
-        let mut missing: Vec<&str> = self
-            .deleted_files
+        let removed_paths: HashSet<&str> = removed_files.iter().map(|f| f.file_path()).collect();
+        let mut missing: Vec<&str> = deleted_files
             .keys()
             .copied()
-            .filter(|path| !matched.contains(path))
+            .filter(|path| !removed_paths.contains(path))
             .collect();
         if !missing.is_empty() {
             missing.sort_unstable();
@@ -261,7 +233,66 @@ impl SnapshotProduceOperation for OverwriteOperation<'_> {
             ));
         }
 
-        Ok(manifests)
+        if !self.added_data_files.is_empty() {
+            manifests.push(
+                write_added_manifest(
+                    table,
+                    manifest_path(table, commit_uuid, manifest_counter)?,
+                    snapshot_id,
+                    table.metadata().default_partition_spec_id(),
+                    &self.added_data_files,
+                )
+                .await?,
+            );
+        }
+
+        let operation = match (!self.added_data_files.is_empty(), !removed_files.is_empty()) {
+            (true, true) => Operation::Overwrite,
+            (false, true) => Operation::Delete,
+            // Also a properties-only commit, the workaround from #1548.
+            _ => Operation::Append,
+        };
+        write_snapshot_commit(table, SnapshotCommitInput {
+            snapshot_id,
+            manifest_list_path: manifest_list_path(table, snapshot_id, 0, commit_uuid)?,
+            operation,
+            properties: self.snapshot_properties.clone(),
+            added_files: &self.added_data_files,
+            removed_files: &removed_files,
+            manifests,
+            // Only the listed files are replaced, so the table totals carry over.
+            truncate_full_table: false,
+        })
+        .await
+    }
+
+    async fn cleanup(self, _state: (), _table: &Table, _status: CommitStatus) {}
+}
+
+/// Describes the first field where a requested delete differs from the table's entry.
+fn metadata_mismatch(requested: &DataFile, actual: &DataFile) -> Option<String> {
+    if requested.record_count != actual.record_count {
+        Some(format!(
+            "record_count: requested {}, table has {}",
+            requested.record_count, actual.record_count
+        ))
+    } else if requested.file_size_in_bytes != actual.file_size_in_bytes {
+        Some(format!(
+            "file_size_in_bytes: requested {}, table has {}",
+            requested.file_size_in_bytes, actual.file_size_in_bytes
+        ))
+    } else if requested.partition_spec_id != actual.partition_spec_id {
+        Some(format!(
+            "partition_spec_id: requested {}, table has {}",
+            requested.partition_spec_id, actual.partition_spec_id
+        ))
+    } else if requested.partition != actual.partition {
+        Some(format!(
+            "partition: requested {:?}, table has {:?}",
+            requested.partition, actual.partition
+        ))
+    } else {
+        None
     }
 }
 
@@ -586,7 +617,7 @@ mod tests {
         let base = make_v3_minimal_table_in_catalog(&catalog).await;
         for transform in [Transform::Identity, Transform::Truncate(10)] {
             let schema = Schema::builder()
-                .with_fields([NestedField::required(1, "x", PrimitiveType::Int.into()).into()])
+                .with_fields([NestedField::required(1, "x", PrimitiveType::Int).into()])
                 .build()
                 .unwrap();
             let spec = UnboundPartitionSpec::builder()
@@ -629,7 +660,7 @@ mod tests {
                 .await
                 .unwrap();
             let schema = Schema::builder()
-                .with_fields([NestedField::required(1, "x", PrimitiveType::Long.into()).into()])
+                .with_fields([NestedField::required(1, "x", PrimitiveType::Long).into()])
                 .build()
                 .unwrap();
             let table = catalog
