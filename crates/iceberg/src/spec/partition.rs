@@ -753,34 +753,41 @@ impl PartitionSpecBuilder {
     }
 
     /// Ensure that the transformation of the field is compatible with type of the field
-    /// in the schema. Implicitly also checks if the source field exists in the schema.
+    /// in the schema. For non-void transforms this also checks that the source field exists.
+    ///
+    /// Void fields may reference a dropped source column. Java's
+    /// `PartitionSpec.checkCompatibility` skips them the same way, which lets
+    /// `TableMetadataBuilder::build` re-validate a default spec after a column drop.
     fn check_transform_compatibility(field: &UnboundPartitionField, schema: &Schema) -> Result<()> {
         // A multi-argument field is rejected here on purpose: a bound `PartitionField` has
         // no place for more than one source id yet.
         let source_id = field.source_id()?;
+
+        if field.transform == Transform::Void {
+            return Ok(());
+        }
+
         let schema_field = schema.field_by_id(source_id).ok_or_else(|| {
             invalid_data!("Cannot find partition source field with id `{source_id}` in schema")
         })?;
 
-        if field.transform != Transform::Void {
-            if !schema_field.field_type.is_primitive() {
-                return Err(invalid_data!(
-                    "Cannot partition by non-primitive source field: '{}'.",
-                    schema_field.field_type
-                ));
-            }
+        if !schema_field.field_type.is_primitive() {
+            return Err(invalid_data!(
+                "Cannot partition by non-primitive source field: '{}'.",
+                schema_field.field_type
+            ));
+        }
 
-            if field
-                .transform
-                .result_type(&schema_field.field_type)
-                .is_err()
-            {
-                return Err(invalid_data!(
-                    "Invalid source type: '{}' for transform: '{}'.",
-                    schema_field.field_type,
-                    field.transform.dedup_name()
-                ));
-            }
+        if field
+            .transform
+            .result_type(&schema_field.field_type)
+            .is_err()
+        {
+            return Err(invalid_data!(
+                "Invalid source type: '{}' for transform: '{}'.",
+                schema_field.field_type,
+                field.transform.dedup_name()
+            ));
         }
 
         Ok(())
@@ -1648,6 +1655,25 @@ mod tests {
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains("Field name 'id'"));
+    }
+
+    #[test]
+    fn test_bind_accepts_void_field_whose_source_was_dropped() {
+        // Java PartitionSpec.checkCompatibility skips void fields, so a void
+        // partition can keep a source id that is no longer in the schema.
+        let unbound = UnboundPartitionSpec {
+            spec_id: Some(1),
+            fields: vec![UnboundPartitionField {
+                source_ids: vec![999],
+                field_id: Some(1000),
+                name: "dropped_void".to_string(),
+                transform: Transform::Void,
+            }],
+        };
+
+        let spec = unbound.bind(ts_schema()).unwrap();
+        assert_eq!(spec.fields()[0].source_id, 999);
+        assert_eq!(spec.fields()[0].transform, Transform::Void);
     }
 
     #[test]
