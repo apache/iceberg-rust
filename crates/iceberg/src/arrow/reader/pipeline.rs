@@ -151,10 +151,14 @@ fn candidate_row_groups(
 
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
-        let should_load_page_index = (self.row_selection_enabled && task.predicate().is_some())
-            || !task.deletes().is_empty();
         let mut parquet_read_options = self.parquet_read_options;
-        parquet_read_options.preload_page_index = should_load_page_index;
+        if !self.row_selection_enabled {
+            parquet_read_options.preload_column_index = false;
+        }
+        if task.predicate().is_none() && task.deletes().is_empty() {
+            parquet_read_options.preload_column_index = false;
+            parquet_read_options.preload_offset_index = false;
+        }
 
         let delete_filter_rx = self
             .delete_file_loader
@@ -3942,6 +3946,105 @@ mod tests {
         assert_eq!(total_rows, 3);
     }
 
+    fn page_index_lengths(file_path: &str) -> (u64, u64) {
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+
+        let reader = SerializedFileReader::new(File::open(file_path).unwrap()).unwrap();
+        reader
+            .metadata()
+            .row_groups()
+            .iter()
+            .flat_map(|row_group| row_group.columns())
+            .fold((0, 0), |(column_len, offset_len), column| {
+                (
+                    column_len + column.column_index_length().unwrap_or(0) as u64,
+                    offset_len + column.offset_index_length().unwrap_or(0) as u64,
+                )
+            })
+    }
+
+    #[tokio::test]
+    async fn test_scan_preloads_only_page_indexes_used_by_row_selection() {
+        use crate::expr::{Bind, Reference};
+        use crate::spec::Datum;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = write_plain_parquet(
+            tmp_dir.path().to_str().unwrap(),
+            "page_index.parquet",
+            vec![],
+            vec![],
+        );
+        let (column_index_len, offset_index_len) = page_index_lengths(&file_path);
+        assert!(column_index_len > 0);
+        assert!(offset_index_len > 0);
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let task = |predicate| {
+            FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path.clone())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(Arc::clone(&schema))
+                .with_project_field_ids(vec![1])
+                .with_predicate(predicate)
+                .with_case_sensitive(false)
+                .build()
+                .unwrap()
+        };
+        // A minimal prefetch hint keeps the page index out of the footer read, so
+        // fetching it shows up in `bytes_read`.
+        let scan = |task: FileScanTask, row_selection_enabled| async move {
+            let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                .with_metadata_size_hint(8)
+                .with_row_selection_enabled(row_selection_enabled)
+                .build();
+            let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+            let scan = reader.read(tasks).unwrap();
+            let metrics = scan.metrics().clone();
+            let batches: Vec<RecordBatch> = scan.stream().try_collect().await.unwrap();
+            (batches, metrics.bytes_read())
+        };
+
+        let predicate = Reference::new("id")
+            .greater_than_or_equal_to(Datum::int(0))
+            .bind(Arc::clone(&schema), false)
+            .unwrap();
+        let (without_predicate, without_predicate_bytes) = scan(task(None), false).await;
+        let (with_predicate, with_predicate_bytes) =
+            scan(task(Some(predicate.clone())), false).await;
+        let (with_row_selection, with_row_selection_bytes) =
+            scan(task(Some(predicate)), true).await;
+        let (without_predicate_with_row_selection, without_predicate_with_row_selection_bytes) =
+            scan(task(None), true).await;
+
+        assert_eq!(with_predicate, without_predicate);
+        assert_eq!(with_row_selection, without_predicate);
+        assert_eq!(without_predicate_with_row_selection, without_predicate);
+        assert_eq!(
+            without_predicate_with_row_selection_bytes,
+            without_predicate_bytes
+        );
+        assert_eq!(
+            with_predicate_bytes - without_predicate_bytes,
+            offset_index_len
+        );
+        assert_eq!(
+            with_row_selection_bytes - with_predicate_bytes,
+            column_index_len
+        );
+    }
+
     /// The reads a data file needs must finish even when nothing polls the scan,
     /// and a dropped scan must stop reading (#3276).
     mod open_progress {
@@ -3969,10 +4072,11 @@ mod tests {
         const CONCURRENCY: usize = 2;
         /// Smaller than a footer, so one open takes more than one request.
         const METADATA_SIZE_HINT: usize = 64;
-        /// Bytes one open reads: the hint, then the footer and its indexes.
+        /// Bytes one open reads: the hint, then the rest of the footer. The scan has
+        /// no predicate, so the open skips the page indexes.
         /// The footer stores the writer's `created_by` version, so a `parquet`
         /// upgrade can change this.
-        const OPEN_BYTES: u64 = 547;
+        const OPEN_BYTES: u64 = 514;
         /// Scheduler turns, far more than a request needs. A bound only because
         /// `#[tokio::test]` runs the test and the spawned reads on one thread.
         const YIELDS: usize = 100;
