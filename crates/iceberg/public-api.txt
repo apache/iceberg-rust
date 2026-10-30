@@ -1358,6 +1358,7 @@ pub mod iceberg::scan
 pub struct iceberg::scan::FileScanTask
 impl iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::case_sensitive(&self) -> bool
+pub fn iceberg::scan::FileScanTask::column_stats(&self) -> core::option::Option<&iceberg::scan::FileScanTaskColumnStats>
 pub fn iceberg::scan::FileScanTask::data_file_format(&self) -> iceberg::spec::DataFileFormat
 pub fn iceberg::scan::FileScanTask::data_file_path(&self) -> &str
 pub fn iceberg::scan::FileScanTask::data_sequence_number(&self) -> core::option::Option<i64>
@@ -1388,11 +1389,34 @@ impl core::fmt::Debug for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTask
 impl iceberg::scan::FileScanTask
-pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
+pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::scan::FileScanTaskColumnStats
+impl iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::column_sizes(&self) -> &std::collections::hash::map::HashMap<i32, u64>
+pub fn iceberg::scan::FileScanTaskColumnStats::lower_bounds(&self) -> &std::collections::hash::map::HashMap<i32, iceberg::spec::Datum>
+pub fn iceberg::scan::FileScanTaskColumnStats::nan_value_counts(&self) -> &std::collections::hash::map::HashMap<i32, u64>
+pub fn iceberg::scan::FileScanTaskColumnStats::null_value_counts(&self) -> &std::collections::hash::map::HashMap<i32, u64>
+pub fn iceberg::scan::FileScanTaskColumnStats::upper_bounds(&self) -> &std::collections::hash::map::HashMap<i32, iceberg::spec::Datum>
+pub fn iceberg::scan::FileScanTaskColumnStats::value_counts(&self) -> &std::collections::hash::map::HashMap<i32, u64>
+impl core::clone::Clone for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::clone(&self) -> iceberg::scan::FileScanTaskColumnStats
+impl core::cmp::PartialEq for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::eq(&self, other: &iceberg::scan::FileScanTaskColumnStats) -> bool
+impl core::default::Default for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::default() -> iceberg::scan::FileScanTaskColumnStats
+impl core::fmt::Debug for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTaskColumnStats
+impl iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::builder() -> FileScanTaskColumnStatsBuilder<((), (), (), (), (), ())>
+impl serde_core::ser::Serialize for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::scan::FileScanTaskDeleteFile
 impl iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::content_offset(&self) -> core::option::Option<u64>
@@ -1451,6 +1475,7 @@ pub fn iceberg::scan::TableScanBuilder<'a>::snapshot_id(self, snapshot_id: i64) 
 pub fn iceberg::scan::TableScanBuilder<'a>::with_batch_size(self, batch_size: core::option::Option<usize>) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_bloom_filter_enabled(self, bloom_filter_enabled: bool) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_case_sensitive(self, case_sensitive: bool) -> Self
+pub fn iceberg::scan::TableScanBuilder<'a>::with_column_stats(self, column_names: impl core::iter::traits::collect::IntoIterator<Item = impl alloc::string::ToString>) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_concurrency_limit(self, limit: usize) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_data_file_concurrency_limit(self, limit: usize) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_filter(self, predicate: iceberg::expr::Predicate) -> Self
