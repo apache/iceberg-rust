@@ -699,6 +699,13 @@ impl Catalog for S3TablesCatalog {
         ))
     }
 
+    async fn unregister_table(&self, _table_ident: &TableIdent) -> Result<Table> {
+        Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            "Unregistering a table is not supported yet",
+        ))
+    }
+
     /// Updates an existing table within the s3tables catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         let table_ident = commit.identifier().clone();
