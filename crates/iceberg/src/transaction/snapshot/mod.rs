@@ -468,7 +468,7 @@ mod tests {
     use super::*;
     use crate::spec::{
         DataContentType, DataFileBuilder, Literal, Manifest, NestedField, PartitionSpec,
-        PrimitiveType, Schema, SnapshotRef, Transform, Type,
+        PrimitiveType, Schema, SnapshotRef, SortOrder, TableMetadataBuilder, Transform, Type,
     };
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::{ErrorKind, TableUpdate};
@@ -591,49 +591,43 @@ mod tests {
 
     #[test]
     fn test_summary_keeps_decimal_scale_of_dropped_partition_source() {
-        let table = make_v2_minimal_table();
-        let without_d = table.metadata().current_schema().as_ref().clone();
-        let d = NestedField::required(
-            4,
-            "d",
-            Type::Primitive(PrimitiveType::Decimal {
-                precision: 9,
-                scale: 2,
-            }),
-        );
-        let x = NestedField::required(1, "x", Type::Primitive(PrimitiveType::Int));
-        let with_d = Schema::builder()
-            .with_fields(without_d.as_struct().fields()[1..].iter().cloned())
-            .with_fields([d.into(), x.into()])
+        let decimal = PrimitiveType::Decimal {
+            precision: 9,
+            scale: 2,
+        };
+        let d = Arc::new(NestedField::required(1, "d", Type::Primitive(decimal)));
+        let x = |ty| Arc::new(NestedField::required(2, "x", Type::Primitive(ty)));
+        let schema = |fields: Vec<_>| Schema::builder().with_fields(fields).build().unwrap();
+        let base = schema(vec![d.clone(), x(PrimitiveType::Int)]);
+        let spec = PartitionSpec::builder(base.clone())
+            .add_partition_field("d", "d", Transform::Identity)
+            .unwrap()
+            .add_partition_field("x", "x", Transform::Identity)
+            .unwrap()
             .build()
             .unwrap();
-        let metadata = table
-            .metadata()
-            .clone()
-            .into_builder(None)
-            .set_properties(HashMap::from([(
+        let table = make_v2_minimal_table();
+        let metadata = TableMetadataBuilder::new(
+            base,
+            spec,
+            SortOrder::unsorted_order(),
+            table.metadata().location().to_string(),
+            FormatVersion::V2,
+            HashMap::from([(
                 TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT.to_string(),
                 "10".to_string(),
-            )]))
-            .unwrap()
-            .add_current_schema(with_d.clone())
-            .unwrap()
-            .add_partition_spec(
-                PartitionSpec::builder(with_d)
-                    .add_partition_field("d", "d", Transform::Identity)
-                    .unwrap()
-                    .add_partition_field("x", "x", Transform::Identity)
-                    .unwrap()
-                    .build()
-                    .unwrap()
-                    .into_unbound(),
-            )
-            .unwrap()
-            .add_current_schema(without_d)
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
+            )]),
+        )
+        .unwrap()
+        .add_current_schema(schema(vec![d, x(PrimitiveType::Long)]))
+        .unwrap()
+        .add_default_partition_spec(Default::default())
+        .unwrap()
+        .add_current_schema(schema(vec![x(PrimitiveType::Long)]))
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
         let table = table.with_metadata(Arc::new(metadata));
         let deleted = DataFileBuilder::default()
             .content(DataContentType::Data)
@@ -641,10 +635,10 @@ mod tests {
             .file_format(DataFileFormat::Parquet)
             .file_size_in_bytes(100)
             .record_count(2)
-            .partition_spec_id(1)
+            .partition_spec_id(0)
             .partition(Struct::from_iter([
                 Some(Literal::decimal(123)),
-                Some(Literal::long(5)),
+                Some(Literal::int(5)),
             ]))
             .build()
             .unwrap();
