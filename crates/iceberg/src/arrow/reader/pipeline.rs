@@ -152,6 +152,18 @@ fn candidate_row_groups(
 
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
+        let runtime = self.runtime.clone();
+        // Spawn the complete open/planning phase so it can keep progressing
+        // while try_flatten_unordered is polling other files (#3276).
+        let stream = runtime
+            .cpu()
+            .spawn(self.process_inner(task))
+            .abort_on_drop()
+            .await??;
+        Ok(super::batch_stream::decode_on_cpu(stream, runtime.cpu()))
+    }
+
+    async fn process_inner(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
         let should_load_page_index = (self.row_selection_enabled && task.predicate().is_some())
             || !task.deletes().is_empty();
         let mut parquet_read_options = self.parquet_read_options;
@@ -161,33 +173,16 @@ impl FileScanTaskReader {
             .delete_file_loader
             .load_deletes(task.deletes(), task.schema_ref());
 
-        // `try_flatten_unordered` stops polling the buffered opens once it holds
-        // `concurrency_limit_data_files` streams, so spawn the open (#3276).
-        // Footer and page-index decode also run on the IO runtime.
-        // Aborts on drop.
-        let path = task.data_file_path().to_string();
-        let file_io = self.file_io.clone();
-        let file_size_in_bytes = task.file_size_in_bytes();
-        let bytes_read = Arc::clone(self.scan_metrics.bytes_read_counter());
-        let key_metadata = task.key_metadata().map(|km| km.to_vec());
-        let runtime = self.runtime.clone();
-        let opening = self
-            .runtime
-            .io()
-            .spawn(async move {
-                ArrowReader::open_parquet_file(
-                    &path,
-                    &file_io,
-                    &runtime,
-                    file_size_in_bytes,
-                    parquet_read_options,
-                    &bytes_read,
-                    key_metadata.as_deref(),
-                )
-                .await
-            })
-            .abort_on_drop();
-        let (parquet_file_reader, arrow_metadata) = opening.await??;
+        let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
+            task.data_file_path(),
+            &self.file_io,
+            &self.runtime,
+            task.file_size_in_bytes(),
+            parquet_read_options,
+            self.scan_metrics.bytes_read_counter(),
+            task.key_metadata(),
+        )
+        .await?;
 
         // Check if Parquet file has embedded field IDs
         // Corresponds to Java's ParquetSchemaUtil.hasIds()
@@ -585,28 +580,13 @@ impl FileScanTaskReader {
                     record_batch_stream_builder.metadata().num_row_groups(),
                 );
 
-                // Spawned for the same reason as the open (#3276).
-                let bloom_predicate = predicate.clone();
-                let bloom_candidates = candidates.as_ref().to_vec();
-                let bloom_field_ids = field_id_map.clone();
-                let mut builder = record_batch_stream_builder;
-                let (builder, bloom_filtered) = self
-                    .runtime
-                    .io()
-                    .spawn(async move {
-                        let filtered = Self::filter_row_groups_by_bloom_filter(
-                            &bloom_predicate,
-                            &mut builder,
-                            &bloom_candidates,
-                            &bloom_field_ids,
-                        )
-                        .await;
-                        (builder, filtered)
-                    })
-                    .abort_on_drop()
-                    .await?;
-                record_batch_stream_builder = builder;
-                let bloom_filtered = bloom_filtered?;
+                let bloom_filtered = Self::filter_row_groups_by_bloom_filter(
+                    &predicate,
+                    &mut record_batch_stream_builder,
+                    candidates.as_ref(),
+                    &field_id_map,
+                )
+                .await?;
 
                 if bloom_filtered.len() < candidates.len() {
                     selected_row_group_indices = Some(bloom_filtered);
@@ -3982,6 +3962,7 @@ mod tests {
 
         #[derive(Debug, Default)]
         struct Reads {
+            expected_io_thread: Option<String>,
             last_start: Option<u64>,
             started: usize,
             finished: usize,
@@ -4024,6 +4005,9 @@ mod tests {
             async fn read(&self, range: Range<u64>) -> Result<Bytes> {
                 {
                     let mut reads = self.log.0.lock().unwrap();
+                    if let Some(expected) = &reads.expected_io_thread {
+                        assert_eq!(std::thread::current().name(), Some(expected.as_str()));
+                    }
                     reads.last_start = Some(range.start);
                     reads.started += 1;
                 }
@@ -4041,6 +4025,9 @@ mod tests {
         #[typetag::serde]
         impl Storage for DeferredStorage {
             async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
+                if let Some(expected) = &self.log.0.lock().unwrap().expected_io_thread {
+                    assert_eq!(std::thread::current().name(), Some(expected.as_str()));
+                }
                 Ok(Box::new(DeferredRead {
                     contents: self.files.read(path).await?,
                     log: self.log.clone(),
@@ -4176,6 +4163,75 @@ mod tests {
                 }
                 tokio::task::yield_now().await;
             }
+        }
+
+        #[test]
+        fn scan_with_split_runtimes_keeps_storage_on_io() {
+            let io = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .thread_name("parquet-storage")
+                .enable_all()
+                .build()
+                .unwrap();
+            let cpu = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .thread_name("parquet-decoding")
+                .enable_all()
+                .build()
+                .unwrap();
+            let runtime = Runtime::new_with_split(&io, &cpu);
+            let dir = TempDir::new().unwrap();
+            let path = write_plain_parquet(
+                dir.path().to_str().unwrap(),
+                "split.parquet",
+                vec![],
+                vec![],
+            );
+            let contents = Bytes::from(std::fs::read(path).unwrap());
+            let storage = DeferredStorage::default();
+            storage.log.0.lock().unwrap().expected_io_thread = Some("parquet-storage".to_owned());
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let batches = io.block_on(async {
+                storage
+                    .files
+                    .write("memory:/split.parquet", contents.clone())
+                    .await
+                    .unwrap();
+                let task = FileScanTask::builder()
+                    .with_data_file_path("memory:/split.parquet".to_owned())
+                    .with_file_size_in_bytes(contents.len() as u64)
+                    .with_start(0)
+                    .with_length(0)
+                    .with_data_file_format(DataFileFormat::Parquet)
+                    .with_schema(schema)
+                    .with_project_field_ids(vec![1])
+                    .with_case_sensitive(false)
+                    .build()
+                    .unwrap();
+                let file_io =
+                    FileIOBuilder::new(Arc::new(DeferredStorageFactory { storage })).build();
+                let reader = ArrowReaderBuilder::new(file_io, runtime)
+                    .with_batch_size(1)
+                    .with_data_file_concurrency_limit(1)
+                    .build();
+                let tasks = Box::pin(futures::stream::iter(vec![Ok(task)]));
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    reader.read(tasks).unwrap().stream().try_collect::<Vec<_>>(),
+                )
+                .await
+                .unwrap()
+                .unwrap()
+            });
+            assert_eq!(batches.len(), 3);
+            assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
         }
 
         /// An open must finish its requests even when the scan is never polled again.
