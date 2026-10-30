@@ -24,13 +24,12 @@
 //! The resulting snapshot uses [`Operation::Replace`] to indicate that files
 //! were reorganised without changing the data.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
 use crate::error::{Result, invalid_data};
 use crate::spec::{DataFile, ManifestContentType, Operation};
 use crate::table::Table;
+use crate::transaction::action::CommitStatus;
 use crate::transaction::merging::MergingSnapshotProducer;
 use crate::transaction::{ActionCommit, TransactionAction};
 
@@ -69,8 +68,11 @@ use crate::transaction::{ActionCommit, TransactionAction};
 /// covered by this check. Either apply them while rewriting, or keep them
 /// applicable to the new file with
 /// [`data_sequence_number`](RewriteFilesAction::data_sequence_number).
+#[derive(Clone)]
 pub struct RewriteFilesAction {
-    producer: MergingSnapshotProducer,
+    added_data_files: Vec<DataFile>,
+    deleted_data_files: Vec<DataFile>,
+    data_sequence_number: Option<i64>,
     /// The snapshot the rewrite was planned against, if the table had one.
     /// Deletes newer than it fail the commit.
     starting_snapshot_id: Option<i64>,
@@ -79,7 +81,9 @@ pub struct RewriteFilesAction {
 impl RewriteFilesAction {
     pub(crate) fn new(starting_snapshot_id: Option<i64>) -> Self {
         Self {
-            producer: MergingSnapshotProducer::new(Operation::Replace),
+            added_data_files: Vec::new(),
+            deleted_data_files: Vec::new(),
+            data_sequence_number: None,
             starting_snapshot_id,
         }
     }
@@ -89,7 +93,7 @@ impl RewriteFilesAction {
     /// The file must exist in the current snapshot; otherwise the commit
     /// will fail with a validation error.
     pub fn delete_file(mut self, file: DataFile) -> Self {
-        self.producer.delete_data_file(file);
+        self.deleted_data_files.push(file);
         self
     }
 
@@ -97,7 +101,7 @@ impl RewriteFilesAction {
     ///
     /// Typically this is the merged output of the files being deleted.
     pub fn add_file(mut self, file: DataFile) -> Self {
-        self.producer.add_data_file(file);
+        self.added_data_files.push(file);
         self
     }
 
@@ -109,12 +113,12 @@ impl RewriteFilesAction {
     /// V1 manifest entries carry no sequence number, so this has no effect on
     /// a V1 table.
     pub fn data_sequence_number(mut self, sequence_number: i64) -> Self {
-        self.producer.set_data_sequence_number(sequence_number);
+        self.data_sequence_number = Some(sequence_number);
         self
     }
 
     fn validate(&self) -> Result<()> {
-        if !self.producer.has_deleted_data_files() {
+        if self.deleted_data_files.is_empty() {
             return Err(invalid_data!(
                 "Rewrite files requires at least one file to delete"
             ));
@@ -169,10 +173,28 @@ impl RewriteFilesAction {
 
 #[async_trait]
 impl TransactionAction for RewriteFilesAction {
-    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+    type State = MergingSnapshotProducer;
+
+    fn new_state(&self) -> MergingSnapshotProducer {
+        MergingSnapshotProducer::new(
+            Operation::Replace,
+            self.added_data_files.clone(),
+            &self.deleted_data_files,
+            self.data_sequence_number,
+        )
+    }
+
+    async fn commit(
+        &self,
+        state: &mut MergingSnapshotProducer,
+        table: &Table,
+    ) -> Result<ActionCommit> {
         self.validate()?;
         self.validate_no_new_deletes(table).await?;
-        self.producer.commit_snapshot(table).await
+        state.commit_snapshot(table).await
+    }
+
+    async fn cleanup(self, _state: MergingSnapshotProducer, _table: &Table, _status: CommitStatus) {
     }
 }
 
@@ -192,6 +214,7 @@ mod tests {
         UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::table::Table;
+    use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::tests::{
         append_files, make_data_file, make_v1_minimal_table_in_catalog,
         make_v2_minimal_table_in_catalog, make_v3_minimal_table_in_catalog,
@@ -734,12 +757,12 @@ mod tests {
         // Plan the rewrite against this snapshot, then let another commit land.
         let tx = Transaction::new(&table);
         let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
-        let action = Arc::new(tx.rewrite_files().delete_file(f1).add_file(merged));
+        let action = tx.rewrite_files().delete_file(f1).add_file(merged);
 
         let table = append_files(&catalog, &table, vec![f2]).await;
         let delete_manifest_path = add_delete_manifest(&table).await;
 
-        let Err(err) = action.commit(&table).await else {
+        let Err(err) = commit_with_fresh_state(action, &table).await else {
             panic!("a delete manifest newer than the starting snapshot must be rejected");
         };
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
@@ -762,12 +785,12 @@ mod tests {
         let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
         let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
         let tx = Transaction::new(&table);
-        let action = Arc::new(tx.rewrite_files().delete_file(f1.clone()).add_file(merged));
+        let action = tx.rewrite_files().delete_file(f1.clone()).add_file(merged);
 
         // The file it wants to replace only exists because of a later commit.
         let table = append_files(&catalog, &table, vec![f1]).await;
 
-        let Err(err) = action.commit(&table).await else {
+        let Err(err) = commit_with_fresh_state(action, &table).await else {
             panic!("a rewrite planned against an empty table must be rejected");
         };
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
@@ -793,7 +816,7 @@ mod tests {
         // Plan the rewrite against this snapshot, then expire it behind us.
         let tx = Transaction::new(&table);
         let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
-        let action = Arc::new(tx.rewrite_files().delete_file(f1).add_file(merged));
+        let action = tx.rewrite_files().delete_file(f1).add_file(merged);
 
         let table = append_files(&catalog, &table, vec![f2]).await;
         let tx = Transaction::new(&table);
@@ -811,7 +834,7 @@ mod tests {
             "the starting snapshot should have been expired"
         );
 
-        let Err(err) = action.commit(&table).await else {
+        let Err(err) = commit_with_fresh_state(action, &table).await else {
             panic!("an expired starting snapshot must be rejected");
         };
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
@@ -836,10 +859,11 @@ mod tests {
 
         let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
         let tx = Transaction::new(&table);
-        let action = Arc::new(tx.rewrite_files().delete_file(f1).add_file(merged));
+        let action = tx.rewrite_files().delete_file(f1).add_file(merged);
+        let mut state = action.new_state();
 
-        let first = manifest_paths(&table, Arc::clone(&action)).await;
-        let second = manifest_paths(&table, action).await;
+        let first = manifest_paths(&table, &action, &mut state).await;
+        let second = manifest_paths(&table, &action, &mut state).await;
 
         assert_eq!(first.len(), 2, "{first:?}");
         assert_eq!(first.len(), second.len());
@@ -850,8 +874,12 @@ mod tests {
 
     /// Commit `action` against `table` and return the paths of the manifests
     /// the resulting snapshot points at.
-    async fn manifest_paths(table: &Table, action: Arc<RewriteFilesAction>) -> Vec<String> {
-        let mut commit = action.commit(table).await.unwrap();
+    async fn manifest_paths(
+        table: &Table,
+        action: &RewriteFilesAction,
+        state: &mut MergingSnapshotProducer,
+    ) -> Vec<String> {
+        let mut commit = action.commit(state, table).await.unwrap();
         let snapshot = commit
             .take_updates()
             .into_iter()
