@@ -213,7 +213,7 @@ impl SimpleSnapshotProducer {
 
 /// Writes one data manifest at `path` for `data_files`, all of which must
 /// belong to `partition_spec_id`, and returns its manifest-list entry.
-async fn write_added_manifest(
+pub(crate) async fn write_added_manifest(
     table: &Table,
     path: String,
     snapshot_id: i64,
