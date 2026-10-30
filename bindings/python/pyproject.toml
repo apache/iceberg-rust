@@ -40,15 +40,10 @@ readme = "project-description.md"
 requires-python = ">=3.10,<4"
 
 [tool.maturin]
+# sdist only: maturin adds these to wheels automatically (dist-info/licenses/).
 include = [
-  { path = "LICENSE", format = [
-    "sdist",
-    "wheel",
-  ] },
-  { path = "NOTICE", format = [
-    "sdist",
-    "wheel",
-  ] },
+  { path = "LICENSE", format = "sdist" },
+  { path = "NOTICE", format = "sdist" },
 ]
 module-name = "pyiceberg_core.pyiceberg_core_rust"
 profile = "release"
