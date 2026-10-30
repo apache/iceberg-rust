@@ -1,5 +1,5 @@
 pub mod iceberg_storage_object_store
-pub enum iceberg_storage_object_store::ObjectStoreStorage
+#[non_exhaustive] pub enum iceberg_storage_object_store::ObjectStoreStorage
 pub iceberg_storage_object_store::ObjectStoreStorage::S3(iceberg_storage_object_store::S3Storage)
 impl core::clone::Clone for iceberg_storage_object_store::ObjectStoreStorage
 pub fn iceberg_storage_object_store::ObjectStoreStorage::clone(&self) -> iceberg_storage_object_store::ObjectStoreStorage
@@ -21,7 +21,7 @@ impl serde_core::ser::Serialize for iceberg_storage_object_store::ObjectStoreSto
 pub fn iceberg_storage_object_store::ObjectStoreStorage::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_object_store::ObjectStoreStorage
 pub fn iceberg_storage_object_store::ObjectStoreStorage::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
-pub enum iceberg_storage_object_store::ObjectStoreStorageFactory
+#[non_exhaustive] pub enum iceberg_storage_object_store::ObjectStoreStorageFactory
 pub iceberg_storage_object_store::ObjectStoreStorageFactory::S3
 impl core::clone::Clone for iceberg_storage_object_store::ObjectStoreStorageFactory
 pub fn iceberg_storage_object_store::ObjectStoreStorageFactory::clone(&self) -> iceberg_storage_object_store::ObjectStoreStorageFactory
