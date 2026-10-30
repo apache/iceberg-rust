@@ -403,7 +403,10 @@ impl MinMaxColAggregator {
                 None
             };
 
-            self.update_state_min(field_id, min_datum);
+            // Iceberg bounds must not be NaN.
+            if !min_datum.as_ref().is_some_and(Datum::is_nan) {
+                self.update_state_min(field_id, min_datum);
+            }
         }
 
         if value.max_bytes_opt().is_some() {
@@ -419,7 +422,9 @@ impl MinMaxColAggregator {
                 None
             };
 
-            self.update_state_max(field_id, max_datum);
+            if !max_datum.as_ref().is_some_and(Datum::is_nan) {
+                self.update_state_max(field_id, max_datum);
+            }
         }
 
         Ok(())
@@ -2758,6 +2763,40 @@ mod tests {
             .unwrap();
 
         assert_eq!(min_max_agg.produce(), (HashMap::new(), HashMap::new()));
+    }
+
+    #[test]
+    fn test_min_max_aggregator_skips_nan_bounds() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(0, "f", Type::Primitive(PrimitiveType::Float)).into(),
+                    NestedField::required(1, "d", Type::Primitive(PrimitiveType::Double)).into(),
+                ])
+                .build()
+                .expect("Failed to create schema"),
+        );
+        let mut min_max_agg = MinMaxColAggregator::new(schema);
+        let float_stats =
+            |min, max| Statistics::Float(ValueStatistics::new(min, max, None, None, false));
+        let double_stats =
+            |min, max| Statistics::Double(ValueStatistics::new(min, max, None, None, false));
+
+        min_max_agg
+            .update(0, &float_stats(Some(-f32::NAN), Some(f32::NAN)))
+            .unwrap();
+        min_max_agg
+            .update(0, &float_stats(Some(1.5), Some(2.5)))
+            .unwrap();
+        min_max_agg
+            .update(1, &double_stats(Some(f64::NAN), Some(f64::NAN)))
+            .unwrap();
+
+        let (lower_bounds, upper_bounds) = min_max_agg.produce();
+
+        assert_eq!(lower_bounds, HashMap::from([(0, Datum::float(1.5_f32))]));
+        assert_eq!(upper_bounds, HashMap::from([(0, Datum::float(2.5_f32))]));
     }
 
     fn cdc_test_schema() -> SchemaRef {
