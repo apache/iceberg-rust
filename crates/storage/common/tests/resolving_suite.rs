@@ -24,10 +24,10 @@ use std::sync::Arc;
 use bytes::Bytes;
 use common::{StorageKind, load_storage, unique_path};
 use iceberg::io::{FileIOBuilder, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION};
-use iceberg_storage_common::roundtrip_file_io;
 use iceberg_storage_opendal::{
     AwsCredential, CustomAwsCredentialLoader, OpenDalResolvingStorageFactory, ProvideCredential,
 };
+use iceberg_test_utils::storage::roundtrip_file_io;
 use iceberg_test_utils::{get_object_store_endpoint, set_up};
 use reqsign_core::Context;
 use rstest::rstest;
@@ -42,7 +42,7 @@ async fn test_mixed_scheme_write_and_read(#[case] kind: StorageKind) -> iceberg:
     };
 
     let s3_path = unique_path(&harness, "test_mixed_scheme_write_and_read");
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TempDir::new()?;
     let fs_path = format!(
         "file:{}/mixed_write_and_read.txt",
         temp_dir.path().display()
@@ -95,7 +95,7 @@ async fn test_mixed_scheme_exists_independently(#[case] kind: StorageKind) -> ic
     };
 
     let s3_path = unique_path(&harness, "test_mixed_scheme_exists_independently");
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TempDir::new()?;
     let fs_path = format!(
         "file:{}/mixed_exists_independently.txt",
         temp_dir.path().display()
@@ -138,7 +138,7 @@ async fn test_mixed_scheme_delete_one_keeps_others(
     };
 
     let s3_path = unique_path(&harness, "test_mixed_scheme_delete_one_keeps_others");
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TempDir::new()?;
     let fs_path = format!(
         "file:{}/mixed_delete_one_keeps_others.txt",
         temp_dir.path().display()
@@ -196,7 +196,7 @@ async fn test_mixed_scheme_interleaved_operations(
     };
 
     let s3_path = unique_path(&harness, "test_mixed_scheme_interleaved");
-    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = TempDir::new()?;
     let fs_path = format!("file:{}/mixed_interleaved.txt", temp_dir.path().display());
     let mem_path = "memory://test_mixed_scheme_interleaved";
 

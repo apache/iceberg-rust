@@ -22,7 +22,7 @@ use std::time::Duration;
 use iceberg::io::FileIO;
 use tokio::time::sleep;
 
-use crate::harness::StorageHarness;
+use super::harness::StorageHarness;
 
 const DEFAULT_PROBE_TIMEOUT_MS: u64 = 1000;
 const DEFAULT_PROBE_RETRIES: usize = 3;
@@ -43,6 +43,7 @@ fn get_probe_timeout() -> Duration {
 /// and actively responding to HTTP requests.
 pub async fn is_endpoint_reachable(endpoint: &str) -> bool {
     let Ok(client) = reqwest::Client::builder()
+        .no_proxy()
         .timeout(get_probe_timeout())
         .build()
     else {

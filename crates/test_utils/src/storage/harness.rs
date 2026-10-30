@@ -20,8 +20,9 @@
 use std::sync::Arc;
 
 use iceberg::io::FileIO;
-use iceberg_test_utils::normalize_test_name;
 use tempfile::TempDir;
+
+use crate::normalize_test_name;
 
 /// Test harness holding an initialized `FileIO` instance and a base test directory/prefix.
 pub struct StorageHarness {
@@ -57,4 +58,12 @@ impl StorageHarness {
 /// Helper function to generate a unique, normalized path for a given storage harness.
 pub fn unique_path(harness: &StorageHarness, test_name: &str) -> String {
     harness.unique_path(test_name)
+}
+
+/// Helper to serialize and deserialize a `FileIO` instance.
+pub fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
+    let serialized = file_io
+        .serialize_all()
+        .expect("FileIO serialization must succeed");
+    FileIO::deserialize_all(&serialized).expect("FileIO deserialization must succeed")
 }

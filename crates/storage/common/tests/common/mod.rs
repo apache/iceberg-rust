@@ -26,12 +26,12 @@ use iceberg::io::{
     FileIOBuilder, GCS_NO_AUTH, GCS_SERVICE_HOST, S3_ACCESS_KEY_ID, S3_ENDPOINT,
     S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
 };
-#[allow(unused_imports)]
-pub use iceberg_storage_common::{
-    StorageHarness, handle_unreachable_endpoint, is_endpoint_reachable, unique_path,
-    wait_until_ready,
-};
 use iceberg_storage_opendal::{OpenDalResolvingStorageFactory, OpenDalStorageFactory};
+#[allow(unused_imports)]
+pub use iceberg_test_utils::storage::{
+    StorageHarness, handle_unreachable_endpoint, is_endpoint_reachable, roundtrip_file_io,
+    unique_path, wait_until_ready,
+};
 use iceberg_test_utils::{get_gcs_endpoint, get_object_store_endpoint, set_up};
 use tempfile::TempDir;
 

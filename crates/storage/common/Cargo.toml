@@ -30,24 +30,19 @@ keywords = ["iceberg", "storage"]
 publish = false
 
 [dependencies]
-bytes = { workspace = true }
-futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg_test_utils = { path = "../../test_utils", features = ["tests"] }
-reqwest = { workspace = true }
-tempfile = { workspace = true }
-tokio = { workspace = true, features = [
-  "io-util",
-  "macros",
-  "net",
-  "rt-multi-thread",
-  "time",
-] }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 
 [dev-dependencies]
+bytes = { workspace = true }
+futures = { workspace = true }
 iceberg-storage-opendal = { workspace = true, features = ["opendal-all"] }
 reqsign-core = { workspace = true }
+reqwest = { workspace = true }
 rstest = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "macros", "net"] }
 
 [lints]
 workspace = true
