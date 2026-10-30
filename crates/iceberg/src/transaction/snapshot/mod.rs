@@ -259,6 +259,7 @@ fn build_summary(
         );
     }
 
+    let mut schemas_by_spec = HashMap::new();
     for data_file in removed_files {
         let partition_spec = metadata
             .partition_spec_by_id(data_file.partition_spec_id)
@@ -267,14 +268,19 @@ fn build_summary(
             })?;
         // A dropped source column keeps its type, such as a decimal's scale, only in an
         // older schema.
-        let schema = metadata
-            .schemas_iter()
-            .filter(|schema| {
-                let mut source_ids = partition_spec.fields().iter().map(|f| f.source_id);
-                source_ids.all(|id| schema.field_by_id(id).is_some())
-            })
-            .max_by_key(|schema| schema.schema_id())
-            .unwrap_or(metadata.current_schema());
+        let schema = schemas_by_spec
+            .entry(data_file.partition_spec_id)
+            .or_insert_with(|| {
+                metadata
+                    .schemas_iter()
+                    .filter(|schema| {
+                        let mut source_ids = partition_spec.fields().iter().map(|f| f.source_id);
+                        source_ids.all(|id| schema.field_by_id(id).is_some())
+                    })
+                    .max_by_key(|schema| schema.schema_id())
+                    .unwrap_or(metadata.current_schema())
+                    .clone()
+            });
         collector.remove_file(data_file, schema.clone(), partition_spec.clone());
     }
 
