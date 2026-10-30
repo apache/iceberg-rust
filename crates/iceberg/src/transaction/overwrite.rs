@@ -143,11 +143,18 @@ impl OverwriteAction {
 
 #[async_trait]
 impl TransactionAction for OverwriteAction {
-    type State = ();
+    type State = OverwriteState;
 
-    fn new_state(&self) -> Self::State {}
+    fn new_state(&self) -> OverwriteState {
+        OverwriteState {
+            commit_uuid: self.commit_uuid.unwrap_or_else(Uuid::now_v7),
+            snapshot_id: None,
+            attempt: 0,
+            manifest_counter: 0,
+        }
+    }
 
-    async fn commit(&self, _state: &mut (), table: &Table) -> Result<ActionCommit> {
+    async fn commit(&self, state: &mut OverwriteState, table: &Table) -> Result<ActionCommit> {
         self.validate(table)?;
         let mut deleted_files = HashMap::new();
         for file in &self.deleted_data_files {
@@ -163,9 +170,9 @@ impl TransactionAction for OverwriteAction {
             validate_files_not_live(table, &added).await?;
         }
 
-        let snapshot_id = generate_snapshot_id(table);
-        let commit_uuid = self.commit_uuid.unwrap_or_else(Uuid::now_v7);
-        let mut manifest_counter = 0;
+        let snapshot_id = *state
+            .snapshot_id
+            .get_or_insert_with(|| generate_snapshot_id(table));
         let mut manifests = vec![];
         // One per tombstone written, so a path live in several manifests counts each copy.
         let mut removed_files = vec![];
@@ -199,13 +206,12 @@ impl TransactionAction for OverwriteAction {
 
             let mut writer = new_manifest_writer(
                 table,
-                manifest_path(table, commit_uuid, manifest_counter)?,
+                state.next_manifest_path(table)?,
                 snapshot_id,
                 manifest_file.content,
                 manifest.metadata().schema.clone(),
                 Arc::new(manifest.metadata().partition_spec.clone()),
             )?;
-            manifest_counter += 1;
             // Like Java, only live entries are carried into the rewrite.
             for entry in live {
                 if deleted_files.contains_key(entry.file_path()) {
@@ -236,7 +242,7 @@ impl TransactionAction for OverwriteAction {
             manifests.push(
                 write_added_manifest(
                     table,
-                    manifest_path(table, commit_uuid, manifest_counter)?,
+                    state.next_manifest_path(table)?,
                     snapshot_id,
                     table.metadata().default_partition_spec_id(),
                     &self.added_data_files,
@@ -251,9 +257,12 @@ impl TransactionAction for OverwriteAction {
             // Also a properties-only commit, the workaround from #1548.
             _ => Operation::Append,
         };
+        let manifest_list_path =
+            manifest_list_path(table, snapshot_id, state.attempt, state.commit_uuid)?;
+        state.attempt += 1;
         write_snapshot_commit(table, SnapshotCommitInput {
             snapshot_id,
-            manifest_list_path: manifest_list_path(table, snapshot_id, 0, commit_uuid)?,
+            manifest_list_path,
             operation,
             properties: self.snapshot_properties.clone(),
             added_files: &self.added_data_files,
@@ -265,7 +274,23 @@ impl TransactionAction for OverwriteAction {
         .await
     }
 
-    async fn cleanup(self, _state: (), _table: &Table, _status: CommitStatus) {}
+    async fn cleanup(self, _state: OverwriteState, _table: &Table, _status: CommitStatus) {}
+}
+
+/// Kept across retries, so no attempt overwrites a file an earlier attempt wrote.
+pub(crate) struct OverwriteState {
+    commit_uuid: Uuid,
+    snapshot_id: Option<i64>,
+    attempt: u64,
+    manifest_counter: u64,
+}
+
+impl OverwriteState {
+    fn next_manifest_path(&mut self, table: &Table) -> Result<String> {
+        let path = manifest_path(table, self.commit_uuid, self.manifest_counter);
+        self.manifest_counter += 1;
+        path
+    }
 }
 
 /// Describes the first field where a requested delete differs from the table's entry.
@@ -299,6 +324,8 @@ fn metadata_mismatch(requested: &DataFile, actual: &DataFile) -> Option<String> 
 mod tests {
     use std::sync::Arc;
 
+    use uuid::Uuid;
+
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, Literal,
@@ -309,7 +336,7 @@ mod tests {
     use crate::table::Table;
     use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::tests::{make_v2_minimal_table, make_v3_minimal_table_in_catalog};
-    use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
+    use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction, TransactionAction};
     use crate::{Catalog, ErrorKind, TableCommit, TableCreation, TableUpdate};
 
     fn test_data_file(path: &str, partition_spec_id: i32) -> DataFile {
@@ -429,6 +456,45 @@ mod tests {
             (ManifestStatus::Added, "test/c.parquet".to_string()),
             (ManifestStatus::Added, "test/d.parquet".to_string()),
         ]);
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_retry_keeps_its_snapshot_id_and_never_reuses_a_manifest_path() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+        let file_a = test_data_file("test/a.parquet", spec_id);
+        let tx = Transaction::new(&table);
+        let action = tx.fast_append().add_data_files(vec![file_a.clone()]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let action = Transaction::new(&table)
+            .overwrite()
+            .set_commit_uuid(Uuid::nil())
+            .add_data_files(vec![test_data_file("test/b.parquet", spec_id)])
+            .delete_data_files(vec![file_a]);
+        let mut state = action.new_state();
+        let mut attempts = vec![];
+        for _ in 0..2 {
+            let mut action_commit = action.commit(&mut state, &table).await.unwrap();
+            let Some(TableUpdate::AddSnapshot { snapshot }) =
+                action_commit.take_updates().into_iter().next()
+            else {
+                unreachable!()
+            };
+            let snapshot = SnapshotRef::new(snapshot);
+            let manifest_list = table.manifest_list_reader(&snapshot).load().await.unwrap();
+            let mut paths: Vec<_> = manifest_list
+                .entries()
+                .iter()
+                .map(|m| m.manifest_path.clone())
+                .collect();
+            paths.push(snapshot.manifest_list().to_string());
+            attempts.push((snapshot.snapshot_id(), paths));
+        }
+
+        assert_eq!(attempts[0].0, attempts[1].0);
+        assert!(attempts[1].1.iter().all(|p| !attempts[0].1.contains(p)));
     }
 
     #[tokio::test]
