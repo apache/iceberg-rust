@@ -147,6 +147,7 @@ pub struct TableScanBuilder<'a> {
     filter: Option<Predicate>,
     concurrency_limit_manifest_entries: usize,
     concurrency_limit_manifest_files: usize,
+    concurrency_limit_data_files: usize,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -161,6 +162,7 @@ impl<'a> TableScanBuilder<'a> {
             filter: None,
             concurrency_limit_manifest_entries: num_cpus,
             concurrency_limit_manifest_files: num_cpus,
+            concurrency_limit_data_files: num_cpus,
         }
     }
 
@@ -237,11 +239,11 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Sets the concurrency limit for both manifest files and manifest
-    /// entries for this scan
+    /// Sets manifest concurrency and the default data-file concurrency for `to_arrow`.
     pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
         self.concurrency_limit_manifest_files = limit;
         self.concurrency_limit_manifest_entries = limit;
+        self.concurrency_limit_data_files = limit;
         self
     }
 
@@ -285,6 +287,7 @@ impl<'a> TableScanBuilder<'a> {
                         plan_context: None,
                         concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+                        concurrency_limit_data_files: self.concurrency_limit_data_files,
                         runtime: self.table.runtime().clone(),
                     });
                 };
@@ -344,6 +347,7 @@ impl<'a> TableScanBuilder<'a> {
             plan_context: Some(plan_context),
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
+            concurrency_limit_data_files: self.concurrency_limit_data_files,
             runtime: self.table.runtime().clone(),
         })
     }
@@ -361,6 +365,7 @@ pub struct TableScan {
     /// The maximum number of manifest files that will be
     /// retrieved from [`FileIO`] concurrently
     concurrency_limit_manifest_files: usize,
+    concurrency_limit_data_files: usize,
 
     /// The maximum number of [`ManifestEntry`]s that will
     /// be processed in parallel
@@ -512,7 +517,13 @@ impl TableScan {
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
+    ///
+    /// An unset reader concurrency inherits the scan's data-file limit; an explicit
+    /// reader limit overrides it. Zero reader concurrency is treated as one.
     pub async fn to_arrow(&self, options: ArrowReaderOptions) -> Result<ArrowRecordBatchStream> {
+        // Preserve the scan's data-file concurrency bound for backwards compatibility.
+        let options =
+            options.with_default_data_file_concurrency_limit(self.concurrency_limit_data_files);
         ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
             .with_options(options)
             .build()
@@ -681,6 +692,7 @@ mod tests {
         ROWS_PER_FIXTURE_FILE, TableTestFixture, assert_last_updated_seq_all,
     };
     use crate::test_utils::test_runtime;
+    use crate::util::available_parallelism;
     use crate::util::snapshot::snapshot_id_as_of_time;
     use crate::{ErrorKind, Runtime, TableIdent};
 
@@ -3228,6 +3240,37 @@ mod tests {
             .expect_err("projecting an absent column should fail");
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_scan_retains_data_file_concurrency() {
+        for fixture in [TableTestFixture::new(), TableTestFixture::new_empty()] {
+            let default_scan = fixture.table.scan().build().unwrap();
+            let default_limit = available_parallelism().get();
+            assert_eq!(
+                (
+                    default_scan.concurrency_limit_manifest_files,
+                    default_scan.concurrency_limit_manifest_entries,
+                    default_scan.concurrency_limit_data_files
+                ),
+                (default_limit, default_limit, default_limit),
+            );
+            let scan = fixture
+                .table
+                .scan()
+                .with_concurrency_limit(3)
+                .with_manifest_entry_concurrency_limit(1)
+                .build()
+                .unwrap();
+            assert_eq!(
+                (
+                    scan.concurrency_limit_manifest_files,
+                    scan.concurrency_limit_manifest_entries,
+                    scan.concurrency_limit_data_files
+                ),
+                (3, 1, 3),
+            );
+        }
     }
 
     #[tokio::test]

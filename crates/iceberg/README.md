@@ -85,9 +85,11 @@ let stream = table.scan().build()?.to_arrow(options).await?;
 When upgrading, move reader-setting calls from `TableScanBuilder` to
 `ArrowReaderOptions::builder()` and pass the result to `to_arrow(options)`.
 Use `to_arrow(Default::default())` for default settings. Scan
-`with_concurrency_limit()` controls manifest planning only; set
-`with_data_file_concurrency_limit(limit)` on the reader options to also
-limit data-file reads. An unset data-file limit uses execution-host parallelism.
+`with_concurrency_limit()` controls manifest planning and supplies the default
+data-file limit for `to_arrow()`. Set `with_data_file_concurrency_limit(limit)`
+on the reader options to override that limit independently. For direct reader
+construction, an unset data-file limit uses execution-host parallelism. Zero
+reader concurrency is treated as one.
 
 Locally constructed readers accept the same options through
 `ArrowReaderBuilder::with_options(options)`, including Parquet I/O tuning.
