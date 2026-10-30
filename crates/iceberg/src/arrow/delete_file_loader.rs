@@ -47,14 +47,16 @@ pub trait DeleteFileLoader {
 pub(crate) struct BasicDeleteFileLoader {
     file_io: FileIO,
     scan_metrics: ScanMetrics,
+    runtime: crate::Runtime,
 }
 
 #[allow(unused_variables)]
 impl BasicDeleteFileLoader {
-    pub fn new(file_io: FileIO, scan_metrics: ScanMetrics) -> Self {
+    pub fn new(file_io: FileIO, scan_metrics: ScanMetrics, runtime: crate::Runtime) -> Self {
         BasicDeleteFileLoader {
             file_io,
             scan_metrics,
+            runtime,
         }
     }
 
@@ -78,6 +80,7 @@ impl BasicDeleteFileLoader {
         let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
             data_file_path,
             &self.file_io,
+            &self.runtime,
             file_size_in_bytes,
             parquet_read_options,
             self.scan_metrics.bytes_read_counter(),
@@ -156,7 +159,8 @@ mod tests {
         let file_io = FileIO::new_with_fs();
 
         let scan_metrics = ScanMetrics::new();
-        let delete_file_loader = BasicDeleteFileLoader::new(file_io.clone(), scan_metrics);
+        let delete_file_loader =
+            BasicDeleteFileLoader::new(file_io.clone(), scan_metrics, crate::Runtime::current());
 
         let file_scan_tasks = setup(table_location);
 
@@ -241,7 +245,8 @@ mod tests {
             .unwrap();
 
         let scan_metrics = ScanMetrics::new();
-        let delete_file_loader = BasicDeleteFileLoader::new(file_io, scan_metrics);
+        let delete_file_loader =
+            BasicDeleteFileLoader::new(file_io, scan_metrics, crate::Runtime::current());
 
         let result = delete_file_loader
             .read_delete_file(&task, schema)
@@ -317,7 +322,8 @@ mod tests {
             .unwrap();
 
         let scan_metrics = ScanMetrics::new();
-        let delete_file_loader = BasicDeleteFileLoader::new(file_io, scan_metrics);
+        let delete_file_loader =
+            BasicDeleteFileLoader::new(file_io, scan_metrics, crate::Runtime::current());
 
         let result = delete_file_loader
             .read_delete_file(&task, schema)

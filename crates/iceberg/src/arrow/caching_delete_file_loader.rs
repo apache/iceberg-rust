@@ -101,7 +101,11 @@ impl CachingDeleteFileLoader {
     ) -> Self {
         let scan_metrics = ScanMetrics::new();
         CachingDeleteFileLoader {
-            basic_delete_file_loader: BasicDeleteFileLoader::new(file_io, scan_metrics),
+            basic_delete_file_loader: BasicDeleteFileLoader::new(
+                file_io,
+                scan_metrics,
+                runtime.clone(),
+            ),
             concurrency_limit_data_files,
             delete_filter: DeleteFilter::new(runtime.clone()),
             runtime,
@@ -112,6 +116,7 @@ impl CachingDeleteFileLoader {
         self.basic_delete_file_loader = BasicDeleteFileLoader::new(
             self.basic_delete_file_loader.file_io().clone(),
             scan_metrics,
+            self.runtime.clone(),
         );
         self
     }
@@ -204,7 +209,10 @@ impl CachingDeleteFileLoader {
         let del_filter = self.delete_filter.clone();
         let concurrency_limit_data_files = self.concurrency_limit_data_files;
         let basic_delete_file_loader = self.basic_delete_file_loader.clone();
-        self.runtime.io().spawn(async move {
+        let io = self.runtime.io().clone();
+        // Decode Parquet batches and construct delete filters on CPU workers.
+        // Storage operations are dispatched separately to the I/O runtime.
+        self.runtime.cpu().spawn(async move {
             let result = async move {
                 let mut del_filter = del_filter;
                 let basic_delete_file_loader = basic_delete_file_loader.clone();
@@ -212,12 +220,14 @@ impl CachingDeleteFileLoader {
                 let mut results_stream = task_stream
                     .map(move |(task, file_io, del_filter, schema)| {
                         let basic_delete_file_loader = basic_delete_file_loader.clone();
+                        let io = io.clone();
                         async move {
                             Self::load_file_for_task(
                                 &task,
                                 basic_delete_file_loader.clone(),
                                 del_filter,
                                 schema,
+                                io,
                             )
                             .await
                         }
@@ -262,13 +272,20 @@ impl CachingDeleteFileLoader {
         basic_delete_file_loader: BasicDeleteFileLoader,
         del_filter: DeleteFilter,
         schema: SchemaRef,
+        io: crate::runtime::RuntimeHandle,
     ) -> Result<DeleteFileContext> {
         match task.file_type() {
             DataContentType::PositionDeletes => {
                 // A V3 deletion vector arrives as a PositionDeletes entry whose deletes live in
                 // a Puffin blob, not in a positional-delete parquet file.
                 if task.file_format() == DataFileFormat::Puffin {
-                    return Self::load_deletion_vector(task, basic_delete_file_loader).await;
+                    let task = task.clone();
+                    return io
+                        .spawn(async move {
+                            Self::load_deletion_vector(&task, basic_delete_file_loader).await
+                        })
+                        .abort_on_drop()
+                        .await?;
                 }
 
                 match del_filter.try_start_pos_del_load(task.file_path()) {
@@ -841,6 +858,41 @@ mod tests {
     use crate::test_utils::encode_dv_blob;
 
     #[test]
+    fn delete_loading_requires_cpu_runtime() {
+        let io = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        // Deliberately not driven until after the I/O runtime has had a chance
+        // to run. A loader accidentally spawned on I/O would finish early.
+        let cpu = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let runtime = Runtime::new_with_split(&io, &cpu);
+        let dir = TempDir::new().unwrap();
+        let tasks = setup(dir.path());
+        let loader = CachingDeleteFileLoader::new(FileIO::new_with_fs(), 2, runtime);
+        let mut loaded = loader.load_deletes(tasks[0].deletes(), tasks[0].schema_ref());
+        io.block_on(async {
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(100), &mut loaded)
+                    .await
+                    .is_err()
+            );
+        });
+        let filter = cpu.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), loaded)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap()
+        });
+        assert!(filter.get_delete_vector(&tasks[0]).is_some());
+    }
+
+    #[test]
     fn test_deserialized_deletion_vector_rejects_missing_fields() {
         // A deletion vector that omits its required coordinates fails validation
         // during deserialization (the try_from mirror routes through `build()`),
@@ -869,7 +921,7 @@ mod tests {
         let eq_delete_file_path = setup_write_equality_delete_file_1(table_location);
 
         let basic_delete_file_loader =
-            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
+            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new(), Runtime::current());
         let record_batch_stream = basic_delete_file_loader
             .parquet_to_batch_stream(
                 &eq_delete_file_path,
@@ -1307,7 +1359,7 @@ mod tests {
 
         let file_io = FileIO::new_with_fs();
         let basic_delete_file_loader =
-            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
+            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new(), Runtime::current());
 
         let batch_stream = basic_delete_file_loader
             .parquet_to_batch_stream(
@@ -1488,7 +1540,7 @@ mod tests {
         writer.close().unwrap();
 
         let basic_delete_file_loader =
-            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
+            BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new(), Runtime::current());
         let record_batch_stream = basic_delete_file_loader
             .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len(), None)
             .await
