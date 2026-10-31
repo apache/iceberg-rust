@@ -37,7 +37,8 @@ use serde::{Deserialize, Serialize};
 
 use self::_serde::SchemaEnum;
 use self::id_reassigner::ReassignFieldIds;
-use self::index::{IndexByName, index_by_id, index_parents};
+pub(crate) use self::index::index_by_id;
+use self::index::{IndexByName, index_parents};
 pub use self::prune_columns::prune_columns;
 use super::NestedField;
 use crate::error::{Result, invalid_data};
