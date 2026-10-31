@@ -27,7 +27,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
 use arrow_array::{Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatch, Scalar};
 use arrow_buffer::BooleanBuffer;
-use arrow_cast::cast::cast;
+use arrow_cast::cast::{CastOptions, cast_with_options};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, DataType};
 use arrow_string::like::starts_with;
@@ -638,12 +638,10 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
     }
 }
 
-/// The Arrow type of an array that the Parquet reader reads may not match the exact Arrow type
-/// that Iceberg uses for literals - but they are effectively the same logical type,
-/// i.e. LargeUtf8 and Utf8 or Utf8View and Utf8 or Utf8View and LargeUtf8.
-///
-/// The Arrow compute kernels that we use must match the type exactly, so first cast the literal
-/// into the type of the batch we read from Parquet before sending it to the compute kernel.
+/// The row filter evaluates batches converted to the table schema, but a literal can still use
+/// another Arrow representation of the same type (e.g. `Binary` for a `LargeBinary` column).
+/// The compute kernels need the exact type, so cast the literal, failing rather than letting a
+/// lossy cast turn it into null.
 fn try_cast_literal(
     literal: &Arc<dyn ArrowDatum + Send + Sync>,
     column_type: &DataType,
@@ -655,7 +653,12 @@ fn try_cast_literal(
         return Ok(Arc::clone(literal));
     }
 
-    let literal_array = cast(literal_array, column_type)?;
+    // `safe: false` makes arrow return an error where the default would produce null.
+    let options = CastOptions {
+        safe: false,
+        ..Default::default()
+    };
+    let literal_array = cast_with_options(literal_array, column_type, &options)?;
     Ok(Arc::new(Scalar::new(literal_array)))
 }
 
@@ -664,15 +667,15 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
-    use arrow_array::{Array, BooleanArray, RecordBatch};
-    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use arrow_array::{Array, BooleanArray, Int32Array, RecordBatch};
+    use arrow_schema::{ArrowError, DataType, Field, Schema as ArrowSchema};
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
 
     use super::{CollectFieldIdVisitor, PredicateConverter, constant_bool_array};
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, Predicate, Reference};
-    use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     fn table_schema_simple() -> SchemaRef {
         Arc::new(
@@ -835,5 +838,44 @@ mod tests {
             [true, false, true, true]
         );
         assert!(!result.is_null(2));
+    }
+
+    /// A literal that does not fit the column type fails the predicate instead of becoming null.
+    #[test]
+    fn test_predicate_converter_rejects_lossy_literal_cast() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let predicate = Reference::new("x")
+            .less_than(Datum::long(i64::from(i32::MAX) + 1))
+            .bind(schema, true)
+            .unwrap();
+        let parquet_type = parse_message_type("message schema { required int32 x = 1; }").unwrap();
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+        let column_map = HashMap::from([(1, 0)]);
+        let column_indices = vec![0];
+        let mut converter = PredicateConverter {
+            parquet_schema: &parquet_schema,
+            column_map: &column_map,
+            column_indices: &column_indices,
+        };
+        let mut predicate_fn = visit(&mut converter, &predicate).unwrap();
+
+        // An `int` batch that was not converted to the table's `long`.
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "x",
+                DataType::Int32,
+                false,
+            )])),
+            vec![Arc::new(Int32Array::from(vec![1]))],
+        )
+        .unwrap();
+        assert!(matches!(predicate_fn(batch), Err(ArrowError::CastError(_))));
     }
 }
