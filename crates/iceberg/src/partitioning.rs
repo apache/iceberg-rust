@@ -17,6 +17,8 @@
 
 //! Partition type utilities for Iceberg tables.
 
+pub(crate) mod statistics;
+
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
