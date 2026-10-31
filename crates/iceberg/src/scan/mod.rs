@@ -404,6 +404,7 @@ impl<'a> TableScanBuilder<'a> {
             predicate: self.filter.map(Arc::new),
             snapshot_bound_predicate,
             object_cache: self.table.object_cache(),
+            runtime: self.table.runtime().clone(),
             field_ids: Arc::new(field_ids),
             name_mapping,
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
@@ -771,7 +772,7 @@ mod tests {
     };
     use crate::test_utils::test_runtime;
     use crate::util::snapshot::snapshot_id_as_of_time;
-    use crate::{ErrorKind, TableIdent};
+    use crate::{ErrorKind, Result, Runtime, TableIdent};
 
     #[tokio::test]
     async fn test_table_scan_columns() {
@@ -3134,6 +3135,89 @@ mod tests {
 
         // Assert it finished (didn't timeout)
         assert!(result.is_ok(), "Scan timed out - deadlock detected");
+    }
+
+    /// Plans `table` under a timeout so a swallowed manifest error shows up as
+    /// a timeout instead of a hang, and returns the collected result.
+    async fn plan_files_with_timeout(table: &Table) -> Result<Vec<FileScanTask>> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            table
+                .scan()
+                .build()
+                .unwrap()
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+        })
+        .await
+        .expect("plan_files hung instead of reporting the manifest error")
+    }
+
+    /// Returns the path of the first manifest in the current snapshot.
+    async fn first_manifest_path(fixture: &TableTestFixture) -> String {
+        let snapshot = fixture.table.metadata().current_snapshot().unwrap();
+        let manifest_list = fixture
+            .table
+            .manifest_list_reader(snapshot)
+            .load()
+            .await
+            .unwrap();
+        manifest_list.entries()[0].manifest_path.clone()
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_reports_corrupt_manifest_as_error() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let path = first_manifest_path(&fixture).await;
+        fs::write(&path, b"not an avro file").unwrap();
+
+        let err = plan_files_with_timeout(&fixture.table)
+            .await
+            .expect_err("a corrupt manifest must fail the plan");
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.to_string().contains(&path), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_reports_missing_manifest_as_error() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let path = first_manifest_path(&fixture).await;
+        fs::remove_file(&path).unwrap();
+
+        let err = plan_files_with_timeout(&fixture.table)
+            .await
+            .expect_err("a missing manifest must fail the plan");
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.to_string().contains(&path), "{err}");
+    }
+
+    /// A manifest parse spawned on a shut-down cpu runtime is cancelled, which
+    /// takes the same `JoinError` path a panicking parse does.
+    #[tokio::test]
+    async fn test_plan_files_reports_cancelled_manifest_parse_as_error() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let io_rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let cpu_rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let rt = Runtime::new_with_split(&io_rt, &cpu_rt);
+        cpu_rt.shutdown_background();
+        let table = fixture.table.clone().with_runtime(rt);
+
+        let err = plan_files_with_timeout(&table)
+            .await
+            .expect_err("a cancelled manifest parse must fail the plan");
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        io_rt.shutdown_background();
     }
 
     #[tokio::test]

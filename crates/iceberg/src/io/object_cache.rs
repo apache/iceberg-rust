@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use crate::encryption::EncryptionManager;
 use crate::io::FileIO;
+use crate::runtime::Runtime;
 use crate::spec::{
     Manifest, ManifestFile, ManifestList, ManifestListReader, ManifestReader, SnapshotRef,
     TableMetadataRef,
@@ -127,10 +128,15 @@ impl ObjectCache {
     }
 
     /// Retrieves an Arc [`Manifest`] from the cache
-    /// or retrieves one from FileIO and parses it if not present
-    pub(crate) async fn get_manifest(&self, manifest_file: &ManifestFile) -> Result<Arc<Manifest>> {
+    /// or retrieves one from FileIO and parses it on `runtime` if not present
+    pub(crate) async fn get_manifest(
+        &self,
+        manifest_file: &ManifestFile,
+        runtime: &Runtime,
+    ) -> Result<Arc<Manifest>> {
         if self.cache_disabled {
             return ManifestReader::new(self.file_io.clone())
+                .with_runtime(runtime.clone())
                 .read(manifest_file)
                 .await
                 .map(Arc::new);
@@ -141,7 +147,7 @@ impl ObjectCache {
         let cache_entry = self
             .cache
             .entry_by_ref(&key)
-            .or_try_insert_with(self.fetch_and_parse_manifest(manifest_file))
+            .or_try_insert_with(self.fetch_and_parse_manifest(manifest_file, runtime))
             .await
             .map_err(|err| {
                 Error::new(
@@ -206,8 +212,13 @@ impl ObjectCache {
         }
     }
 
-    async fn fetch_and_parse_manifest(&self, manifest_file: &ManifestFile) -> Result<CachedItem> {
+    async fn fetch_and_parse_manifest(
+        &self,
+        manifest_file: &ManifestFile,
+        runtime: &Runtime,
+    ) -> Result<CachedItem> {
         let manifest = ManifestReader::new(self.file_io.clone())
+            .with_runtime(runtime.clone())
             .read(manifest_file)
             .await?;
 
@@ -443,7 +454,10 @@ mod tests {
         assert_eq!(result_manifest_list.entries().len(), 1);
 
         let manifest_file = result_manifest_list.entries().first().unwrap();
-        let result_manifest = object_cache.get_manifest(manifest_file).await.unwrap();
+        let result_manifest = object_cache
+            .get_manifest(manifest_file, fixture.table.runtime())
+            .await
+            .unwrap();
 
         assert_eq!(
             result_manifest
@@ -490,7 +504,10 @@ mod tests {
         let manifest_file = result_manifest_list.entries().first().unwrap();
 
         // not in cache
-        let result_manifest = object_cache.get_manifest(manifest_file).await.unwrap();
+        let result_manifest = object_cache
+            .get_manifest(manifest_file, fixture.table.runtime())
+            .await
+            .unwrap();
 
         assert_eq!(
             result_manifest
@@ -505,7 +522,10 @@ mod tests {
         );
 
         // retrieve cached version
-        let result_manifest = object_cache.get_manifest(manifest_file).await.unwrap();
+        let result_manifest = object_cache
+            .get_manifest(manifest_file, fixture.table.runtime())
+            .await
+            .unwrap();
 
         assert_eq!(
             result_manifest
@@ -667,8 +687,14 @@ mod tests {
 
         let object_cache = ObjectCache::new(io, None);
 
-        let manifest_a = object_cache.get_manifest(&manifest_file_a).await.unwrap();
-        let manifest_b = object_cache.get_manifest(&manifest_file_b).await.unwrap();
+        let manifest_a = object_cache
+            .get_manifest(&manifest_file_a, &test_runtime())
+            .await
+            .unwrap();
+        let manifest_b = object_cache
+            .get_manifest(&manifest_file_b, &test_runtime())
+            .await
+            .unwrap();
 
         // A cache keyed on path alone would serve manifest_a's inherited ids for
         // the second read; keying on first_row_id keeps them distinct.
@@ -744,8 +770,14 @@ mod tests {
 
         let object_cache = ObjectCache::new(io, None);
 
-        let first = object_cache.get_manifest(&first_attempt).await.unwrap();
-        let second = object_cache.get_manifest(&retry).await.unwrap();
+        let first = object_cache
+            .get_manifest(&first_attempt, &test_runtime())
+            .await
+            .unwrap();
+        let second = object_cache
+            .get_manifest(&retry, &test_runtime())
+            .await
+            .unwrap();
 
         assert_eq!(first.entries()[0].sequence_number(), Some(35));
         assert_eq!(second.entries()[0].sequence_number(), Some(36));

@@ -19,18 +19,29 @@ use super::Manifest;
 use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
 use crate::error::{Result, invalid_data};
 use crate::io::FileIO;
+use crate::runtime::Runtime;
 use crate::spec::{ManifestContentType, ManifestEntry, ManifestFile};
 
 /// Reads a manifest file referenced by a manifest list entry, transparently
 /// decrypting it when the entry records key metadata.
 pub struct ManifestReader {
     file_io: FileIO,
+    runtime: Option<Runtime>,
 }
 
 impl ManifestReader {
     /// Create a manifest reader.
     pub(crate) fn new(file_io: FileIO) -> Self {
-        Self { file_io }
+        Self {
+            file_io,
+            runtime: None,
+        }
+    }
+
+    /// Parses manifests on `runtime`'s cpu handle instead of the calling task.
+    pub(crate) fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = Some(runtime);
+        self
     }
 
     /// Read, decrypt, parse and return the manifest described by
@@ -51,8 +62,16 @@ impl ManifestReader {
             None => input_file.read().await?,
         };
 
-        let (metadata, mut entries) =
-            Manifest::try_from_avro_bytes(&bytes, Some(&manifest_file.manifest_path))?;
+        let (metadata, mut entries) = match &self.runtime {
+            Some(runtime) => {
+                let location = manifest_file.manifest_path.clone();
+                runtime
+                    .cpu()
+                    .spawn(async move { Manifest::try_from_avro_bytes(&bytes, Some(&location)) })
+                    .await??
+            }
+            None => Manifest::try_from_avro_bytes(&bytes, Some(&manifest_file.manifest_path))?,
+        };
 
         for entry in &mut entries {
             entry.inherit_data(manifest_file);
@@ -139,6 +158,7 @@ mod tests {
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, ManifestEntry, ManifestStatus,
         ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema, Struct, Type,
     };
+    use crate::test_utils::test_runtime;
 
     #[tokio::test]
     async fn test_read_plaintext_manifest_inherits_entries() {
@@ -205,6 +225,38 @@ mod tests {
         let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
         assert_eq!(manifest.entries()[0].sequence_number(), Some(0));
         assert_eq!(manifest.entries()[0].file_sequence_number, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_read_parses_on_runtime() {
+        let schema = test_schema();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        let io = FileIO::new_with_memory();
+        let path = "memory:///table/metadata/runtime.avro";
+        let mut writer = ManifestWriterBuilder::new(
+            io.new_output(path).unwrap(),
+            Some(1),
+            schema.clone(),
+            partition_spec,
+        )
+        .build_v2_data();
+        writer.add_entry(test_entry()).unwrap();
+        let manifest_file = writer.write_manifest_file().await.unwrap();
+
+        let inline = ManifestReader::new(io.clone())
+            .read(&manifest_file)
+            .await
+            .unwrap();
+        let spawned = ManifestReader::new(io)
+            .with_runtime(test_runtime())
+            .read(&manifest_file)
+            .await
+            .unwrap();
+        assert_eq!(spawned, inline);
     }
 
     #[tokio::test]
