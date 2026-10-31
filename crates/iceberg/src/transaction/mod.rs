@@ -227,6 +227,17 @@ impl Transaction {
             self.table = refreshed.clone();
         }
 
+        let table_commit = self.prepare_commit().await?;
+        catalog.update_table(table_commit).await
+    }
+
+    /// Builds the [`TableCommit`] for this transaction against its base table,
+    /// without refreshing the base or sending the commit.
+    ///
+    /// This lets several tables be committed atomically through a catalog that
+    /// supports multi-table commits. If that commit conflicts, reload the tables
+    /// and rebuild their transactions.
+    pub async fn prepare_commit(&mut self) -> Result<TableCommit> {
         let mut current_table = self.table.clone();
         let mut existing_updates: Vec<TableUpdate> = vec![];
         let mut existing_requirements: Vec<TableRequirement> = vec![];
@@ -242,13 +253,11 @@ impl Transaction {
             )?;
         }
 
-        let table_commit = TableCommit::builder()
+        Ok(TableCommit::builder()
             .ident(self.table.identifier().to_owned())
             .updates(existing_updates)
             .requirements(existing_requirements)
-            .build();
-
-        catalog.update_table(table_commit).await
+            .build())
     }
 }
 
@@ -270,7 +279,7 @@ mod tests {
     use crate::table::{StaticTable, Table};
     use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{ApplyTransactionAction, Transaction};
-    use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent};
+    use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent, TableUpdate};
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -519,6 +528,22 @@ mod tests {
 
         // Verify the result
         assert!(result.is_ok(), "Transaction should eventually succeed");
+    }
+
+    #[tokio::test]
+    async fn test_prepare_commit() {
+        let table = make_v2_table();
+        let mut tx = create_test_transaction(&table);
+
+        let mut commit = tx.prepare_commit().await.unwrap();
+
+        assert_eq!(commit.identifier(), table.identifier());
+        assert_eq!(commit.take_updates(), vec![
+            TableUpdate::SetProperties {
+                updates: HashMap::from([("test.key".to_string(), "test.value".to_string())]),
+            },
+            TableUpdate::RemoveProperties { removals: vec![] },
+        ]);
     }
 
     #[tokio::test]
