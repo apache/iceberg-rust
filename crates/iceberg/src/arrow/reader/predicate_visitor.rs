@@ -38,7 +38,7 @@ use crate::arrow::get_arrow_datum;
 use crate::error::{Result, invalid_data};
 use crate::expr::visitors::bound_predicate_visitor::BoundPredicateVisitor;
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::Datum;
+use crate::spec::{Datum, PartitionSpec, Struct, Transform};
 
 /// A visitor to collect field ids from bound predicates.
 pub(super) struct CollectFieldIdVisitor {
@@ -203,6 +203,8 @@ pub(super) struct PredicateConverter<'a> {
     pub(super) column_map: &'a HashMap<i32, usize>,
     /// The required column indices in Parquet schema for the predicates.
     pub(super) column_indices: &'a Vec<usize>,
+    /// Partition metadata used to distinguish a missing NULL from a constant value.
+    pub(super) partition: Option<(&'a PartitionSpec, &'a Struct)>,
 }
 
 impl PredicateConverter<'_> {
@@ -248,6 +250,20 @@ impl PredicateConverter<'_> {
         Ok(Box::new(|batch| {
             Ok(constant_bool_array(false, batch.num_rows()))
         }))
+    }
+
+    fn missing_field_is_null(&self, reference: &BoundReference) -> bool {
+        if reference.field().required || reference.field().initial_default.is_some() {
+            return false;
+        }
+
+        !self.partition.is_some_and(|(spec, data)| {
+            spec.fields().iter().zip(data.iter()).any(|(field, value)| {
+                field.source_id == reference.field().id
+                    && field.transform == Transform::Identity
+                    && value.is_some()
+            })
+        })
     }
 }
 
@@ -433,7 +449,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             }))
         } else {
             // A missing column, treating it as null.
-            self.build_always_true()
+            if self.missing_field_is_null(reference) {
+                self.build_always_false()
+            } else {
+                self.build_always_true()
+            }
         }
     }
 
@@ -453,7 +473,11 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             }))
         } else {
             // A missing column, treating it as null.
-            self.build_always_true()
+            if self.missing_field_is_null(reference) {
+                self.build_always_false()
+            } else {
+                self.build_always_true()
+            }
         }
     }
 
@@ -767,6 +791,15 @@ mod tests {
         schema: SchemaRef,
         batch: RecordBatch,
     ) -> BooleanArray {
+        apply_predicate_with_partition(predicate, schema, batch, None)
+    }
+
+    fn apply_predicate_with_partition(
+        predicate: Predicate,
+        schema: SchemaRef,
+        batch: RecordBatch,
+        partition: Option<(&crate::spec::PartitionSpec, &crate::spec::Struct)>,
+    ) -> BooleanArray {
         let bound = predicate.bind(schema, true).unwrap();
 
         // Build a trivial Parquet schema with one float column at field id 4
@@ -785,10 +818,129 @@ mod tests {
             parquet_schema: &parquet_schema,
             column_map: &column_map,
             column_indices: &column_indices,
+            partition,
         };
 
         let mut predicate_fn = visit(&mut converter, &bound).unwrap();
         predicate_fn(batch).unwrap()
+    }
+
+    #[test]
+    fn test_missing_nullable_field_comparisons_match_null_semantics() {
+        use arrow_array::{Int64Array, RecordBatch};
+        use arrow_schema::{Field, Schema as ArrowSchema};
+
+        use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "a",
+            DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(arrow_schema, vec![Arc::new(Int64Array::from(vec![
+            1, 2, 3,
+        ]))])
+        .unwrap();
+
+        for predicate in [
+            Reference::new("b").less_than(Datum::long(5)),
+            Reference::new("b").less_than_or_equal_to(Datum::long(5)),
+        ] {
+            let result = apply_predicate_to_batch(predicate, schema.clone(), batch.clone());
+            assert_eq!(result, constant_bool_array(false, 3));
+        }
+    }
+
+    #[test]
+    fn test_missing_field_comparisons_preserve_known_values() {
+        use arrow_array::{Int64Array, RecordBatch};
+        use arrow_schema::{Field, Schema as ArrowSchema};
+
+        use crate::spec::{
+            Datum, Literal, NestedField, PartitionSpec, PrimitiveType, Schema, Struct, Transform,
+            Type,
+        };
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "a",
+            DataType::Int64,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(arrow_schema, vec![Arc::new(Int64Array::from(vec![
+            1, 2, 3,
+        ]))])
+        .unwrap();
+        let spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(7)
+            .add_partition_field("b", "b", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+
+        for predicate in [
+            Reference::new("b").less_than(Datum::long(10)),
+            Reference::new("b").less_than_or_equal_to(Datum::long(10)),
+        ] {
+            let identity_value = Struct::from_iter([Some(Literal::long(7))]);
+            let result = apply_predicate_with_partition(
+                predicate.clone(),
+                schema.clone(),
+                batch.clone(),
+                Some((&spec, &identity_value)),
+            );
+            assert_eq!(result, constant_bool_array(true, 3));
+
+            let identity_null = Struct::from_iter([None]);
+            let result = apply_predicate_with_partition(
+                predicate,
+                schema.clone(),
+                batch.clone(),
+                Some((&spec, &identity_null)),
+            );
+            assert_eq!(result, constant_bool_array(false, 3));
+        }
+
+        for nested_field in [
+            NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Long))
+                .with_initial_default(Literal::long(7)),
+            NestedField::required(2, "b", Type::Primitive(PrimitiveType::Long)),
+        ] {
+            let known_value_schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                        nested_field.into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            for predicate in [
+                Reference::new("b").less_than(Datum::long(10)),
+                Reference::new("b").less_than_or_equal_to(Datum::long(10)),
+            ] {
+                let result =
+                    apply_predicate_to_batch(predicate, known_value_schema.clone(), batch.clone());
+                assert_eq!(result, constant_bool_array(true, 3));
+            }
+        }
     }
 
     #[test]
