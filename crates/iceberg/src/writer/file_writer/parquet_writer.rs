@@ -42,6 +42,7 @@ use crate::compression::CompressionCodec;
 use crate::encryption::{EncryptionManager, StandardKeyMetadata};
 use crate::error::invalid_data;
 use crate::io::{FileIO, FileWrite, OutputFile};
+use crate::metadata_columns::RESERVED_FIELD_ID_DELETE_FILE_PATH;
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
     NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
@@ -167,8 +168,21 @@ impl FileWriterBuilder for ParquetWriterBuilder {
             .encryption_manager
             .as_ref()
             .map(|em| em.generate_key_metadata());
-        let writer_properties =
-            resolve_writer_properties(self.props.clone(), key_metadata.as_ref())?;
+        let mut props = self.props.clone();
+        // Like Java's `MetricsConfig.forPositionDelete`, keep full statistics for a position
+        // delete file. A truncated `file_path` gives unequal bounds, so the file can no
+        // longer be matched to the one data file it references.
+        if self
+            .schema
+            .field_by_id(RESERVED_FIELD_ID_DELETE_FILE_PATH)
+            .is_some()
+        {
+            props = props
+                .into_builder()
+                .set_statistics_truncate_length(None)
+                .build();
+        }
+        let writer_properties = resolve_writer_properties(props, key_metadata.as_ref())?;
         Ok(ParquetWriter {
             schema: self.schema.clone(),
             inner_writer: None,
@@ -778,6 +792,7 @@ mod tests {
     use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
     use crate::spec::{PrimitiveLiteral, Struct, *};
     use crate::test_utils::make_encryption_manager;
+    use crate::writer::base_writer::position_delete_writer::position_delete_schema;
     use crate::writer::file_writer::location_generator::{
         DefaultFileNameGenerator, DefaultLocationGenerator, FileNameGenerator, LocationGenerator,
     };
@@ -2737,6 +2752,31 @@ mod tests {
         assert_eq!(cdc.min_chunk_size, 4096);
         assert_eq!(cdc.max_chunk_size, 8192);
         assert_eq!(cdc.norm_level, 2);
+    }
+
+    #[tokio::test]
+    async fn test_statistics_truncation_kept_off_for_position_deletes() {
+        let tmp = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let props = WriterProperties::builder()
+            .set_statistics_truncate_length(Some(16))
+            .build();
+        for (schema, expected) in [
+            (cdc_test_schema(), Some(16)),
+            (position_delete_schema(), None),
+        ] {
+            let output = file_io
+                .new_output(format!("{}/t.parquet", tmp.path().to_str().unwrap()))
+                .unwrap();
+            let writer = ParquetWriterBuilder::new(props.clone(), schema)
+                .build(output)
+                .await
+                .unwrap();
+            assert_eq!(
+                writer.writer_properties.statistics_truncate_length(),
+                expected
+            );
+        }
     }
 
     #[test]
