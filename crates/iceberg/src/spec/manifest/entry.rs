@@ -564,12 +564,7 @@ fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
         SPLIT_OFFSETS.clone(),
         EQUALITY_IDS.clone(),
         SORT_ORDER_ID.clone(),
-        FIRST_ROW_ID.clone(),
         REFERENCE_DATA_FILE.clone(),
-        // Why are the following two fields here in the existing v2 schema?
-        // In the spec, they are not even listed as optional for v2.
-        CONTENT_OFFSET.clone(),
-        CONTENT_SIZE_IN_BYTES.clone(),
     ]
 }
 
@@ -580,7 +575,17 @@ pub(super) fn data_file_schema_v2(partition_type: &StructType) -> Result<AvroSch
     schema_to_avro_schema("data_file", &schema)
 }
 
+pub(super) fn manifest_schema_v3(partition_type: &StructType) -> Result<AvroSchema> {
+    manifest_schema_v2_v3(data_file_fields_v3(partition_type))
+}
+
 pub(super) fn manifest_schema_v2(partition_type: &StructType) -> Result<AvroSchema> {
+    manifest_schema_v2_v3(data_file_fields_v2(partition_type))
+}
+
+/// Root manifest schema is unchanged between format version 2 and 3.
+/// Manifest entry schema is different between versions.
+fn manifest_schema_v2_v3(data_file_fields: Vec<NestedFieldRef>) -> Result<AvroSchema> {
     let fields = vec![
         STATUS.clone(),
         SNAPSHOT_ID_V2.clone(),
@@ -589,7 +594,7 @@ pub(super) fn manifest_schema_v2(partition_type: &StructType) -> Result<AvroSche
         Arc::new(NestedField::required(
             2,
             "data_file",
-            Type::Struct(StructType::new(data_file_fields_v2(partition_type))),
+            Type::Struct(StructType::new(data_file_fields)),
         )),
     ];
     let schema = Schema::builder().with_fields(fields).build()?;
