@@ -29,9 +29,11 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
 use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
 use parquet::encryption::encrypt::FileEncryptionProperties;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use parquet::file::properties::{CdcOptions, WriterProperties};
 use parquet::file::statistics::Statistics;
+use parquet::geospatial::bounding_box::BoundingBox;
+use parquet_geospatial::interval::{Interval, IntervalTrait, WraparoundInterval};
 
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
@@ -44,8 +46,9 @@ use crate::error::invalid_data;
 use crate::io::{FileIO, FileWrite, OutputFile};
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MapType,
-    NestedFieldRef, PartitionSpec, PrimitiveType, Schema, SchemaRef, SchemaVisitor, Struct,
-    StructType, TableMetadata, TableProperties, Type, VariantType, visit_schema,
+    NestedFieldRef, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema, SchemaRef,
+    SchemaVisitor, Struct, StructType, TableMetadata, TableProperties, Type, VariantType,
+    visit_schema,
 };
 use crate::transform::create_transform_function;
 use crate::writer::{CurrentFileStatus, DataFile};
@@ -318,7 +321,82 @@ pub struct ParquetWriter {
 struct MinMaxColAggregator {
     lower_bounds: HashMap<i32, Datum>,
     upper_bounds: HashMap<i32, Datum>,
+    // None means at least one non-null row group has no bounding box: file bounds are unknown.
+    geo_bounds: HashMap<i32, Option<GeospatialBounds>>,
     schema: SchemaRef,
+}
+
+struct GeospatialBounds {
+    x: WraparoundInterval,
+    y: Interval,
+    z: Interval,
+    m: Interval,
+}
+
+impl From<&BoundingBox> for GeospatialBounds {
+    fn from(bbox: &BoundingBox) -> Self {
+        Self {
+            x: WraparoundInterval::new(bbox.get_xmin(), bbox.get_xmax()),
+            y: Interval::new(bbox.get_ymin(), bbox.get_ymax()),
+            z: bbox
+                .get_zmin()
+                .zip(bbox.get_zmax())
+                .map(|(lo, hi)| Interval::new(lo, hi))
+                .unwrap_or_else(Interval::empty),
+            m: bbox
+                .get_mmin()
+                .zip(bbox.get_mmax())
+                .map(|(lo, hi)| Interval::new(lo, hi))
+                .unwrap_or_else(Interval::empty),
+        }
+    }
+}
+
+impl GeospatialBounds {
+    fn merge(&mut self, bbox: &BoundingBox) {
+        let other = Self::from(bbox);
+        self.x = self.x.merge_interval(&other.x);
+        self.y.update_interval(&other.y);
+        self.z.update_interval(&other.z);
+        self.m.update_interval(&other.m);
+    }
+
+    fn into_datums(self, ty: PrimitiveType) -> (Datum, Datum) {
+        let (xmin, xmax) = if matches!(ty, PrimitiveType::Geography(_)) {
+            // An interval union may cover all longitudes; Iceberg geography uses canonical limits.
+            (self.x.lo().max(-180.0), self.x.hi().min(180.0))
+        } else if self.x.is_wraparound() {
+            // Parquet permits wrapping geometry boxes; Iceberg only permits wrapping geography.
+            (f64::NEG_INFINITY, f64::INFINITY)
+        } else {
+            (self.x.lo(), self.x.hi())
+        };
+        let dimensions = if !self.m.is_empty() {
+            4
+        } else if !self.z.is_empty() {
+            3
+        } else {
+            2
+        };
+        let (zmin, zmax) = if self.z.is_empty() {
+            (f64::NAN, f64::NAN)
+        } else {
+            (self.z.lo(), self.z.hi())
+        };
+        // Iceberg bound serialization is XY[Z[M]] doubles, not WKB (spec Appendix D).
+        let encode = |point: [f64; 4]| {
+            PrimitiveLiteral::Binary(
+                point[..dimensions]
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect(),
+            )
+        };
+        (
+            Datum::new(ty.clone(), encode([xmin, self.y.lo(), zmin, self.m.lo()])),
+            Datum::new(ty, encode([xmax, self.y.hi(), zmax, self.m.hi()])),
+        )
+    }
 }
 
 impl MinMaxColAggregator {
@@ -327,6 +405,7 @@ impl MinMaxColAggregator {
         Self {
             lower_bounds: HashMap::new(),
             upper_bounds: HashMap::new(),
+            geo_bounds: HashMap::new(),
             schema,
         }
     }
@@ -353,8 +432,8 @@ impl MinMaxColAggregator {
             .or_insert(datum);
     }
 
-    /// Update statistics
-    fn update(&mut self, field_id: i32, value: &Statistics) -> Result<()> {
+    /// Update bounds from a column chunk.
+    fn update(&mut self, field_id: i32, column: &ColumnChunkMetaData) -> Result<()> {
         let Some(ty) = self
             .schema
             .field_by_id(field_id)
@@ -364,12 +443,21 @@ impl MinMaxColAggregator {
             // Ignore the field if it is not in schema.
             return Ok(());
         };
-        let Type::Primitive(ty) = ty.clone() else {
+        let Type::Primitive(ty) = ty else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
                 format!("Composed type {ty} is not supported for min max aggregation."),
             ));
         };
+
+        if matches!(ty, PrimitiveType::Geometry(_) | PrimitiveType::Geography(_)) {
+            self.update_geo(field_id, column);
+            return Ok(());
+        }
+        let Some(value) = column.statistics() else {
+            return Ok(());
+        };
+        let ty = ty.clone();
 
         if value.min_is_exact() {
             let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, value)? else {
@@ -401,8 +489,48 @@ impl MinMaxColAggregator {
         Ok(())
     }
 
+    fn update_geo(&mut self, field_id: i32, column: &ColumnChunkMetaData) {
+        // Null-only row groups do not contribute coordinates and need no bounding box.
+        if column.num_values() == 0
+            || column
+                .statistics()
+                .and_then(Statistics::null_count_opt)
+                .is_some_and(|nulls| nulls == column.num_values() as u64)
+        {
+            return;
+        }
+        let bbox = column
+            .geo_statistics()
+            .and_then(|stats| stats.bounding_box());
+        self.geo_bounds
+            .entry(field_id)
+            .and_modify(|state| {
+                if let (Some(bounds), Some(bbox)) = (state.as_mut(), bbox) {
+                    bounds.merge(bbox);
+                } else {
+                    *state = None;
+                }
+            })
+            .or_insert_with(|| bbox.map(GeospatialBounds::from));
+    }
+
     /// Returns lower and upper bounds
-    fn produce(self) -> (HashMap<i32, Datum>, HashMap<i32, Datum>) {
+    fn produce(mut self) -> (HashMap<i32, Datum>, HashMap<i32, Datum>) {
+        for (field_id, bounds) in self.geo_bounds {
+            if let Some(bounds) = bounds {
+                let ty = self
+                    .schema
+                    .field_by_id(field_id)
+                    .unwrap()
+                    .field_type
+                    .as_primitive_type()
+                    .unwrap()
+                    .clone();
+                let (lower, upper) = bounds.into_datums(ty);
+                self.lower_bounds.insert(field_id, lower);
+                self.upper_bounds.insert(field_id, upper);
+            }
+        }
         (self.lower_bounds, self.upper_bounds)
     }
 }
@@ -480,12 +608,13 @@ impl ParquetWriter {
                     *per_col_val_num.entry(field_id).or_insert(0) +=
                         column_chunk_metadata.num_values() as u64;
 
-                    if let Some(statistics) = column_chunk_metadata.statistics() {
-                        if let Some(null_count) = statistics.null_count_opt() {
-                            *per_col_null_val_num.entry(field_id).or_insert(0) += null_count;
-                        }
+                    min_max_agg.update(field_id, column_chunk_metadata)?;
 
-                        min_max_agg.update(field_id, statistics)?;
+                    if let Some(null_count) = column_chunk_metadata
+                        .statistics()
+                        .and_then(Statistics::null_count_opt)
+                    {
+                        *per_col_null_val_num.entry(field_id).or_insert(0) += null_count;
                     }
                 }
             }
@@ -764,9 +893,12 @@ mod tests {
     use futures::TryStreamExt;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
+    use parquet::basic::{
+        BrotliLevel, Compression, EdgeInterpolationAlgorithm, GzipLevel, LogicalType, ZstdLevel,
+    };
     use parquet::file::statistics::ValueStatistics;
     use parquet::schema::types::ColumnPath;
+    use parquet_geospatial::testing::wkb_point_xy;
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -776,6 +908,7 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::decimal_utils::{decimal_mantissa, decimal_new, decimal_scale};
+    use crate::spec::geospatial::EdgeInterpolationAlgorithm as IcebergEdgeInterpolationAlgorithm;
     use crate::spec::{PrimitiveLiteral, Struct, *};
     use crate::test_utils::make_encryption_manager;
     use crate::writer::file_writer::location_generator::{
@@ -2570,9 +2703,250 @@ mod tests {
             (
                 parquet::basic::Type::FIXED_LEN_BYTE_ARRAY,
                 16,
-                Some(&parquet::basic::LogicalType::Uuid)
+                Some(&LogicalType::Uuid)
             )
         );
+    }
+
+    #[tokio::test]
+    async fn test_geospatial_write_roundtrip() -> Result<()> {
+        use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
+        use crate::expr::visitors::strict_metrics_evaluator::StrictMetricsEvaluator;
+        use crate::expr::{Bind, Reference};
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let geom_type = PrimitiveType::Geometry(GeometryType::new(Some("srid:0".to_string()))?);
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "geom", Type::Primitive(geom_type.clone())).into(),
+                    NestedField::optional(
+                        2,
+                        "geog",
+                        Type::Primitive(PrimitiveType::Geography(
+                            GeographyType::new(None, IcebergEdgeInterpolationAlgorithm::Karney)
+                                .unwrap(),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema: ArrowSchemaRef = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let geom_wkb = parquet_geospatial::testing::wkb_point_xyzm(1.0, 20.0, f64::NAN, 40.0);
+        let other_geom_wkb = parquet_geospatial::testing::wkb_point_xyzm(-3.0, 4.0, f64::NAN, 70.0);
+        let geog_wkb = wkb_point_xy(3.0, 4.0);
+        let geom = Arc::new(arrow_array::LargeBinaryArray::from_vec(vec![
+            geom_wkb.as_slice(),
+            other_geom_wkb.as_slice(),
+        ])) as ArrayRef;
+        let geog = Arc::new(arrow_array::LargeBinaryArray::from(vec![
+            Some(geog_wkb.as_slice()),
+            None,
+        ])) as ArrayRef;
+        let to_write = RecordBatch::try_new(arrow_schema, vec![geom, geog])?;
+
+        let output_file =
+            file_io.new_output(temp_dir.path().join("geo.parquet").to_str().unwrap())?;
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(1))
+            .build();
+        let mut pw = ParquetWriterBuilder::new(props, schema.clone())
+            .build(output_file)
+            .await?;
+
+        pw.write(&to_write).await?;
+        let res = pw.close().await?;
+        assert_eq!(res.len(), 1);
+        let data_file = res
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        assert_eq!(data_file.record_count(), 2);
+        // Iceberg bounds use little-endian coordinates, including a NaN Z placeholder for XYM.
+        let lower: Vec<u8> = [-3.0_f64, 4.0, f64::NAN, 40.0]
+            .into_iter()
+            .flat_map(f64::to_le_bytes)
+            .collect();
+        let upper: Vec<u8> = [1.0_f64, 20.0, f64::NAN, 70.0]
+            .into_iter()
+            .flat_map(f64::to_le_bytes)
+            .collect();
+        assert_eq!(data_file.lower_bounds()[&1].to_bytes()?.as_ref(), lower);
+        assert_eq!(data_file.upper_bounds()[&1].to_bytes()?.as_ref(), upper);
+        // Parquet's default accumulator does not compute geography bounds.
+        assert!(!data_file.lower_bounds().contains_key(&2));
+        assert!(!data_file.upper_bounds().contains_key(&2));
+
+        let literal = Datum::new(geom_type, PrimitiveLiteral::Binary(geom_wkb));
+        let inequality = Reference::new("geom")
+            .less_than(literal.clone())
+            .bind(schema.clone(), true)?;
+        let exclusion = Reference::new("geom")
+            .not_equal_to(literal)
+            .bind(schema.clone(), true)?;
+        assert_eq!(
+            (
+                InclusiveMetricsEvaluator::eval(&inequality, &data_file, true)?,
+                StrictMetricsEvaluator::eval(&exclusion, &data_file)?,
+            ),
+            (true, false),
+            "spatial bounds cannot prove scalar comparisons"
+        );
+
+        let manifest_path = temp_dir.path().join("manifest.avro");
+        let manifest_output = file_io.new_output(manifest_path.to_str().unwrap())?;
+        let mut manifest_writer = ManifestWriterBuilder::new(
+            manifest_output,
+            Some(1),
+            schema.clone(),
+            PartitionSpec::builder(schema.clone()).build()?,
+        )
+        .build_v3_data();
+        manifest_writer.add_file(data_file.clone(), 1)?;
+        manifest_writer.write_manifest_file().await?;
+        let manifest = Manifest::parse_avro(&std::fs::read(&manifest_path).unwrap())?;
+        assert_eq!(
+            manifest.entries()[0].data_file().lower_bounds(),
+            data_file.lower_bounds()
+        );
+        assert_eq!(
+            manifest.entries()[0].data_file().upper_bounds(),
+            data_file.upper_bounds()
+        );
+
+        let input_file = file_io.new_input(data_file.file_path())?;
+        let file_metadata = input_file.metadata().await?;
+        let reader = input_file.reader().await?;
+        let mut parquet_reader = ArrowFileReader::new(file_metadata, reader);
+        let parquet_metadata = parquet_reader.get_metadata(None).await?;
+        let schema_descr = parquet_metadata.file_metadata().schema_descr();
+        assert_eq!(parquet_metadata.num_row_groups(), 2);
+
+        let file_arrow_schema = parquet::arrow::parquet_to_arrow_schema(
+            schema_descr,
+            parquet_metadata.file_metadata().key_value_metadata(),
+        )?;
+        let unset_metadata: serde_json::Value = serde_json::from_str(
+            file_arrow_schema
+                .field(0)
+                .extension_type_metadata()
+                .unwrap(),
+        )?;
+        assert!(unset_metadata.get("crs").is_none());
+
+        assert_eq!(
+            schema_descr.column(0).logical_type_ref(),
+            Some(&LogicalType::geometry(Some("srid:0".to_string())))
+        );
+        // Parquet omits CRS when default `OGC:CRS84` is used.
+        assert_eq!(
+            schema_descr.column(1).logical_type_ref(),
+            Some(&LogicalType::geography(
+                None,
+                Some(EdgeInterpolationAlgorithm::KARNEY),
+            ))
+        );
+
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(data_file.file_size_in_bytes())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(data_file.file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1, 2])
+            .with_case_sensitive(false)
+            .build()?;
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> = reader.read(tasks)?.stream().try_collect().await?;
+        let read_back = concat_batches(batches[0].schema_ref(), &batches)?;
+
+        assert_eq!(read_back.columns(), to_write.columns());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_geospatial_geography_bounds_merge() -> Result<()> {
+        use parquet::geospatial::statistics::GeospatialStatistics;
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "geog",
+                        Type::Primitive(PrimitiveType::Geography(GeographyType::default())),
+                    )
+                    .into(),
+                ])
+                .build()?,
+        );
+        let arrow_schema = schema_to_arrow_schema(&schema)?;
+        let parquet_schema = parquet::arrow::ArrowSchemaConverter::new().convert(&arrow_schema)?;
+        let column = |bbox: BoundingBox| {
+            ColumnChunkMetaData::builder(parquet_schema.column(0))
+                .set_num_values(1)
+                .set_geo_statistics(Box::new(GeospatialStatistics::new(Some(bbox), None)))
+                .build()
+                .unwrap()
+        };
+        let wrap = column(BoundingBox::new(170.0, -170.0, -10.0, 10.0).with_zrange(4.0, 9.0));
+        let inside = column(BoundingBox::new(175.0, 178.0, -20.0, 5.0).with_mrange(1.0, 3.0));
+        let mut bounds = MinMaxColAggregator::new(schema.clone());
+        bounds.update(1, &wrap)?;
+        let nulls = ColumnChunkMetaData::builder(parquet_schema.column(0))
+            .set_num_values(1)
+            .set_statistics(Statistics::ByteArray(ValueStatistics::new(
+                None,
+                None,
+                None,
+                Some(1),
+                false,
+            )))
+            .build()?;
+        bounds.update(1, &nulls)?;
+        bounds.update(1, &inside)?;
+        let (lower, upper) = bounds.produce();
+        let expected_lower: Vec<u8> = [170.0_f64, -20.0, 4.0, 1.0]
+            .into_iter()
+            .flat_map(f64::to_le_bytes)
+            .collect();
+        let expected_upper: Vec<u8> = [-170.0_f64, 10.0, 9.0, 3.0]
+            .into_iter()
+            .flat_map(f64::to_le_bytes)
+            .collect();
+        assert_eq!(lower[&1].to_bytes()?.as_ref(), expected_lower);
+        assert_eq!(upper[&1].to_bytes()?.as_ref(), expected_upper);
+
+        let mut full = MinMaxColAggregator::new(schema.clone());
+        full.update(1, &wrap)?;
+        full.update(1, &column(BoundingBox::new(-175.0, 175.0, -10.0, 10.0)))?;
+        let (lower, upper) = full.produce();
+        assert_eq!(&lower[&1].to_bytes()?[..8], &(-180.0_f64).to_le_bytes());
+        assert_eq!(&upper[&1].to_bytes()?[..8], &180.0_f64.to_le_bytes());
+
+        let unknown = ColumnChunkMetaData::builder(parquet_schema.column(0))
+            .set_num_values(1)
+            .build()?;
+        let mut incomplete = MinMaxColAggregator::new(schema);
+        for column in [&wrap, &unknown, &inside] {
+            incomplete.update(1, column)?;
+        }
+        assert_eq!(incomplete.produce(), (HashMap::new(), HashMap::new()));
+        Ok(())
     }
 
     #[test]
@@ -2588,9 +2962,18 @@ mod tests {
                 .build()
                 .expect("Failed to create schema"),
         );
+        let parquet_schema = parquet::arrow::ArrowSchemaConverter::new()
+            .convert(&schema_to_arrow_schema(&schema).unwrap())
+            .unwrap();
         let mut min_max_agg = MinMaxColAggregator::new(schema);
-        let create_statistics =
-            |min, max| Statistics::Int32(ValueStatistics::new(min, max, None, None, false));
+        let create_statistics = |min, max| {
+            ColumnChunkMetaData::builder(parquet_schema.column(0))
+                .set_statistics(Statistics::Int32(ValueStatistics::new(
+                    min, max, None, None, false,
+                )))
+                .build()
+                .unwrap()
+        };
         min_max_agg
             .update(0, &create_statistics(None, Some(42)))
             .unwrap();
@@ -2622,11 +3005,26 @@ mod tests {
                 .build()
                 .expect("Failed to create schema"),
         );
+        let parquet_schema = parquet::arrow::ArrowSchemaConverter::new()
+            .convert(&schema_to_arrow_schema(&schema).unwrap())
+            .unwrap();
         let mut min_max_agg = MinMaxColAggregator::new(schema);
-        let float_stats =
-            |min, max| Statistics::Float(ValueStatistics::new(min, max, None, None, false));
-        let double_stats =
-            |min, max| Statistics::Double(ValueStatistics::new(min, max, None, None, false));
+        let float_stats = |min, max| {
+            ColumnChunkMetaData::builder(parquet_schema.column(0))
+                .set_statistics(Statistics::Float(ValueStatistics::new(
+                    min, max, None, None, false,
+                )))
+                .build()
+                .unwrap()
+        };
+        let double_stats = |min, max| {
+            ColumnChunkMetaData::builder(parquet_schema.column(1))
+                .set_statistics(Statistics::Double(ValueStatistics::new(
+                    min, max, None, None, false,
+                )))
+                .build()
+                .unwrap()
+        };
 
         min_max_agg
             .update(0, &float_stats(Some(-f32::NAN), Some(f32::NAN)))
