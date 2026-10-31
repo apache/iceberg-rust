@@ -30,10 +30,13 @@
 //! forbids adding new position delete files, so callers must not route v3 writes here.
 //! This base writer has no format-version gate by design; that gating belongs at the
 //! transaction/commit layer.
+//!
+//! Reserved-column counts are omitted; bounds are kept only for file-scoped outputs.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::RecordBatch;
+use arrow_array::{RecordBatch, StringArray};
 use arrow_schema::{DataType, Field};
 use once_cell::sync::Lazy;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
@@ -47,7 +50,7 @@ use crate::spec::{DataContentType, DataFile, PartitionKey, Schema, SchemaRef};
 use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
 use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileWriterBuilder};
-use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// The canonical Iceberg schema of a position delete file: the required `file_path`
@@ -115,7 +118,7 @@ fn field_id(field: &Field) -> Result<i32> {
 /// Validates that a batch is a position delete file: the `file_path` (`Utf8`) and
 /// `pos` (`Int64`) columns, in order, with the two reserved field ids. Checking it
 /// here gives a clear error before the batch reaches the Parquet writer.
-fn validate_position_delete_batch(batch: &RecordBatch) -> Result<()> {
+pub(crate) fn validate_position_delete_batch(batch: &RecordBatch) -> Result<()> {
     let fields = batch.schema_ref().fields();
     if fields.len() != 2 {
         return Err(invalid_data!(
@@ -209,7 +212,31 @@ where
         Ok(PositionDeleteFileWriter {
             inner: Some(self.inner.build()),
             partition_key,
+            referenced_data_files_by_output: HashMap::new(),
         })
+    }
+}
+
+#[derive(Debug, Default)]
+enum ReferencedDataFileScope {
+    #[default]
+    None,
+    Single(String),
+    Multiple,
+}
+
+impl ReferencedDataFileScope {
+    fn observe(&mut self, path: &str) -> bool {
+        match self {
+            Self::None => *self = Self::Single(path.to_owned()),
+            Self::Single(existing) if existing.as_str() != path => *self = Self::Multiple,
+            Self::Single(_) | Self::Multiple => {}
+        }
+        matches!(self, Self::Multiple)
+    }
+
+    fn is_file_scoped(&self) -> bool {
+        matches!(self, Self::Single(_))
     }
 }
 
@@ -222,6 +249,7 @@ pub struct PositionDeleteFileWriter<
 > {
     inner: Option<RollingFileWriter<B, L, F>>,
     partition_key: Option<PartitionKey>,
+    referenced_data_files_by_output: HashMap<String, ReferencedDataFileScope>,
 }
 
 #[async_trait::async_trait]
@@ -246,11 +274,32 @@ where
             ));
         };
         validate_position_delete_batch(&batch)?;
-        writer.write(&self.partition_key, &batch).await
+        let paths = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or_else(|| invalid_data!("Position-delete file_path must be a StringArray."))?;
+        writer.write(&self.partition_key, &batch).await?;
+
+        // Rolling happens before a batch is written, so the current path is the output that
+        // received the complete batch. Only file-scoped vs multi-file is needed for metrics.
+        let output_file = writer.current_file_path();
+        let scope = self
+            .referenced_data_files_by_output
+            .entry(output_file)
+            .or_default();
+        for path in paths.iter().flatten() {
+            if scope.observe(path) {
+                break;
+            }
+        }
+        Ok(())
     }
 
     async fn close(&mut self) -> Result<Vec<DataFile>> {
         if let Some(writer) = self.inner.take() {
+            let referenced_data_files_by_output =
+                std::mem::take(&mut self.referenced_data_files_by_output);
             writer
                 .close()
                 .await?
@@ -262,8 +311,14 @@ where
                         res.partition(pk.data().clone());
                         res.partition_spec_id(pk.spec().spec_id());
                     }
-                    res.build()
-                        .map_err(|e| invalid_data!("Failed to build position delete file: {e}"))
+                    let mut data_file = res
+                        .build()
+                        .map_err(|e| invalid_data!("Failed to build position delete file: {e}"))?;
+                    let file_scoped = referenced_data_files_by_output
+                        .get(data_file.file_path())
+                        .is_some_and(ReferencedDataFileScope::is_file_scoped);
+                    strip_position_delete_metrics(&mut data_file, file_scoped);
+                    Ok(data_file)
                 })
                 .collect()
         } else {
@@ -271,6 +326,23 @@ where
                 ErrorKind::Unexpected,
                 "Position delete writer is already closed.",
             ))
+        }
+    }
+}
+
+fn strip_position_delete_metrics(data_file: &mut DataFile, file_scoped: bool) {
+    for field_id in [
+        RESERVED_FIELD_ID_DELETE_FILE_PATH,
+        RESERVED_FIELD_ID_DELETE_FILE_POS,
+    ] {
+        data_file.value_counts.remove(&field_id);
+        data_file.null_value_counts.remove(&field_id);
+        data_file.nan_value_counts.remove(&field_id);
+
+        // Keep bounds only when the output is file-scoped.
+        if !file_scoped {
+            data_file.lower_bounds.remove(&field_id);
+            data_file.upper_bounds.remove(&field_id);
         }
     }
 }
@@ -410,6 +482,17 @@ mod test {
         assert_eq!(data_file.partition_spec_id, 0);
         // The rolling writer fills in file statistics.
         assert!(data_file.file_size_in_bytes > 0);
+        // Multi-file position deletes omit reserved-column counts and bounds.
+        for field_id in [
+            RESERVED_FIELD_ID_DELETE_FILE_PATH,
+            RESERVED_FIELD_ID_DELETE_FILE_POS,
+        ] {
+            assert!(!data_file.value_counts().contains_key(&field_id));
+            assert!(!data_file.null_value_counts().contains_key(&field_id));
+            assert!(!data_file.nan_value_counts().contains_key(&field_id));
+            assert!(!data_file.lower_bounds().contains_key(&field_id));
+            assert!(!data_file.upper_bounds().contains_key(&field_id));
+        }
 
         // The written Parquet file round-trips back to the exact input rows.
         let read_back = read_back_single(&file_io, data_file, &batch.schema()).await;
@@ -449,6 +532,22 @@ mod test {
             RESERVED_FIELD_ID_DELETE_FILE_POS,
         ]);
 
+        // File-scoped deletes retain bounds, while redundant count metrics are omitted.
+        let data_file = &data_files[0];
+        for field_id in [
+            RESERVED_FIELD_ID_DELETE_FILE_PATH,
+            RESERVED_FIELD_ID_DELETE_FILE_POS,
+        ] {
+            assert!(!data_file.value_counts().contains_key(&field_id));
+            assert!(!data_file.null_value_counts().contains_key(&field_id));
+            assert!(!data_file.nan_value_counts().contains_key(&field_id));
+            assert!(data_file.lower_bounds().contains_key(&field_id));
+            assert_eq!(
+                data_file.lower_bounds().get(&field_id),
+                data_file.upper_bounds().get(&field_id)
+            );
+        }
+
         Ok(())
     }
 
@@ -472,10 +571,80 @@ mod test {
 
         assert_eq!(data_files.len(), 1);
         assert_eq!(data_files[0].record_count, 4);
+        for field_id in [
+            RESERVED_FIELD_ID_DELETE_FILE_PATH,
+            RESERVED_FIELD_ID_DELETE_FILE_POS,
+        ] {
+            assert!(!data_files[0].value_counts().contains_key(&field_id));
+            assert!(!data_files[0].null_value_counts().contains_key(&field_id));
+            assert!(!data_files[0].nan_value_counts().contains_key(&field_id));
+            assert!(!data_files[0].lower_bounds().contains_key(&field_id));
+            assert!(!data_files[0].upper_bounds().contains_key(&field_id));
+        }
 
         let expected = concat_batches(&batch1.schema(), [&batch1, &batch2]).unwrap();
         let read_back = read_back_single(&file_io, &data_files[0], &batch1.schema()).await;
         assert_eq!(read_back, expected);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_position_delete_metrics_are_scoped_per_rolled_file() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("rolled".to_string(), None, DataFileFormat::Parquet);
+        let parquet_writer_builder = ParquetWriterBuilder::new(
+            WriterProperties::builder().build(),
+            position_delete_schema(),
+        );
+        let rolling_writer_builder = RollingFileWriterBuilder::new(
+            parquet_writer_builder,
+            1,
+            file_io,
+            location_gen,
+            file_name_gen,
+        );
+        let mut writer = PositionDeleteFileWriterBuilder::new(rolling_writer_builder)
+            .build(None)
+            .await?;
+
+        writer
+            .write(position_delete_batch(
+                vec!["s3://bucket/data/f0.parquet"],
+                vec![1],
+            ))
+            .await?;
+        // The first output is already larger than one byte, so this batch rolls to a
+        // second physical file. Each physical file still targets exactly one data file.
+        writer
+            .write(position_delete_batch(
+                vec!["s3://bucket/data/f1.parquet"],
+                vec![2],
+            ))
+            .await?;
+
+        let data_files = writer.close().await?;
+        assert_eq!(data_files.len(), 2);
+        for data_file in data_files {
+            for field_id in [
+                RESERVED_FIELD_ID_DELETE_FILE_PATH,
+                RESERVED_FIELD_ID_DELETE_FILE_POS,
+            ] {
+                assert!(!data_file.value_counts().contains_key(&field_id));
+                assert!(!data_file.null_value_counts().contains_key(&field_id));
+                assert!(!data_file.nan_value_counts().contains_key(&field_id));
+                assert!(data_file.lower_bounds().contains_key(&field_id));
+                assert_eq!(
+                    data_file.lower_bounds().get(&field_id),
+                    data_file.upper_bounds().get(&field_id)
+                );
+            }
+        }
 
         Ok(())
     }
