@@ -1637,8 +1637,8 @@ mod tests {
         positions.sort_unstable();
         assert_eq!(positions, vec![0, 1, 5]);
         assert_eq!(scan_metrics.data_bytes_read(), 0);
-        assert_eq!(scan_metrics.delete_bytes_read(), content_size as u64);
-        assert_eq!(scan_metrics.bytes_read(), content_size as u64);
+        assert_eq!(scan_metrics.delete_bytes_read(), content_size);
+        assert_eq!(scan_metrics.bytes_read(), content_size);
         assert_eq!(scan_metrics.data_files_opened(), 0);
         assert_eq!(scan_metrics.delete_files_opened(), 1);
         assert_eq!(scan_metrics.rows_emitted(), 0);
@@ -1701,8 +1701,8 @@ mod tests {
         positions.sort_unstable();
         assert_eq!(positions, vec![2, 4]);
         assert_eq!(scan_metrics.data_bytes_read(), 0);
-        assert_eq!(scan_metrics.delete_bytes_read(), plaintext_size as u64);
-        assert_eq!(scan_metrics.bytes_read(), plaintext_size as u64);
+        assert_eq!(scan_metrics.delete_bytes_read(), plaintext_size);
+        assert_eq!(scan_metrics.bytes_read(), plaintext_size);
         assert_eq!(scan_metrics.data_files_opened(), 0);
         assert_eq!(scan_metrics.delete_files_opened(), 1);
         assert_eq!(scan_metrics.rows_emitted(), 0);
