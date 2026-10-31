@@ -3035,6 +3035,8 @@ pub const iceberg::spec::TableProperties<'_>::PROPERTY_MAX_SNAPSHOT_AGE_MS: &'st
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_COMPRESSION_CODEC: &'static str
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &'static str
+pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED: &'static str
+pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &'static str
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &'static str
@@ -3090,6 +3092,7 @@ pub fn iceberg::spec::TableProperties<'properties>::gc_enabled(&self) -> iceberg
 pub fn iceberg::spec::TableProperties<'properties>::max_ref_age_ms(&self) -> iceberg::Result<i64>
 pub fn iceberg::spec::TableProperties<'properties>::max_snapshot_age_ms(&self) -> iceberg::Result<i64>
 pub fn iceberg::spec::TableProperties<'properties>::metadata_compression_codec(&self) -> iceberg::Result<iceberg::compression::CompressionCodec>
+pub fn iceberg::spec::TableProperties<'properties>::metadata_delete_after_commit_enabled(&self) -> iceberg::Result<bool>
 pub fn iceberg::spec::TableProperties<'properties>::min_snapshots_to_keep(&self) -> iceberg::Result<usize>
 pub fn iceberg::spec::TableProperties<'properties>::new(properties: &'properties std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
 pub fn iceberg::spec::TableProperties<'properties>::parquet_compression_codec(&self) -> iceberg::Result<iceberg::compression::CompressionCodec>
@@ -4179,5 +4182,6 @@ pub fn iceberg::SessionCatalog::rename_table<'life0, 'life1, 'life2, 'life3, 'as
 pub fn iceberg::SessionCatalog::table_exists<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, context: &'life1 iceberg::SessionContext, table: &'life2 iceberg::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::SessionCatalog::update_namespace<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, context: &'life1 iceberg::SessionContext, namespace: &'life2 iceberg::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::SessionCatalog::update_table<'life0, 'life1, 'async_trait>(&'life0 self, context: &'life1 iceberg::SessionContext, commit: iceberg::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub async fn iceberg::delete_removed_metadata_files(io: &iceberg::io::FileIO, base: &iceberg::spec::TableMetadata, new: &iceberg::spec::TableMetadata)
 pub async fn iceberg::drop_table_data(table_info: &iceberg::table::Table) -> iceberg::Result<()>
 pub type iceberg::Result<T> = core::result::Result<T, iceberg::Error>
