@@ -610,12 +610,43 @@ fn resolve_writer_properties(
         .build())
 }
 
+/// Fails if a column that `schema` marks required holds a null.
+///
+/// The Arrow schema the file is written with comes from `schema`, so required columns are
+/// written as Parquet `REQUIRED`, and a null in one would be written as whatever value lies
+/// beneath it, typically zero or empty. A batch's own schema may still declare such a column
+/// nullable, and a dictionary column may hold a null value even when the column is
+/// declared non-nullable, so this counts the logical nulls of every required column.
+///
+/// The Parquet writer pairs the schema's fields with the batch's columns by position and
+/// ignores any extra trailing columns, so this pairs them the same way.
+fn check_required_columns(schema: &Schema, batch: &arrow_array::RecordBatch) -> Result<()> {
+    for (field, column) in schema.as_struct().fields().iter().zip(batch.columns()) {
+        if !field.required {
+            continue;
+        }
+        let null_count = column.logical_null_count();
+        if null_count > 0 {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Required column {} (field id {}) contains {null_count} null values",
+                    field.name, field.id
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 impl FileWriter for ParquetWriter {
     async fn write(&mut self, batch: &arrow_array::RecordBatch) -> Result<()> {
         // Skip empty batch
         if batch.num_rows() == 0 {
             return Ok(());
         }
+
+        check_required_columns(&self.schema, batch)?;
 
         self.current_row_num += batch.num_rows();
 
@@ -754,10 +785,10 @@ mod tests {
 
     use anyhow::Result;
     use arrow_array::builder::{Float32Builder, Int32Builder, MapBuilder};
-    use arrow_array::types::{Float32Type, Int64Type};
+    use arrow_array::types::{Float32Type, Int32Type, Int64Type};
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
-        Int64Array, ListArray, MapArray, RecordBatch, StructArray,
+        Array, ArrayRef, BooleanArray, Decimal128Array, DictionaryArray, Float32Array,
+        Float64Array, Int32Array, Int64Array, ListArray, MapArray, RecordBatch, StructArray,
     };
     use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
     use arrow_select::concat::concat_batches;
@@ -1872,6 +1903,97 @@ mod tests {
         pw.close().await.unwrap();
         assert!(!file_io.exists(&file_path).await.unwrap());
 
+        Ok(())
+    }
+
+    async fn required_id_fixture(
+        temp_dir: &TempDir,
+        ids: ArrayRef,
+        id_nullable: bool,
+    ) -> Result<(ParquetWriter, RecordBatch)> {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(0, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(1, "name", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
+        let arrow_schema = schema_to_arrow_schema(&schema)?;
+        // Different batch names exercise Parquet's positional column mapping.
+        let fields = vec![
+            arrow_schema
+                .field(0)
+                .clone()
+                .with_name("a")
+                .with_data_type(ids.data_type().clone())
+                .with_nullable(id_nullable),
+            arrow_schema.field(1).clone().with_name("b"),
+        ];
+        let names = Arc::new(arrow_array::StringArray::new_null(ids.len()));
+        let batch = RecordBatch::try_new(Arc::new(arrow_schema::Schema::new(fields)), vec![
+            ids, names,
+        ])?;
+        let output_file = FileIO::new_with_fs()
+            .new_output(temp_dir.path().join("test.parquet").to_str().unwrap())?;
+        let writer =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(schema))
+                .build(output_file)
+                .await?;
+        Ok((writer, batch))
+    }
+
+    #[tokio::test]
+    async fn test_write_rejects_null_in_required_column_by_position() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let (mut pw, batch) = required_id_fixture(
+            &temp_dir,
+            Arc::new(Int32Array::from(vec![Some(1), None])),
+            true,
+        )
+        .await?;
+
+        let err = pw.write(&batch).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+        assert!(err.to_string().contains("Required column id"), "{err}");
+        assert!(pw.close().await?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_accepts_nullable_column_without_nulls_in_required_column() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        let (mut pw, batch) = required_id_fixture(
+            &temp_dir,
+            Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+            true,
+        )
+        .await?;
+
+        pw.write(&batch).await?;
+        let data_file = pw
+            .close()
+            .await?
+            .into_iter()
+            .next()
+            .unwrap()
+            .partition_spec_id(0)
+            .build()?;
+        assert_eq!(data_file.record_count(), 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_write_rejects_dictionary_null_in_required_column() -> Result<()> {
+        let temp_dir = TempDir::new().unwrap();
+        // Non-null keys can still reference a null dictionary value.
+        let ids = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(Int32Array::from(vec![Some(1), None])),
+        )?;
+        let (mut pw, batch) = required_id_fixture(&temp_dir, Arc::new(ids), false).await?;
+
+        let err = pw.write(&batch).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+        assert!(err.to_string().contains("Required column id"), "{err}");
         Ok(())
     }
 
