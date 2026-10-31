@@ -1249,6 +1249,57 @@ pub fn iceberg::metadata_columns::row_id_field() -> &'static iceberg::spec::Nest
 pub fn iceberg::metadata_columns::spec_id_field() -> &'static iceberg::spec::NestedFieldRef
 pub mod iceberg::partitioning
 pub fn iceberg::partitioning::compute_unified_partition_type<'a>(partition_specs: impl core::iter::traits::iterator::Iterator<Item = &'a iceberg::spec::PartitionSpec>, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::StructType>
+pub mod iceberg::properties
+pub struct iceberg::properties::BoolProp(_)
+impl iceberg::properties::BoolProp
+pub fn iceberg::properties::BoolProp::get(self) -> bool
+impl core::clone::Clone for iceberg::properties::BoolProp
+pub fn iceberg::properties::BoolProp::clone(&self) -> iceberg::properties::BoolProp
+impl core::cmp::PartialEq for iceberg::properties::BoolProp
+pub fn iceberg::properties::BoolProp::eq(&self, other: &iceberg::properties::BoolProp) -> bool
+impl core::convert::From<bool> for iceberg::properties::BoolProp
+pub fn iceberg::properties::BoolProp::from(value: bool) -> Self
+impl core::fmt::Debug for iceberg::properties::BoolProp
+pub fn iceberg::properties::BoolProp::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg::properties::BoolProp
+impl core::marker::StructuralPartialEq for iceberg::properties::BoolProp
+impl core::str::traits::FromStr for iceberg::properties::BoolProp
+pub type iceberg::properties::BoolProp::Err = core::convert::Infallible
+pub fn iceberg::properties::BoolProp::from_str(value: &str) -> core::result::Result<Self, Self::Err>
+pub struct iceberg::properties::DurationMsProp<const MIN_MS: u64, const MAX_MS: u64>(_)
+impl<const MIN_MS: u64, const MAX_MS: u64> iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>
+pub fn iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>::get(self) -> core::time::Duration
+impl<const MIN_MS: u64, const MAX_MS: u64> core::clone::Clone for iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>
+pub fn iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>::clone(&self) -> iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>
+impl<const MIN_MS: u64, const MAX_MS: u64> core::cmp::PartialEq for iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>
+pub fn iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>::eq(&self, other: &iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>) -> bool
+impl<const MIN_MS: u64, const MAX_MS: u64> core::convert::TryFrom<u64> for iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>
+pub type iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>::Error = iceberg::Error
+pub fn iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>::try_from(millis: u64) -> iceberg::Result<Self>
+impl<const MIN_MS: u64, const MAX_MS: u64> core::fmt::Debug for iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>
+pub fn iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<const MIN_MS: u64, const MAX_MS: u64> core::marker::Copy for iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>
+impl<const MIN_MS: u64, const MAX_MS: u64> core::marker::StructuralPartialEq for iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>
+impl<const MIN_MS: u64, const MAX_MS: u64> core::str::traits::FromStr for iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>
+pub type iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>::Err = iceberg::Error
+pub fn iceberg::properties::DurationMsProp<MIN_MS, MAX_MS>::from_str(value: &str) -> iceberg::Result<Self>
+pub struct iceberg::properties::U32Prop<const MIN: u32, const MAX: u32>(_)
+impl<const MIN: u32, const MAX: u32> iceberg::properties::U32Prop<MIN, MAX>
+pub fn iceberg::properties::U32Prop<MIN, MAX>::get(self) -> u32
+impl<const MIN: u32, const MAX: u32> core::clone::Clone for iceberg::properties::U32Prop<MIN, MAX>
+pub fn iceberg::properties::U32Prop<MIN, MAX>::clone(&self) -> iceberg::properties::U32Prop<MIN, MAX>
+impl<const MIN: u32, const MAX: u32> core::cmp::PartialEq for iceberg::properties::U32Prop<MIN, MAX>
+pub fn iceberg::properties::U32Prop<MIN, MAX>::eq(&self, other: &iceberg::properties::U32Prop<MIN, MAX>) -> bool
+impl<const MIN: u32, const MAX: u32> core::convert::TryFrom<u32> for iceberg::properties::U32Prop<MIN, MAX>
+pub type iceberg::properties::U32Prop<MIN, MAX>::Error = iceberg::Error
+pub fn iceberg::properties::U32Prop<MIN, MAX>::try_from(value: u32) -> iceberg::Result<Self>
+impl<const MIN: u32, const MAX: u32> core::fmt::Debug for iceberg::properties::U32Prop<MIN, MAX>
+pub fn iceberg::properties::U32Prop<MIN, MAX>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<const MIN: u32, const MAX: u32> core::marker::Copy for iceberg::properties::U32Prop<MIN, MAX>
+impl<const MIN: u32, const MAX: u32> core::marker::StructuralPartialEq for iceberg::properties::U32Prop<MIN, MAX>
+impl<const MIN: u32, const MAX: u32> core::str::traits::FromStr for iceberg::properties::U32Prop<MIN, MAX>
+pub type iceberg::properties::U32Prop<MIN, MAX>::Err = iceberg::Error
+pub fn iceberg::properties::U32Prop<MIN, MAX>::from_str(value: &str) -> iceberg::Result<Self>
 pub mod iceberg::puffin
 pub enum iceberg::puffin::CompressionCodec
 pub iceberg::puffin::CompressionCodec::Brotli(u8)
@@ -1493,6 +1544,9 @@ pub fn iceberg::sensitive::SensitiveString::from(value: alloc::string::String) -
 impl core::fmt::Debug for iceberg::sensitive::SensitiveString
 pub fn iceberg::sensitive::SensitiveString::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::sensitive::SensitiveString
+impl core::str::traits::FromStr for iceberg::sensitive::SensitiveString
+pub type iceberg::sensitive::SensitiveString::Err = core::convert::Infallible
+pub fn iceberg::sensitive::SensitiveString::from_str(value: &str) -> core::result::Result<Self, Self::Err>
 pub mod iceberg::spec
 pub use iceberg::spec::ByteBuf
 pub mod iceberg::spec::geospatial
