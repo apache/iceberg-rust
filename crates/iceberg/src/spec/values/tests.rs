@@ -2149,3 +2149,81 @@ fn test_datum_to_human_string_float_matches_java() {
     // 2097152.25, halfway between 2097152.2 and 2097152.3.
     assert_eq!(float(f32::from_bits(0x4a00_0001)), "2097152.2");
 }
+
+#[test]
+fn test_datum_promote_date() {
+    // 2024-01-02 is 19_724 days after the epoch. Day 106_751 fits in timestamp_ns;
+    // 106_752 overflows (~292 years from the epoch).
+    let ok_cases = [
+        (
+            19_724,
+            PrimitiveType::Timestamp,
+            Some(Datum::timestamp_micros(19_724 * 86_400_000_000)),
+        ),
+        (
+            19_724,
+            PrimitiveType::TimestampNs,
+            Some(Datum::timestamp_nanos(19_724 * 86_400_000_000_000)),
+        ),
+        (
+            -1,
+            PrimitiveType::Timestamp,
+            Some(Datum::timestamp_micros(-86_400_000_000)),
+        ),
+        // Timestamps with a zone are not a valid promotion target for a date.
+        (19_724, PrimitiveType::Timestamptz, None),
+        (
+            106_751,
+            PrimitiveType::TimestampNs,
+            Some(Datum::timestamp_nanos(106_751 * 86_400_000_000_000)),
+        ),
+        (
+            376_200,
+            PrimitiveType::Timestamp,
+            Some(Datum::timestamp_micros(376_200 * 86_400_000_000)),
+        ),
+    ];
+    for (days, target, want) in ok_cases {
+        assert_eq!(
+            Datum::date(days).promote_to(&target).unwrap(),
+            want,
+            "date({days}) -> {target:?}"
+        );
+    }
+
+    for (days, target) in [
+        (106_752, PrimitiveType::TimestampNs),
+        (376_200, PrimitiveType::TimestampNs),
+        (i32::MAX, PrimitiveType::Timestamp),
+    ] {
+        assert_eq!(
+            Datum::date(days).promote_to(&target).unwrap_err().kind(),
+            ErrorKind::DataInvalid,
+            "date({days}) -> {target:?}"
+        );
+    }
+
+    assert_eq!(
+        Datum::int(5).promote_to(&PrimitiveType::Timestamp).unwrap(),
+        None,
+        "int must not promote as a date"
+    );
+}
+
+#[test]
+fn avro_bytes_timestamp_from_date() {
+    // Under a timestamp / timestamp_ns schema, a 4-byte bound is a date (days from
+    // the epoch) and must decode to midnight of that day.
+    let days = 19_723_i32;
+    let bytes = days.to_le_bytes().to_vec();
+    check_avro_bytes_serde(
+        bytes.clone(),
+        Datum::timestamp_micros(i64::from(days) * 86_400_000_000),
+        &PrimitiveType::Timestamp,
+    );
+    check_avro_bytes_serde(
+        bytes,
+        Datum::timestamp_nanos(i64::from(days) * 86_400_000_000_000),
+        &PrimitiveType::TimestampNs,
+    );
+}
