@@ -19,6 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use futures::future::join_all;
 use uuid::Uuid;
 
 use super::{
@@ -32,6 +33,7 @@ use crate::spec::{
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
+use crate::transaction::action::CommitStatus;
 
 /// What an append-shaped action asks the producer to do.
 ///
@@ -69,10 +71,7 @@ pub(crate) struct SimpleSnapshotProducer {
     /// Manifests written for the added files, reused across attempts.
     added_manifests: Option<AddedManifests>,
     /// Metadata files written by this producer (manifests and every attempt's
-    /// manifest list).
-    // TODO(#3417): cleanup is not implemented yet; terminal cleanup consumes
-    // this set.
-    #[allow(dead_code)]
+    /// manifest list), considered for deletion by [`Self::cleanup`].
     owned_artifacts: HashSet<String>,
 }
 
@@ -126,6 +125,70 @@ impl SimpleSnapshotProducer {
             truncate_full_table: false,
         })
         .await
+    }
+
+    /// Best-effort removal of owned artifacts the terminal result does not need.
+    ///
+    /// - `Committed`: every attempt but the last wrote a manifest list the
+    ///   committed snapshot does not reference; delete those. Owned manifests
+    ///   are referenced by the committed manifest list and are kept.
+    /// - `Failed`: nothing was committed; delete everything owned.
+    /// - `Unknown`: the commit may have been applied; delete nothing.
+    ///
+    /// Failures are logged and swallowed: cleanup must not change the
+    /// transaction's result.
+    pub(crate) async fn cleanup(self, table: &Table, status: CommitStatus) {
+        let to_delete: Vec<String> = match status {
+            CommitStatus::Unknown => return,
+            CommitStatus::Failed => self.owned_artifacts.iter().cloned().collect(),
+            CommitStatus::Committed => {
+                let committed_manifest_list = self
+                    .snapshot_id
+                    .and_then(|id| table.metadata().snapshot_by_id(id))
+                    .map(|s| s.manifest_list().to_string());
+                let Some(committed_manifest_list) = committed_manifest_list else {
+                    // The catalog accepted our `AddSnapshot` but the table it
+                    // returned does not carry the snapshot. Cleanup cannot
+                    // fail the transaction, and without a reachability anchor
+                    // deleting anything could remove live metadata.
+                    debug_assert!(
+                        false,
+                        "committed table is missing snapshot {:?}",
+                        self.snapshot_id
+                    );
+                    tracing::warn!(
+                        "Skipping cleanup: committed table is missing snapshot {:?}",
+                        self.snapshot_id
+                    );
+                    return;
+                };
+                self.owned_artifacts
+                    .iter()
+                    .filter(|path| {
+                        **path != committed_manifest_list && !self.is_owned_manifest(path)
+                    })
+                    .cloned()
+                    .collect()
+            }
+        };
+
+        let runtime = table.runtime();
+        let file_io = table.file_io();
+        join_all(to_delete.into_iter().map(|path| {
+            let file_io = file_io.clone();
+            runtime.io().spawn(async move {
+                if let Err(err) = file_io.delete(&path).await {
+                    tracing::warn!("Failed to clean up uncommitted metadata file {path}: {err}");
+                }
+            })
+        }))
+        .await;
+    }
+
+    fn is_owned_manifest(&self, path: &str) -> bool {
+        self.added_manifests
+            .as_ref()
+            .is_some_and(|m| m.manifests.iter().any(|f| f.manifest_path == path))
     }
 
     /// Checks that every file is written under the table's default partition

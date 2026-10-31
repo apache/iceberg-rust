@@ -72,7 +72,7 @@ pub use update_schema::AddColumn;
 use crate::error::Result;
 use crate::spec::TableProperties;
 use crate::table::Table;
-use crate::transaction::action::TransactionActionEntry;
+use crate::transaction::action::{CommitStatus, TransactionActionEntry};
 pub use crate::transaction::append::FastAppendAction;
 pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
@@ -193,7 +193,7 @@ impl Transaction {
         let backoff = Self::build_backoff(table_props)?;
         let tx = self;
 
-        (|mut tx: Transaction| async {
+        let (tx, result) = (|mut tx: Transaction| async {
             let result = tx.do_commit(catalog).await;
             (tx, result)
         })
@@ -201,8 +201,39 @@ impl Transaction {
         .sleep(tokio::time::sleep)
         .context(tx)
         .when(|e| e.retryable())
-        .await
-        .1
+        .await;
+
+        let status = match &result {
+            Ok(_) => CommitStatus::Committed,
+            Err(e) => Self::classify_failure(e),
+        };
+        // For `Committed`, the accepted table supports reachability checks. For
+        // the others, the last base is execution context only.
+        let table = result.as_ref().unwrap_or(&tx.table).clone();
+        for entry in tx.actions {
+            entry.cleanup(&table, status).await;
+        }
+
+        result
+    }
+
+    /// Classifies a failed commit for cleanup, by error kind alone.
+    ///
+    /// Every kind but `Unexpected` is a definite rejection (a catalog conflict,
+    /// a validation or precondition failure, an unsupported feature), so the
+    /// commit was not applied. `Unexpected` covers both I/O failures before
+    /// submission and catalog errors after it (a 5xx, a dropped connection),
+    /// and the two cannot be told apart, so it is treated as unresolved and
+    /// cleanup deletes nothing. This mirrors iceberg-java's strict-cleanup
+    /// mode, where only `CleanableFailure` exceptions trigger cleanup.
+    // TODO: let errors carry a "definitely not committed" marker so that
+    // pre-submission I/O failures and catalog rejections clean up instead of
+    // leaving orphans.
+    fn classify_failure(error: &Error) -> CommitStatus {
+        match error.kind() {
+            ErrorKind::Unexpected => CommitStatus::Unknown,
+            _ => CommitStatus::Failed,
+        }
     }
 
     fn build_backoff(props: TableProperties<'_>) -> Result<ExponentialBackoff> {

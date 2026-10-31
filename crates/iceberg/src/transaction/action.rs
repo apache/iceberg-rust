@@ -73,9 +73,6 @@ pub(crate) trait TransactionAction: Clone + Send + Sync + 'static {
     /// Cleanup must not change the already-determined transaction result.
     ///
     /// See [`CommitStatus`] for what each terminal status allows cleanup to do.
-    // TODO: invoke this from `Transaction::commit` once terminal status
-    // classification is wired up (stateful transaction RFC, milestone 3).
-    #[allow(dead_code)]
     async fn cleanup(self, state: Self::State, table: &Table, status: CommitStatus);
 }
 
@@ -113,9 +110,6 @@ impl<T: StatelessAction> TransactionAction for T {
 ///
 /// The transaction/catalog layer determines this classification; actions
 /// consume it rather than independently interpreting catalog errors.
-// TODO: produce this classification in `Transaction::commit` once terminal
-// cleanup is wired up (stateful transaction RFC, milestone 3).
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommitStatus {
     /// The catalog confirmed that the commit was applied. Cleanup may remove
@@ -165,9 +159,6 @@ pub(crate) trait DynActionEntry: AsAny + Send + Sync {
     async fn commit(&mut self, table: &Table) -> Result<ActionCommit>;
 
     /// Best-effort terminal cleanup, consuming the entry.
-    // TODO: invoke from `Transaction::commit` once terminal status
-    // classification is wired up (stateful transaction RFC, milestone 3).
-    #[allow(dead_code)]
     async fn cleanup(self: Box<Self>, table: &Table, status: CommitStatus);
 
     /// Creates a new entry for a new logical execution of the same action:

@@ -135,9 +135,8 @@ impl TransactionAction for FastAppendAction {
         state.apply(table).await
     }
 
-    async fn cleanup(self, _state: SimpleSnapshotProducer, _table: &Table, _status: CommitStatus) {
-        // TODO(#3417): remove the producer's uncommitted artifacts once terminal
-        // cleanup is wired up.
+    async fn cleanup(self, state: SimpleSnapshotProducer, table: &Table, status: CommitStatus) {
+        state.cleanup(table, status).await
     }
 }
 
@@ -167,7 +166,7 @@ mod tests {
         make_v2_minimal_table, make_v3_minimal_table, with_retry_properties,
     };
     use crate::transaction::{ApplyTransactionAction, FastAppendAction, Transaction};
-    use crate::{ErrorKind, TableCommit, TableIdent, TableRequirement, TableUpdate};
+    use crate::{Error, ErrorKind, TableCommit, TableIdent, TableRequirement, TableUpdate};
 
     fn render_template(template: &str, ctx: Value) -> String {
         let mut env = Environment::new();
@@ -1150,6 +1149,113 @@ mod tests {
         assert_eq!(summary.get("total-data-files").unwrap(), "2");
         assert_eq!(summary.get("total-records").unwrap(), "2");
 
+        // Cleanup after `Committed`: the first attempt's manifest list is an
+        // orphan and is deleted; the committed manifest list and the reused
+        // manifest stay.
+        let io = s2.file_io();
+        let attempt0_list = s2_snapshot.manifest_list().replace("-1-", "-0-");
+        assert!(!io.exists(&attempt0_list).await.unwrap());
+        assert!(io.exists(s2_snapshot.manifest_list()).await.unwrap());
+        assert!(io.exists(&a_manifest.manifest_path).await.unwrap());
+
         (s1_snapshot, s2_snapshot)
+    }
+
+    /// Builds a table whose metadata location lets `TableCommit::apply` derive
+    /// the next one, with a single-row data file to append.
+    fn cleanup_fixture() -> (Table, DataFile) {
+        let table = with_retry_properties(make_v2_minimal_table(), "0").with_metadata_location(
+            "memory:///table/metadata/00000-9c12d441-03fe-4693-9a96-a0705ddf69c1.metadata.json"
+                .to_string(),
+        );
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/a.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .build()
+            .unwrap();
+        (table, data_file)
+    }
+
+    /// Runs one fast-append attempt whose `update_table` fails with `error`,
+    /// and returns the paths of the manifest list and manifest it wrote so the
+    /// caller can check what cleanup left behind.
+    async fn commit_once_failing_with(error: Error) -> (Table, String, String) {
+        let (table, data_file) = cleanup_fixture();
+        let commit_uuid = Uuid::now_v7();
+
+        let mut mock_catalog = MockCatalog::new();
+        let base = table.clone();
+        mock_catalog.expect_load_table().returning_st(move |_| {
+            let base = base.clone();
+            Box::pin(async move { Ok(base) })
+        });
+        // Capture the manifest list path from the submitted commit.
+        let submitted_list = Arc::new(std::sync::Mutex::new(None));
+        let captured = submitted_list.clone();
+        let error = Arc::new(std::sync::Mutex::new(Some(error)));
+        mock_catalog
+            .expect_update_table()
+            .times(1)
+            .returning_st(move |mut commit| {
+                let list = commit.take_updates().into_iter().find_map(|u| match u {
+                    TableUpdate::AddSnapshot { snapshot } => {
+                        Some(snapshot.manifest_list().to_string())
+                    }
+                    _ => None,
+                });
+                *captured.lock().unwrap() = list;
+                let error = error.lock().unwrap().take().unwrap();
+                Box::pin(async move { Err(error) })
+            });
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .set_commit_uuid(commit_uuid)
+            .add_data_files(vec![data_file])
+            .apply(tx)
+            .unwrap();
+        tx.commit(&mock_catalog).await.unwrap_err();
+
+        let manifest_list = submitted_list.lock().unwrap().take().unwrap();
+        let manifest = format!(
+            "{}/{commit_uuid}-m0.avro",
+            table.metadata().metadata_location().unwrap()
+        );
+        (table, manifest_list, manifest)
+    }
+
+    /// The catalog definitively rejects the commit: every owned artifact is
+    /// deleted.
+    #[tokio::test]
+    async fn test_fast_append_cleanup_deletes_artifacts_on_failed_commit() {
+        let (table, manifest_list, manifest) = commit_once_failing_with(
+            Error::new(ErrorKind::CatalogCommitConflicts, "rejected").with_retryable(false),
+        )
+        .await;
+
+        let io = table.file_io();
+        assert!(!io.exists(&manifest_list).await.unwrap());
+        assert!(!io.exists(&manifest).await.unwrap());
+    }
+
+    /// `update_table` fails for a reason other than a rejection: the commit may
+    /// have been applied, so nothing is deleted.
+    #[tokio::test]
+    async fn test_fast_append_cleanup_keeps_artifacts_on_unknown_outcome() {
+        let (table, manifest_list, manifest) = commit_once_failing_with(Error::new(
+            ErrorKind::Unexpected,
+            "connection reset while awaiting the response",
+        ))
+        .await;
+
+        let io = table.file_io();
+        assert!(io.exists(&manifest_list).await.unwrap());
+        assert!(io.exists(&manifest).await.unwrap());
     }
 }
