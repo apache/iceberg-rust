@@ -1377,7 +1377,7 @@ mod tests {
             None,
             Some("d"),
         ])) as ArrayRef;
-        let col6 = Arc::new(arrow_array::LargeBinaryArray::from_opt_vec(vec![
+        let col6 = Arc::new(arrow_array::BinaryArray::from_opt_vec(vec![
             Some(b"one"),
             None,
             Some(b""),
