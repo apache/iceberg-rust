@@ -65,6 +65,10 @@ pub const S3_ALLOW_ANONYMOUS: &str = "s3.allow-anonymous";
 pub const S3_DISABLE_EC2_METADATA: &str = "s3.disable-ec2-metadata";
 /// Option to skip loading configuration from config file and the env.
 pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
+/// S3 bulk delete batch size property key (matches Iceberg Java specification).
+pub const S3_DELETE_BATCH_SIZE: &str = "s3.delete.batch-size";
+/// S3 multipart upload part size in bytes property key (matches Iceberg Java specification).
+pub const S3_MULTIPART_PART_SIZE_BYTES: &str = "s3.multipart.part-size-bytes";
 
 /// Amazon S3 storage configuration.
 ///
