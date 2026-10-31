@@ -26,18 +26,19 @@ pub use metadata::*;
 mod reader;
 pub use reader::*;
 mod writer;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use apache_avro::Reader as AvroReader;
 use apache_avro::error::Details;
+use apache_avro::{Reader as AvroReader, Schema as AvroSchema};
 pub use writer::*;
 
 use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType, Schema, Struct, Type,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::avro::{Resolved, define_named_types_once};
+use crate::avro::{FIELD_ID_PROP, Resolved, define_named_types_once};
 use crate::error::{Error, Result, invalid_data};
 
 /// Whether a manifest with repeated Avro named type definitions was logged at
@@ -109,7 +110,8 @@ impl Manifest {
         // Wrap the partition type once and share it across all entries: the
         // per-entry conversion needs a `&Type`, and building it here keeps the
         // lazily-populated field-name lookup from being rebuilt for every entry.
-        let partition_struct_type = Type::Struct(partition_type.clone());
+        let partition_struct_type =
+            Type::Struct(with_writer_names(reader.writer_schema(), &partition_type));
 
         let entries = match metadata.format_version {
             FormatVersion::V1 => reader
@@ -167,6 +169,61 @@ impl Manifest {
             entries: entries.into_iter().map(Arc::new).collect(),
         }
     }
+}
+
+/// `partition_type` with each field renamed to the writer's Avro name for it,
+/// matched by `field-id`. If the writer's partition fields have no field IDs,
+/// they are matched by name. Java writes a name that isn't a valid Avro name,
+/// such as `a.b`, as `a_x2Eb`.
+fn with_writer_names(
+    writer_schema: &AvroSchema,
+    partition_type: &super::StructType,
+) -> super::StructType {
+    fn field<'a>(schema: &'a AvroSchema, name: &str) -> Option<&'a AvroSchema> {
+        match schema {
+            AvroSchema::Record(record) => {
+                let i = *record.lookup.get(name)?;
+                record.fields.get(i).map(|f| &f.schema)
+            }
+            _ => None,
+        }
+    }
+    let partition_fields = match field(writer_schema, "data_file")
+        .and_then(|data_file| field(data_file, "partition"))
+    {
+        Some(AvroSchema::Record(partition)) => partition.fields.as_slice(),
+        _ => &[],
+    };
+    let names: HashMap<i64, &str> = partition_fields
+        .iter()
+        .filter_map(|f| {
+            Some((
+                f.custom_attributes.get(FIELD_ID_PROP)?.as_i64()?,
+                f.name.as_str(),
+            ))
+        })
+        .collect();
+    if names.is_empty() {
+        return partition_type.clone();
+    }
+    super::StructType::new(
+        partition_type
+            .fields()
+            .iter()
+            .map(|f| {
+                let name = match names.get(&i64::from(f.id)) {
+                    Some(&name) if name == f.name => return f.clone(),
+                    Some(&name) => name.to_string(),
+                    // apache-avro rejects `#` in names, so this matches nothing and reads as null.
+                    None => format!("{}#{}", f.name, f.id),
+                };
+                Arc::new(super::NestedField {
+                    name,
+                    ..f.as_ref().clone()
+                })
+            })
+            .collect(),
+    )
 }
 
 /// Serialize a DataFile to a JSON string.
@@ -1874,6 +1931,83 @@ mod tests {
             manifest,
             Manifest::new(metadata, vec![expected_entry(partition)])
         );
+    }
+
+    #[test]
+    fn test_parse_manifest_written_by_java_with_sanitized_partition_name() {
+        // Java writes the partition field `user.id_bucket` as `user_x2Eid_bucket`.
+        for (file, format_version) in [
+            ("java-v1-nested-bucket.avro", FormatVersion::V1),
+            ("java-v2-nested-bucket.avro", FormatVersion::V2),
+        ] {
+            let bs = fs::read(format!(
+                "{}/testdata/manifests/{file}",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap();
+
+            let manifest = Manifest::parse_avro(&bs).unwrap();
+
+            assert_eq!(manifest.metadata().format_version, format_version);
+            assert_eq!(
+                manifest.metadata().partition_spec.fields()[0].name,
+                "user.id_bucket"
+            );
+            assert_eq!(
+                *manifest.entries()[0].data_file().partition(),
+                Struct::from_iter([Some(Literal::int(3))])
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_manifest_matches_partition_fields_by_field_id() {
+        let metadata = writer_schema_test_metadata();
+        let cases = [
+            // In spec order, but `name` and `score` have each other's field IDs.
+            (
+                serde_json::json!([
+                    {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+                    {"name": "name", "type": ["null", "double"], "default": null, "field-id": 1002},
+                    {"name": "score", "type": ["null", "string"], "default": null, "field-id": 1001},
+                ]),
+                serde_json::json!({"id": 5, "name": 2.5, "score": "a"}),
+                Some(Literal::double(2.5)),
+            ),
+            // With field IDs, a field whose name matches but whose ID doesn't reads as null.
+            (
+                serde_json::json!([
+                    {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+                    {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
+                    {"name": "score", "type": ["null", "double"], "default": null, "field-id": 1005},
+                ]),
+                serde_json::json!({"id": 5, "name": "a", "score": 2.5}),
+                None,
+            ),
+            // Without field IDs, fields match by name.
+            (
+                serde_json::json!([
+                    {"name": "score", "type": ["null", "double"], "default": null},
+                    {"name": "id", "type": ["null", "long"], "default": null},
+                    {"name": "name", "type": ["null", "string"], "default": null},
+                ]),
+                serde_json::json!({"score": 2.5, "id": 5, "name": "a"}),
+                Some(Literal::double(2.5)),
+            ),
+        ];
+        for (partition_fields, partition, score) in cases {
+            let bs =
+                write_with_writer_schema(&metadata, &v2_writer_schema(partition_fields), vec![
+                    v2_entry(partition),
+                ]);
+
+            let partition =
+                Struct::from_iter([Some(Literal::long(5)), Some(Literal::string("a")), score]);
+            assert_eq!(
+                Manifest::parse_avro(&bs).unwrap(),
+                Manifest::new(metadata.clone(), vec![expected_entry(partition)])
+            );
+        }
     }
 
     #[test]

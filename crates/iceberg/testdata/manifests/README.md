@@ -97,3 +97,46 @@ def main(path: str) -> None:
 if __name__ == "__main__":
     main(sys.argv[1])
 ```
+
+`java-v1-nested-bucket.avro` and `java-v2-nested-bucket.avro` are V1 and V2 data
+manifests written by iceberg-java 1.12.0. Their table schema has optional columns
+`event` (string, id 1) and `user` (struct, id 2) with an optional `id` (long,
+id 3), and their partition spec is `bucket(16, user.id)`. Java names the
+partition field `user.id_bucket`, which isn't a valid Avro name, so the Avro
+schema stores it as `user_x2Eid_bucket` with `field-id` 1000 and the original in
+`iceberg-field-name`. Each holds one entry for `s3://bucket/table/data/a.parquet`
+with partition value 3.
+
+To regenerate them, run this program against iceberg-java 1.12.0
+(`iceberg-core` and its dependencies), passing the output directory:
+
+```java
+import java.io.File;
+import org.apache.iceberg.*;
+import org.apache.iceberg.types.Types;
+
+public class WriteManifests {
+  public static void main(String[] args) throws Exception {
+    Schema schema = new Schema(
+        Types.NestedField.optional(1, "event", Types.StringType.get()),
+        Types.NestedField.optional(2, "user", Types.StructType.of(
+            Types.NestedField.optional(3, "id", Types.LongType.get()))));
+    PartitionSpec spec = PartitionSpec.builderFor(schema).bucket("user.id", 16).build();
+    for (int version : new int[] {1, 2}) {
+      File out = new File(args[0], "java-v" + version + "-nested-bucket.avro");
+      PartitionData partition = new PartitionData(spec.partitionType());
+      partition.set(0, 3);
+      try (ManifestWriter<DataFile> writer =
+          ManifestFiles.write(version, spec, Files.localOutput(out), 7L)) {
+        writer.add(DataFiles.builder(spec)
+            .withPath("s3://bucket/table/data/a.parquet")
+            .withFormat(FileFormat.PARQUET)
+            .withPartition(partition)
+            .withRecordCount(10)
+            .withFileSizeInBytes(100)
+            .build());
+      }
+    }
+  }
+}
+```
