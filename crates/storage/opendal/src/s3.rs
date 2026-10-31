@@ -183,10 +183,13 @@ impl CustomAwsCredentialLoader {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use iceberg::io::S3_PATH_STYLE_ACCESS;
+    use opendal::services::S3Config;
 
-    use super::s3_config_parse;
+    use super::{AwsCredential, CustomAwsCredentialLoader, ProvideCredential, s3_config_parse};
+    use crate::{OpenDalClientConfig, OpenDalStorage, OpenDalStorageFactory};
 
     fn parse_with(prop: Option<&str>) -> bool {
         let mut props = HashMap::new();
@@ -196,11 +199,60 @@ mod tests {
         s3_config_parse(props).unwrap().enable_virtual_host_style
     }
 
+    #[derive(Debug)]
+    struct EmptyCredentialLoader;
+
+    impl ProvideCredential for EmptyCredentialLoader {
+        type Credential = AwsCredential;
+
+        async fn provide_credential(
+            &self,
+            _ctx: &reqsign_core::Context,
+        ) -> reqsign_core::Result<Option<AwsCredential>> {
+            Ok(None)
+        }
+    }
+
     #[test]
     fn s3_config_parse_path_style_access() {
         // Match Iceberg S3FileIOProperties.PATH_STYLE_ACCESS_DEFAULT = false.
         assert!(parse_with(None));
         assert!(parse_with(Some("false")));
         assert!(!parse_with(Some("true")));
+    }
+
+    #[test]
+    fn test_relativize_path_s3() {
+        let storage = OpenDalStorage::S3 {
+            config: Arc::new(S3Config::default()),
+            customized_credential_load: None,
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        // All S3-family schemes are accepted by the same storage instance.
+        // Custom schemes for S3-compatible stores (e.g., `minio://`) are also
+        // accepted because the path's scheme is used as-is for prefix matching.
+        for scheme in ["s3", "s3a", "s3n", "minio"] {
+            assert_eq!(
+                storage
+                    .relativize_path(&format!("{scheme}://my-bucket/path/to/file.parquet"))
+                    .unwrap(),
+                "path/to/file.parquet"
+            );
+        }
+    }
+
+    #[test]
+    fn test_s3_factory_custom_credential_loader_serialization_fails() {
+        let file_io = iceberg::io::FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: Some(CustomAwsCredentialLoader::new(EmptyCredentialLoader)),
+        }))
+        .build();
+
+        let err = file_io.serialize_all().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("custom AWS credential loaders cannot be serialized")
+        );
     }
 }

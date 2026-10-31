@@ -324,10 +324,12 @@ fn validate_storage_and_scheme(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use opendal::services::AzdlsConfig;
 
     use super::{AzureStoragePath, AzureStorageScheme, azdls_config_parse, azdls_create_operator};
+    use crate::{OpenDalClientConfig, OpenDalStorage};
 
     #[test]
     fn test_azdls_config_parse() {
@@ -585,5 +587,24 @@ mod tests {
             let endpoint = path.as_endpoint();
             assert_eq!(endpoint, expected, "Test case: {name}");
         }
+    }
+
+    #[test]
+    fn test_relativize_path_azdls() {
+        let storage = OpenDalStorage::Azdls {
+            config: Arc::new(AzdlsConfig {
+                account_name: Some("myaccount".to_string()),
+                endpoint: Some("https://myaccount.dfs.core.windows.net".to_string()),
+                ..Default::default()
+            }),
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        assert_eq!(
+            storage
+                .relativize_path("abfss://myfs@myaccount.dfs.core.windows.net/path/to/file.parquet")
+                .unwrap(),
+            "path/to/file.parquet"
+        );
     }
 }
