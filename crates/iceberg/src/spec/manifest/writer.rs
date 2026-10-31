@@ -442,6 +442,7 @@ impl ManifestWriter {
             "schema-id".to_string(),
             table_schema.schema_id().to_string(),
         )?;
+        // Per the spec, this is only the partition fields array, not the full spec.
         avro_writer.add_user_metadata(
             "partition-spec".to_string(),
             to_vec(&self.metadata.partition_spec.fields()).map_err(|err| {
