@@ -16,6 +16,7 @@
 // under the License.
 
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 
@@ -37,7 +38,7 @@ pub struct RollingFileWriterBuilder<
     target_file_size: usize,
     file_io: FileIO,
     location_generator: L,
-    file_name_generator: F,
+    file_name_generator: Arc<F>,
 }
 
 impl<B, L, F> RollingFileWriterBuilder<B, L, F>
@@ -71,7 +72,7 @@ where
             target_file_size,
             file_io,
             location_generator,
-            file_name_generator,
+            file_name_generator: Arc::new(file_name_generator),
         }
     }
 
@@ -98,7 +99,7 @@ where
             target_file_size: TableProperties::PROPERTY_WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT,
             file_io,
             location_generator,
-            file_name_generator,
+            file_name_generator: Arc::new(file_name_generator),
         }
     }
 
@@ -129,7 +130,7 @@ pub struct RollingFileWriter<B: FileWriterBuilder, L: LocationGenerator, F: File
     data_file_builders: Vec<DataFileBuilder>,
     file_io: FileIO,
     location_generator: L,
-    file_name_generator: F,
+    file_name_generator: Arc<F>,
 }
 
 impl<B, L, F> Debug for RollingFileWriter<B, L, F>

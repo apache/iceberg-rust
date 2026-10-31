@@ -241,7 +241,7 @@ fn dirs_from_hash(hash: &str) -> String {
 
 /// `FileNameGeneratorTrait` used to generate file name for data file. The file name can be passed to `LocationGenerator` to generate the location of the file.
 pub trait FileNameGenerator: Clone + Send + Sync + 'static {
-    /// Generate a file name.
+    /// Generate a file name that is unique across calls to this instance.
     fn generate_file_name(&self) -> String;
 }
 
