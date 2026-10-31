@@ -3226,7 +3226,7 @@ pub fn iceberg::spec::ViewMetadataBuilder::new(location: alloc::string::String, 
 pub fn iceberg::spec::ViewMetadataBuilder::new_from_metadata(previous: iceberg::spec::ViewMetadata) -> Self
 pub fn iceberg::spec::ViewMetadataBuilder::remove_properties(self, removals: &[alloc::string::String]) -> Self
 pub fn iceberg::spec::ViewMetadataBuilder::set_current_version(self, view_version: iceberg::spec::ViewVersion, schema: iceberg::spec::Schema) -> iceberg::Result<Self>
-pub fn iceberg::spec::ViewMetadataBuilder::set_current_version_id(self, version_id: i32) -> iceberg::Result<Self>
+pub fn iceberg::spec::ViewMetadataBuilder::set_current_version_id(self, version_id: iceberg::spec::ViewVersionId) -> iceberg::Result<Self>
 pub fn iceberg::spec::ViewMetadataBuilder::set_location(self, location: alloc::string::String) -> Self
 pub fn iceberg::spec::ViewMetadataBuilder::set_properties(self, updates: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::Result<Self>
 pub fn iceberg::spec::ViewMetadataBuilder::upgrade_format_version(self, format_version: iceberg::spec::ViewFormatVersion) -> iceberg::Result<Self>
@@ -3267,7 +3267,7 @@ pub fn iceberg::spec::ViewVersion::timestamp(&self) -> iceberg::Result<chrono::d
 pub fn iceberg::spec::ViewVersion::timestamp_ms(&self) -> i64
 pub fn iceberg::spec::ViewVersion::version_id(&self) -> iceberg::spec::ViewVersionId
 pub fn iceberg::spec::ViewVersion::with_schema_id(self, schema_id: iceberg::spec::SchemaId) -> Self
-pub fn iceberg::spec::ViewVersion::with_version_id(self, version_id: i32) -> Self
+pub fn iceberg::spec::ViewVersion::with_version_id(self, version_id: iceberg::spec::ViewVersionId) -> Self
 impl core::clone::Clone for iceberg::spec::ViewVersion
 pub fn iceberg::spec::ViewVersion::clone(&self) -> iceberg::spec::ViewVersion
 impl core::cmp::Eq for iceberg::spec::ViewVersion
@@ -3872,7 +3872,7 @@ pub iceberg::ViewUpdate::AssignUuid::uuid: uuid::Uuid
 pub iceberg::ViewUpdate::RemoveProperties
 pub iceberg::ViewUpdate::RemoveProperties::removals: alloc::vec::Vec<alloc::string::String>
 pub iceberg::ViewUpdate::SetCurrentViewVersion
-pub iceberg::ViewUpdate::SetCurrentViewVersion::view_version_id: i32
+pub iceberg::ViewUpdate::SetCurrentViewVersion::view_version_id: iceberg::spec::ViewVersionId
 pub iceberg::ViewUpdate::SetLocation
 pub iceberg::ViewUpdate::SetLocation::location: alloc::string::String
 pub iceberg::ViewUpdate::SetProperties
