@@ -23,8 +23,8 @@ use uuid::Uuid;
 use super::{
     DEFAULT_PARTITION_SPEC_ID, DEFAULT_SCHEMA_ID, FormatVersion, MAIN_BRANCH, MetadataLog,
     ONE_MINUTE_MS, PartitionField, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
-    Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
-    SortOrderRef, StatisticsFile, StructType, TableMetadata, TableProperties, Transform,
+    Schema, SchemaId, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention,
+    SortOrder, SortOrderRef, StatisticsFile, StructType, TableMetadata, TableProperties, Transform,
     UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result, invalid_data};
@@ -49,7 +49,7 @@ pub(crate) const FIRST_FIELD_ID: i32 = 1;
 pub struct TableMetadataBuilder {
     metadata: TableMetadata,
     changes: Vec<TableUpdate>,
-    last_added_schema_id: Option<i32>,
+    last_added_schema_id: Option<SchemaId>,
     last_added_spec_id: Option<i32>,
     last_added_order_id: Option<i64>,
     // None if this is a new table (from_metadata) method not used
@@ -650,7 +650,7 @@ impl TableMetadataBuilder {
     /// - provided `schema_id` is -1 but no schema has been added via `add_schema`.
     /// - No schema with the provided `schema_id` exists.
     /// - A field of the schema takes the name of a partition field it is not the source of.
-    pub fn set_current_schema(mut self, mut schema_id: i32) -> Result<Self> {
+    pub fn set_current_schema(mut self, mut schema_id: SchemaId) -> Result<Self> {
         if schema_id == Self::LAST_ADDED {
             schema_id = self.last_added_schema_id.ok_or_else(|| {
                 invalid_data!(
@@ -1294,7 +1294,7 @@ impl TableMetadataBuilder {
         Ok((fresh_schema, fresh_spec, fresh_sort_order))
     }
 
-    fn reuse_or_create_new_schema_id(&self, new_schema: &Schema) -> i32 {
+    fn reuse_or_create_new_schema_id(&self, new_schema: &Schema) -> SchemaId {
         self.metadata
             .schemas
             .iter()
@@ -1302,7 +1302,7 @@ impl TableMetadataBuilder {
             .unwrap_or_else(|| self.get_highest_schema_id() + 1)
     }
 
-    fn get_highest_schema_id(&self) -> i32 {
+    fn get_highest_schema_id(&self) -> SchemaId {
         *self
             .metadata
             .schemas
@@ -1378,7 +1378,7 @@ impl TableMetadataBuilder {
 
     /// Remove schemas by their ids from the table metadata.
     /// Does nothing if a schema id is not present. Active schemas should not be removed.
-    pub fn remove_schemas(mut self, schema_id_to_remove: &[i32]) -> Result<Self> {
+    pub fn remove_schemas(mut self, schema_id_to_remove: &[SchemaId]) -> Result<Self> {
         if schema_id_to_remove.contains(&self.metadata.current_schema_id) {
             return Err(invalid_data!("Cannot remove current schema"));
         }

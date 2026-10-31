@@ -524,7 +524,7 @@ pub enum TableUpdate {
     #[serde(rename_all = "kebab-case")]
     SetCurrentSchema {
         /// Schema ID to set as current, or -1 to set last added schema
-        schema_id: i32,
+        schema_id: SchemaId,
     },
     /// Add a new partition spec to the table
     AddSpec {
@@ -629,7 +629,7 @@ pub enum TableUpdate {
     #[serde(rename_all = "kebab-case")]
     RemoveSchemas {
         /// Schema IDs to remove.
-        schema_ids: Vec<i32>,
+        schema_ids: Vec<SchemaId>,
     },
     /// Add an encryption key
     #[serde(rename_all = "kebab-case")]
