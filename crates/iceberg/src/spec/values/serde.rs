@@ -19,12 +19,15 @@
 
 pub(crate) mod _serde {
     use std::collections::HashMap;
+    use std::str::FromStr;
 
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
     use serde::{Deserialize, Serialize};
     use serde_bytes::ByteBuf;
     use serde_derive::{Deserialize as DeserializeDerive, Serialize as SerializeDerive};
+    use uuid::Uuid;
+    use uuid::fmt::Hyphenated;
 
     use crate::Error;
     use crate::error::invalid_data;
@@ -106,6 +109,7 @@ pub(crate) mod _serde {
         Double(f64),
         String(String),
         Bytes(ByteBuf),
+        Uuid(#[serde(serialize_with = "apache_avro::serde::fixed::serialize")] [u8; 16]),
         List(List),
         StringMap(StringMap),
         Record(Record),
@@ -287,6 +291,9 @@ pub(crate) mod _serde {
                     PrimitiveLiteral::Float(v) => RawLiteralEnum::Float(v.0),
                     PrimitiveLiteral::Double(v) => RawLiteralEnum::Double(v.0),
                     PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
+                    PrimitiveLiteral::UInt128(v) if *ty == Type::Primitive(PrimitiveType::Uuid) => {
+                        RawLiteralEnum::Uuid(v.to_be_bytes())
+                    }
                     PrimitiveLiteral::UInt128(v) => {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
                     }
@@ -473,7 +480,19 @@ pub(crate) mod _serde {
                 },
                 RawLiteralEnum::String(v) => match ty {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
+                    Type::Primitive(PrimitiveType::Uuid) => Hyphenated::from_str(&v)
+                        // The hyphenated UUID restriction is to match behaviour with Java.
+                        .map(|hyphenated_uuid| Some(Literal::uuid(hyphenated_uuid.into_uuid())))
+                        .map_err(|_| {
+                            invalid_err_with_reason("string", "UUID must be a valid UUID string")
+                        }),
                     _ => Err(invalid_err("string")),
+                },
+                RawLiteralEnum::Uuid(v) => match ty {
+                    Type::Primitive(PrimitiveType::Uuid) => {
+                        Ok(Some(Literal::uuid(Uuid::from_bytes(v))))
+                    }
+                    _ => Err(invalid_err("uuid")),
                 },
                 RawLiteralEnum::Bytes(v) => match ty {
                     Type::Primitive(PrimitiveType::Binary) => Ok(Some(Literal::binary(v.to_vec()))),
@@ -496,7 +515,7 @@ pub(crate) mod _serde {
                             let bytes: [u8; 16] = v.as_slice().try_into().map_err(|_| {
                                 invalid_err_with_reason("bytes", "UUID must be exactly 16 bytes")
                             })?;
-                            Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
+                            Ok(Some(Literal::uuid(Uuid::from_bytes(bytes))))
                         } else {
                             Err(invalid_err_with_reason(
                                 "bytes",
@@ -630,7 +649,7 @@ pub(crate) mod _serde {
                                 ));
                             }
                         }
-                        Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
+                        Ok(Some(Literal::uuid(Uuid::from_bytes(bytes))))
                     }
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: _,
