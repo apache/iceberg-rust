@@ -318,7 +318,7 @@ impl Table {
 
     /// Creates a [`ManifestReader`] for loading manifests referenced by this table.
     pub fn manifest_reader(&self) -> ManifestReader {
-        ManifestReader::new(self.file_io.clone())
+        ManifestReader::new(self.file_io.clone()).with_runtime(self.runtime.clone())
     }
 
     /// Create a reader for the table.

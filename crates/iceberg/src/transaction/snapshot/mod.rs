@@ -198,9 +198,10 @@ pub(crate) async fn validate_files_not_live(table: &Table, data_files: &[DataFil
         .into_iter()
         .map(|entry| {
             let object_cache = object_cache.clone();
+            let parse_runtime = runtime.clone();
             runtime
                 .io()
-                .spawn(async move { object_cache.get_manifest(&entry).await })
+                .spawn(async move { object_cache.get_manifest(&entry, &parse_runtime).await })
         })
         .collect::<FuturesUnordered<_>>()
         .try_fold(Vec::new(), |mut acc, manifest| async move {

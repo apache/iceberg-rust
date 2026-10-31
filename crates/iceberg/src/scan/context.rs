@@ -24,6 +24,7 @@ use futures::{SinkExt, TryFutureExt};
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
+use crate::runtime::Runtime;
 use crate::scan::{
     BoundPredicates, ColumnStatsColumns, ExpressionEvaluatorCache, FileScanTask,
     FileScanTaskColumnStats, ManifestEvaluatorCache, PartitionFilterCache,
@@ -45,6 +46,7 @@ pub(crate) struct ManifestFileContext {
     field_ids: Arc<Vec<i32>>,
     bound_predicates: Option<Arc<BoundPredicates>>,
     object_cache: Arc<ObjectCache>,
+    runtime: Runtime,
     snapshot_schema: SchemaRef,
     expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     delete_file_index: DeleteFileIndex,
@@ -103,6 +105,7 @@ impl ManifestFileContext {
     pub(crate) async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
         let ManifestFileContext {
             object_cache,
+            runtime,
             manifest_file,
             bound_predicates,
             snapshot_schema,
@@ -118,7 +121,7 @@ impl ManifestFileContext {
             column_stats_columns,
         } = self;
 
-        let manifest = object_cache.get_manifest(&manifest_file).await?;
+        let manifest = object_cache.get_manifest(&manifest_file, &runtime).await?;
 
         // A manifest written under an older schema stores partition values in that
         // schema's (narrower) types. When the current partition type widens the one the
@@ -264,6 +267,8 @@ pub(crate) struct PlanContext {
     pub predicate: Option<Arc<Predicate>>,
     pub snapshot_bound_predicate: Option<Arc<BoundPredicate>>,
     pub object_cache: Arc<ObjectCache>,
+    /// The runtime manifests are parsed on.
+    pub runtime: Runtime,
     pub field_ids: Arc<Vec<i32>>,
     pub name_mapping: Option<Arc<NameMapping>>,
 
@@ -399,6 +404,7 @@ impl PlanContext {
             bound_predicates,
             sender,
             object_cache: self.object_cache.clone(),
+            runtime: self.runtime.clone(),
             snapshot_schema: self.snapshot_schema.clone(),
             field_ids: self.field_ids.clone(),
             expression_evaluator_cache: self.expression_evaluator_cache.clone(),
