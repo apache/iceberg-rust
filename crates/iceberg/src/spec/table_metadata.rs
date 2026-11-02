@@ -3317,6 +3317,33 @@ mod tests {
     }
 
     #[test]
+    fn test_table_metadata_v3_multi_argument_partition_field() {
+        let mut metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string("testdata/table_metadata/TableMetadataV3ValidMinimal.json")
+                .unwrap(),
+        )
+        .unwrap();
+        metadata["partition-specs"][0]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!(
+                {"name": "xy", "transform": "bucket[4]", "source-ids": [1, 2], "field-id": 1001}
+            ));
+        metadata["last-partition-id"] = serde_json::json!(1001);
+
+        let metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
+
+        let field = &metadata.default_partition_spec().fields()[1];
+        assert_eq!(field.source_ids(), [1, 2]);
+        assert_eq!(field.transform(), Transform::Unknown);
+
+        let serialized = serde_json::to_value(&metadata).unwrap();
+        let field = &serialized["partition-specs"][0]["fields"][1];
+        assert_eq!(field["source-ids"], serde_json::json!([1, 2]));
+        assert!(field.get("source-id").is_none());
+    }
+
+    #[test]
     fn test_table_metadata_v1_legacy_partition_spec_with_void_fields() {
         let mut metadata: serde_json::Value = serde_json::from_str(
             &fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap(),
