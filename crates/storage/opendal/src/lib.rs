@@ -36,8 +36,8 @@ use cfg_if::cfg_if;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use iceberg::io::{
-    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
-    StorageFactory,
+    FileMetadata, FileRead, FileWrite, InputFile, OutputFile, S3_RETRY_MAX_WAIT_MS,
+    S3_RETRY_MIN_WAIT_MS, S3_RETRY_NUM_RETRIES, Storage, StorageConfig, StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
 use iceberg_property_macro::Properties;
@@ -130,15 +130,35 @@ pub struct OpenDalClientConfig {
     #[property(
         key = OPENDAL_IO_TIMEOUT_MS,
         default = DEFAULT_IO_TIMEOUT_MS,
-        parse_with = parse_io_timeout_ms
+        parse_with = parse_positive_ms
     )]
     io_timeout_ms: NonZeroU64,
+    /// S3 retries.
+    #[property(key = S3_RETRY_NUM_RETRIES, default = None)]
+    s3_retry_num_retries: Option<usize>,
+    /// S3 delay before the first retry in milliseconds.
+    #[property(
+        key = S3_RETRY_MIN_WAIT_MS,
+        default = None,
+        parse_with = parse_positive_ms
+    )]
+    s3_retry_min_wait_ms: Option<NonZeroU64>,
+    /// S3 upper bound of the delay between two retries in milliseconds.
+    #[property(
+        key = S3_RETRY_MAX_WAIT_MS,
+        default = None,
+        parse_with = parse_positive_ms
+    )]
+    s3_retry_max_wait_ms: Option<NonZeroU64>,
 }
 
 impl Default for OpenDalClientConfig {
     fn default() -> Self {
         Self {
             io_timeout_ms: DEFAULT_IO_TIMEOUT_MS,
+            s3_retry_num_retries: None,
+            s3_retry_min_wait_ms: None,
+            s3_retry_max_wait_ms: None,
         }
     }
 }
@@ -147,9 +167,30 @@ impl OpenDalClientConfig {
     pub(crate) fn io_timeout(&self) -> Duration {
         Duration::from_millis(self.io_timeout_ms.get())
     }
+
+    /// The retry policy of the `s3.retry.*` properties, with jitter; OpenDAL's default when none is set.
+    pub(crate) fn s3_retry_layer(&self) -> RetryLayer {
+        let mut layer = RetryLayer::new();
+        if self.s3_retry_num_retries.is_none()
+            && self.s3_retry_min_wait_ms.is_none()
+            && self.s3_retry_max_wait_ms.is_none()
+        {
+            return layer;
+        }
+        if let Some(times) = self.s3_retry_num_retries {
+            layer = layer.with_max_times(times);
+        }
+        if let Some(ms) = self.s3_retry_min_wait_ms {
+            layer = layer.with_min_delay(Duration::from_millis(ms.get()));
+        }
+        if let Some(ms) = self.s3_retry_max_wait_ms {
+            layer = layer.with_max_delay(Duration::from_millis(ms.get()));
+        }
+        layer.with_jitter()
+    }
 }
 
-fn parse_io_timeout_ms(value: &str) -> Result<NonZeroU64> {
+fn parse_positive_ms(value: &str) -> Result<NonZeroU64> {
     value.parse().map_err(|error| {
         Error::new(
             ErrorKind::DataInvalid,
@@ -513,8 +554,17 @@ impl OpenDalStorage {
         // benefits non-object-store backends.
         let operator = operator
             .layer(TimeoutLayer::new().with_io_timeout(self.client_config().io_timeout()))
-            .layer(RetryLayer::new());
+            .layer(self.retry_layer());
         Ok((operator, relative_path))
+    }
+
+    /// Only S3 reads the `s3.retry.*` properties; the other backends keep OpenDAL's default.
+    fn retry_layer(&self) -> RetryLayer {
+        match self {
+            #[cfg(feature = "opendal-s3")]
+            OpenDalStorage::S3 { client_config, .. } => client_config.s3_retry_layer(),
+            _ => RetryLayer::new(),
+        }
     }
 
     pub(crate) fn client_config(&self) -> &OpenDalClientConfig {
@@ -924,6 +974,94 @@ mod tests {
         assert_ne!(
             opendal_default,
             layer(control, io + Duration::from_millis(1))
+        );
+    }
+
+    fn retry_config(props: &[(&str, &str)]) -> Result<OpenDalClientConfig> {
+        OpenDalClientConfig::from_properties(
+            &props
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<HashMap<_, _>>(),
+        )
+    }
+
+    #[test]
+    fn test_s3_retry_defaults_match_opendal() {
+        // `RetryLayer` has no getters, so compare through `Debug`.
+        let unset = retry_config(&[]).unwrap();
+        assert_eq!(
+            format!("{:?}", unset.s3_retry_layer()),
+            format!("{:?}", RetryLayer::new())
+        );
+        assert_ne!(
+            format!("{:?}", RetryLayer::new()),
+            format!("{:?}", RetryLayer::new().with_jitter())
+        );
+    }
+
+    #[test]
+    fn test_s3_retry_properties_reach_retry_layer() {
+        let config = retry_config(&[
+            (S3_RETRY_NUM_RETRIES, "10"),
+            (S3_RETRY_MIN_WAIT_MS, "2000"),
+            (S3_RETRY_MAX_WAIT_MS, "20000"),
+        ])
+        .unwrap();
+        let expected = RetryLayer::new()
+            .with_max_times(10)
+            .with_min_delay(Duration::from_secs(2))
+            .with_max_delay(Duration::from_secs(20))
+            .with_jitter();
+        assert_eq!(
+            format!("{:?}", config.s3_retry_layer()),
+            format!("{expected:?}")
+        );
+
+        // any one property switches jitter on and leaves the others at OpenDAL's defaults
+        let no_retries = retry_config(&[(S3_RETRY_NUM_RETRIES, "0")]).unwrap();
+        assert_eq!(
+            format!("{:?}", no_retries.s3_retry_layer()),
+            format!("{:?}", RetryLayer::new().with_max_times(0).with_jitter())
+        );
+    }
+
+    #[test]
+    fn test_s3_retry_property_parsing_rejects_invalid_values() {
+        for (key, invalid) in [
+            (S3_RETRY_NUM_RETRIES, "-1"),
+            (S3_RETRY_NUM_RETRIES, "abc"),
+            (S3_RETRY_NUM_RETRIES, ""),
+            (S3_RETRY_MIN_WAIT_MS, "0"),
+            (S3_RETRY_MIN_WAIT_MS, "abc"),
+            (S3_RETRY_MAX_WAIT_MS, "0"),
+            (S3_RETRY_MAX_WAIT_MS, "12.5"),
+        ] {
+            let err = retry_config(&[(key, invalid)]).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={invalid}: {err}");
+        }
+    }
+
+    #[cfg(all(feature = "opendal-s3", feature = "opendal-memory"))]
+    #[test]
+    fn test_only_s3_applies_the_retry_properties() {
+        let client_config = retry_config(&[(S3_RETRY_NUM_RETRIES, "10")]).unwrap();
+        let s3 = OpenDalStorage::S3 {
+            config: Arc::new(S3Config::default()),
+            customized_credential_load: None,
+            client_config: client_config.clone(),
+        };
+        let memory = OpenDalStorage::Memory {
+            operator: default_memory_operator(),
+            client_config,
+        };
+        assert_eq!(
+            format!("{:?}", s3.retry_layer()),
+            format!("{:?}", RetryLayer::new().with_max_times(10).with_jitter())
+        );
+        assert_eq!(
+            format!("{:?}", memory.retry_layer()),
+            format!("{:?}", RetryLayer::new())
         );
     }
 
