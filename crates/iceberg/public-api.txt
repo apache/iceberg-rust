@@ -83,10 +83,13 @@ pub fn iceberg::arrow::ArrowReaderOptions::row_group_filtering_enabled(&self) ->
 pub fn iceberg::arrow::ArrowReaderOptions::row_selection_enabled(&self) -> bool
 impl core::clone::Clone for iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::clone(&self) -> iceberg::arrow::ArrowReaderOptions
+impl core::cmp::PartialEq for iceberg::arrow::ArrowReaderOptions
+pub fn iceberg::arrow::ArrowReaderOptions::eq(&self, other: &iceberg::arrow::ArrowReaderOptions) -> bool
 impl core::default::Default for iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::default() -> Self
 impl core::fmt::Debug for iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::arrow::ArrowReaderOptions
 impl iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::builder() -> ArrowReaderOptionsBuilder<((), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::arrow::ArrowReaderOptions
@@ -100,10 +103,13 @@ pub fn iceberg::arrow::ParquetReadOptions::range_coalesce_bytes(&self) -> u64
 pub fn iceberg::arrow::ParquetReadOptions::range_fetch_concurrency(&self) -> usize
 impl core::clone::Clone for iceberg::arrow::ParquetReadOptions
 pub fn iceberg::arrow::ParquetReadOptions::clone(&self) -> iceberg::arrow::ParquetReadOptions
+impl core::cmp::PartialEq for iceberg::arrow::ParquetReadOptions
+pub fn iceberg::arrow::ParquetReadOptions::eq(&self, other: &iceberg::arrow::ParquetReadOptions) -> bool
 impl core::default::Default for iceberg::arrow::ParquetReadOptions
 pub fn iceberg::arrow::ParquetReadOptions::default() -> Self
 impl core::fmt::Debug for iceberg::arrow::ParquetReadOptions
 pub fn iceberg::arrow::ParquetReadOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::arrow::ParquetReadOptions
 impl iceberg::arrow::ParquetReadOptions
 pub fn iceberg::arrow::ParquetReadOptions::builder() -> ParquetReadOptionsBuilder<((), (), ())>
 impl serde_core::ser::Serialize for iceberg::arrow::ParquetReadOptions

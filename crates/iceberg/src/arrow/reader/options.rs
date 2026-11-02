@@ -44,8 +44,7 @@ use super::{
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize, TypedBuilder)]
-#[cfg_attr(test, derive(PartialEq))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TypedBuilder)]
 #[serde(default)]
 #[builder(field_defaults(default, setter(prefix = "with_")))]
 pub struct ArrowReaderOptions {
@@ -73,6 +72,7 @@ impl Default for ArrowReaderOptions {
 }
 
 impl ArrowReaderOptions {
+    /// Supplies the scan's fallback limit without replacing an explicit reader limit.
     pub(crate) fn with_default_data_file_concurrency_limit(mut self, limit: usize) -> Self {
         self.data_file_concurrency_limit.get_or_insert(limit);
         self
@@ -127,8 +127,7 @@ impl ArrowReaderOptions {
 }
 
 /// Options for tuning Parquet file I/O.
-#[derive(Clone, Debug, Serialize, Deserialize, TypedBuilder)]
-#[cfg_attr(test, derive(PartialEq))]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TypedBuilder)]
 #[serde(default)]
 #[builder(field_defaults(setter(prefix = "with_")))]
 pub struct ParquetReadOptions {
@@ -178,170 +177,72 @@ impl ParquetReadOptions {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use futures::{TryStreamExt, stream};
+    use rstest::rstest;
 
     use super::*;
-    use crate::arrow::ArrowReaderBuilder;
-    use crate::io::FileIO;
-    use crate::test_utils::test_runtime;
-    use crate::util::available_parallelism;
 
-    #[tokio::test]
-    async fn deserialized_zero_concurrency_completes_reads() {
-        let options: ArrowReaderOptions =
-            serde_json::from_str(r#"{"data_file_concurrency_limit":0}"#).unwrap();
-        let reader = ArrowReaderBuilder::new(FileIO::new_with_memory(), test_runtime())
-            .with_options(options)
-            .build();
-        assert_eq!(reader.concurrency_limit_data_files, 1);
-        let batches = tokio::time::timeout(
-            Duration::from_secs(1),
-            reader
-                .read(Box::pin(stream::empty()))
-                .unwrap()
-                .stream()
-                .try_collect::<Vec<_>>(),
-        )
-        .await
-        .expect("zero concurrency must not stall the task stream")
+    #[rstest]
+    #[case::unset(None, 7)]
+    #[case::explicit(Some(3), 3)]
+    #[case::zero(Some(0), 0)]
+    fn default_data_file_concurrency_preserves_explicit_options(
+        #[case] configured: Option<usize>,
+        #[case] expected: usize,
+    ) {
+        // Include unrelated settings to check that resolving concurrency preserves them.
+        let options: ArrowReaderOptions = serde_json::from_value(serde_json::json!({
+            "batch_size": 17,
+            "data_file_concurrency_limit": configured,
+            "row_selection_enabled": true,
+        }))
         .unwrap();
-        assert!(batches.is_empty());
+        // Resolve the scan fallback; explicit zero is normalized later by the reader.
+        let options = options.with_default_data_file_concurrency_limit(7);
+        let expected = ArrowReaderOptions::builder()
+            .with_batch_size(17)
+            .with_data_file_concurrency_limit(expected)
+            .with_row_selection_enabled(true)
+            .build();
+        assert_eq!(options, expected);
     }
 
     #[test]
-    fn default_data_file_concurrency_preserves_explicit_options() {
-        for (configured, expected) in [(None, 7), (Some(3), 3), (Some(0), 0)] {
-            let options: ArrowReaderOptions = serde_json::from_value(serde_json::json!({
-                "batch_size": 17,
-                "data_file_concurrency_limit": configured,
-                "row_selection_enabled": true,
-            }))
-            .unwrap();
-            let expected = ArrowReaderOptions::builder()
-                .with_batch_size(17)
-                .with_data_file_concurrency_limit(expected)
-                .with_row_selection_enabled(true)
-                .build();
-            assert_eq!(
-                options.with_default_data_file_concurrency_limit(7),
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn missing_options_use_defaults_and_unknown_options_are_ignored() {
-        let decoded: ArrowReaderOptions =
-            serde_json::from_str(r#"{"future_option":true}"#).unwrap();
-        assert_eq!(decoded, ArrowReaderOptions::default());
+    fn missing_options_use_defaults() {
         let decoded: ArrowReaderOptions = serde_json::from_str(r#"{"batch_size":17}"#).unwrap();
         assert_eq!(
             decoded,
             ArrowReaderOptions::builder().with_batch_size(17).build()
         );
+    }
+
+    #[test]
+    fn unknown_options_are_ignored() {
+        let decoded: ArrowReaderOptions =
+            serde_json::from_str(r#"{"future_option":true}"#).unwrap();
+        assert_eq!(decoded, ArrowReaderOptions::default());
+    }
+
+    #[test]
+    fn unset_concurrency_serializes_as_null() {
         assert_eq!(
             serde_json::to_value(ArrowReaderOptions::default()).unwrap()["data_file_concurrency_limit"],
-            serde_json::Value::Null
+            serde_json::Value::Null,
         );
     }
 
     #[test]
     fn partial_parquet_options_preserve_defaults() {
-        let options: ArrowReaderOptions = serde_json::from_str(
-            r#"{"parquet_options":{"range_fetch_concurrency":2,"future_option":true}}"#,
-        )
-        .unwrap();
+        let options: ArrowReaderOptions =
+            serde_json::from_str(r#"{"parquet_options":{"range_fetch_concurrency":2}}"#).unwrap();
         assert_eq!(
             options,
             ArrowReaderOptions::builder()
                 .with_parquet_options(
                     ParquetReadOptions::builder()
                         .with_range_fetch_concurrency(2)
-                        .build()
+                        .build(),
                 )
                 .build()
         );
-    }
-
-    #[test]
-    fn parquet_override_preserves_other_reader_settings() {
-        let parquet = ParquetReadOptions::builder()
-            .with_metadata_size_hint(4096)
-            .with_range_fetch_concurrency(2)
-            .build();
-        let reader = ArrowReaderBuilder::new(FileIO::new_with_memory(), test_runtime())
-            .with_options(ArrowReaderOptions::builder().with_batch_size(17).build())
-            .with_parquet_options(parquet.clone())
-            .build();
-        assert_eq!(
-            (reader.batch_size, reader.parquet_read_options),
-            (Some(17), parquet)
-        );
-    }
-
-    #[test]
-    fn options_restore_local_defaults_or_apply_explicit_settings() {
-        for explicit in [false, true] {
-            let options = if explicit {
-                ArrowReaderOptions::builder()
-                    .with_batch_size(17)
-                    .with_data_file_concurrency_limit(3)
-                    .with_row_group_filtering_enabled(false)
-                    .with_row_selection_enabled(true)
-                    .with_bloom_filter_enabled(true)
-                    .with_parquet_options(
-                        ParquetReadOptions::builder()
-                            .with_metadata_size_hint(4096)
-                            .with_range_coalesce_bytes(8192)
-                            .with_range_fetch_concurrency(2)
-                            .build(),
-                    )
-                    .build()
-            } else {
-                ArrowReaderOptions::default()
-            };
-            let reader = ArrowReaderBuilder::new(FileIO::new_with_memory(), test_runtime())
-                .with_options(
-                    ArrowReaderOptions::builder()
-                        .with_batch_size(1024)
-                        .with_parquet_options(
-                            ParquetReadOptions::builder()
-                                .with_range_fetch_concurrency(99)
-                                .build(),
-                        )
-                        .build(),
-                )
-                .with_options(options)
-                .build();
-            let expected = if explicit {
-                (Some(17), 3, false, true, true)
-            } else {
-                (None, available_parallelism().get(), true, false, false)
-            };
-            assert_eq!(
-                (
-                    reader.batch_size,
-                    reader.concurrency_limit_data_files,
-                    reader.row_group_filtering_enabled,
-                    reader.row_selection_enabled,
-                    reader.bloom_filter_enabled
-                ),
-                expected
-            );
-            assert_eq!(
-                (
-                    reader.parquet_read_options.metadata_size_hint(),
-                    reader.parquet_read_options.range_coalesce_bytes(),
-                    reader.parquet_read_options.range_fetch_concurrency()
-                ),
-                if explicit {
-                    (4096, 8192, 2)
-                } else {
-                    (512 * 1024, 1024 * 1024, 10)
-                }
-            );
-        }
     }
 }

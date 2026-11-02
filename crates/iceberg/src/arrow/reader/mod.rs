@@ -42,6 +42,8 @@ mod predicate_visitor;
 mod projection;
 mod row_filter;
 mod row_lineage;
+#[cfg(test)]
+mod tests;
 pub use file_reader::ArrowFileReader;
 pub use options::{ArrowReaderOptions, ParquetReadOptions};
 use predicate_visitor::{CollectFieldIdVisitor, PredicateConverter};
