@@ -32,7 +32,7 @@ use arrow_schema::{
 use arrow_select::zip::zip;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::schema::try_get_field_id_from_metadata;
+use crate::arrow::schema::{is_variant_binary, is_variant_field, try_get_field_id_from_metadata};
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
 use crate::arrow::{
     datum_to_arrow_type_with_ree, primitive_type_to_arrow_type_with_ree, schema_to_arrow_schema,
@@ -233,6 +233,62 @@ pub(crate) enum ChildPlan {
 }
 
 impl PromotePlan {
+    /// Plans one field, dispatching on the target field so a variant is seen by its extension.
+    fn build_field(
+        source: &Field,
+        target: &Field,
+        snapshot_schema: &IcebergSchema,
+        constant_fields: &HashMap<i32, ColumnConstant>,
+    ) -> Result<Self> {
+        if is_variant_field(target) {
+            return Self::build_variant(source.data_type(), target.data_type());
+        }
+        Self::build(
+            source.data_type(),
+            target.data_type(),
+            snapshot_schema,
+            constant_fields,
+        )
+    }
+
+    /// A variant's `metadata` and `value` carry no field ids, so they are matched by name.
+    /// When reading data files, projection reports unsupported or malformed storage before this
+    /// runs.
+    fn build_variant(source: &DataType, target: &DataType) -> Result<Self> {
+        if source == target {
+            return Ok(PromotePlan::PassThrough);
+        }
+        let mismatch =
+            || invalid_data!("cannot read variant stored as {source:?}, expected {target:?}");
+        let (DataType::Struct(source_fields), DataType::Struct(target_fields)) = (source, target)
+        else {
+            return Err(mismatch());
+        };
+        if source_fields.len() != target_fields.len() {
+            return Err(mismatch());
+        }
+        let children = target_fields
+            .iter()
+            .map(|target_field| {
+                let (source_index, source_field) = source_fields
+                    .find(target_field.name())
+                    .ok_or_else(mismatch)?;
+                let plan = if source_field.data_type() == target_field.data_type() {
+                    PromotePlan::PassThrough
+                } else if is_variant_binary(source_field.data_type()) {
+                    PromotePlan::Cast(target_field.data_type().clone())
+                } else {
+                    return Err(mismatch());
+                };
+                Ok(ChildPlan::FromSource { source_index, plan })
+            })
+            .collect::<Result<_>>()?;
+        Ok(PromotePlan::Struct {
+            fields: target_fields.clone(),
+            children,
+        })
+    }
+
     fn build(
         source: &DataType,
         target: &DataType,
@@ -260,9 +316,9 @@ impl PromotePlan {
                 DataType::List(source_field) | DataType::LargeList(source_field),
                 DataType::List(target_field),
             ) => Ok(PromotePlan::List {
-                element: Box::new(Self::build(
-                    source_field.data_type(),
-                    target_field.data_type(),
+                element: Box::new(Self::build_field(
+                    source_field,
+                    target_field,
                     snapshot_schema,
                     constant_fields,
                 )?),
@@ -282,9 +338,9 @@ impl PromotePlan {
                                 .map(|(source_index, (source_field, target_field))| {
                                     Ok(ChildPlan::FromSource {
                                         source_index,
-                                        plan: Self::build(
-                                            source_field.data_type(),
-                                            target_field.data_type(),
+                                        plan: Self::build_field(
+                                            source_field,
+                                            target_field,
                                             snapshot_schema,
                                             constant_fields,
                                         )?,
@@ -346,9 +402,9 @@ impl PromotePlan {
                 let field_id = try_get_field_id_from_metadata(target_field)?;
                 match field_id.and_then(|id| source_by_id.get(&id).copied()) {
                     Some(source_index) => Ok(ChildPlan::FromSource {
-                        plan: Self::build(
-                            source_fields[source_index].data_type(),
-                            target_field.data_type(),
+                        plan: Self::build_field(
+                            &source_fields[source_index],
+                            target_field,
                             snapshot_schema,
                             constant_fields,
                         )?,
@@ -895,7 +951,12 @@ impl RecordBatchTransformer {
         let target_schema = Arc::new(ArrowSchema::new(fields?));
 
         match Self::compare_schemas(source_schema, &target_schema) {
-            SchemaComparison::Equivalent => Ok(BatchTransform::PassThrough),
+            SchemaComparison::Equivalent => Ok(
+                match Self::with_variant_extensions(source_schema, &target_schema) {
+                    Some(target_schema) => BatchTransform::ModifySchema { target_schema },
+                    None => BatchTransform::PassThrough,
+                },
+            ),
             SchemaComparison::NameChangesOnly => Ok(BatchTransform::ModifySchema { target_schema }),
             SchemaComparison::Different => Ok(BatchTransform::Modify {
                 operations: Self::generate_transform_operations(
@@ -965,6 +1026,34 @@ impl RecordBatchTransformer {
         } else {
             SchemaComparison::NameChangesOnly
         }
+    }
+
+    /// Copies the variant extension from `target_schema` onto source fields that lack it, so
+    /// an otherwise unchanged batch still reports its variant columns as variants. `None`
+    /// when no field needs it.
+    fn with_variant_extensions(
+        source_schema: &ArrowSchemaRef,
+        target_schema: &ArrowSchemaRef,
+    ) -> Option<ArrowSchemaRef> {
+        let needs_extension =
+            |(s, t): (&FieldRef, &FieldRef)| is_variant_field(t) && !is_variant_field(s);
+        let pairs = || source_schema.fields().iter().zip(target_schema.fields());
+        if !pairs().any(needs_extension) {
+            return None;
+        }
+        let fields: Vec<FieldRef> = pairs()
+            .map(|pair| {
+                if needs_extension(pair) {
+                    Arc::clone(pair.1)
+                } else {
+                    Arc::clone(pair.0)
+                }
+            })
+            .collect();
+        Some(Arc::new(ArrowSchema::new_with_metadata(
+            fields,
+            source_schema.metadata().clone(),
+        )))
     }
 
     fn generate_transform_operations(
@@ -1116,9 +1205,9 @@ impl RecordBatchTransformer {
                 let column_source = if let Some((source_field, source_index)) =
                     field_id_to_source_schema_map.get(field_id)
                 {
-                    match PromotePlan::build(
-                        source_field.data_type(),
-                        target_type,
+                    match PromotePlan::build_field(
+                        source_field,
+                        target_field,
                         snapshot_schema,
                         constant_fields,
                     )? {
@@ -1438,7 +1527,7 @@ mod test {
     use crate::arrow::record_batch_transformer::{
         PromotePlan, RecordBatchTransformer, RecordBatchTransformerBuilder,
     };
-    use crate::arrow::{DEFAULT_MAP_FIELD_NAME, build_partition_constant};
+    use crate::arrow::{DEFAULT_MAP_FIELD_NAME, VariantExtensionType, build_partition_constant};
     use crate::spec::{
         ListType, Literal, MapType, NestedField, PrimitiveType, Schema, Struct, StructType, Type,
     };
@@ -1771,6 +1860,96 @@ mod test {
                 PromotePlan::build(&source, &target, &empty_schema(), &HashMap::new()).unwrap_err();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert!(err.to_string().contains(message), "{err}");
+        }
+    }
+
+    fn variant_target() -> Field {
+        Field::new(
+            "v",
+            DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, true),
+            ])),
+            true,
+        )
+        .with_extension_type(VariantExtensionType)
+    }
+
+    #[test]
+    fn promote_variant_matches_storage_fields_by_name() {
+        use arrow_array::{BinaryArray, LargeBinaryArray};
+        let source = Arc::new(StructArray::new(
+            Fields::from(vec![
+                Field::new("value", DataType::LargeBinary, false),
+                Field::new("metadata", DataType::LargeBinary, false),
+            ]),
+            vec![
+                Arc::new(LargeBinaryArray::from(vec![b"\x0a".as_ref()])) as ArrayRef,
+                Arc::new(LargeBinaryArray::from(vec![b"\x01".as_ref()])) as ArrayRef,
+            ],
+            None,
+        )) as ArrayRef;
+        let target = variant_target();
+        let DataType::Struct(target_fields) = target.data_type() else {
+            unreachable!()
+        };
+
+        let promoted = PromotePlan::build_field(
+            &Field::new("v", source.data_type().clone(), true),
+            &target,
+            &empty_schema(),
+            &HashMap::new(),
+        )
+        .unwrap()
+        .apply(&source)
+        .unwrap();
+
+        let expected = StructArray::new(
+            target_fields.clone(),
+            vec![
+                Arc::new(BinaryArray::from(vec![b"\x01".as_ref()])) as ArrayRef,
+                Arc::new(BinaryArray::from(vec![b"\x0a".as_ref()])) as ArrayRef,
+            ],
+            None,
+        );
+        assert_eq!(promoted.as_struct(), &expected);
+    }
+
+    #[test]
+    fn promote_variant_rejects_unsupported_storage() {
+        let binary = |name: &str| Field::new(name, DataType::Binary, true);
+        let target = variant_target();
+        for storage in [
+            DataType::Struct(Fields::from(vec![
+                binary("metadata"),
+                binary("value"),
+                Field::new("typed_value", DataType::Int64, true),
+            ])),
+            DataType::Struct(Fields::from(vec![binary("metadata"), binary("foo")])),
+            DataType::Struct(Fields::from(vec![
+                Field::new("metadata", DataType::Utf8, false),
+                binary("value"),
+            ])),
+            DataType::Binary,
+        ] {
+            let err = PromotePlan::build_field(
+                &Field::new("v", storage.clone(), true),
+                &target,
+                &empty_schema(),
+                &HashMap::new(),
+            )
+            .unwrap_err();
+            assert_eq!(
+                (err.kind(), err.message()),
+                (
+                    ErrorKind::DataInvalid,
+                    format!(
+                        "cannot read variant stored as {storage:?}, expected {:?}",
+                        target.data_type()
+                    )
+                    .as_str()
+                )
+            );
         }
     }
 

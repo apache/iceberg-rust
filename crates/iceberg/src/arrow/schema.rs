@@ -104,6 +104,20 @@ impl ExtensionType for VariantExtensionType {
     }
 }
 
+/// Whether `field` carries the [`VariantExtensionType`].
+pub(crate) fn is_variant_field(field: &Field) -> bool {
+    field.extension_type_name() == Some(VariantExtensionType::NAME)
+}
+
+/// Whether `data_type` can hold a variant's `metadata` or `value` bytes.
+pub(crate) fn is_variant_binary(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => true,
+        DataType::Dictionary(_, value_type) => is_variant_binary(value_type),
+        _ => false,
+    }
+}
+
 fn to_arrow_wkb_edges(algorithm: EdgeInterpolationAlgorithm) -> WkbEdges {
     match algorithm {
         EdgeInterpolationAlgorithm::Spherical => WkbEdges::Spherical,
