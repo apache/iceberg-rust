@@ -151,30 +151,31 @@ impl RecordBatchProjector {
 
     /// Do projection with record batch
     pub(crate) fn project_batch(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        let columns = self
-            .project_column(batch.columns())?
-            .into_iter()
-            .zip(self.projected_schema.fields())
-            .map(
-                |(column, field)| match (column.data_type(), field.data_type()) {
-                    (DataType::LargeBinary, DataType::Binary) => cast(&column, &DataType::Binary)
-                        .map_err(|err| {
-                            invalid_data!("Failed to cast column {} to Binary", field.name())
-                                .with_source(err)
-                        }),
-                    _ => Ok(column),
-                },
-            )
-            .collect::<Result<Vec<_>>>()?;
-        RecordBatch::try_new(self.projected_schema.clone(), columns)
-            .map_err(|err| invalid_data!("{err}"))
+        RecordBatch::try_new(
+            self.projected_schema.clone(),
+            self.project_column(batch.columns())?,
+        )
+        .map_err(|err| invalid_data!("{err}"))
     }
 
     /// Do projection with columns
     pub fn project_column(&self, batch: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
         let mut columns = Vec::with_capacity(self.field_indices.len());
-        for index_vec in &self.field_indices {
-            columns.push(Self::get_column_by_field_index(batch, index_vec)?);
+        for (index_vec, field) in self
+            .field_indices
+            .iter()
+            .zip(self.projected_schema.fields())
+        {
+            let column = Self::get_column_by_field_index(batch, index_vec)?;
+            let column = match (column.data_type(), field.data_type()) {
+                (DataType::LargeBinary, DataType::Binary) => cast(&column, &DataType::Binary)
+                    .map_err(|err| {
+                        invalid_data!("Failed to cast column {} to Binary", field.name())
+                            .with_source(err)
+                    })?,
+                _ => column,
+            };
+            columns.push(column);
         }
         Ok(columns)
     }
