@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 
+use arrow_schema::TimeUnit;
 use fnv::FnvHashSet;
 use ordered_float::OrderedFloat;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
@@ -26,6 +27,7 @@ use parquet::file::metadata::RowGroupMetaData;
 use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 
+use crate::arrow::{parquet_timestamp_to_micros, parquet_timestamp_unit};
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::decimal_utils::i128_from_be_bytes;
@@ -168,16 +170,20 @@ impl<'a> PageIndexEvaluator<'a> {
             return self.select_all_rows();
         };
 
-        // Declared byte width of a FIXED_LEN_BYTE_ARRAY column, used to detect
-        // truncated page-index bounds when decoding decimals. `None` when the
-        // column metadata is absent or reports no fixed width.
-        let type_length = self
+        let column_descr = self
             .row_group_metadata
             .columns()
             .get(parquet_column_index)
-            .map(|column| column.column_descr().type_length())
+            .map(|column| column.column_descr());
+
+        // Declared byte width of a FIXED_LEN_BYTE_ARRAY column, used to detect
+        // truncated page-index bounds when decoding decimals. `None` when the
+        // column metadata is absent or reports no fixed width.
+        let type_length = column_descr
+            .map(|descr| descr.type_length())
             .filter(|&len| len > 0)
             .map(|len| len as usize);
+        let timestamp_unit = column_descr.and_then(parquet_timestamp_unit);
 
         let row_counts = {
             // Caches row count calculations for columns that appear multiple times in
@@ -207,6 +213,7 @@ impl<'a> PageIndexEvaluator<'a> {
             predicate,
             field_type,
             type_length,
+            timestamp_unit,
             column_index,
             &row_counts,
         )?
@@ -256,6 +263,7 @@ impl<'a> PageIndexEvaluator<'a> {
         predicate: F,
         field_type: &PrimitiveType,
         type_length: Option<usize>,
+        timestamp_unit: Option<TimeUnit>,
         column_index: &ColumnIndexMetaData,
         row_counts: &[usize],
     ) -> Result<Option<Vec<bool>>>
@@ -303,8 +311,12 @@ impl<'a> PageIndexEvaluator<'a> {
                 .zip(row_counts.iter())
                 .map(|((i, (min, max)), &row_count)| {
                     predicate(
-                        min.map(|&val| Self::int64_bound_to_datum(field_type, val)),
-                        max.map(|&val| Self::int64_bound_to_datum(field_type, val)),
+                        min.and_then(|&val| {
+                            Self::int64_bound_to_datum(field_type, timestamp_unit, val)
+                        }),
+                        max.and_then(|&val| {
+                            Self::int64_bound_to_datum(field_type, timestamp_unit, val)
+                        }),
                         PageNullCount::from_row_and_null_counts(row_count, idx.null_count(i)),
                     )
                 })
@@ -505,13 +517,24 @@ impl<'a> PageIndexEvaluator<'a> {
 
     /// Converts an `INT64` page bound into a [`Datum`] according to the field's
     /// primitive type.
-    fn int64_bound_to_datum(field_type: &PrimitiveType, val: i64) -> Datum {
+    ///
+    /// Returns `None` for nanosecond bounds under a microsecond field, or when a
+    /// millisecond bound overflows, so that side of the page cannot be pruned.
+    fn int64_bound_to_datum(
+        field_type: &PrimitiveType,
+        timestamp_unit: Option<TimeUnit>,
+        val: i64,
+    ) -> Option<Datum> {
         match field_type {
-            PrimitiveType::Decimal { .. } => Datum::new(
+            PrimitiveType::Decimal { .. } => Some(Datum::new(
                 field_type.clone(),
                 PrimitiveLiteral::Int128(i128::from(val)),
-            ),
-            _ => Datum::new(field_type.clone(), PrimitiveLiteral::Long(val)),
+            )),
+            PrimitiveType::Timestamp | PrimitiveType::Timestamptz => {
+                parquet_timestamp_to_micros(val, timestamp_unit)
+                    .map(|val| Datum::new(field_type.clone(), PrimitiveLiteral::Long(val)))
+            }
+            _ => Some(Datum::new(field_type.clone(), PrimitiveLiteral::Long(val))),
         }
     }
 
@@ -974,9 +997,9 @@ mod tests {
 
     use arrow_array::{
         ArrayRef, Decimal128Array, FixedSizeBinaryArray, Float32Array, LargeBinaryArray,
-        RecordBatch, StringArray,
+        RecordBatch, StringArray, TimestampMillisecondArray,
     };
-    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::arrow_reader::{
         ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelector,
@@ -1277,6 +1300,45 @@ mod tests {
             ) as ArrayRef;
             let batch = RecordBatch::try_new(arrow_schema.clone(), vec![array]).unwrap();
             // Write rows one at a time so the writer splits into per-value pages.
+            for i in 0..batch.num_rows() {
+                writer.write(&batch.slice(i, 1)).unwrap();
+            }
+        }
+
+        writer.close().unwrap();
+
+        let file = temp_file.reopen().unwrap();
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
+        let metadata = reader.metadata().clone();
+
+        Ok((metadata, temp_file))
+    }
+
+    fn create_millisecond_timestamp_parquet_file(
+        pages: &[i64],
+    ) -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        )]));
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let file = temp_file.reopen().unwrap();
+
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(1024)
+            .set_write_batch_size(512)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
+
+        for page in pages {
+            let array = Arc::new(TimestampMillisecondArray::from_iter_values(
+                std::iter::repeat_n(*page, 1024),
+            )) as ArrayRef;
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![array]).unwrap();
             for i in 0..batch.num_rows() {
                 writer.write(&batch.slice(i, 1)).unwrap();
             }
@@ -2308,6 +2370,51 @@ mod tests {
             RowSelector::select(1024),
             RowSelector::skip(2048)
         ]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn eval_eq_prunes_millisecond_timestamp_pages() -> Result<()> {
+        let (metadata, _temp_file) =
+            create_millisecond_timestamp_parquet_file(&[-1_500, 1_000, 2_000])?;
+        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_fields([Arc::new(NestedField::required(
+                    1,
+                    "ts",
+                    Type::Primitive(PrimitiveType::Timestamp),
+                ))])
+                .build()?,
+        );
+        let field_id_map = HashMap::from_iter([(1, 0)]);
+
+        for (micros, expected) in [
+            (2_000_000, vec![
+                RowSelector::skip(2048),
+                RowSelector::select(1024),
+            ]),
+            (-1_500_000, vec![
+                RowSelector::select(1024),
+                RowSelector::skip(2048),
+            ]),
+        ] {
+            let filter = Reference::new("ts")
+                .equal_to(Datum::timestamp_micros(micros))
+                .bind(iceberg_schema.clone(), false)?;
+
+            let result = PageIndexEvaluator::eval(
+                &filter,
+                &column_index,
+                &offset_index,
+                row_group_metadata,
+                &field_id_map,
+                iceberg_schema.as_ref(),
+            )?;
+
+            assert_eq!(result, expected, "ts = {micros}");
+        }
 
         Ok(())
     }

@@ -38,11 +38,11 @@ use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
     apply_name_mapping_to_arrow_schema, find_leaf_by_field_id,
 };
-use crate::arrow::build_partition_constant;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
+use crate::arrow::{build_partition_constant, parquet_timestamp_unit};
 use crate::encryption::StandardKeyMetadata;
 use crate::error::{Result, invalid_data};
 use crate::expr::BoundPredicate;
@@ -771,6 +771,7 @@ impl FileScanTaskReader {
 
                 let physical_type = col_meta.column_type();
                 let type_length = col_meta.column_descr().type_length();
+                let timestamp_unit = parquet_timestamp_unit(col_meta.column_descr());
 
                 match builder
                     .get_row_group_column_bloom_filter(rg_idx, col_idx)
@@ -779,7 +780,8 @@ impl FileScanTaskReader {
                     Ok(Some(sbbf)) => {
                         bloom_filters.insert(
                             field_id,
-                            ColumnBloomFilter::new(sbbf, physical_type, type_length),
+                            ColumnBloomFilter::new(sbbf, physical_type, type_length)
+                                .with_timestamp_unit(timestamp_unit),
                         );
                     }
                     Ok(None) => {}

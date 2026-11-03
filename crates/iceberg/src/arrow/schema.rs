@@ -31,7 +31,9 @@ use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, Schema as ArrowSchema, TimeUnit,
 };
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use parquet::basic::{ConvertedType, LogicalType, TimeUnit as ParquetTimeUnit};
 use parquet::file::statistics::Statistics;
+use parquet::schema::types::ColumnDescriptor;
 use parquet_geospatial::{WkbEdges, WkbMetadata, WkbType, WkbTypeHint};
 use uuid::Uuid;
 
@@ -991,9 +993,32 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
     }
 }
 
+pub(crate) fn parquet_timestamp_unit(column: &ColumnDescriptor) -> Option<TimeUnit> {
+    match (column.logical_type_ref(), column.converted_type()) {
+        (Some(LogicalType::Timestamp(timestamp)), _) => Some(match timestamp.unit {
+            ParquetTimeUnit::MILLIS => TimeUnit::Millisecond,
+            ParquetTimeUnit::MICROS => TimeUnit::Microsecond,
+            ParquetTimeUnit::NANOS => TimeUnit::Nanosecond,
+        }),
+        (None, ConvertedType::TIMESTAMP_MILLIS) => Some(TimeUnit::Millisecond),
+        (None, ConvertedType::TIMESTAMP_MICROS) => Some(TimeUnit::Microsecond),
+        _ => None,
+    }
+}
+
+pub(crate) fn parquet_timestamp_to_micros(value: i64, unit: Option<TimeUnit>) -> Option<i64> {
+    match unit {
+        Some(TimeUnit::Millisecond) => value.checked_mul(1_000),
+        // A truncated nanosecond max would undershoot and prune matching rows.
+        Some(TimeUnit::Nanosecond) => None,
+        _ => Some(value),
+    }
+}
+
 pub(crate) fn get_parquet_stat_min_as_datum(
     primitive_type: &PrimitiveType,
     stats: &Statistics,
+    timestamp_unit: Option<TimeUnit>,
 ) -> Result<Option<Datum>> {
     Ok(match (primitive_type, stats) {
         (PrimitiveType::Boolean, Statistics::Boolean(stats)) => {
@@ -1015,12 +1040,14 @@ pub(crate) fn get_parquet_stat_min_as_datum(
 
             Some(Datum::time_micros(*val)?)
         }
-        (PrimitiveType::Timestamp, Statistics::Int64(stats)) => {
-            stats.min_opt().map(|val| Datum::timestamp_micros(*val))
-        }
-        (PrimitiveType::Timestamptz, Statistics::Int64(stats)) => {
-            stats.min_opt().map(|val| Datum::timestamptz_micros(*val))
-        }
+        (PrimitiveType::Timestamp, Statistics::Int64(stats)) => stats
+            .min_opt()
+            .and_then(|val| parquet_timestamp_to_micros(*val, timestamp_unit))
+            .map(Datum::timestamp_micros),
+        (PrimitiveType::Timestamptz, Statistics::Int64(stats)) => stats
+            .min_opt()
+            .and_then(|val| parquet_timestamp_to_micros(*val, timestamp_unit))
+            .map(Datum::timestamptz_micros),
         (PrimitiveType::TimestampNs, Statistics::Int64(stats)) => {
             stats.min_opt().map(|val| Datum::timestamp_nanos(*val))
         }
@@ -1144,6 +1171,7 @@ pub(crate) fn get_parquet_stat_min_as_datum(
 pub(crate) fn get_parquet_stat_max_as_datum(
     primitive_type: &PrimitiveType,
     stats: &Statistics,
+    timestamp_unit: Option<TimeUnit>,
 ) -> Result<Option<Datum>> {
     Ok(match (primitive_type, stats) {
         (PrimitiveType::Boolean, Statistics::Boolean(stats)) => {
@@ -1165,12 +1193,14 @@ pub(crate) fn get_parquet_stat_max_as_datum(
 
             Some(Datum::time_micros(*val)?)
         }
-        (PrimitiveType::Timestamp, Statistics::Int64(stats)) => {
-            stats.max_opt().map(|val| Datum::timestamp_micros(*val))
-        }
-        (PrimitiveType::Timestamptz, Statistics::Int64(stats)) => {
-            stats.max_opt().map(|val| Datum::timestamptz_micros(*val))
-        }
+        (PrimitiveType::Timestamp, Statistics::Int64(stats)) => stats
+            .max_opt()
+            .and_then(|val| parquet_timestamp_to_micros(*val, timestamp_unit))
+            .map(Datum::timestamp_micros),
+        (PrimitiveType::Timestamptz, Statistics::Int64(stats)) => stats
+            .max_opt()
+            .and_then(|val| parquet_timestamp_to_micros(*val, timestamp_unit))
+            .map(Datum::timestamptz_micros),
         (PrimitiveType::TimestampNs, Statistics::Int64(stats)) => {
             stats.max_opt().map(|val| Datum::timestamp_nanos(*val))
         }
@@ -1553,6 +1583,8 @@ mod tests {
 
     use arrow_schema::extension::ExtensionType;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use parquet::schema::parser::parse_message_type;
+    use parquet::schema::types::SchemaDescriptor;
     use parquet_geospatial::WkbEdges;
 
     use super::*;
@@ -2665,14 +2697,93 @@ mod tests {
             PrimitiveType::Geography(GeographyType::default()),
         ] {
             assert_eq!(
-                get_parquet_stat_min_as_datum(&primitive_type, &stats).unwrap(),
+                get_parquet_stat_min_as_datum(&primitive_type, &stats, None).unwrap(),
                 None
             );
             assert_eq!(
-                get_parquet_stat_max_as_datum(&primitive_type, &stats).unwrap(),
+                get_parquet_stat_max_as_datum(&primitive_type, &stats, None).unwrap(),
                 None
             );
         }
+    }
+
+    #[test]
+    fn test_parquet_timestamp_unit() {
+        let schema = SchemaDescriptor::new(Arc::new(
+            parse_message_type(
+                "
+                message schema {
+                    required int64 utc (TIMESTAMP(MILLIS,true));
+                    required int64 local (TIMESTAMP(MILLIS,false));
+                    required int64 legacy (TIMESTAMP_MILLIS);
+                    required int64 plain;
+                }
+                ",
+            )
+            .unwrap(),
+        ));
+
+        let units: Vec<_> = schema
+            .columns()
+            .iter()
+            .map(|column| parquet_timestamp_unit(column))
+            .collect();
+
+        assert_eq!(units, vec![
+            Some(TimeUnit::Millisecond),
+            Some(TimeUnit::Millisecond),
+            Some(TimeUnit::Millisecond),
+            None,
+        ]);
+    }
+
+    #[test]
+    fn test_parquet_timestamp_stats_as_micros() {
+        let bounds = |primitive_type: PrimitiveType, min: i64, max: i64, unit: TimeUnit| {
+            let stats = Statistics::int64(Some(min), Some(max), None, Some(0), false);
+            (
+                get_parquet_stat_min_as_datum(&primitive_type, &stats, Some(unit)).unwrap(),
+                get_parquet_stat_max_as_datum(&primitive_type, &stats, Some(unit)).unwrap(),
+            )
+        };
+
+        assert_eq!(
+            bounds(
+                PrimitiveType::Timestamp,
+                -1_500,
+                2_000,
+                TimeUnit::Millisecond
+            ),
+            (
+                Some(Datum::timestamp_micros(-1_500_000)),
+                Some(Datum::timestamp_micros(2_000_000))
+            )
+        );
+        assert_eq!(
+            bounds(
+                PrimitiveType::Timestamptz,
+                -1_500,
+                2_000,
+                TimeUnit::Millisecond
+            ),
+            (
+                Some(Datum::timestamptz_micros(-1_500_000)),
+                Some(Datum::timestamptz_micros(2_000_000))
+            )
+        );
+        assert_eq!(
+            bounds(PrimitiveType::Timestamp, 0, i64::MAX, TimeUnit::Millisecond),
+            (Some(Datum::timestamp_micros(0)), None)
+        );
+        assert_eq!(
+            bounds(
+                PrimitiveType::Timestamp,
+                -1_500,
+                2_000,
+                TimeUnit::Nanosecond
+            ),
+            (None, None)
+        );
     }
 
     #[test]
@@ -3124,8 +3235,8 @@ mod tests {
             scale: 2,
         };
         Ok((
-            get_parquet_stat_min_as_datum(&ty, stats)?,
-            get_parquet_stat_max_as_datum(&ty, stats)?,
+            get_parquet_stat_min_as_datum(&ty, stats, None)?,
+            get_parquet_stat_max_as_datum(&ty, stats, None)?,
         ))
     }
 
