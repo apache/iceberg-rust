@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Scan metrics and I/O counting for Parquet data file reads.
+//! Scan metrics and I/O counting for data and delete file reads.
 
 use std::ops::Range;
 use std::sync::Arc;
@@ -27,15 +27,26 @@ use crate::error::Result;
 use crate::io::FileRead;
 use crate::scan::ArrowRecordBatchStream;
 
-/// Wraps a [`FileRead`] to count bytes read via a shared atomic counter.
+/// The kind of file whose reads are being counted.
+pub(crate) enum ScanFileType {
+    Data,
+    Delete,
+}
+
+/// Wraps a [`FileRead`] to count bytes read in the shared scan metrics.
 pub(crate) struct CountingFileRead<F: FileRead> {
     inner: F,
-    bytes_read: Arc<AtomicU64>,
+    scan_metrics: ScanMetrics,
+    file_type: ScanFileType,
 }
 
 impl<F: FileRead> CountingFileRead<F> {
-    pub(crate) fn new(inner: F, bytes_read: Arc<AtomicU64>) -> Self {
-        Self { inner, bytes_read }
+    pub(crate) fn new(inner: F, scan_metrics: ScanMetrics, file_type: ScanFileType) -> Self {
+        Self {
+            inner,
+            scan_metrics,
+            file_type,
+        }
     }
 }
 
@@ -43,8 +54,11 @@ impl<F: FileRead> CountingFileRead<F> {
 impl<F: FileRead> FileRead for CountingFileRead<F> {
     async fn read(&self, range: Range<u64>) -> Result<Bytes> {
         debug_assert!(range.end >= range.start);
-        self.bytes_read
-            .fetch_add(range.end - range.start, Ordering::Relaxed);
+        let bytes_read = range.end - range.start;
+        match self.file_type {
+            ScanFileType::Data => self.scan_metrics.add_data_bytes_read(bytes_read),
+            ScanFileType::Delete => self.scan_metrics.add_delete_bytes_read(bytes_read),
+        }
         self.inner.read(range).await
     }
 }
@@ -52,42 +66,51 @@ impl<F: FileRead> FileRead for CountingFileRead<F> {
 /// Metrics collected during an Iceberg scan.
 #[derive(Clone, Debug)]
 pub struct ScanMetrics {
-    data_bytes_read: Arc<AtomicU64>,
-    delete_bytes_read: Arc<AtomicU64>,
-    data_files_opened: Arc<AtomicU64>,
-    delete_files_opened: Arc<AtomicU64>,
-    rows_emitted: Arc<AtomicU64>,
+    inner: Arc<ScanMetricsInner>,
+}
+
+#[derive(Debug, Default)]
+struct ScanMetricsInner {
+    data_bytes_read: AtomicU64,
+    delete_bytes_read: AtomicU64,
+    data_files_opened: AtomicU64,
+    delete_files_opened: AtomicU64,
+    rows_emitted: AtomicU64,
 }
 
 impl ScanMetrics {
     pub(crate) fn new() -> Self {
         Self {
-            data_bytes_read: Arc::new(AtomicU64::new(0)),
-            delete_bytes_read: Arc::new(AtomicU64::new(0)),
-            data_files_opened: Arc::new(AtomicU64::new(0)),
-            delete_files_opened: Arc::new(AtomicU64::new(0)),
-            rows_emitted: Arc::new(AtomicU64::new(0)),
+            inner: Arc::new(ScanMetricsInner::default()),
         }
     }
 
-    pub(crate) fn data_bytes_read_counter(&self) -> &Arc<AtomicU64> {
-        &self.data_bytes_read
+    pub(crate) fn add_data_bytes_read(&self, bytes: u64) {
+        self.inner
+            .data_bytes_read
+            .fetch_add(bytes, Ordering::Relaxed);
     }
 
-    pub(crate) fn delete_bytes_read_counter(&self) -> &Arc<AtomicU64> {
-        &self.delete_bytes_read
+    pub(crate) fn add_delete_bytes_read(&self, bytes: u64) {
+        self.inner
+            .delete_bytes_read
+            .fetch_add(bytes, Ordering::Relaxed);
     }
 
-    pub(crate) fn data_files_opened_counter(&self) -> &Arc<AtomicU64> {
-        &self.data_files_opened
+    pub(crate) fn add_data_files_opened(&self, files: u64) {
+        self.inner
+            .data_files_opened
+            .fetch_add(files, Ordering::Relaxed);
     }
 
-    pub(crate) fn delete_files_opened_counter(&self) -> &Arc<AtomicU64> {
-        &self.delete_files_opened
+    pub(crate) fn add_delete_files_opened(&self, files: u64) {
+        self.inner
+            .delete_files_opened
+            .fetch_add(files, Ordering::Relaxed);
     }
 
-    pub(crate) fn rows_emitted_counter(&self) -> &Arc<AtomicU64> {
-        &self.rows_emitted
+    pub(crate) fn add_rows_emitted(&self, rows: u64) {
+        self.inner.rows_emitted.fetch_add(rows, Ordering::Relaxed);
     }
 
     /// Total bytes read from storage during this scan, including data files and delete files.
@@ -97,29 +120,29 @@ impl ScanMetrics {
 
     /// Total bytes read from data files in storage during this scan.
     pub fn data_bytes_read(&self) -> u64 {
-        self.data_bytes_read.load(Ordering::Relaxed)
+        self.inner.data_bytes_read.load(Ordering::Relaxed)
     }
 
     /// Total bytes read from delete files in storage during this scan.
     pub fn delete_bytes_read(&self) -> u64 {
-        self.delete_bytes_read.load(Ordering::Relaxed)
+        self.inner.delete_bytes_read.load(Ordering::Relaxed)
     }
 
     /// Total number of data files opened during this scan
     pub fn data_files_opened(&self) -> u64 {
-        self.data_files_opened.load(Ordering::Relaxed)
+        self.inner.data_files_opened.load(Ordering::Relaxed)
     }
 
     /// Total number of delete files opened during this scan
     /// Delete files can be reused/shared across multiple data file scans
     /// This does *not* include delete files that were reused from cache
     pub fn delete_files_opened(&self) -> u64 {
-        self.delete_files_opened.load(Ordering::Relaxed)
+        self.inner.delete_files_opened.load(Ordering::Relaxed)
     }
 
     /// Total number of rows emitted from this scan
     pub fn rows_emitted(&self) -> u64 {
-        self.rows_emitted.load(Ordering::Relaxed)
+        self.inner.rows_emitted.load(Ordering::Relaxed)
     }
 }
 
@@ -143,5 +166,37 @@ impl ScanResult {
     /// Returns a reference to the scan metrics.
     pub fn metrics(&self) -> &ScanMetrics {
         &self.metrics
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cloned_metrics_share_concurrent_updates() {
+        let metrics = ScanMetrics::new();
+
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let metrics = metrics.clone();
+                scope.spawn(move || {
+                    for _ in 0..100 {
+                        metrics.add_data_bytes_read(10);
+                        metrics.add_delete_bytes_read(20);
+                        metrics.add_data_files_opened(1);
+                        metrics.add_delete_files_opened(2);
+                        metrics.add_rows_emitted(3);
+                    }
+                });
+            }
+        });
+
+        assert_eq!(metrics.data_bytes_read(), 4000);
+        assert_eq!(metrics.delete_bytes_read(), 8000);
+        assert_eq!(metrics.bytes_read(), 12000);
+        assert_eq!(metrics.data_files_opened(), 400);
+        assert_eq!(metrics.delete_files_opened(), 800);
+        assert_eq!(metrics.rows_emitted(), 1200);
     }
 }

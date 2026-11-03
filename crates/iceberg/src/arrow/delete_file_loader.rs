@@ -16,7 +16,6 @@
 // under the License.
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use futures::{StreamExt, TryStreamExt};
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -24,7 +23,7 @@ use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use crate::arrow::ArrowReader;
 use crate::arrow::reader::ParquetReadOptions;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
-use crate::arrow::scan_metrics::ScanMetrics;
+use crate::arrow::scan_metrics::{ScanFileType, ScanMetrics};
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{Schema, SchemaRef};
@@ -85,14 +84,13 @@ impl BasicDeleteFileLoader {
             &self.file_io,
             file_size_in_bytes,
             parquet_read_options,
-            self.scan_metrics.delete_bytes_read_counter(),
+            self.scan_metrics.clone(),
+            ScanFileType::Delete,
             key_metadata,
         )
         .await?;
 
-        self.scan_metrics()
-            .delete_files_opened_counter()
-            .fetch_add(1, Ordering::Relaxed);
+        self.scan_metrics().add_delete_files_opened(1);
 
         let record_batch_stream =
             ParquetRecordBatchStreamBuilder::new_with_metadata(parquet_file_reader, arrow_metadata)

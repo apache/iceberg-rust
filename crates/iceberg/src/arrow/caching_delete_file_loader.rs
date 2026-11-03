@@ -17,7 +17,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use arrow_array::{Array, ArrayRef, Int64Array, StringArray, StructArray};
 use bytes::Bytes;
@@ -26,7 +25,7 @@ use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, PosDelLoadAction};
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
-use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics};
+use crate::arrow::scan_metrics::{CountingFileRead, ScanFileType, ScanMetrics};
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
 use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
@@ -423,16 +422,13 @@ impl CachingDeleteFileLoader {
 
         let reader = CountingFileRead::new(
             reader,
-            basic_delete_file_loader
-                .scan_metrics()
-                .delete_bytes_read_counter()
-                .clone(),
+            basic_delete_file_loader.scan_metrics().clone(),
+            ScanFileType::Delete,
         );
 
         basic_delete_file_loader
             .scan_metrics()
-            .delete_files_opened_counter()
-            .fetch_add(1, Ordering::Relaxed);
+            .add_delete_files_opened(1);
 
         let blob = reader.read(start..start + len).await?;
 
@@ -1453,8 +1449,10 @@ mod tests {
             .unwrap();
 
         // Load the deletes - should handle both types without error
+        let scan_metrics = ScanMetrics::new();
         let delete_file_loader =
-            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current());
+            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current())
+                .with_scan_metrics(scan_metrics.clone());
         let delete_filter = delete_file_loader
             .load_deletes(file_scan_task.deletes(), file_scan_task.schema_ref())
             .await
@@ -1470,6 +1468,12 @@ mod tests {
             "Failed to build equality delete predicate: {:?}",
             result.err()
         );
+        assert_eq!(scan_metrics.data_bytes_read(), 0);
+        assert!(scan_metrics.delete_bytes_read() > 0);
+        assert_eq!(scan_metrics.bytes_read(), scan_metrics.delete_bytes_read());
+        assert_eq!(scan_metrics.data_files_opened(), 0);
+        assert_eq!(scan_metrics.delete_files_opened(), 2);
+        assert_eq!(scan_metrics.rows_emitted(), 0);
     }
 
     #[tokio::test]

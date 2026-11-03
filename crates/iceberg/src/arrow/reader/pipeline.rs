@@ -23,7 +23,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_schema::{DataType, Field};
 use futures::{StreamExt, TryStreamExt};
@@ -42,7 +41,7 @@ use crate::arrow::build_partition_constant;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
-use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
+use crate::arrow::scan_metrics::{CountingFileRead, ScanFileType, ScanMetrics, ScanResult};
 use crate::encryption::StandardKeyMetadata;
 use crate::error::{Result, invalid_data};
 use crate::expr::BoundPredicate;
@@ -167,7 +166,7 @@ impl FileScanTaskReader {
         let path = task.data_file_path().to_string();
         let file_io = self.file_io.clone();
         let file_size_in_bytes = task.file_size_in_bytes();
-        let bytes_read = Arc::clone(self.scan_metrics.data_bytes_read_counter());
+        let scan_metrics = self.scan_metrics.clone();
         let key_metadata = task.key_metadata().map(|km| km.to_vec());
         let opening = self
             .runtime
@@ -178,7 +177,8 @@ impl FileScanTaskReader {
                     &file_io,
                     file_size_in_bytes,
                     parquet_read_options,
-                    &bytes_read,
+                    scan_metrics,
+                    ScanFileType::Data,
                     key_metadata.as_deref(),
                 )
                 .await
@@ -186,9 +186,7 @@ impl FileScanTaskReader {
             .abort_on_drop();
         let (parquet_file_reader, arrow_metadata) = opening.await??;
 
-        self.scan_metrics
-            .data_files_opened_counter()
-            .fetch_add(1, Ordering::Relaxed);
+        self.scan_metrics.add_data_files_opened(1);
 
         // Check if Parquet file has embedded field IDs
         // Corresponds to Java's ParquetSchemaUtil.hasIds()
@@ -663,7 +661,7 @@ impl FileScanTaskReader {
         // batches (using the reader-produced `_pos` position) before the transformer, which
         // then passes it through as a virtual field.
         let first_row_id = task.first_row_id();
-        let scan_metrics = self.scan_metrics.clone();
+        let scan_metrics = self.scan_metrics;
         let record_batch_stream = record_batch_stream_builder.build()?.map(move |batch| {
             let mut batch = batch.map_err(|err| -> Error { err.into() })?;
             if project_row_id {
@@ -672,9 +670,7 @@ impl FileScanTaskReader {
             // Process the record batch (type promotion, column reordering, virtual fields, etc.)
             let record_batch = record_batch_transformer.process_record_batch(batch);
             if let Ok(records) = &record_batch {
-                scan_metrics
-                    .rows_emitted_counter()
-                    .fetch_add(records.num_rows() as u64, Ordering::Relaxed);
+                scan_metrics.add_rows_emitted(records.num_rows() as u64);
             }
 
             record_batch
@@ -823,18 +819,20 @@ impl FileScanTaskReader {
 
 impl ArrowReader {
     /// Opens a Parquet file and loads its metadata, wrapping the reader with
-    /// [`CountingFileRead`] so all I/O is accumulated into `bytes_read`.
+    /// [`CountingFileRead`] so all I/O is accumulated into the scan metrics
+    /// for the specified file type.
     pub(crate) async fn open_parquet_file(
         data_file_path: &str,
         file_io: &FileIO,
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
-        bytes_read: &Arc<AtomicU64>,
+        scan_metrics: ScanMetrics,
+        file_type: ScanFileType,
         key_metadata: Option<&[u8]>,
     ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let parquet_file = file_io.new_input(data_file_path)?;
         let counting_reader =
-            CountingFileRead::new(parquet_file.reader().await?, Arc::clone(bytes_read));
+            CountingFileRead::new(parquet_file.reader().await?, scan_metrics, file_type);
         Self::build_parquet_reader(
             Box::new(counting_reader),
             file_size_in_bytes,
@@ -3501,9 +3499,18 @@ mod tests {
             .build()
             .unwrap();
 
-        let (batches, _) = scan_task(task).await;
+        let (batches, metrics) = scan_task(task).await;
 
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+        assert!(metrics.data_bytes_read() > 0);
+        assert!(metrics.delete_bytes_read() > 0);
+        assert_eq!(
+            metrics.bytes_read(),
+            metrics.data_bytes_read() + metrics.delete_bytes_read()
+        );
+        assert_eq!(metrics.data_files_opened(), 1);
+        assert_eq!(metrics.delete_files_opened(), 1);
+        assert_eq!(metrics.rows_emitted(), 2);
     }
 
     #[tokio::test]
