@@ -1338,6 +1338,14 @@ mod tests {
             ),
             "1.5"
         );
+        // Not exact in f32: the widened double is rendered, as Java does.
+        assert_eq!(
+            Transform::Identity.to_human_string(
+                &Type::Primitive(PrimitiveType::Double),
+                Some(&Literal::float(0.1_f32))
+            ),
+            "0.10000000149011612"
+        );
     }
 
     #[test]

@@ -1127,6 +1127,85 @@ mod tests {
         assert!(!summary.contains_key("deleted-data-files"));
     }
 
+    /// A concurrent format upgrade invalidates both caches: the rewrite, whose
+    /// entries were written without v2 sequence numbers, and the added
+    /// manifest, whose entries must now inherit one.
+    #[tokio::test]
+    async fn test_rewrite_and_added_manifest_are_redone_when_format_version_changes() {
+        use crate::spec::FormatVersion;
+
+        let base = make_v1_table();
+        let table = append_to(&base, vec![
+            data_file(&base, "test/a.parquet", 1),
+            data_file(&base, "test/b.parquet", 1),
+        ])
+        .await;
+
+        let mut i = intent(Operation::Overwrite);
+        i.removed_data_files = vec![data_file(&base, "test/a.parquet", 1)];
+        i.added_data_files = vec![data_file(&base, "test/x.parquet", 1)];
+        let mut producer = MergingSnapshotProducer::new(i);
+        let mut first = producer.apply(&table).await.unwrap();
+        let first = added_snapshot(&mut first);
+        assert_eq!(producer.manifest_counter, 2);
+
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .upgrade_format_version(FormatVersion::V2)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let upgraded = table.clone().with_metadata(std::sync::Arc::new(metadata));
+
+        let mut second = producer.apply(&upgraded).await.unwrap();
+        let second = added_snapshot(&mut second);
+        assert_eq!(producer.manifest_counter, 4);
+
+        let own_paths = |list: crate::spec::ManifestList, snapshot_id: i64| {
+            let mut p: Vec<_> = list
+                .entries()
+                .iter()
+                .filter(|m| m.added_snapshot_id == snapshot_id)
+                .map(|m| m.manifest_path.clone())
+                .collect();
+            p.sort();
+            p
+        };
+        let first_list = table.manifest_list_reader(&first).load().await.unwrap();
+        let second_list = upgraded.manifest_list_reader(&second).load().await.unwrap();
+        let first_paths = own_paths(first_list, first.snapshot_id());
+        let second_paths = own_paths(second_list.clone(), second.snapshot_id());
+        assert_eq!(first_paths.len(), 2);
+        assert_eq!(second_paths.len(), 2);
+        assert!(first_paths.iter().all(|p| !second_paths.contains(p)));
+
+        // Under v2 the added entry inherits the new sequence number, while the
+        // rewritten entries keep the v1 data's sequence number 0.
+        for m in second_list
+            .entries()
+            .iter()
+            .filter(|m| m.added_snapshot_id == second.snapshot_id())
+        {
+            let manifest = upgraded.manifest_reader().read(m).await.unwrap();
+            for entry in manifest.entries() {
+                let expected = if entry.file_path() == "test/x.parquet" {
+                    second.sequence_number()
+                } else {
+                    0
+                };
+                assert_eq!(
+                    entry.sequence_number(),
+                    Some(expected),
+                    "{}",
+                    entry.file_path()
+                );
+            }
+        }
+    }
+
     /// A manifest left with only `Deleted` entries by an earlier snapshot is
     /// dropped by the next commit; the one this commit writes is kept.
     #[tokio::test]
