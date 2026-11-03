@@ -198,7 +198,7 @@ impl RefreshingCredentialsProvider {
                     .as_ref()
                     .filter(|credentials| credentials.expiry().is_none_or(|expiry| expiry > now))
                 {
-                    log::warn!(
+                    tracing::warn!(
                         "failed to refresh AssumeRole credentials, falling back to cached \
                          credentials that have not yet expired: {error}"
                     );
@@ -368,6 +368,7 @@ mod tests {
     };
     use mockito::Matcher;
     use reqsign_core::{Context, ProvideCredential};
+    use tracing::instrument::WithSubscriber;
 
     use super::*;
 
@@ -434,6 +435,38 @@ mod tests {
             base_config,
         )
         .await
+    }
+
+    /// With a single live dispatcher, tracing resolves callsite interest from the
+    /// registering thread's default, so a concurrent test can disable a callsite for
+    /// the capturing subscriber. A second dispatcher avoids that.
+    static KEEP_ALIVE: std::sync::LazyLock<tracing::Dispatch> = std::sync::LazyLock::new(|| {
+        tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default())
+    });
+
+    #[derive(Clone, Default)]
+    struct CapturedLog(std::sync::Arc<std::sync::Mutex<String>>);
+
+    impl tracing::field::Visit for CapturedLog {
+        fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            self.0.lock().unwrap().push_str(&format!("{value:?}"));
+        }
+    }
+
+    impl tracing::Subscriber for CapturedLog {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::Id {
+            tracing::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::Id, _: &tracing::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            event.record(&mut self.clone());
+        }
+        fn enter(&self, _: &tracing::Id) {}
+        fn exit(&self, _: &tracing::Id) {}
     }
 
     #[tokio::test]
@@ -653,12 +686,21 @@ mod tests {
             }),
         };
 
+        std::sync::LazyLock::force(&KEEP_ALIVE);
+        let log = CapturedLog::default();
         let credentials = provider
             .credentials()
+            .with_subscriber(log.clone())
             .await
             .expect("should fall back to the still-valid cached credentials");
         assert_eq!(credentials.access_key_id(), "cached-access-key");
         mock.assert_async().await;
+
+        let captured = log.0.lock().unwrap().clone();
+        assert!(
+            captured.contains("falling back to cached credentials that have not yet expired"),
+            "expected log message about fallback, got: {captured}"
+        );
     }
 
     #[tokio::test]
