@@ -50,21 +50,22 @@ impl Truncate {
 
     #[inline]
     fn truncate_i32(v: i32, width: i32) -> i32 {
-        // Match Java TruncateUtil, including int overflow wrapping.
-        v.wrapping_sub((v % width).wrapping_add(width) % width)
+        // The spec requires a non-negative remainder, which `rem_euclid` computes without
+        // overflow. Only the subtraction can overflow, when the result is below `i32::MIN`.
+        // The spec doesn't cover that case, so wrap as Java's `TruncateUtil` does.
+        v.wrapping_sub(v.rem_euclid(width))
     }
 
     #[inline]
     fn truncate_i64(v: i64, width: i64) -> i64 {
-        // Match Java TruncateUtil, including long overflow wrapping.
-        v.wrapping_sub((v % width).wrapping_add(width) % width)
+        // See `truncate_i32`.
+        v.wrapping_sub(v.rem_euclid(width))
     }
 
     #[inline]
     fn truncate_decimal_i128(v: i128, width: i128) -> i128 {
-        // Match Java TruncateUtil. Java uses BigInteger here, so wrapping only keeps
-        // out-of-range i128 values from panicking.
-        v.wrapping_sub((v % width).wrapping_add(width) % width)
+        // See `truncate_i32`. Only mantissas outside the 38-digit decimal range can wrap.
+        v.wrapping_sub(v.rem_euclid(width))
     }
 }
 
@@ -830,6 +831,22 @@ mod test {
         Ok(())
     }
 
+    #[test]
+    fn test_projection_truncate_integer_large_width() -> Result<()> {
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(2_000_000_000),
+            "name",
+            NestedField::required(1, "value", Primitive(Int)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::int(1_500_000_000)),
+            Some("name = 0"),
+        )?;
+
+        Ok(())
+    }
+
     // Test case ref from: https://iceberg.apache.org/spec/#truncate-transform-details
     #[test]
     fn test_truncate_simple() {
@@ -996,17 +1013,16 @@ mod test {
     }
 
     #[test]
-    fn test_truncate_int_matches_java() {
-        // Expected values computed with Iceberg Java's `TruncateUtil.truncateInt`
-        // (iceberg 1.11.0, JDK 17).
+    fn test_truncate_int_large_width() {
+        // Expected values follow the spec: `v - (v % W)` with a non-negative remainder.
+        // Below `i32::MIN` the spec is silent, and the result wraps as Java's `TruncateUtil` does.
         for (width, value, expected) in [
-            (2_000_000_000, 1_500_000_000, -2_000_000_000),
-            (i32::MAX as u32, i32::MAX - 1, -2_147_483_647),
+            (2_000_000_000, 1_500_000_000, 0),
+            (i32::MAX as u32, i32::MAX - 1, 0),
             (1000, i32::MIN, 2_147_483_296),
             // Smallest width where `(v % w) + w` can overflow i32.
-            (1_073_741_825, 1_073_741_824, 2_147_483_646),
-            // Tiny value, max width: Java wraps to 2.
-            (i32::MAX as u32, 1, 2),
+            (1_073_741_825, 1_073_741_824, 0),
+            (i32::MAX as u32, 1, 0),
         ] {
             let truncate = super::Truncate::new(width);
             let input = Arc::new(Int32Array::from(vec![Some(value), None]));
