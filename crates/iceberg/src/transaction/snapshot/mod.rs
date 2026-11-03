@@ -734,6 +734,7 @@ pub(crate) mod tests {
             HashMap::new(),
             &[],
             &[deleted],
+            &[],
             false,
         )
         .unwrap();

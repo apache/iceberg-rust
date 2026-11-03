@@ -27,6 +27,39 @@ use crate::io::object_cache::ManifestKey;
 use crate::spec::{DataFile, FormatVersion, ManifestContentType, ManifestFile};
 use crate::table::Table;
 
+/// Identifies one entry to mark as deleted.
+///
+/// A path alone is not enough: a Puffin file may hold several deletion
+/// vectors, each its own entry at a distinct blob offset. Data files and
+/// non-DV delete files have no offset, so for them this is the path.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct DeleteFileIdentity {
+    /// The absolute path, as stored in the manifest entry. Comparison is
+    /// textual, so a relative path would not match the entry it names.
+    path: String,
+    content_offset: Option<i64>,
+    content_size_in_bytes: Option<i64>,
+}
+
+impl DeleteFileIdentity {
+    fn of(file: &DataFile) -> Self {
+        Self {
+            path: file.file_path().to_string(),
+            content_offset: file.content_offset(),
+            content_size_in_bytes: file.content_size_in_bytes(),
+        }
+    }
+}
+
+impl std::fmt::Display for DeleteFileIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match (self.content_offset, self.content_size_in_bytes) {
+            (Some(offset), Some(size)) => write!(f, "{}@{offset}+{size}", self.path),
+            _ => f.write_str(&self.path),
+        }
+    }
+}
+
 /// Removes a fixed set of files from the manifests of one content type.
 ///
 /// One manager lives for one logical execution of an action and is driven
@@ -42,8 +75,13 @@ use crate::table::Table;
 /// after a rebase.
 pub(crate) struct ManifestFilterManager {
     content: ManifestContentType,
-    /// Paths of the files to remove. Fixed for the execution.
-    files_to_remove: HashSet<String>,
+    /// The files to remove, by absolute path (and blob range for deletion
+    /// vectors). Fixed for the execution.
+    files_to_remove: HashSet<DeleteFileIdentity>,
+    /// Whether a file to remove that is not live in any manifest fails the
+    /// attempt. Off lets a retry succeed after a concurrent commit removed the
+    /// same file; the action decides which it needs.
+    fail_missing_delete_paths: bool,
     /// Source manifest → rewritten result.
     filtered: HashMap<ManifestKey, FilteredManifest>,
     /// Format version the rewrites were written under. Per spec, v1 entries
@@ -68,13 +106,15 @@ pub(crate) struct Filtered {
 }
 
 impl ManifestFilterManager {
-    pub(crate) fn new(content: ManifestContentType, files_to_remove: &[DataFile]) -> Self {
+    pub(crate) fn new(
+        content: ManifestContentType,
+        files_to_remove: &[DataFile],
+        fail_missing_delete_paths: bool,
+    ) -> Self {
         Self {
             content,
-            files_to_remove: files_to_remove
-                .iter()
-                .map(|f| f.file_path().to_string())
-                .collect(),
+            files_to_remove: files_to_remove.iter().map(DeleteFileIdentity::of).collect(),
+            fail_missing_delete_paths,
             filtered: HashMap::new(),
             format_version: None,
         }
@@ -83,8 +123,9 @@ impl ManifestFilterManager {
     /// Applies the removals to `manifests`, rewriting those of this manager's
     /// content type that reference a file to remove.
     ///
-    /// Fails if a file to remove is not live in any manifest: it was never in
-    /// the table, or a concurrent commit already removed it.
+    /// With `fail_missing_delete_paths`, fails if a file to remove is not live
+    /// in any manifest: it was never in the table, or a concurrent commit
+    /// already removed it. Otherwise such files are skipped.
     ///
     /// Rewritten manifests take their paths from `next_manifest_number` and are
     /// recorded in `owned_artifacts` before being written, so a failed write
@@ -143,19 +184,22 @@ impl ManifestFilterManager {
             out.push(result.manifest);
         }
 
-        let found: HashSet<&str> = removed_files.iter().map(|f| f.file_path()).collect();
-        let mut missing: Vec<&str> = self
-            .files_to_remove
-            .iter()
-            .map(String::as_str)
-            .filter(|p| !found.contains(p))
-            .collect();
-        if !missing.is_empty() {
-            missing.sort_unstable();
-            return Err(invalid_data!(
-                "Cannot remove files that are not live in the table: {}",
-                missing.join(", ")
-            ));
+        if self.fail_missing_delete_paths {
+            let found: HashSet<DeleteFileIdentity> =
+                removed_files.iter().map(DeleteFileIdentity::of).collect();
+            let mut missing: Vec<String> = self
+                .files_to_remove
+                .iter()
+                .filter(|f| !found.contains(f))
+                .map(ToString::to_string)
+                .collect();
+            if !missing.is_empty() {
+                missing.sort_unstable();
+                return Err(invalid_data!(
+                    "Cannot remove files that are not live in the table: {}",
+                    missing.join(", ")
+                ));
+            }
         }
 
         Ok(Filtered {
@@ -180,7 +224,7 @@ impl ManifestFilterManager {
         let removed_files: Vec<DataFile> = manifest
             .entries()
             .iter()
-            .filter(|e| e.is_alive() && self.files_to_remove.contains(e.file_path()))
+            .filter(|e| e.is_alive() && self.removes(e.data_file()))
             .map(|e| e.data_file().clone())
             .collect();
         if removed_files.is_empty() {
@@ -211,7 +255,7 @@ impl ManifestFilterManager {
                 continue;
             }
             let entry = (**entry).clone();
-            if self.files_to_remove.contains(entry.file_path()) {
+            if self.removes(entry.data_file()) {
                 writer.add_delete_entry(entry)?;
             } else {
                 writer.add_existing_entry(entry)?;
@@ -223,5 +267,9 @@ impl ManifestFilterManager {
             manifest,
             removed_files,
         })
+    }
+
+    fn removes(&self, file: &DataFile) -> bool {
+        self.files_to_remove.contains(&DeleteFileIdentity::of(file))
     }
 }
