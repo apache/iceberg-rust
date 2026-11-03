@@ -29,7 +29,10 @@ use super::{
     write_snapshot_commit,
 };
 use crate::error::{Result, invalid_data};
-use crate::spec::{DataFile, FormatVersion, ManifestContentType, ManifestFile, Operation};
+use crate::spec::{
+    DataContentType, DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestFile,
+    Operation,
+};
 use crate::table::Table;
 use crate::transaction::ActionCommit;
 
@@ -48,6 +51,14 @@ pub(crate) struct MergingIntent {
     pub added_delete_files: Vec<DataFile>,
     pub removed_data_files: Vec<DataFile>,
     pub removed_delete_files: Vec<DataFile>,
+    /// Whether a removed file that is no longer live fails the commit.
+    ///
+    /// Required by actions that must not double-remove (a rewrite whose
+    /// replacement files would otherwise duplicate rows). Actions whose
+    /// removal is harmless when already done, such as a merge-on-read delete
+    /// replacing a position delete file, leave it off so a retry after a
+    /// concurrent removal still commits.
+    pub fail_missing_delete_paths: bool,
     /// Whether the summary resets table totals (a full-table overwrite).
     pub truncate_full_table: bool,
 }
@@ -89,10 +100,12 @@ impl MergingSnapshotProducer {
             data_filter: ManifestFilterManager::new(
                 ManifestContentType::Data,
                 &intent.removed_data_files,
+                intent.fail_missing_delete_paths,
             ),
             delete_filter: ManifestFilterManager::new(
                 ManifestContentType::Deletes,
                 &intent.removed_delete_files,
+                intent.fail_missing_delete_paths,
             ),
             intent,
             snapshot_id: None,
@@ -134,7 +147,17 @@ impl MergingSnapshotProducer {
                 &mut self.owned_artifacts,
             )
             .await?;
-        let mut manifests = deletes.manifests;
+        // A manifest from an earlier snapshot whose entries are all `Deleted`
+        // has nothing left to contribute; dropping it keeps the manifest list
+        // from growing with every commit. This commit's own rewrites stay even
+        // when delete-only, since they record what it removed.
+        let mut manifests: Vec<ManifestFile> = deletes
+            .manifests
+            .into_iter()
+            .filter(|m| {
+                m.has_added_files() || m.has_existing_files() || m.added_snapshot_id == snapshot_id
+            })
+            .collect();
 
         manifests.extend(self.added_manifests(table, snapshot_id).await?);
 
@@ -163,20 +186,17 @@ impl MergingSnapshotProducer {
     }
 
     /// Checks that every added file is written under the table's default
-    /// partition spec with a compatible partition value, and that delete files
-    /// are only added to tables whose format supports them.
+    /// partition spec with a compatible partition value, and that every added
+    /// delete file is in a format the table's version allows.
     ///
     /// Runs against the table the manifests are written for; a later rebase
     /// does not invalidate manifests already written under a spec the table
     /// still has.
     fn validate_added_files(&self, table: &Table) -> Result<()> {
         let metadata = table.metadata();
-        if !self.intent.added_delete_files.is_empty()
-            && metadata.format_version() == FormatVersion::V1
-        {
-            return Err(invalid_data!(
-                "Cannot add delete files to a format version 1 table"
-            ));
+        let format_version = metadata.format_version();
+        for file in &self.intent.added_delete_files {
+            validate_delete_file_format(file, format_version)?;
         }
         for file in self
             .intent
@@ -266,6 +286,29 @@ impl MergingSnapshotProducer {
     }
 }
 
+/// Checks that a delete file's format is allowed by the table's version: v1
+/// has no deletes, v2 has no deletion vectors, and v3 position deletes must be
+/// deletion vectors.
+fn validate_delete_file_format(file: &DataFile, format_version: FormatVersion) -> Result<()> {
+    let is_dv = file.file_format() == DataFileFormat::Puffin;
+    match format_version {
+        FormatVersion::V1 => Err(invalid_data!(
+            "Cannot add delete files to a format version 1 table"
+        )),
+        FormatVersion::V2 if is_dv => Err(invalid_data!(
+            "Cannot add deletion vector {} to a format version 2 table",
+            file.file_path()
+        )),
+        FormatVersion::V3 if file.content_type() == DataContentType::PositionDeletes && !is_dv => {
+            Err(invalid_data!(
+                "Position deletes must be deletion vectors in a format version 3 table: {}",
+                file.file_path()
+            ))
+        }
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -302,6 +345,7 @@ mod tests {
             added_delete_files: vec![],
             removed_data_files: vec![],
             removed_delete_files: vec![],
+            fail_missing_delete_paths: true,
             truncate_full_table: false,
         }
     }
@@ -919,5 +963,208 @@ mod tests {
             .err()
             .expect("v1 tables cannot hold delete files");
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    /// A deletion vector: one blob of a Puffin file, located by offset and size.
+    fn deletion_vector(table: &Table, path: &str, offset: i64, size: i64) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::PositionDeletes)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Puffin)
+            .file_size_in_bytes(200)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .referenced_data_file(Some(format!("test/{offset}.parquet")))
+            .content_offset(Some(offset))
+            .content_size_in_bytes(Some(size))
+            .build()
+            .unwrap()
+    }
+
+    fn equality_delete_file(table: &Table, path: &str) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::EqualityDeletes)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(50)
+            .record_count(1)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .partition(Struct::from_iter([Some(Literal::long(300))]))
+            .equality_ids(Some(vec![1]))
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vector_rejected_on_v2_table() {
+        let table = make_v2_minimal_table();
+        let mut i = intent(Operation::Overwrite);
+        i.added_delete_files = vec![deletion_vector(&table, "test/dv.puffin", 4, 10)];
+        let err = MergingSnapshotProducer::new(i)
+            .apply(&table)
+            .await
+            .err()
+            .expect("v2 tables cannot hold deletion vectors");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("test/dv.puffin"));
+    }
+
+    #[tokio::test]
+    async fn test_position_delete_file_rejected_on_v3_table() {
+        use crate::transaction::tests::make_v3_minimal_table;
+
+        let table = make_v3_minimal_table();
+        let mut i = intent(Operation::Overwrite);
+        i.added_delete_files = vec![delete_file(&table, "test/d-deletes.parquet")];
+        let err = MergingSnapshotProducer::new(i)
+            .apply(&table)
+            .await
+            .err()
+            .expect("v3 position deletes must be deletion vectors");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("test/d-deletes.parquet"));
+    }
+
+    /// v3 still accepts equality delete files and deletion vectors.
+    #[tokio::test]
+    async fn test_v3_accepts_equality_deletes_and_deletion_vectors() {
+        use crate::transaction::tests::make_v3_minimal_table;
+
+        let table = make_v3_minimal_table();
+        let mut i = intent(Operation::Overwrite);
+        i.added_delete_files = vec![
+            equality_delete_file(&table, "test/eq.parquet"),
+            deletion_vector(&table, "test/dv.puffin", 4, 10),
+        ];
+        let mut commit = MergingSnapshotProducer::new(i).apply(&table).await.unwrap();
+        let snapshot = added_snapshot(&mut commit);
+        assert_eq!(
+            snapshot
+                .summary()
+                .additional_properties
+                .get("added-delete-files")
+                .unwrap(),
+            "2"
+        );
+    }
+
+    /// Two deletion vectors share one Puffin file. Removing one marks only
+    /// that blob's entry `Deleted`; the other stays `Existing`.
+    #[tokio::test]
+    async fn test_remove_one_deletion_vector_keeps_others_in_same_puffin_file() {
+        use crate::transaction::tests::make_v3_minimal_table;
+
+        let base = make_v3_minimal_table();
+        let dv_a = deletion_vector(&base, "test/dvs.puffin", 4, 10);
+        let dv_b = deletion_vector(&base, "test/dvs.puffin", 14, 12);
+
+        let mut add = intent(Operation::Overwrite);
+        add.added_data_files = vec![data_file(&base, "test/a.parquet", 1)];
+        add.added_delete_files = vec![dv_a.clone(), dv_b.clone()];
+        let mut commit = MergingSnapshotProducer::new(add)
+            .apply(&base)
+            .await
+            .unwrap();
+        let table = super::super::tests::with_snapshot(&base, added_snapshot(&mut commit));
+
+        let mut remove = intent(Operation::Delete);
+        remove.removed_delete_files = vec![dv_a.clone()];
+        let mut commit = MergingSnapshotProducer::new(remove)
+            .apply(&table)
+            .await
+            .unwrap();
+        let snapshot = added_snapshot(&mut commit);
+
+        let list = table.manifest_list_reader(&snapshot).load().await.unwrap();
+        let rewritten = list
+            .entries()
+            .iter()
+            .find(|m| {
+                m.added_snapshot_id == snapshot.snapshot_id()
+                    && m.content == ManifestContentType::Deletes
+            })
+            .expect("the delete manifest is rewritten");
+        let manifest = table.manifest_reader().read(rewritten).await.unwrap();
+        let mut entries: Vec<_> = manifest
+            .entries()
+            .iter()
+            .map(|e| (e.status(), e.data_file().content_offset()))
+            .collect();
+        entries.sort_by_key(|(_, offset)| *offset);
+        assert_eq!(entries, vec![
+            (ManifestStatus::Deleted, dv_a.content_offset()),
+            (ManifestStatus::Existing, dv_b.content_offset()),
+        ]);
+        let summary = &snapshot.summary().additional_properties;
+        assert_eq!(summary.get("removed-delete-files").unwrap(), "1");
+        assert_eq!(summary.get("total-delete-files").unwrap(), "1");
+    }
+
+    /// With missing-file failures off, a file removed by a concurrent commit
+    /// is skipped and the attempt commits; nothing is rewritten for it.
+    #[tokio::test]
+    async fn test_missing_removed_file_is_skipped_when_not_failing() {
+        let base = make_v2_minimal_table();
+        let table = append_to(&base, vec![data_file(&base, "test/a.parquet", 1)]).await;
+
+        let mut i = intent(Operation::Delete);
+        i.removed_data_files = vec![data_file(&base, "test/nope.parquet", 1)];
+        i.fail_missing_delete_paths = false;
+        let mut producer = MergingSnapshotProducer::new(i);
+        let mut commit = producer.apply(&table).await.unwrap();
+        let snapshot = added_snapshot(&mut commit);
+
+        let list = table.manifest_list_reader(&snapshot).load().await.unwrap();
+        assert!(
+            list.entries()
+                .iter()
+                .all(|m| m.added_snapshot_id != snapshot.snapshot_id())
+        );
+        assert_eq!(producer.manifest_counter, 0);
+        let summary = &snapshot.summary().additional_properties;
+        assert_eq!(summary.get("total-data-files").unwrap(), "1");
+        assert!(!summary.contains_key("deleted-data-files"));
+    }
+
+    /// A manifest left with only `Deleted` entries by an earlier snapshot is
+    /// dropped by the next commit; the one this commit writes is kept.
+    #[tokio::test]
+    async fn test_delete_only_manifest_from_earlier_snapshot_is_dropped() {
+        use super::super::tests::with_snapshot;
+
+        let base = make_v2_minimal_table();
+        let table = append_to(&base, vec![data_file(&base, "test/a.parquet", 1)]).await;
+
+        let mut remove = intent(Operation::Delete);
+        remove.removed_data_files = vec![data_file(&base, "test/a.parquet", 1)];
+        let mut commit = MergingSnapshotProducer::new(remove)
+            .apply(&table)
+            .await
+            .unwrap();
+        let s1 = added_snapshot(&mut commit);
+        let s1_list = table.manifest_list_reader(&s1).load().await.unwrap();
+        assert_eq!(s1_list.entries().len(), 1);
+        assert_eq!(s1_list.entries()[0].deleted_files_count, Some(1));
+        assert_eq!(s1_list.entries()[0].existing_files_count, Some(0));
+        let table = with_snapshot(&table, s1);
+
+        let mut add = intent(Operation::Append);
+        add.added_data_files = vec![data_file(&base, "test/b.parquet", 1)];
+        let mut commit = MergingSnapshotProducer::new(add)
+            .apply(&table)
+            .await
+            .unwrap();
+        let s2 = added_snapshot(&mut commit);
+        let s2_list = table.manifest_list_reader(&s2).load().await.unwrap();
+        assert_eq!(s2_list.entries().len(), 1);
+        assert_eq!(s2_list.entries()[0].added_snapshot_id, s2.snapshot_id());
+        assert_eq!(
+            s2.summary()
+                .additional_properties
+                .get("total-data-files")
+                .unwrap(),
+            "1"
+        );
     }
 }
