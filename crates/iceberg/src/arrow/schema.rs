@@ -642,15 +642,14 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
             DataType::Time64(unit) if unit == &TimeUnit::Microsecond => {
                 Ok(Type::Primitive(PrimitiveType::Time))
             }
-            DataType::Timestamp(unit, None) if unit == &TimeUnit::Microsecond => {
+            DataType::Timestamp(TimeUnit::Millisecond | TimeUnit::Microsecond, None) => {
                 Ok(Type::Primitive(PrimitiveType::Timestamp))
             }
             DataType::Timestamp(unit, None) if unit == &TimeUnit::Nanosecond => {
                 Ok(Type::Primitive(PrimitiveType::TimestampNs))
             }
-            DataType::Timestamp(unit, Some(zone))
-                if unit == &TimeUnit::Microsecond
-                    && (zone.as_ref() == "UTC" || zone.as_ref() == "+00:00") =>
+            DataType::Timestamp(TimeUnit::Millisecond | TimeUnit::Microsecond, Some(zone))
+                if zone.as_ref() == "UTC" || zone.as_ref() == "+00:00" =>
             {
                 Ok(Type::Primitive(PrimitiveType::Timestamptz))
             }

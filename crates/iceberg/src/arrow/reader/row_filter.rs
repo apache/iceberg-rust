@@ -228,8 +228,8 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::{
-        ArrayRef, Decimal128Array, Float32Array, Int32Array, Int64Array, LargeStringArray,
-        RecordBatch, StringArray,
+        Array, ArrayRef, Decimal128Array, Float32Array, Int32Array, Int64Array, LargeStringArray,
+        RecordBatch, StringArray, TimestampMillisecondArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
@@ -247,7 +247,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveLiteral, PrimitiveType,
+        Schema, SchemaRef, Type,
     };
 
     async fn test_perform_read(
@@ -1998,5 +1999,128 @@ mod tests {
         )
         .await;
         assert_eq!(rows(&on), 1);
+    }
+
+    async fn read_id_and_ts(
+        reader: ArrowReader,
+        path: &str,
+        schema: SchemaRef,
+        predicate: &Predicate,
+        project_ts: bool,
+    ) -> Vec<(i32, Option<i64>)> {
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(path.to_string())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(if project_ts { vec![1, 2] } else { vec![1] })
+            .with_predicate(Some(predicate.clone().bind(schema, true).unwrap()))
+            .with_case_sensitive(true)
+            .build()
+            .unwrap();
+        let batches: Vec<RecordBatch> = reader
+            .read(Box::pin(futures::stream::iter(vec![Ok(task)])))
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let mut rows = vec![];
+        for batch in &batches {
+            let ids = batch
+                .column(0)
+                .as_primitive::<arrow_array::types::Int32Type>();
+            let ts = project_ts.then(|| {
+                batch
+                    .column(1)
+                    .as_primitive::<arrow_array::types::TimestampMicrosecondType>()
+            });
+            for row in 0..batch.num_rows() {
+                rows.push((ids.value(row), ts.map(|ts| ts.value(row))));
+            }
+        }
+        rows
+    }
+
+    #[tokio::test]
+    async fn test_millisecond_timestamp_column_in_every_pruning_mode() {
+        let tmp = TempDir::new().unwrap();
+        let path = format!("{}/ts_millis.parquet", tmp.path().to_str().unwrap());
+
+        for (primitive_type, tz) in [
+            (PrimitiveType::Timestamp, None),
+            (PrimitiveType::Timestamptz, Some("UTC")),
+        ] {
+            let ts =
+                TimestampMillisecondArray::from(vec![-1_500, 1_000, 2_000]).with_timezone_opt(tz);
+            let arrow_schema = Arc::new(ArrowSchema::new(vec![
+                field_with_id("id", DataType::Int32, 1),
+                field_with_id("ts", ts.data_type().clone(), 2),
+            ]));
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+                Arc::new(Int32Array::from(vec![0, 1, 2])),
+                Arc::new(ts),
+            ])
+            .unwrap();
+            write_row_groups(&path, arrow_schema, vec![batch], true);
+
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::required(2, "ts", Type::Primitive(primitive_type.clone()))
+                            .into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let micros = |v| Datum::new(primitive_type.clone(), PrimitiveLiteral::Long(v));
+            let cases = [
+                (Reference::new("ts").equal_to(micros(2_000_000)), vec![(
+                    2, 2_000_000,
+                )]),
+                (Reference::new("ts").less_than(micros(1_000_500)), vec![
+                    (0, -1_500_000),
+                    (1, 1_000_000),
+                ]),
+                (Reference::new("ts").equal_to(micros(1_000_500)), vec![]),
+            ];
+
+            for (mode, row_group_filtering, row_selection, bloom_filter) in [
+                ("default", true, false, false),
+                ("page index only", false, true, false),
+                ("bloom filter only", false, false, true),
+                ("all off", false, false, false),
+            ] {
+                let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                    .with_row_group_filtering_enabled(row_group_filtering)
+                    .with_row_selection_enabled(row_selection)
+                    .with_bloom_filter_enabled(bloom_filter)
+                    .build();
+                for (predicate, expected) in &cases {
+                    for project_ts in [false, true] {
+                        let rows = read_id_and_ts(
+                            reader.clone(),
+                            &path,
+                            schema.clone(),
+                            predicate,
+                            project_ts,
+                        )
+                        .await;
+                        let expected: Vec<_> = expected
+                            .iter()
+                            .map(|&(id, ts)| (id, project_ts.then_some(ts)))
+                            .collect();
+                        assert_eq!(
+                            rows, expected,
+                            "{primitive_type} {mode} {predicate} project_ts={project_ts}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
