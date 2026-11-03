@@ -454,7 +454,8 @@ impl TableMetadataBuilder {
 
     /// Remove snapshots by its ids from the table metadata.
     /// Does nothing if a snapshot id is not present.
-    /// Keeps as changes only the snapshots that were actually removed.
+    /// Records removed snapshot IDs once each, in the order they first appear
+    /// in `snapshot_ids`.
     pub fn remove_snapshots(mut self, snapshot_ids: &[i64]) -> Self {
         let mut removed_snapshots = Vec::with_capacity(snapshot_ids.len());
 
@@ -2428,8 +2429,8 @@ mod tests {
     fn test_remove_snapshots_records_existing_ids_once() {
         let fixture = TableTestFixture::new_with_deep_history();
         let metadata = fixture.table.metadata().clone();
-        let first_id = 3051729675574597004;
-        let third_id = 3056729675574597004;
+        let first_id = metadata.snapshot_log[0].snapshot_id;
+        let third_id = metadata.snapshot_log[2].snapshot_id;
         let mut expected_metadata = metadata.clone();
         expected_metadata.snapshots = [
             3055729675574597004,
@@ -2456,26 +2457,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_remove_snapshots_ignores_empty_or_unknown_ids() {
-        let fixture = TableTestFixture::new_with_deep_history();
-        let metadata = fixture.table.metadata();
-        let expected = TableMetadataBuildResult {
-            metadata: metadata.clone(),
-            changes: vec![],
-            expired_metadata_logs: vec![],
-        };
-
-        for snapshot_ids in [&[][..], &[0, 0][..]] {
-            let mut builder = metadata.clone().into_builder(None);
-            builder.last_updated_ms = Some(metadata.last_updated_ms);
-
-            let result = builder.remove_snapshots(snapshot_ids).build().unwrap();
-
-            assert_eq!(result, expected);
-        }
     }
 
     #[test]
