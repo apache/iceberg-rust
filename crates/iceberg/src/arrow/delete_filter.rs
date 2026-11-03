@@ -128,10 +128,7 @@ impl PosDelLoadGuard {
     /// Ends the load with `error`, which the tasks waiting on it return. Later calls to
     /// [`DeleteFilter::try_start_pos_del_load`] start a new attempt.
     pub(crate) fn fail(self, error: &Error) {
-        let _ = self
-            .attempt
-            .failure
-            .set((error.kind(), error.message().to_string()));
+        let _ = self.attempt.failure.set((error.kind(), error.to_string()));
     }
 }
 
@@ -473,7 +470,10 @@ pub(crate) mod tests {
             })
             .collect();
 
-        guard.fail(&Error::new(ErrorKind::DataInvalid, "bad file"));
+        guard.fail(
+            &Error::new(ErrorKind::DataInvalid, "bad file")
+                .with_source(std::io::Error::other("403 Forbidden")),
+        );
 
         for wait in waits {
             let err = tokio::time::timeout(std::time::Duration::from_secs(5), wait.wait())
@@ -481,7 +481,8 @@ pub(crate) mod tests {
                 .expect("WaitFor future must resolve when the load fails")
                 .unwrap_err();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
-            assert_eq!(err.message(), "bad file");
+            assert!(err.message().contains("bad file"), "{err}");
+            assert!(err.message().contains("403 Forbidden"), "{err}");
         }
 
         // Only the waiters of that attempt get the error; a later call loads again.

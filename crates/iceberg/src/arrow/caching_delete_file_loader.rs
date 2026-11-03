@@ -1938,7 +1938,7 @@ mod tests {
                 .err()
                 .unwrap();
             assert_eq!(err.kind(), ErrorKind::Unexpected);
-            assert_eq!(err.message(), "load failed");
+            assert!(err.message().contains("load failed"), "{err}");
         }
     }
 
@@ -2067,6 +2067,33 @@ mod tests {
         }
     }
 
+    /// Writes a position delete file at `path` for `data.parquet` with `positions`.
+    fn write_pos_del_file(path: &str, positions: Vec<i64>) -> FileScanTaskDeleteFile {
+        let batch = RecordBatch::try_new(
+            crate::arrow::delete_filter::tests::create_pos_del_schema(),
+            vec![
+                Arc::new(StringArray::from_iter_values(vec![
+                    "data.parquet";
+                    positions.len()
+                ])),
+                Arc::new(Int64Array::from_iter_values(positions)),
+            ],
+        )
+        .unwrap();
+        let mut writer =
+            ArrowWriter::try_new(File::create(path).unwrap(), batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        FileScanTaskDeleteFile::builder()
+            .with_file_path(path.to_string())
+            .with_file_size_in_bytes(std::fs::metadata(path).unwrap().len())
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
+            .with_partition_spec_id(0)
+            .build()
+            .unwrap()
+    }
+
     /// A failing positional delete file ends `load_deletes` early while the load of the
     /// other file in the same call is still in flight, dropping its guard. That file
     /// still loads later.
@@ -2074,36 +2101,15 @@ mod tests {
     async fn test_pos_del_load_dropped_by_a_failing_sibling_can_be_loaded_later() {
         let tmp_dir = TempDir::new().unwrap();
         let schema = Arc::new(Schema::builder().build().unwrap());
-        let write = |name: &str, positions: Vec<i64>| {
-            let path = tmp_dir.path().join(name);
-            let path = path.to_str().unwrap().to_string();
-            let batch = RecordBatch::try_new(
-                crate::arrow::delete_filter::tests::create_pos_del_schema(),
-                vec![
-                    Arc::new(StringArray::from_iter_values(vec![
-                        "data.parquet";
-                        positions.len()
-                    ])),
-                    Arc::new(Int64Array::from_iter_values(positions)),
-                ],
-            )
-            .unwrap();
-            let mut writer =
-                ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), None).unwrap();
-            writer.write(&batch).unwrap();
-            writer.close().unwrap();
-            FileScanTaskDeleteFile::builder()
-                .with_file_path(path.clone())
-                .with_file_size_in_bytes(std::fs::metadata(&path).unwrap().len())
-                .with_file_type(DataContentType::PositionDeletes)
-                .with_file_format(DataFileFormat::Parquet)
-                .with_partition_spec_id(0)
-                .build()
-                .unwrap()
-        };
-        let invalid = write("invalid.parquet", vec![-1]);
+        let invalid = write_pos_del_file(
+            tmp_dir.path().join("invalid.parquet").to_str().unwrap(),
+            vec![-1],
+        );
         // Its read waits for the gate, so its load is in flight when `invalid` fails.
-        let valid = write("gated.parquet", vec![1, 3]);
+        let valid = write_pos_del_file(
+            tmp_dir.path().join("gated.parquet").to_str().unwrap(),
+            vec![1, 3],
+        );
         let factory = Arc::new(gated_storage::GatedStorageFactory::default());
         let gate = Arc::clone(&factory.open);
         let file_io = crate::io::FileIOBuilder::new(factory).build();
@@ -2142,35 +2148,10 @@ mod tests {
         let path = tmp_dir.path().join("pos-del.parquet");
         let path = path.to_str().unwrap();
         let schema = Arc::new(Schema::builder().build().unwrap());
-        let write = |positions: Vec<i64>| {
-            let batch = RecordBatch::try_new(
-                crate::arrow::delete_filter::tests::create_pos_del_schema(),
-                vec![
-                    Arc::new(StringArray::from_iter_values(vec![
-                        "data.parquet";
-                        positions.len()
-                    ])),
-                    Arc::new(Int64Array::from_iter_values(positions)),
-                ],
-            )
-            .unwrap();
-            let mut writer =
-                ArrowWriter::try_new(File::create(path).unwrap(), batch.schema(), None).unwrap();
-            writer.write(&batch).unwrap();
-            writer.close().unwrap();
-            FileScanTaskDeleteFile::builder()
-                .with_file_path(path.to_string())
-                .with_file_size_in_bytes(std::fs::metadata(path).unwrap().len())
-                .with_file_type(DataContentType::PositionDeletes)
-                .with_file_format(DataFileFormat::Parquet)
-                .with_partition_spec_id(0)
-                .build()
-                .unwrap()
-        };
         let loader = CachingDeleteFileLoader::new(FileIO::new_with_fs(), 10, Runtime::current());
 
         // The file opens but fails to parse, so the load is abandoned after the open.
-        let invalid = write(vec![-1]);
+        let invalid = write_pos_del_file(path, vec![-1]);
         let err = loader
             .load_deletes(&[invalid], Arc::clone(&schema))
             .await
@@ -2180,7 +2161,7 @@ mod tests {
         assert!(err.message().contains("negative position"), "{err}");
 
         // Once the file is valid, the same loader loads it instead of waiting.
-        let valid = write(vec![1, 3]);
+        let valid = write_pos_del_file(path, vec![1, 3]);
         let filter = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             loader.load_deletes(&[valid], schema),
