@@ -234,51 +234,51 @@ impl StorageFactory for OpenDalStorageFactory {
 
 impl OpenDalStorageFactory {
     #[allow(unused_variables)]
-    fn build_storage(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
+    fn build_storage(&self, config: &StorageConfig) -> Result<OpenDalStorage> {
         let client_config = OpenDalClientConfig::from_properties(config.props())?;
         match self {
             #[cfg(feature = "opendal-memory")]
-            OpenDalStorageFactory::Memory => Ok(Arc::new(OpenDalStorage::Memory {
+            OpenDalStorageFactory::Memory => Ok(OpenDalStorage::Memory {
                 operator: memory_config_build()?,
                 client_config,
-            })),
+            }),
             #[cfg(feature = "opendal-fs")]
-            OpenDalStorageFactory::Fs => Ok(Arc::new(OpenDalStorage::LocalFs { client_config })),
+            OpenDalStorageFactory::Fs => Ok(OpenDalStorage::LocalFs { client_config }),
             #[cfg(feature = "opendal-s3")]
             OpenDalStorageFactory::S3 {
                 customized_credential_load,
-            } => Ok(Arc::new(OpenDalStorage::S3 {
+            } => Ok(OpenDalStorage::S3 {
                 config: s3_config_parse(config.props().clone())?.into(),
                 customized_credential_load: customized_credential_load.clone(),
                 client_config,
-            })),
+            }),
             #[cfg(feature = "opendal-gcs")]
-            OpenDalStorageFactory::Gcs => Ok(Arc::new(OpenDalStorage::Gcs {
+            OpenDalStorageFactory::Gcs => Ok(OpenDalStorage::Gcs {
                 config: gcs_config_parse(config.props().clone())?.into(),
                 client_config,
-            })),
+            }),
             #[cfg(feature = "opendal-hdfs-native")]
-            OpenDalStorageFactory::HdfsNative => Ok(Arc::new(OpenDalStorage::HdfsNative(
-                HdfsNativeStorage::new(
+            OpenDalStorageFactory::HdfsNative => {
+                Ok(OpenDalStorage::HdfsNative(HdfsNativeStorage::new(
                     hdfs_native_config_parse(config.props().clone())?,
                     client_config,
-                ),
-            ))),
+                )))
+            }
             #[cfg(feature = "opendal-oss")]
-            OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
+            OpenDalStorageFactory::Oss => Ok(OpenDalStorage::Oss {
                 config: oss_config_parse(config.props().clone())?.into(),
                 client_config,
-            })),
+            }),
             #[cfg(feature = "opendal-azdls")]
-            OpenDalStorageFactory::Azdls => Ok(Arc::new(OpenDalStorage::Azdls {
+            OpenDalStorageFactory::Azdls => Ok(OpenDalStorage::Azdls {
                 config: azdls_config_parse(config.props().clone())?.into(),
                 client_config,
-            })),
+            }),
             #[cfg(feature = "opendal-hf")]
-            OpenDalStorageFactory::Hf => Ok(Arc::new(OpenDalStorage::Hf {
+            OpenDalStorageFactory::Hf => Ok(OpenDalStorage::Hf {
                 config: hf_config_parse(config.props().clone())?.into(),
                 client_config,
-            })),
+            }),
             #[cfg(all(
                 not(feature = "opendal-memory"),
                 not(feature = "opendal-fs"),

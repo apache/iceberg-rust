@@ -251,13 +251,16 @@ mod tests {
                 (S3_REGION.to_string(), "us-east-1".to_string()),
                 (S3_PATH_STYLE_ACCESS.to_string(), "true".to_string()),
             ]))
-            .storage_credentials(vec![StorageCredential::new(
-                "s3://bucket1/vended/",
-                HashMap::from([
-                    (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
-                    (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
-                ]),
-            )])
+            .storage_credentials(vec![
+                StorageCredential::new(
+                    "s3://bucket1/vended/",
+                    HashMap::from([
+                        (S3_ACCESS_KEY_ID.to_string(), "admin".to_string()),
+                        (S3_SECRET_ACCESS_KEY.to_string(), "password".to_string()),
+                    ]),
+                )
+                .unwrap(),
+            ])
             .build();
         let file_io = FileIOBuilder::new(Arc::new(OpenDalResolvingStorageFactory::new()))
             .with_config(config)

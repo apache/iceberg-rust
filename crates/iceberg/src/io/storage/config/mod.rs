@@ -45,8 +45,10 @@ pub use hdfs_native::*;
 pub use hf::*;
 pub use oss::*;
 pub use s3::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use typed_builder::TypedBuilder;
+
+use crate::{Error, ErrorKind, Result};
 
 /// Configuration properties for storage backends.
 ///
@@ -143,7 +145,7 @@ impl StorageConfig {
 
 /// Storage properties, such as a vended credential, that apply to locations
 /// under a prefix, like Java's `StorageCredential`.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct StorageCredential {
     /// Location prefix, such as `s3://bucket/table`
     prefix: String,
@@ -152,12 +154,20 @@ pub struct StorageCredential {
 }
 
 impl StorageCredential {
-    /// Create a credential for locations under `prefix`. An empty prefix covers none.
-    pub fn new(prefix: impl Into<String>, config: HashMap<String, String>) -> Self {
-        Self {
-            prefix: prefix.into(),
-            config,
+    /// Create a credential for locations under `prefix`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `prefix` is empty.
+    pub fn new(prefix: impl Into<String>, config: HashMap<String, String>) -> Result<Self> {
+        let prefix = prefix.into();
+        if prefix.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Invalid storage credential: prefix must be non-empty",
+            ));
         }
+        Ok(Self { prefix, config })
     }
 
     /// Return the location prefix this credential applies to.
@@ -168,6 +178,19 @@ impl StorageCredential {
     /// Return the storage properties holding the credential.
     pub fn config(&self) -> &HashMap<String, String> {
         &self.config
+    }
+}
+
+impl<'de> Deserialize<'de> for StorageCredential {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Fields {
+            prefix: String,
+            config: HashMap<String, String>,
+        }
+
+        let Fields { prefix, config } = Fields::deserialize(deserializer)?;
+        Self::new(prefix, config).map_err(serde::de::Error::custom)
     }
 }
 
@@ -265,10 +288,13 @@ mod tests {
                 "region".to_string(),
                 "us-east-1".to_string(),
             )]))
-            .storage_credentials(vec![StorageCredential::new(
-                "s3://bucket/table",
-                HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]),
-            )])
+            .storage_credentials(vec![
+                StorageCredential::new(
+                    "s3://bucket/table",
+                    HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]),
+                )
+                .unwrap(),
+            ])
             .build();
 
         let serialized = serde_json::to_string(&config).unwrap();
@@ -282,12 +308,25 @@ mod tests {
         let credential = StorageCredential::new(
             "s3://bucket/table",
             HashMap::from([("s3.secret-access-key".to_string(), "secret".to_string())]),
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             format!("{credential:?}"),
             r#"StorageCredential { prefix: "s3://bucket/table", config_keys: ["s3.secret-access-key"] }"#
         );
+    }
+
+    #[test]
+    fn test_storage_credential_rejects_an_empty_prefix() {
+        let config = HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]);
+
+        let err = StorageCredential::new("", config).unwrap_err();
+        let deserialized =
+            serde_json::from_str::<StorageCredential>(r#"{"prefix":"","config":{}}"#);
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(deserialized.is_err());
     }
 
     #[test]
