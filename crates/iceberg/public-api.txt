@@ -78,6 +78,7 @@ impl iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::batch_size(&self) -> core::option::Option<usize>
 pub fn iceberg::arrow::ArrowReaderOptions::bloom_filter_enabled(&self) -> bool
 pub fn iceberg::arrow::ArrowReaderOptions::data_file_concurrency_limit(&self) -> core::option::Option<usize>
+pub fn iceberg::arrow::ArrowReaderOptions::dictionary_field_ids(&self) -> &alloc::collections::btree::set::BTreeSet<i32>
 pub fn iceberg::arrow::ArrowReaderOptions::parquet_options(&self) -> &iceberg::arrow::ParquetReadOptions
 pub fn iceberg::arrow::ArrowReaderOptions::row_group_filtering_enabled(&self) -> bool
 pub fn iceberg::arrow::ArrowReaderOptions::row_selection_enabled(&self) -> bool
@@ -91,7 +92,7 @@ impl core::fmt::Debug for iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::arrow::ArrowReaderOptions
 impl iceberg::arrow::ArrowReaderOptions
-pub fn iceberg::arrow::ArrowReaderOptions::builder() -> ArrowReaderOptionsBuilder<((), (), (), (), (), ())>
+pub fn iceberg::arrow::ArrowReaderOptions::builder() -> ArrowReaderOptionsBuilder<((), (), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::arrow::ArrowReaderOptions where iceberg::arrow::ArrowReaderOptions: core::default::Default

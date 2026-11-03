@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_arith::boolean::is_not_null;
@@ -34,7 +34,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::schema::{
     get_field_id_from_metadata, is_variant_field, try_get_field_id_from_metadata,
-    validate_unshredded_variant,
+    validate_unshredded_variant, with_dictionary_fields,
 };
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
 use crate::arrow::{
@@ -578,6 +578,7 @@ pub(crate) struct RecordBatchTransformerBuilder {
     projected_iceberg_field_ids: Vec<i32>,
     constant_fields: HashMap<i32, ColumnConstant>,
     virtual_fields: HashSet<i32>,
+    dictionary_field_ids: Arc<BTreeSet<i32>>,
 }
 
 /// How a metadata (or identity-partition) column's values are supplied.
@@ -649,7 +650,14 @@ impl RecordBatchTransformerBuilder {
             projected_iceberg_field_ids: projected_iceberg_field_ids.to_vec(),
             constant_fields: HashMap::new(),
             virtual_fields: HashSet::new(),
+            dictionary_field_ids: Arc::default(),
         }
+    }
+
+    /// Produce the listed top-level string fields as `Dictionary(Int32, Utf8)`.
+    pub(crate) fn with_dictionary_field_ids(mut self, field_ids: Arc<BTreeSet<i32>>) -> Self {
+        self.dictionary_field_ids = field_ids;
+        self
     }
 
     /// Add a scalar constant value for a specific field ID.
@@ -742,6 +750,7 @@ impl RecordBatchTransformerBuilder {
             projected_iceberg_field_ids: self.projected_iceberg_field_ids,
             constant_fields: self.constant_fields,
             virtual_fields: self.virtual_fields,
+            dictionary_field_ids: self.dictionary_field_ids,
             batch_transform: None,
         }
     }
@@ -789,6 +798,8 @@ pub(crate) struct RecordBatchTransformer {
     // Iceberg projection rules (name mapping / initial-default / null)
     virtual_fields: HashSet<i32>,
 
+    dictionary_field_ids: Arc<BTreeSet<i32>>,
+
     // BatchTransform gets lazily constructed based on the schema of
     // the first RecordBatch we receive from the file
     batch_transform: Option<BatchTransform>,
@@ -831,6 +842,7 @@ impl RecordBatchTransformer {
                     &self.projected_iceberg_field_ids,
                     &self.constant_fields,
                     &self.virtual_fields,
+                    &self.dictionary_field_ids,
                 )?);
 
                 self.process_record_batch(record_batch)?
@@ -851,8 +863,14 @@ impl RecordBatchTransformer {
         projected_iceberg_field_ids: &[i32],
         constant_fields: &HashMap<i32, ColumnConstant>,
         virtual_fields: &HashSet<i32>,
+        dictionary_field_ids: &BTreeSet<i32>,
     ) -> Result<BatchTransform> {
-        let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
+        let mut mapped_unprojected_arrow_schema = schema_to_arrow_schema(snapshot_schema)?;
+        if !dictionary_field_ids.is_empty() {
+            mapped_unprojected_arrow_schema =
+                with_dictionary_fields(&mapped_unprojected_arrow_schema, dictionary_field_ids)?;
+        }
+        let mapped_unprojected_arrow_schema = Arc::new(mapped_unprojected_arrow_schema);
         let field_id_to_mapped_schema_map =
             Self::build_field_id_to_arrow_schema_map(&mapped_unprojected_arrow_schema)?;
 

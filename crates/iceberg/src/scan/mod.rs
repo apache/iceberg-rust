@@ -33,7 +33,7 @@ use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
-use crate::arrow::{ArrowReaderBuilder, ArrowReaderOptions};
+use crate::arrow::{ArrowReaderBuilder, ArrowReaderOptions, validate_dictionary_field_ids};
 pub use crate::arrow::{ScanMetrics, ScanResult};
 use crate::delete_file_index::DeleteFileIndex;
 use crate::error::invalid_data;
@@ -355,6 +355,7 @@ impl<'a> TableScanBuilder<'a> {
             None => {
                 let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
                     return Ok(TableScan {
+                        schema: self.table.metadata().current_schema().clone(),
                         column_names: self.column_names,
                         file_io: self.table.file_io().clone(),
                         plan_context: None,
@@ -404,7 +405,7 @@ impl<'a> TableScanBuilder<'a> {
         let plan_context = PlanContext {
             snapshot,
             table_metadata: self.table.metadata_ref(),
-            snapshot_schema: schema,
+            snapshot_schema: Arc::clone(&schema),
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
             snapshot_bound_predicate,
@@ -420,6 +421,7 @@ impl<'a> TableScanBuilder<'a> {
         };
 
         Ok(TableScan {
+            schema,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
             plan_context: Some(plan_context),
@@ -437,6 +439,8 @@ pub struct TableScan {
     ///
     /// If this is None, then the scan contains no rows.
     plan_context: Option<PlanContext>,
+    /// The schema the scan projects, also when there is no snapshot to plan.
+    schema: SchemaRef,
     file_io: FileIO,
     column_names: Option<Vec<String>>,
     /// The maximum number of manifest files that will be
@@ -628,6 +632,8 @@ impl TableScan {
     /// have been removed. [`ArrowReaderBuilder::with_parquet_options`] replaces
     /// only the nested Parquet configuration.
     pub async fn to_arrow(&self, options: ArrowReaderOptions) -> Result<ArrowRecordBatchStream> {
+        // Fail scans that plan no files the same way as the reader fails each task.
+        validate_dictionary_field_ids(&self.schema, options.dictionary_field_ids())?;
         ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
             .with_options(options)
             .build()
@@ -2290,6 +2296,7 @@ mod tests {
                     "metadata_size_hint": 4096, "range_coalesce_bytes": 1048576, "range_fetch_concurrency": 2,
                     "preload_column_index": true, "preload_offset_index": true, "preload_page_index": false,
                 },
+                "dictionary_field_ids": [],
             })
         );
         let deserialized: ArrowReaderOptions = serde_json::from_value(serialized).unwrap();
@@ -2310,6 +2317,89 @@ mod tests {
         assert!(!actual.is_empty());
         assert!(actual.iter().all(|batch| batch.num_rows() <= 17));
         assert_eq!(actual, expected);
+    }
+
+    fn dictionary_options() -> ArrowReaderOptions {
+        ArrowReaderOptions::builder()
+            .with_dictionary_field_ids([4])
+            .build()
+    }
+
+    fn assert_dictionary_column(batches: &[RecordBatch]) {
+        assert!(!batches.is_empty());
+        for batch in batches {
+            assert_eq!(
+                batch.column(0).data_type(),
+                &crate::arrow::dictionary_string_type()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn to_arrow_reads_dictionary_field_ids() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let scan = fixture.table.scan().select(["a"]).build().unwrap();
+
+        let batches: Vec<_> = scan
+            .to_arrow(dictionary_options())
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_dictionary_column(&batches);
+    }
+
+    #[tokio::test]
+    async fn dictionary_field_ids_survive_serialization_for_planned_reads() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let scan = fixture.table.scan().select(["a"]).build().unwrap();
+        let tasks: Vec<_> = scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        drop(scan);
+        let options: ArrowReaderOptions =
+            serde_json::from_value(serde_json::to_value(dictionary_options()).unwrap()).unwrap();
+
+        let batches: Vec<_> =
+            ArrowReaderBuilder::new(fixture.table.file_io().clone(), test_runtime())
+                .with_options(options)
+                .build()
+                .read(Box::pin(stream::iter(tasks.into_iter().map(Ok))))
+                .unwrap()
+                .stream()
+                .try_collect()
+                .await
+                .unwrap();
+
+        assert_dictionary_column(&batches);
+    }
+
+    #[tokio::test]
+    async fn to_arrow_rejects_unknown_dictionary_field_id_without_planned_files() {
+        let table = TableTestFixture::new_empty().table;
+        let options = ArrowReaderOptions::builder()
+            .with_dictionary_field_ids([99])
+            .build();
+
+        let err = table
+            .scan()
+            .build()
+            .unwrap()
+            .to_arrow(options)
+            .await
+            .err()
+            .unwrap();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("field id 99"), "{}", err.message());
     }
 
     #[tokio::test]
