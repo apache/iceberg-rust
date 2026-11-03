@@ -3977,6 +3977,7 @@ mod tests {
 
         use super::*;
         use crate::Result;
+        use crate::arrow::ParquetReadOptions;
         use crate::arrow::scan_metrics::ScanMetrics;
         use crate::expr::{Bind, Predicate, Reference};
         use crate::io::{
@@ -4161,9 +4162,17 @@ mod tests {
             let file_io = FileIOBuilder::new(Arc::new(DeferredStorageFactory { storage })).build();
 
             let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-                .with_data_file_concurrency_limit(CONCURRENCY)
-                .with_metadata_size_hint(METADATA_SIZE_HINT)
-                .with_bloom_filter_enabled(bound.is_some())
+                .with_options(
+                    ReaderOptions::builder()
+                        .with_data_file_concurrency_limit(CONCURRENCY)
+                        .with_bloom_filter_enabled(bound.is_some())
+                        .with_parquet_options(
+                            ParquetReadOptions::builder()
+                                .with_metadata_size_hint(METADATA_SIZE_HINT)
+                                .build(),
+                        )
+                        .build(),
+                )
                 .build();
             let tasks =
                 Box::pin(futures::stream::iter(tasks.into_iter().map(Ok))) as FileScanTaskStream;
