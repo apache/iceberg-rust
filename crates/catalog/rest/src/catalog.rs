@@ -4792,7 +4792,8 @@ mod tests {
         let credential = StorageCredential::new(
             "s3://warehouse/database/table",
             HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]),
-        );
+        )
+        .unwrap();
         let mut body = load_table_body("v1");
         body["storage-credentials"] =
             json!([{ "prefix": credential.prefix(), "config": credential.config() }]);

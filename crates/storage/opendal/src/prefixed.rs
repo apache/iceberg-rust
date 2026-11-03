@@ -31,53 +31,56 @@ use iceberg::io::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Per-prefix batch size of `delete_stream`, as in Java's `S3FileIO.deleteFiles`.
-const DELETE_BATCH_SIZE: usize = 1000;
+use crate::OpenDalStorage;
+
+/// Batch size of `delete_stream`, as in Java's `S3FileIO.deleteFiles`.
+pub(crate) const DELETE_BATCH_SIZE: usize = 1000;
 
 /// Serves each path with the credential of its longest matching prefix, as
 /// Java's `S3FileIO.clientForStoragePath` does, else without credentials.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct PrefixedStorage {
-    default: Arc<dyn Storage>,
+    default: OpenDalStorage,
     /// Longest prefix first.
-    prefixed: Vec<(String, Arc<dyn Storage>)>,
+    prefixed: Vec<(String, OpenDalStorage)>,
 }
 
 impl PrefixedStorage {
-    /// Builds the storage for `config` with `build`, which is passed configs
+    /// Builds the storage for `config` with `build_fn`, which is passed configs
     /// without storage credentials.
     pub(crate) fn build(
         config: &StorageConfig,
-        build: impl Fn(&StorageConfig) -> Result<Arc<dyn Storage>>,
+        build_fn: impl Fn(&StorageConfig) -> Result<OpenDalStorage>,
     ) -> Result<Arc<dyn Storage>> {
         if config.storage_credentials().is_empty() {
-            return build(config);
+            return Ok(Arc::new(build_fn(config)?));
         }
-        Ok(Arc::new(Self::new(config, build)?))
+        Ok(Arc::new(Self::new(config, build_fn)?))
     }
 
-    fn new(
+    /// Builds one storage per credential of `config` and one for its props
+    /// alone, with `build_fn` as in [`Self::build`].
+    pub(crate) fn new(
         config: &StorageConfig,
-        build: impl Fn(&StorageConfig) -> Result<Arc<dyn Storage>>,
+        build_fn: impl Fn(&StorageConfig) -> Result<OpenDalStorage>,
     ) -> Result<Self> {
         let base = StorageConfig::from_props(config.props().clone());
         // The last credential for a prefix wins, as in Java's `clientByPrefix`.
         let credentials: HashMap<&str, &HashMap<String, String>> = config
             .storage_credentials()
             .iter()
-            .filter(|credential| !credential.prefix().is_empty())
             .map(|credential| (credential.prefix(), credential.config()))
             .collect();
         let mut prefixed = credentials
             .into_iter()
             .map(|(prefix, credential)| {
                 let config = base.clone().with_props(credential.clone());
-                Ok((prefix.to_string(), build(&config)?))
+                Ok((prefix.to_string(), build_fn(&config)?))
             })
             .collect::<Result<Vec<_>>>()?;
         prefixed.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
         Ok(Self {
-            default: build(&base)?,
+            default: build_fn(&base)?,
             prefixed,
         })
     }
@@ -89,14 +92,14 @@ impl PrefixedStorage {
             .position(|(prefix, _)| path.starts_with(prefix.as_str()))
     }
 
-    fn storage_at(&self, index: Option<usize>) -> &dyn Storage {
+    fn storage_at(&self, index: Option<usize>) -> &OpenDalStorage {
         match index {
-            Some(index) => self.prefixed[index].1.as_ref(),
-            None => self.default.as_ref(),
+            Some(index) => &self.prefixed[index].1,
+            None => &self.default,
         }
     }
 
-    fn storage_for(&self, path: &str) -> &dyn Storage {
+    pub(crate) fn storage_for(&self, path: &str) -> &OpenDalStorage {
         self.storage_at(self.prefix_index(path))
     }
 }
@@ -185,191 +188,126 @@ impl Storage for PrefixedStorage {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "opendal-memory"))]
 mod tests {
-    use std::sync::Mutex;
+    use std::time::Duration;
 
     use iceberg::io::StorageCredential;
 
     use super::*;
+    use crate::{OPENDAL_IO_TIMEOUT_MS, OpenDalStorageFactory};
 
-    type CallLog = Arc<Mutex<Vec<(String, String)>>>;
-
-    /// Records each call's path, or `delete_stream`'s batch size, with its `scope` prop.
-    #[derive(Debug, Serialize, Deserialize)]
-    struct RecordingStorage {
-        props: HashMap<String, String>,
-        #[serde(skip)]
-        calls: CallLog,
+    fn timeout_ms(ms: u64) -> HashMap<String, String> {
+        HashMap::from([(OPENDAL_IO_TIMEOUT_MS.to_string(), ms.to_string())])
     }
 
-    impl RecordingStorage {
-        fn record(&self, arg: impl Into<String>) {
-            self.calls
-                .lock()
-                .unwrap()
-                .push((self.props["scope"].clone(), arg.into()));
-        }
-    }
-
-    #[async_trait]
-    #[typetag::serde]
-    impl Storage for RecordingStorage {
-        async fn exists(&self, path: &str) -> Result<bool> {
-            self.record(path);
-            Ok(true)
-        }
-
-        async fn metadata(&self, _path: &str) -> Result<FileMetadata> {
-            unimplemented!()
-        }
-
-        async fn read(&self, _path: &str) -> Result<Bytes> {
-            unimplemented!()
-        }
-
-        async fn reader(&self, _path: &str) -> Result<Box<dyn FileRead>> {
-            unimplemented!()
-        }
-
-        async fn write(&self, _path: &str, _bs: Bytes) -> Result<()> {
-            unimplemented!()
-        }
-
-        async fn writer(&self, _path: &str) -> Result<Box<dyn FileWrite>> {
-            unimplemented!()
-        }
-
-        async fn delete(&self, _path: &str) -> Result<()> {
-            unimplemented!()
-        }
-
-        async fn delete_prefix(&self, path: &str) -> Result<()> {
-            self.record(path);
-            Ok(())
-        }
-
-        async fn delete_stream(&self, paths: BoxStream<'static, String>) -> Result<()> {
-            self.record(paths.count().await.to_string());
-            Ok(())
-        }
-
-        fn new_input(&self, _path: &str) -> Result<InputFile> {
-            unimplemented!()
-        }
-
-        fn new_output(&self, _path: &str) -> Result<OutputFile> {
-            unimplemented!()
-        }
-    }
-
-    /// A storage with `scope` "default" and a credential per (prefix, scope).
-    fn recording_storage(credentials: &[(&str, &str)]) -> (PrefixedStorage, CallLog) {
-        let scope = |scope: &str| HashMap::from([("scope".to_string(), scope.to_string())]);
+    /// Memory storages with an IO timeout of 1s by default and of `ms` under each `prefix`.
+    fn memory_storage(credentials: &[(&str, u64)]) -> PrefixedStorage {
         let config = StorageConfig::builder()
-            .props(scope("default"))
+            .props(timeout_ms(1000))
             .storage_credentials(
                 credentials
                     .iter()
-                    .map(|(prefix, credential)| StorageCredential::new(*prefix, scope(credential)))
+                    .map(|(prefix, ms)| StorageCredential::new(*prefix, timeout_ms(*ms)).unwrap())
                     .collect(),
             )
             .build();
-        let calls = CallLog::default();
-        let storage = PrefixedStorage::new(&config, |config| {
-            Ok(Arc::new(RecordingStorage {
-                props: config.props().clone(),
-                calls: calls.clone(),
-            }))
+        PrefixedStorage::new(&config, |config| {
+            OpenDalStorageFactory::Memory.build_storage(config)
         })
-        .unwrap();
-        (storage, calls)
+        .unwrap()
     }
 
-    fn recorded(calls: &[(&str, &str)]) -> Vec<(String, String)> {
-        calls
-            .iter()
-            .map(|(scope, arg)| (scope.to_string(), arg.to_string()))
-            .collect()
+    fn timeout_for(storage: &PrefixedStorage, path: &str) -> Duration {
+        storage.storage_for(path).client_config().io_timeout()
     }
 
-    #[tokio::test]
-    async fn test_routes_a_path_to_its_longest_matching_prefix() {
-        let (storage, calls) = recording_storage(&[
-            ("s3://bucket/data", "short"),
-            ("s3://bucket/data/warehouse", "long"),
-            ("", "empty"),
-        ]);
+    #[test]
+    fn test_routes_a_path_to_its_longest_matching_prefix() {
+        let storage = memory_storage(&[("memory:/data", 2000), ("memory:/data/warehouse", 3000)]);
 
-        for path in [
-            "s3://bucket/data/warehouse/f",
-            "s3://bucket/data/other/f",
-            "s3://bucket/database/f",
-            "s3://bucket/elsewhere/f",
-        ] {
-            storage.exists(path).await.unwrap();
-        }
+        let timeouts: Vec<_> = [
+            "memory:/data/warehouse/f",
+            "memory:/data/other/f",
+            "memory:/database/f",
+            "memory:/elsewhere/f",
+        ]
+        .into_iter()
+        .map(|path| timeout_for(&storage, path))
+        .collect();
 
         assert_eq!(
-            *calls.lock().unwrap(),
-            recorded(&[
-                ("long", "s3://bucket/data/warehouse/f"),
-                ("short", "s3://bucket/data/other/f"),
-                ("short", "s3://bucket/database/f"),
-                ("default", "s3://bucket/elsewhere/f"),
-            ])
+            timeouts,
+            [3000, 2000, 2000, 1000].map(Duration::from_millis)
         );
     }
 
-    #[tokio::test]
-    async fn test_a_later_credential_replaces_an_earlier_one_for_its_prefix() {
-        let (storage, calls) = recording_storage(&[
-            ("s3://bucket/table/", "earlier"),
-            ("s3://bucket/table/", "later"),
-        ]);
-
-        storage.exists("s3://bucket/table/f").await.unwrap();
+    #[test]
+    fn test_a_later_credential_replaces_an_earlier_one_for_its_prefix() {
+        let storage = memory_storage(&[("memory:/table/", 2000), ("memory:/table/", 3000)]);
 
         assert_eq!(
-            *calls.lock().unwrap(),
-            recorded(&[("later", "s3://bucket/table/f")])
+            timeout_for(&storage, "memory:/table/f"),
+            Duration::from_millis(3000)
         );
     }
 
     #[tokio::test]
     async fn test_delete_prefix_routes_a_directory_with_or_without_its_slash() {
-        for path in ["s3://bucket/table", "s3://bucket/table/"] {
-            let (storage, calls) = recording_storage(&[("s3://bucket/table/", "vended")]);
+        for path in ["memory:/table", "memory:/table/"] {
+            let storage = memory_storage(&[("memory:/table/", 2000)]);
+            storage
+                .write("memory:/table/f", Bytes::from("data"))
+                .await
+                .unwrap();
 
             storage.delete_prefix(path).await.unwrap();
 
-            assert_eq!(*calls.lock().unwrap(), recorded(&[("vended", path)]));
+            assert!(!storage.exists("memory:/table/f").await.unwrap(), "{path}");
         }
     }
 
     #[tokio::test]
-    async fn test_delete_stream_batches_paths_per_prefix() {
-        let (storage, calls) = recording_storage(&[("s3://bucket/table/", "vended")]);
-        let paths = (0..DELETE_BATCH_SIZE + 1)
-            .map(|i| format!("s3://bucket/table/{i}"))
-            .chain(["s3://bucket/other/f".to_string()]);
+    async fn test_delete_stream_deletes_each_path_with_its_prefix_storage() {
+        let storage = memory_storage(&[("memory:/table/", 2000)]);
+        let paths: Vec<_> = (0..DELETE_BATCH_SIZE + 1)
+            .map(|i| format!("memory:/table/{i}"))
+            .chain(["memory:/other/f".to_string()])
+            .collect();
+        for path in &paths {
+            storage.write(path, Bytes::from("data")).await.unwrap();
+        }
 
         storage
-            .delete_stream(stream::iter(paths).boxed())
+            .delete_stream(stream::iter(paths.clone()).boxed())
             .await
             .unwrap();
 
-        let mut calls = calls.lock().unwrap().clone();
-        calls.sort();
-        assert_eq!(
-            calls,
-            recorded(&[("default", "1"), ("vended", "1"), ("vended", "1000")])
-        );
+        for path in &paths {
+            assert!(!storage.exists(path).await.unwrap(), "{path}");
+        }
     }
 
+    #[cfg(feature = "opendal-s3")]
     #[test]
     fn test_debug_omits_prefixed_storages() {
-        let (storage, _) = recording_storage(&[("s3://bucket/table/", "vended-secret")]);
+        let config = StorageConfig::builder()
+            .storage_credentials(vec![
+                StorageCredential::new(
+                    "s3://bucket/table/",
+                    HashMap::from([(
+                        iceberg::io::S3_SECRET_ACCESS_KEY.to_string(),
+                        "vended-secret".to_string(),
+                    )]),
+                )
+                .unwrap(),
+            ])
+            .build();
+        let factory = OpenDalStorageFactory::S3 {
+            customized_credential_load: None,
+        };
+        let storage =
+            PrefixedStorage::new(&config, |config| factory.build_storage(config)).unwrap();
 
         let debug = format!("{storage:?}");
 
