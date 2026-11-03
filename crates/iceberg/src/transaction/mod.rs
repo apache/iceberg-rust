@@ -214,6 +214,7 @@ impl Transaction {
             )))
             .with_max_times(props.commit_num_retries()?)
             .with_factor(2.0)
+            .with_jitter()
             .build())
     }
 
@@ -259,6 +260,7 @@ mod tests {
     use std::io::BufReader;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::Duration;
 
     use crate::catalog::MockCatalog;
     use crate::io::FileIO;
@@ -565,6 +567,19 @@ mod tests {
             assert_eq!(err.message(), "Commit conflict");
             assert!(err.retryable(), "Error should be retryable");
         }
+    }
+
+    #[test]
+    fn test_commit_backoff_is_jittered() {
+        let table = setup_test_table("4");
+        let delays: Vec<Duration> = Transaction::build_backoff(table.metadata().table_properties())
+            .unwrap()
+            .collect();
+
+        let base = [10, 20, 40, 80].map(Duration::from_millis);
+        assert_eq!(delays.len(), base.len());
+        assert!(delays.iter().zip(base).all(|(d, b)| (b..2 * b).contains(d)));
+        assert_ne!(delays, base);
     }
 
     #[tokio::test]
