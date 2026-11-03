@@ -173,17 +173,20 @@ pub(crate) async fn current_manifests(table: &Table) -> Result<Vec<ManifestFile>
         .collect())
 }
 
-/// Fails if any of `data_files` is already live in the table's current snapshot.
+/// Fails if any of the `file_paths` is already live in the table's current snapshot.
 ///
 /// Must run against each attempt's base, since a concurrent commit may have
 /// added one of these files. Manifest reads go through the table's object
 /// cache, so manifests unchanged by a rebase are not re-read.
-pub(crate) async fn validate_files_not_live(table: &Table, data_files: &[DataFile]) -> Result<()> {
+pub(crate) async fn validate_files_not_live(
+    table: &Table,
+    file_paths: impl IntoIterator<Item = &str>,
+) -> Result<()> {
     let Some(current_snapshot) = table.metadata().current_snapshot() else {
         return Ok(());
     };
 
-    let new_files: HashSet<&str> = data_files.iter().map(|df| df.file_path()).collect();
+    let new_files: HashSet<&str> = file_paths.into_iter().collect();
     if new_files.is_empty() {
         return Ok(());
     }
@@ -522,19 +525,21 @@ mod tests {
         // No current snapshot: nothing is live, so nothing is a duplicate.
         let table = make_v2_minimal_table();
         let files = vec![data_file(&table, "test/dup.parquet", 1)];
-        validate_files_not_live(&table, &files).await.unwrap();
+        validate_files_not_live(&table, ["test/dup.parquet"])
+            .await
+            .unwrap();
 
         // A concurrent writer commits the same file; validating against that
         // base must detect it.
-        let rebased = append_to(&table, files.clone()).await;
-        let err = validate_files_not_live(&rebased, &files)
+        let rebased = append_to(&table, files).await;
+        let err = validate_files_not_live(&rebased, ["test/dup.parquet"])
             .await
             .expect_err("file committed concurrently must be detected");
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains("test/dup.parquet"));
 
         // A different file is not flagged.
-        validate_files_not_live(&rebased, &[data_file(&table, "test/other.parquet", 1)])
+        validate_files_not_live(&rebased, ["test/other.parquet"])
             .await
             .unwrap();
     }

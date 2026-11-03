@@ -161,33 +161,25 @@ impl TransactionAction for OverwriteAction {
             deleted_files.entry(file.file_path()).or_insert(file);
         }
         if self.check_duplicate {
-            let added: Vec<DataFile> = self
-                .added_data_files
-                .iter()
-                .filter(|f| !deleted_files.contains_key(f.file_path()))
-                .cloned()
-                .collect();
-            validate_files_not_live(table, &added).await?;
+            let added = self.added_data_files.iter().map(DataFile::file_path);
+            validate_files_not_live(table, added.filter(|p| !deleted_files.contains_key(p)))
+                .await?;
         }
 
-        let snapshot_id = *state
-            .snapshot_id
-            .get_or_insert_with(|| generate_snapshot_id(table));
-        let mut manifests = vec![];
-        // One per tombstone written, so a path live in several manifests counts each copy.
-        let mut removed_files = vec![];
-
+        // Every requested delete is matched before any manifest is written, so a
+        // missing path or mismatched metadata fails without leaving files behind.
+        let mut matched = HashSet::new();
+        let mut planned = vec![];
         for manifest_file in current_manifests(table).await? {
             if manifest_file.content == ManifestContentType::Deletes || deleted_files.is_empty() {
-                manifests.push(manifest_file);
+                planned.push((manifest_file, None));
                 continue;
             }
 
-            let manifest = table.manifest_reader().read(&manifest_file).await?;
-            let live: Vec<_> = manifest.entries().iter().filter(|e| e.is_alive()).collect();
+            let manifest = table.object_cache().get_manifest(&manifest_file).await?;
             let mut has_deletes = false;
-            for entry in &live {
-                let Some(requested) = deleted_files.get(entry.file_path()) else {
+            for entry in manifest.entries().iter().filter(|e| e.is_alive()) {
+                let Some((path, requested)) = deleted_files.get_key_value(entry.file_path()) else {
                     continue;
                 };
                 if let Some(mismatch) = metadata_mismatch(requested, entry.data_file()) {
@@ -196,13 +188,36 @@ impl TransactionAction for OverwriteAction {
                         entry.file_path()
                     ));
                 }
+                matched.insert(*path);
                 has_deletes = true;
             }
-            if !has_deletes {
+            planned.push((manifest_file, has_deletes.then_some(manifest)));
+        }
+
+        let mut missing: Vec<&str> = deleted_files
+            .keys()
+            .copied()
+            .filter(|path| !matched.contains(path))
+            .collect();
+        if !missing.is_empty() {
+            missing.sort_unstable();
+            return Err(invalid_data!(
+                "Missing required files to delete: {}",
+                missing.join(", ")
+            ));
+        }
+
+        let snapshot_id = *state
+            .snapshot_id
+            .get_or_insert_with(|| generate_snapshot_id(table));
+        let mut manifests = vec![];
+        // One per tombstone written, so a path live in several manifests counts each copy.
+        let mut removed_files = vec![];
+        for (manifest_file, rewrite) in planned {
+            let Some(manifest) = rewrite else {
                 manifests.push(manifest_file);
                 continue;
-            }
-
+            };
             let mut writer = new_manifest_writer(
                 table,
                 state.next_manifest_path(table)?,
@@ -212,7 +227,7 @@ impl TransactionAction for OverwriteAction {
                 Arc::new(manifest.metadata().partition_spec.clone()),
             )?;
             // Like Java, only live entries are carried into the rewrite.
-            for entry in live {
+            for entry in manifest.entries().iter().filter(|e| e.is_alive()) {
                 if deleted_files.contains_key(entry.file_path()) {
                     removed_files.push(entry.data_file().clone());
                     writer.add_delete_entry(entry.as_ref().clone())?;
@@ -221,20 +236,6 @@ impl TransactionAction for OverwriteAction {
                 }
             }
             manifests.push(writer.write_manifest_file().await?);
-        }
-
-        let removed_paths: HashSet<&str> = removed_files.iter().map(|f| f.file_path()).collect();
-        let mut missing: Vec<&str> = deleted_files
-            .keys()
-            .copied()
-            .filter(|path| !removed_paths.contains(path))
-            .collect();
-        if !missing.is_empty() {
-            missing.sort_unstable();
-            return Err(invalid_data!(
-                "Missing required files to delete: {}",
-                missing.join(", ")
-            ));
         }
 
         if !self.added_data_files.is_empty() {
@@ -273,7 +274,10 @@ impl TransactionAction for OverwriteAction {
         .await
     }
 
-    async fn cleanup(self, _state: OverwriteState, _table: &Table, _status: CommitStatus) {}
+    async fn cleanup(self, _state: OverwriteState, _table: &Table, _status: CommitStatus) {
+        // TODO(#3417): remove this attempt's manifests once terminal cleanup is
+        // wired up.
+    }
 }
 
 /// Kept across retries, so no attempt overwrites a file an earlier attempt wrote.
@@ -334,6 +338,7 @@ mod tests {
     };
     use crate::table::Table;
     use crate::test_utils::commit_with_fresh_state;
+    use crate::transaction::snapshot::manifest_path;
     use crate::transaction::tests::{make_v2_minimal_table, make_v3_minimal_table_in_catalog};
     use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction, TransactionAction};
     use crate::{Catalog, ErrorKind, TableCommit, TableCreation, TableUpdate};
@@ -703,6 +708,7 @@ mod tests {
         let tx = Transaction::new(&table);
         let action = tx
             .overwrite()
+            .set_commit_uuid(Uuid::nil())
             .add_data_files(vec![test_data_file("test/b.parquet", spec_id)])
             .delete_data_files(vec![
                 file_a.clone(),
@@ -715,6 +721,8 @@ mod tests {
                 .contains("Missing required files to delete: test/never-committed.parquet"),
             "{err}"
         );
+        let first_manifest = manifest_path(&table, Uuid::nil(), 0).unwrap();
+        assert!(!table.file_io().exists(&first_manifest).await.unwrap());
     }
 
     #[tokio::test]
