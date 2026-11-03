@@ -24,13 +24,16 @@
 //! The resulting snapshot uses [`Operation::Replace`] to indicate that files
 //! were reorganised without changing the data.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 
 use crate::error::{Result, invalid_data};
-use crate::spec::{DataFile, ManifestContentType, Operation};
+use crate::spec::{DataContentType, DataFile, ManifestContentType, Operation};
 use crate::table::Table;
 use crate::transaction::action::CommitStatus;
-use crate::transaction::merging::MergingSnapshotProducer;
+use crate::transaction::snapshot::merging::{MergingIntent, MergingSnapshotProducer};
+use crate::transaction::snapshot::validate_files_not_live;
 use crate::transaction::{ActionCommit, TransactionAction};
 
 /// A transaction action that rewrites (replaces) data files.
@@ -65,14 +68,11 @@ use crate::transaction::{ActionCommit, TransactionAction};
 /// Replan the rewrite against the current table and run it again.
 ///
 /// Deletes that were already committed when the rewrite was planned are not
-/// covered by this check. Either apply them while rewriting, or keep them
-/// applicable to the new file with
-/// [`data_sequence_number`](RewriteFilesAction::data_sequence_number).
+/// covered by this check, so apply them while rewriting.
 #[derive(Clone)]
 pub struct RewriteFilesAction {
     added_data_files: Vec<DataFile>,
     deleted_data_files: Vec<DataFile>,
-    data_sequence_number: Option<i64>,
     /// The snapshot the rewrite was planned against, if the table had one.
     /// Deletes newer than it fail the commit.
     starting_snapshot_id: Option<i64>,
@@ -83,7 +83,6 @@ impl RewriteFilesAction {
         Self {
             added_data_files: Vec::new(),
             deleted_data_files: Vec::new(),
-            data_sequence_number: None,
             starting_snapshot_id,
         }
     }
@@ -105,22 +104,21 @@ impl RewriteFilesAction {
         self
     }
 
-    /// Set the data sequence number recorded for every added file.
-    ///
-    /// Without this the added files inherit the sequence number of the new
-    /// snapshot. A compaction that must not shadow concurrently written
-    /// deletes sets the sequence number of the files it replaces instead.
-    /// V1 manifest entries carry no sequence number, so this has no effect on
-    /// a V1 table.
-    pub fn data_sequence_number(mut self, sequence_number: i64) -> Self {
-        self.data_sequence_number = Some(sequence_number);
-        self
-    }
-
     fn validate(&self) -> Result<()> {
         if self.deleted_data_files.is_empty() {
             return Err(invalid_data!(
                 "Rewrite files requires at least one file to delete"
+            ));
+        }
+        if let Some(file) = self
+            .added_data_files
+            .iter()
+            .find(|f| f.content_type() != DataContentType::Data)
+        {
+            return Err(invalid_data!(
+                "Only data content type is allowed for rewrite files, got {:?} for {}",
+                file.content_type(),
+                file.file_path()
             ));
         }
         Ok(())
@@ -143,14 +141,14 @@ impl RewriteFilesAction {
         // snapshot it has now, deletes included, landed after that.
         let Some(starting_snapshot_id) = self.starting_snapshot_id else {
             return Err(invalid_data!(
-                "Cannot rewrite files: the rewrite was planned against a table with no snapshot, and the table has been committed to since."
+                "Cannot rewrite files: the rewrite was planned against a table with no snapshot, and the table has been committed to since"
             ));
         };
         let Some(starting_snapshot) = table.metadata().snapshot_by_id(starting_snapshot_id) else {
             // Without the starting snapshot there is no sequence number to
             // compare against, so no delete can be ruled out.
             return Err(invalid_data!(
-                "Cannot rewrite files: the starting snapshot {starting_snapshot_id} is no longer in the table, so deletes added since it cannot be ruled out."
+                "Cannot rewrite files: the starting snapshot {starting_snapshot_id} is no longer in the table, so deletes added since it cannot be ruled out"
             ));
         };
         let starting_sequence_number = starting_snapshot.sequence_number();
@@ -163,7 +161,7 @@ impl RewriteFilesAction {
 
         match conflict {
             Some(entry) => Err(invalid_data!(
-                "Cannot rewrite files: delete manifest {} was added after the starting snapshot {starting_snapshot_id}.",
+                "Cannot rewrite files: delete manifest {} was added after the starting snapshot {starting_snapshot_id}",
                 entry.manifest_path,
             )),
             None => Ok(()),
@@ -176,12 +174,16 @@ impl TransactionAction for RewriteFilesAction {
     type State = MergingSnapshotProducer;
 
     fn new_state(&self) -> MergingSnapshotProducer {
-        MergingSnapshotProducer::new(
-            Operation::Replace,
-            self.added_data_files.clone(),
-            &self.deleted_data_files,
-            self.data_sequence_number,
-        )
+        MergingSnapshotProducer::new(MergingIntent {
+            commit_uuid: None,
+            operation: Operation::Replace,
+            snapshot_properties: HashMap::new(),
+            added_data_files: self.added_data_files.clone(),
+            added_delete_files: Vec::new(),
+            removed_data_files: self.deleted_data_files.clone(),
+            removed_delete_files: Vec::new(),
+            truncate_full_table: false,
+        })
     }
 
     async fn commit(
@@ -191,17 +193,19 @@ impl TransactionAction for RewriteFilesAction {
     ) -> Result<ActionCommit> {
         self.validate()?;
         self.validate_no_new_deletes(table).await?;
-        state.commit_snapshot(table).await
+        validate_files_not_live(table, &self.added_data_files).await?;
+        state.apply(table).await
     }
 
     async fn cleanup(self, _state: MergingSnapshotProducer, _table: &Table, _status: CommitStatus) {
+        // TODO(#3417): remove the producer's uncommitted artifacts once terminal
+        // cleanup is wired up.
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     use uuid::Uuid;
 
@@ -336,7 +340,7 @@ mod tests {
         let err = result.unwrap_err();
         assert!(
             err.message()
-                .contains("Failed to find the following files to delete"),
+                .contains("Cannot remove files that are not live in the table"),
             "unexpected error: {}",
             err.message()
         );
@@ -443,71 +447,6 @@ mod tests {
         );
     }
 
-    /// An explicit data sequence number is recorded on the added file instead
-    /// of the one it would inherit from the rewrite snapshot.
-    #[tokio::test]
-    async fn test_rewrite_files_applies_data_sequence_number() {
-        let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
-
-        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
-        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
-        let append_sequence_number = table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .sequence_number();
-
-        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
-        let tx = Transaction::new(&table);
-        let action = tx
-            .rewrite_files()
-            .delete_file(f1)
-            .add_file(merged)
-            .data_sequence_number(append_sequence_number);
-        let tx = action.apply(tx).unwrap();
-        let table = tx.commit(&catalog).await.unwrap();
-
-        let snapshot = table.metadata().current_snapshot().unwrap();
-        assert_ne!(snapshot.sequence_number(), append_sequence_number);
-
-        let merged_entry = find_entry(&table, snapshot, "test/merged.parquet")
-            .await
-            .expect("added file should be in a manifest");
-        assert_eq!(merged_entry.sequence_number(), Some(append_sequence_number));
-    }
-
-    /// A data sequence number above the one the new snapshot will carry is
-    /// rejected.
-    #[tokio::test]
-    async fn test_rewrite_files_rejects_data_sequence_number_above_the_snapshot() {
-        let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
-
-        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
-        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
-        let snapshot_sequence_number = table.metadata().next_sequence_number();
-
-        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
-        let tx = Transaction::new(&table);
-        let action = tx
-            .rewrite_files()
-            .delete_file(f1)
-            .add_file(merged)
-            .data_sequence_number(snapshot_sequence_number + 1);
-        let tx = action.apply(tx).unwrap();
-        let err = tx.commit(&catalog).await.unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(
-            err.to_string().contains(&format!(
-                "Data sequence number {} is greater than the snapshot's {snapshot_sequence_number}.",
-                snapshot_sequence_number + 1
-            )),
-            "{err}"
-        );
-    }
-
     /// Rewrite on an empty table (no snapshot) should fail because
     /// the delete target doesn't exist.
     #[tokio::test]
@@ -527,156 +466,8 @@ mod tests {
             result
                 .unwrap_err()
                 .message()
-                .contains("Failed to find the following files to delete"),
+                .contains("Cannot remove files that are not live in the table"),
         );
-    }
-
-    /// Rewrite where all files in a manifest are deleted should omit
-    /// the manifest entirely (not leave an empty one).
-    #[tokio::test]
-    async fn test_rewrite_files_removes_empty_manifest() {
-        let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
-
-        // Append 1 file → 1 manifest.
-        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
-        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
-
-        // Rewrite: delete f1, add merged. f1's manifest keeps no live entry,
-        // but it still has to record the removal for this snapshot.
-        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
-        let tx = Transaction::new(&table);
-        let action = tx.rewrite_files().delete_file(f1.clone()).add_file(merged);
-        let tx = action.apply(tx).unwrap();
-        let table = tx.commit(&catalog).await.unwrap();
-
-        let snapshot = table.metadata().current_snapshot().unwrap();
-        let emptied = find_entry(&table, snapshot, "test/1.parquet")
-            .await
-            .expect("the removal has to be recorded somewhere");
-        assert_eq!(emptied.status(), ManifestStatus::Deleted);
-        assert_eq!(emptied.snapshot_id(), Some(snapshot.snapshot_id()));
-        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
-        assert_eq!(manifest_list.entries().len(), 2);
-        assert!(
-            manifest_list
-                .entries()
-                .iter()
-                .any(|m| !m.has_added_files() && !m.has_existing_files()),
-            "the emptied manifest holds only the deleted entry"
-        );
-
-        // A later rewrite drops it: it has nothing live, and no removal of its
-        // own left to record. An append would carry it along, as in Java,
-        // where only a merging commit rebuilds the manifest list.
-        let merged = find_entry(&table, snapshot, "test/merged.parquet")
-            .await
-            .unwrap()
-            .data_file()
-            .clone();
-        let merged_again = make_data_file(&table, "test/merged-2.parquet", 10, 100);
-        let tx = Transaction::new(&table);
-        let action = tx
-            .rewrite_files()
-            .delete_file(merged)
-            .add_file(merged_again);
-        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
-
-        let snapshot = table.metadata().current_snapshot().unwrap();
-        assert!(
-            find_entry(&table, snapshot, "test/1.parquet")
-                .await
-                .is_none(),
-            "an all-deleted manifest should not survive a later rewrite"
-        );
-    }
-
-    /// A manifest left with only deleted entries records nothing live, whether
-    /// the current snapshot or an older one left it that way.
-    #[tokio::test]
-    async fn test_rewrite_files_drops_all_deleted_manifests() {
-        let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
-
-        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
-        let f2 = make_data_file(&table, "test/2.parquet", 10, 100);
-        let table = append_files(&catalog, &table, vec![f1.clone()]).await;
-        let table = append_files(&catalog, &table, vec![f2]).await;
-        let current_snapshot_id = table.metadata().current_snapshot().unwrap().snapshot_id();
-        let earlier_snapshot_id = table
-            .metadata()
-            .current_snapshot()
-            .unwrap()
-            .parent_snapshot_id()
-            .unwrap();
-        let older = add_delete_only_manifest(&table, earlier_snapshot_id).await;
-        let current = add_delete_only_manifest(&table, current_snapshot_id).await;
-
-        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
-        let tx = Transaction::new(&table);
-        let action = tx.rewrite_files().delete_file(f1).add_file(merged);
-        let tx = action.apply(tx).unwrap();
-        let table = tx.commit(&catalog).await.unwrap();
-
-        let snapshot = table.metadata().current_snapshot().unwrap();
-        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
-        for path in [older, current] {
-            assert!(
-                !manifest_list
-                    .entries()
-                    .iter()
-                    .any(|m| m.manifest_path == path),
-                "{path} holds no live entry and should have been dropped"
-            );
-        }
-    }
-
-    /// Add a delete-only manifest, attributed to `added_snapshot_id`, to the
-    /// manifest list of the table's current snapshot, and return its path.
-    async fn add_delete_only_manifest(table: &Table, added_snapshot_id: i64) -> String {
-        let added_sequence_number = table
-            .metadata()
-            .snapshot_by_id(added_snapshot_id)
-            .unwrap()
-            .sequence_number();
-        let output = table
-            .file_io()
-            .new_output(format!(
-                "{}/delete-only-{}.avro",
-                table.metadata().metadata_location().unwrap(),
-                Uuid::new_v4()
-            ))
-            .unwrap();
-        let mut writer = ManifestWriterBuilder::new(
-            output,
-            Some(added_snapshot_id),
-            table.metadata().current_schema().clone(),
-            table.metadata().default_partition_spec().as_ref().clone(),
-        )
-        .build_v3_data();
-        writer
-            .add_delete_file(
-                make_data_file(
-                    table,
-                    &format!("test/removed-{added_snapshot_id}.parquet"),
-                    10,
-                    100,
-                ),
-                added_sequence_number,
-                Some(added_sequence_number),
-            )
-            .unwrap();
-        let mut delete_manifest = writer.write_manifest_file().await.unwrap();
-        // The manifest list writer only assigns sequence numbers to manifests of
-        // the snapshot being written; this one belongs to an earlier snapshot.
-        delete_manifest.sequence_number = added_sequence_number;
-        delete_manifest.min_sequence_number = added_sequence_number;
-        let delete_manifest_path = delete_manifest.manifest_path.clone();
-        assert!(!delete_manifest.has_added_files());
-        assert!(!delete_manifest.has_existing_files());
-
-        append_to_manifest_list(table, delete_manifest).await;
-        delete_manifest_path
     }
 
     /// Add a delete manifest, attributed to the table's current snapshot, to
@@ -846,61 +637,6 @@ mod tests {
         );
     }
 
-    /// A retried commit must not reuse the manifest paths of the attempt
-    /// before it: the commit uuid is fixed, so only the counter separates them.
-    #[tokio::test]
-    async fn test_rewrite_files_writes_distinct_manifests_per_attempt() {
-        let catalog = new_memory_catalog().await;
-        let table = make_v3_minimal_table_in_catalog(&catalog).await;
-
-        let f1 = make_data_file(&table, "test/1.parquet", 10, 100);
-        let f2 = make_data_file(&table, "test/2.parquet", 10, 100);
-        let table = append_files(&catalog, &table, vec![f1.clone(), f2.clone()]).await;
-
-        let merged = make_data_file(&table, "test/merged.parquet", 10, 100);
-        let tx = Transaction::new(&table);
-        let action = tx.rewrite_files().delete_file(f1).add_file(merged);
-        let mut state = action.new_state();
-
-        let first = manifest_paths(&table, &action, &mut state).await;
-        let second = manifest_paths(&table, &action, &mut state).await;
-
-        assert_eq!(first.len(), 2, "{first:?}");
-        assert_eq!(first.len(), second.len());
-        for path in &first {
-            assert!(!second.contains(path), "{path} was written twice");
-        }
-    }
-
-    /// Commit `action` against `table` and return the paths of the manifests
-    /// the resulting snapshot points at.
-    async fn manifest_paths(
-        table: &Table,
-        action: &RewriteFilesAction,
-        state: &mut MergingSnapshotProducer,
-    ) -> Vec<String> {
-        let mut commit = action.commit(state, table).await.unwrap();
-        let snapshot = commit
-            .take_updates()
-            .into_iter()
-            .find_map(|update| match update {
-                TableUpdate::AddSnapshot { snapshot } => Some(snapshot),
-                _ => None,
-            })
-            .expect("commit should add a snapshot");
-
-        let manifest_list = table
-            .manifest_list_reader(&Arc::new(snapshot))
-            .load()
-            .await
-            .unwrap();
-        manifest_list
-            .entries()
-            .iter()
-            .map(|entry| entry.manifest_path.clone())
-            .collect()
-    }
-
     /// An added file whose partition value does not fit the default spec is
     /// rejected before anything is written.
     #[tokio::test]
@@ -927,7 +663,7 @@ mod tests {
     }
 
     /// A delete file handed to `add_file` is rejected: a rewrite replaces data
-    /// files, and the producer validation names the offending file.
+    /// files, and the action's validation names the offending file.
     #[tokio::test]
     async fn test_rewrite_files_rejects_non_data_content_type() {
         let catalog = new_memory_catalog().await;
@@ -946,7 +682,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(
             err.to_string().contains(
-                "Only data content type is allowed in added data files, but test/1-deletes.parquet is PositionDeletes"
+                "Only data content type is allowed for rewrite files, got PositionDeletes for test/1-deletes.parquet"
             ),
             "{err}"
         );
@@ -1254,79 +990,6 @@ mod tests {
             assert_eq!(totals.get("deleted-data-files").unwrap(), "2");
             assert_eq!(totals.get("total-data-files").unwrap(), "2");
             assert_eq!(totals.get("total-records").unwrap(), "30");
-        }
-    }
-
-    /// A second compaction that removes the last old-spec file drops the spec-0
-    /// manifest, and the totals chained through both rewrites stay exact.
-    #[tokio::test]
-    async fn test_rewrite_files_retires_the_old_spec() {
-        for format_version in [FormatVersion::V2, FormatVersion::V3] {
-            let catalog = new_memory_catalog().await;
-            let (table, _, [old_1, old_2, new_1]) =
-                spec_evolved_table_with_files(&catalog, format_version).await;
-
-            let merged = make_file_in_spec("test/merged-1.parquet", 10, 1, Literal::date(DAY));
-            let tx = Transaction::new(&table);
-            let action = tx.rewrite_files().delete_file(old_1).add_file(merged);
-            let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
-
-            let merged = make_file_in_spec("test/merged-2.parquet", 20, 1, Literal::date(DAY));
-            let tx = Transaction::new(&table);
-            let action = tx
-                .rewrite_files()
-                .delete_file(old_2)
-                .delete_file(new_1)
-                .add_file(merged);
-            let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
-
-            assert_eq!(
-                live_files_by_manifest_spec(&table).await,
-                vec![
-                    ("test/merged-1.parquet".to_string(), 1),
-                    ("test/merged-2.parquet".to_string(), 1),
-                ],
-                "{format_version}"
-            );
-            let snapshot = table.metadata().current_snapshot().unwrap();
-            let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
-            assert!(
-                manifest_list
-                    .entries()
-                    .iter()
-                    .filter(|m| m.partition_spec_id == 0)
-                    .all(|m| !m.has_added_files() && !m.has_existing_files()),
-                "{format_version}: a spec-0 manifest kept a live file"
-            );
-
-            let totals = &snapshot.summary().additional_properties;
-            assert_eq!(totals.get("total-data-files").unwrap(), "2");
-            assert_eq!(totals.get("total-records").unwrap(), "30");
-
-            // The spec-0 manifest only carries the removal made by the snapshot
-            // that emptied it. The next rewrite has no reason to keep it.
-            let merged = make_file_in_spec("test/merged-3.parquet", 10, 1, Literal::date(DAY));
-            let tx = Transaction::new(&table);
-            let action = tx
-                .rewrite_files()
-                .delete_file(make_file_in_spec(
-                    "test/merged-1.parquet",
-                    10,
-                    1,
-                    Literal::date(DAY),
-                ))
-                .add_file(merged);
-            let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
-
-            let snapshot = table.metadata().current_snapshot().unwrap();
-            let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
-            assert!(
-                manifest_list
-                    .entries()
-                    .iter()
-                    .all(|m| m.partition_spec_id == 1),
-                "{format_version}: a spec-0 manifest outlived its last file"
-            );
         }
     }
 

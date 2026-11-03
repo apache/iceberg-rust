@@ -3468,7 +3468,6 @@ pub fn iceberg::transaction::ReplaceSortOrderAction::clone(&self) -> iceberg::tr
 pub struct iceberg::transaction::RewriteFilesAction
 impl iceberg::transaction::RewriteFilesAction
 pub fn iceberg::transaction::RewriteFilesAction::add_file(self, file: iceberg::spec::DataFile) -> Self
-pub fn iceberg::transaction::RewriteFilesAction::data_sequence_number(self, sequence_number: i64) -> Self
 pub fn iceberg::transaction::RewriteFilesAction::delete_file(self, file: iceberg::spec::DataFile) -> Self
 impl core::clone::Clone for iceberg::transaction::RewriteFilesAction
 pub fn iceberg::transaction::RewriteFilesAction::clone(&self) -> iceberg::transaction::RewriteFilesAction

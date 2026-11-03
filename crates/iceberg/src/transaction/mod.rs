@@ -55,7 +55,6 @@ mod action;
 pub use action::*;
 mod append;
 mod expire_snapshots;
-mod merging;
 mod rewrite;
 mod snapshot;
 mod sort_order;

@@ -23,6 +23,12 @@
 //! Iceberg metadata and files, never select operation policy, and never cache
 //! across calls.
 
+// TODO(#1607): remove the allows once `RowDeltaAction` consumes the merging
+// producer.
+#[allow(dead_code)]
+pub(crate) mod manifest_filter;
+#[allow(dead_code)]
+pub(crate) mod merging;
 pub(crate) mod simple;
 
 use std::collections::{HashMap, HashSet};
@@ -33,10 +39,11 @@ use uuid::Uuid;
 
 use crate::error::{Result, invalid_data};
 use crate::spec::{
-    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestFile,
-    ManifestListWriter, ManifestWriter, ManifestWriterBuilder, Operation, PartitionSpecRef,
-    SchemaRef, Snapshot, SnapshotReference, SnapshotRetention, SnapshotSummaryCollector, Struct,
-    StructType, Summary, TableProperties, set_iceberg_version, update_snapshot_summaries,
+    DataFile, DataFileFormat, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestEntry,
+    ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriter, ManifestWriterBuilder,
+    Operation, PartitionSpecRef, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
+    SnapshotSummaryCollector, Struct, StructType, Summary, TableProperties, set_iceberg_version,
+    update_snapshot_summaries,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -173,6 +180,61 @@ pub(crate) async fn current_manifests(table: &Table) -> Result<Vec<ManifestFile>
         .collect())
 }
 
+/// The manifests a producer wrote for one execution's added files.
+///
+/// Reusable while the table's format version is unchanged. Per spec, sequence
+/// number inheritance does not apply to v1 manifests, so one written before a
+/// concurrent upgrade cannot carry the v2 sequence number a retry assigns and
+/// must be rewritten. The schema is not a guard: the manifest's embedded schema
+/// describes the files it was written for, which do not change. Nor is the
+/// default partition spec: the files name their own spec, which stays valid.
+pub(crate) struct AddedManifests {
+    /// One per content type today. Several once added files are grouped by
+    /// partition spec (#3500) or rolled over at a target size (#3499).
+    pub manifests: Vec<ManifestFile>,
+    pub format_version: FormatVersion,
+}
+
+/// Writes one manifest at `path` holding `files` as `Added` entries, all of
+/// which must belong to `partition_spec_id`, and returns its manifest-list entry.
+pub(crate) async fn write_added_manifest(
+    table: &Table,
+    path: String,
+    snapshot_id: i64,
+    content: ManifestContentType,
+    partition_spec_id: i32,
+    files: &[DataFile],
+) -> Result<ManifestFile> {
+    let metadata = table.metadata();
+    let partition_spec = metadata
+        .partition_spec_by_id(partition_spec_id)
+        .ok_or_else(|| invalid_data!("Unknown partition spec id {partition_spec_id}"))?;
+
+    let mut writer = new_manifest_writer(
+        table,
+        path,
+        snapshot_id,
+        content,
+        metadata.current_schema().clone(),
+        partition_spec.clone(),
+    )?;
+    let format_version = metadata.format_version();
+    for file in files {
+        let builder = ManifestEntry::builder()
+            .status(ManifestStatus::Added)
+            .data_file(file.clone());
+        let entry = if format_version == FormatVersion::V1 {
+            builder.snapshot_id(snapshot_id).build()
+        } else {
+            // For format version > 1, the snapshot id is inherited from the
+            // manifest list, so a rebase does not require rewriting the manifest.
+            builder.build()
+        };
+        writer.add_entry(entry)?;
+    }
+    writer.write_manifest_file().await
+}
+
 /// Fails if any of `data_files` is already live in the table's current snapshot.
 ///
 /// Must run against each attempt's base, since a concurrent commit may have
@@ -238,6 +300,7 @@ fn build_summary(
     mut properties: HashMap<String, String>,
     added_files: &[DataFile],
     removed_files: &[DataFile],
+    removed_delete_files: &[DataFile],
     truncate_full_table: bool,
 ) -> Result<Summary> {
     let metadata = table.metadata();
@@ -259,7 +322,7 @@ fn build_summary(
         );
     }
 
-    for data_file in removed_files {
+    for data_file in removed_files.iter().chain(removed_delete_files) {
         let partition_spec = metadata
             .partition_spec_by_id(data_file.partition_spec_id)
             .ok_or_else(|| {
@@ -297,9 +360,12 @@ pub(crate) struct SnapshotCommitInput<'a> {
     pub manifest_list_path: String,
     pub operation: Operation,
     pub properties: HashMap<String, String>,
+    /// Data and delete files added by this commit.
     pub added_files: &'a [DataFile],
     /// Must match the data files marked Deleted by this commit, including their metrics.
     pub removed_files: &'a [DataFile],
+    /// Must match the delete files marked Deleted by this commit, including their metrics.
+    pub removed_delete_files: &'a [DataFile],
     pub manifests: Vec<ManifestFile>,
     /// Whether the summary resets table totals (a full-table overwrite).
     pub truncate_full_table: bool,
@@ -318,19 +384,28 @@ pub(crate) async fn write_snapshot_commit(
         properties,
         added_files,
         removed_files,
+        removed_delete_files,
         manifests,
         truncate_full_table,
     } = input;
 
-    debug_assert_eq!(
+    let deleted_count = |content: ManifestContentType| {
         manifests
             .iter()
-            .filter(|m| m.added_snapshot_id == snapshot_id && m.content == ManifestContentType::Data)
+            .filter(|m| m.added_snapshot_id == snapshot_id && m.content == content)
             .filter_map(|m| m.deleted_files_count)
             .map(u64::from)
-            .sum::<u64>(),
+            .sum::<u64>()
+    };
+    debug_assert_eq!(
+        deleted_count(ManifestContentType::Data),
         removed_files.len() as u64,
         "deleted files must match this commit's manifest entries"
+    );
+    debug_assert_eq!(
+        deleted_count(ManifestContentType::Deletes),
+        removed_delete_files.len() as u64,
+        "deleted delete files must match this commit's manifest entries"
     );
 
     let metadata = table.metadata();
@@ -344,6 +419,7 @@ pub(crate) async fn write_snapshot_commit(
         properties,
         added_files,
         removed_files,
+        removed_delete_files,
         truncate_full_table,
     )
     .map_err(|err| {
@@ -446,7 +522,7 @@ pub(crate) async fn write_snapshot_commit(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -461,7 +537,7 @@ mod tests {
     use crate::transaction::tests::make_v2_minimal_table;
     use crate::{ErrorKind, TableUpdate};
 
-    fn data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
+    pub(super) fn data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
         DataFileBuilder::default()
             .content(DataContentType::Data)
             .file_path(path.to_string())
@@ -480,23 +556,31 @@ mod tests {
 
     /// Commits `data_files` to `table` through a fresh producer, returning the
     /// table with that snapshot as current.
-    async fn append_to(table: &Table, data_files: Vec<DataFile>) -> Table {
+    pub(super) async fn append_to(table: &Table, data_files: Vec<DataFile>) -> Table {
         let mut producer = SimpleSnapshotProducer::new(AppendIntent {
             commit_uuid: None,
             snapshot_properties: HashMap::new(),
             data_files,
         });
-        let snapshot = producer
-            .apply(table)
-            .await
-            .unwrap()
+        let commit = producer.apply(table).await.unwrap();
+        with_snapshot(table, added_snapshot(commit))
+    }
+
+    /// Extracts the snapshot an `ActionCommit` adds.
+    pub(super) fn added_snapshot(mut commit: ActionCommit) -> SnapshotRef {
+        commit
             .take_updates()
             .into_iter()
             .find_map(|u| match u {
                 TableUpdate::AddSnapshot { snapshot } => Some(SnapshotRef::new(snapshot)),
                 _ => None,
             })
-            .expect("append should add a snapshot");
+            .expect("commit should add a snapshot")
+    }
+
+    /// Returns `table` with `snapshot` added and set as current, as a local
+    /// `TableCommit::apply` would.
+    pub(super) fn with_snapshot(table: &Table, snapshot: SnapshotRef) -> Table {
         let metadata = table
             .metadata()
             .clone()
@@ -567,6 +651,7 @@ mod tests {
             HashMap::new(),
             &[],
             &[deleted],
+            &[],
             false,
         )
         .unwrap();
@@ -592,6 +677,7 @@ mod tests {
             properties: HashMap::new(),
             added_files: &[],
             removed_files: &[deleted],
+            removed_delete_files: &[],
             manifests: vec![],
             truncate_full_table: false,
         })
