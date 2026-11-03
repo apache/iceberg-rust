@@ -367,7 +367,7 @@ pub struct FileScanTaskDeleteFile {
     file_path: String,
 
     /// The total size of the delete file in bytes. Tasks planned from manifest entries carry
-    /// the recorded size. An externally constructed task may leave it unset when the size is
+    /// the recorded size. An externally constructed task may pass `None` when the size is
     /// unavailable or the recorded size can't be trusted, such as position delete files
     /// rewritten by `rewrite_table_path` before Iceberg Java 1.12.0
     /// (<https://github.com/apache/iceberg/issues/12554>). The Parquet delete-file loader then
@@ -375,7 +375,7 @@ pub struct FileScanTaskDeleteFile {
     /// do not use it.
     #[serde(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[builder(default, setter(strip_option(fallback = with_file_size_in_bytes_opt)))]
+    #[builder(setter(strip_option(fallback = with_file_size_in_bytes_opt)))]
     file_size_in_bytes: Option<u64>,
 
     /// delete file type

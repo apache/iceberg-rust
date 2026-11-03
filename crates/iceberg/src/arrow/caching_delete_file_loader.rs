@@ -867,6 +867,7 @@ mod tests {
     fn test_delete_file_without_size_round_trips_through_serde() {
         let task = FileScanTaskDeleteFile::builder()
             .with_file_path("pos-del.parquet".to_string())
+            .with_file_size_in_bytes_opt(None)
             .with_file_type(DataContentType::PositionDeletes)
             .with_file_format(DataFileFormat::Parquet)
             .with_partition_spec_id(0)
@@ -1264,6 +1265,7 @@ mod tests {
     fn without_size(delete: &FileScanTaskDeleteFile, path: &str) -> FileScanTaskDeleteFile {
         FileScanTaskDeleteFile::builder()
             .with_file_path(path.to_string())
+            .with_file_size_in_bytes_opt(None)
             .with_file_type(delete.file_type())
             .with_file_format(delete.file_format())
             .with_partition_spec_id(delete.partition_spec_id())
