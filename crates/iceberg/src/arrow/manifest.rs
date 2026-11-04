@@ -473,8 +473,8 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{Int32Type, Int64Type};
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, FixedSizeBinaryArray,
-        Float32Array, Float64Array, Int32Array, Int64Array, LargeBinaryArray, StringArray,
+        Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Decimal128Array,
+        FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
         Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
     };
 
@@ -605,7 +605,7 @@ mod tests {
     fn binary_map(column: &ArrayRef, row: usize) -> Vec<(i32, Vec<u8>)> {
         let entries = column.as_map().value(row);
         let keys = entries.column(0).as_primitive::<Int32Type>();
-        let values = entries.column(1).as_binary::<i64>();
+        let values = entries.column(1).as_binary::<i32>();
         let mut pairs: Vec<_> = keys
             .values()
             .iter()
@@ -870,7 +870,7 @@ mod tests {
         )]);
         assert_eq!(
             column("key_metadata").as_ref(),
-            &LargeBinaryArray::from(vec![Some(&[1u8, 2][..]), None]) as &dyn Array
+            &BinaryArray::from(vec![Some(&[1u8, 2][..]), None]) as &dyn Array
         );
         let split_offsets = column("split_offsets");
         assert_eq!(
@@ -1043,7 +1043,7 @@ mod tests {
                 )
                 .unwrap(),
             ),
-            Arc::new(LargeBinaryArray::from(vec![Some(&[9u8][..]), None])),
+            Arc::new(BinaryArray::from(vec![Some(&[9u8][..]), None])),
             Arc::new(Int32Array::from(vec![Some(3), None])),
             Arc::new(Date32Array::from(vec![Some(19_675), None])),
             Arc::new(StringArray::from(vec![Some("ab"), None])),
