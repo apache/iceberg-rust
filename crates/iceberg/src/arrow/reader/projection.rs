@@ -254,6 +254,15 @@ fn type_contains_variant(field_type: &Type) -> bool {
     }
 }
 
+/// Returns whether any Parquet field carries an embedded field ID.
+pub(super) fn has_field_ids(parquet_schema: &SchemaDescriptor) -> bool {
+    fn has_id(field: &ParquetType) -> bool {
+        field.get_basic_info().has_id()
+            || (!field.is_primitive() && field.get_fields().iter().any(|child| has_id(child)))
+    }
+    has_id(parquet_schema.root_schema())
+}
+
 /// Build the map of parquet field id to Parquet column index in the schema.
 /// Returns None if the Parquet file doesn't have field IDs embedded (e.g., migrated tables).
 pub(super) fn build_field_id_map(
@@ -277,7 +286,7 @@ pub(super) fn build_field_id_map(
         };
     }
 
-    Ok((!column_map.is_empty()).then_some(column_map))
+    Ok(has_field_ids(parquet_schema).then_some(column_map))
 }
 
 /// Finds the Parquet leaf column index carrying `field_id` by its embedded id.
@@ -354,7 +363,10 @@ fn build_field_id_map_from_name_mapping(
             return;
         };
         let child_mapping = |name| find_mapped_field(mapped.fields().iter().map(Arc::as_ref), name);
-        if !list_element && ty.get_basic_info().repetition() == Repetition::REPEATED {
+        if !list_element
+            && ty.get_basic_info().repetition() == Repetition::REPEATED
+            && ty.get_basic_info().converted_type() != ConvertedType::MAP_KEY_VALUE
+        {
             visit(
                 ty,
                 child_mapping(LIST_FIELD_NAME),
@@ -393,7 +405,11 @@ fn build_field_id_map_from_name_mapping(
                 );
             }
             ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
-                let entries = &ty.get_fields()[0];
+                let entries = if ty.get_basic_info().repetition() == Repetition::REPEATED {
+                    ty
+                } else {
+                    &ty.get_fields()[0]
+                };
                 for (child, name) in entries
                     .get_fields()
                     .iter()
@@ -663,6 +679,324 @@ mod tests {
         StructType, Type, VariantType,
     };
     use crate::{ErrorKind, Runtime};
+
+    #[tokio::test]
+    async fn test_partial_field_ids_preserve_embedded_ids() {
+        use arrow_array::Int32Array;
+        use arrow_array::types::Int32Type;
+        use parquet::file::properties::EnabledStatistics;
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "missing", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(42, "salary", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let mapping = Arc::new(NameMapping::new(vec![
+            MappedField::new(Some(1), vec!["unannotated".to_string()], vec![]),
+            MappedField::new(Some(2), vec!["salary".to_string()], vec![]),
+        ]));
+        for annotated_first in [false, true] {
+            let mut fields = vec![
+                Field::new("unannotated", DataType::Int32, true),
+                Field::new("salary", DataType::Int32, true).with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "42".to_string(),
+                )])),
+            ];
+            let mut columns: Vec<ArrayRef> = vec![
+                Arc::new(Int32Array::from(vec![100, 200, 300])),
+                Arc::new(Int32Array::from(vec![10, 20, 30])),
+            ];
+            if annotated_first {
+                fields.reverse();
+                columns.reverse();
+            }
+            let batch = RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), columns).unwrap();
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("mixed.parquet");
+            let props = WriterProperties::builder()
+                .set_max_row_group_row_count(Some(2))
+                .set_data_page_row_count_limit(1)
+                .set_write_batch_size(1)
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .set_bloom_filter_enabled(true)
+                .build();
+            let mut writer =
+                ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), Some(props))
+                    .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            for with_mapping in [false, true] {
+                for mode in 0..7 {
+                    let predicate = match mode {
+                        0 => None,
+                        5 => Some(Reference::new("missing").is_null()),
+                        6 => Some(Reference::new("missing").is_not_null()),
+                        _ => Some(Reference::new("salary").equal_to(Datum::int(20))),
+                    }
+                    .map(|predicate| predicate.bind(schema.clone(), true).unwrap());
+                    let task = FileScanTask::builder()
+                        .with_file_size_in_bytes(std::fs::metadata(&path).unwrap().len())
+                        .with_start(0)
+                        .with_length(0)
+                        .with_data_file_path(path.to_str().unwrap().to_string())
+                        .with_data_file_format(DataFileFormat::Parquet)
+                        .with_schema(schema.clone())
+                        .with_project_field_ids(vec![1, 42])
+                        .with_name_mapping(with_mapping.then(|| mapping.clone()))
+                        .with_predicate(predicate)
+                        .with_case_sensitive(true)
+                        .build()
+                        .unwrap();
+                    let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                        .with_row_group_filtering_enabled(mode == 2)
+                        .with_bloom_filter_enabled(mode == 3)
+                        .with_row_selection_enabled(mode == 4)
+                        .build();
+                    let tasks = Box::pin(futures::stream::iter([Ok(task)])) as FileScanTaskStream;
+                    let batches = reader
+                        .read(tasks)
+                        .unwrap()
+                        .stream()
+                        .try_collect::<Vec<RecordBatch>>()
+                        .await
+                        .unwrap();
+                    let actual: Vec<_> = batches
+                        .iter()
+                        .flat_map(|batch| {
+                            batch
+                                .column(0)
+                                .as_primitive::<Int32Type>()
+                                .iter()
+                                .zip(batch.column(1).as_primitive::<Int32Type>().iter())
+                        })
+                        .collect();
+                    let expected = match mode {
+                        0 | 5 => vec![(None, Some(10)), (None, Some(20)), (None, Some(30))],
+                        6 => vec![],
+                        _ => vec![(None, Some(20))],
+                    };
+                    assert_eq!(
+                        actual, expected,
+                        "annotated_first={annotated_first}, mapping={with_mapping}, mode={mode}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_embedded_group_ids_disable_fallback() {
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parse_message_type(
+            "message schema { optional group data = 42 { optional int32 value; } optional int32 other; }",
+        ).unwrap()));
+        assert_eq!(
+            super::build_field_id_map(&parquet_schema).unwrap(),
+            Some(HashMap::new())
+        );
+    }
+
+    #[test]
+    fn test_name_mapping_legacy_map_encodings() {
+        let entry =
+            |id, name: &str, fields| MappedField::new(Some(id), vec![name.to_string()], fields);
+        let mapping = NameMapping::new(vec![
+            entry(1, "m", vec![
+                entry(2, "key", vec![]),
+                entry(3, "value", vec![]),
+            ]),
+            entry(4, "after", vec![]),
+        ]);
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "m",
+                        Type::Map(crate::spec::MapType::optional(
+                            2,
+                            Type::Primitive(PrimitiveType::String),
+                            3,
+                            Type::Primitive(PrimitiveType::Int),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(4, "after", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema = Arc::new(crate::arrow::schema_to_arrow_schema(&schema).unwrap());
+        let predicate = Reference::new("after")
+            .equal_to(Datum::int(2))
+            .bind(schema.clone(), true)
+            .unwrap();
+        for map in [
+            "repeated group m (MAP_KEY_VALUE) { required binary key (UTF8); optional int32 value; }",
+            "optional group m (MAP_KEY_VALUE) { repeated group pairs { required binary k (UTF8); optional int32 v; } }",
+            "optional group m (MAP) { repeated group pairs (MAP_KEY_VALUE) { required binary k (UTF8); optional int32 v; } }",
+        ] {
+            let parquet_schema = SchemaDescriptor::new(Arc::new(
+                parse_message_type(&format!("message schema {{ {map} optional int32 after; }}",))
+                    .unwrap(),
+            ));
+            let expected = HashMap::from([(2, 0), (3, 1), (4, 2)]);
+            assert_eq!(
+                super::build_field_id_map_from_name_mapping(&parquet_schema, &mapping),
+                expected,
+                "{map}"
+            );
+            assert_eq!(
+                ArrowReader::build_field_id_set_and_map(
+                    &parquet_schema,
+                    Some(&mapping),
+                    &predicate,
+                    false
+                )
+                .unwrap()
+                .1,
+                expected
+            );
+            assert_eq!(
+                ArrowReader::get_arrow_projection_mask(
+                    &[1],
+                    &schema,
+                    &parquet_schema,
+                    &arrow_schema,
+                    Some(&mapping),
+                    false
+                )
+                .unwrap(),
+                ProjectionMask::leaves(&parquet_schema, [0, 1])
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_predicate_after_legacy_map() {
+        use arrow_array::types::Int32Type;
+        use parquet::data_type::{ByteArray, ByteArrayType, Int32Type as ParquetInt32Type};
+        use parquet::file::properties::EnabledStatistics;
+        use parquet::file::writer::SerializedFileWriter;
+
+        let entry =
+            |id, name: &str, fields| MappedField::new(Some(id), vec![name.to_string()], fields);
+        let mapping = Arc::new(NameMapping::new(vec![
+            entry(1, "m", vec![
+                entry(2, "key", vec![]),
+                entry(3, "value", vec![]),
+            ]),
+            entry(4, "after", vec![]),
+        ]));
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(4, "after", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        for map in [
+            "optional group m (MAP) { repeated group pairs { required binary k (UTF8); optional int32 v; } }",
+            "optional group m (MAP_KEY_VALUE) { repeated group pairs { required binary k (UTF8); optional int32 v; } }",
+            "optional group m (MAP) { repeated group pairs (MAP_KEY_VALUE) { required binary k (UTF8); optional int32 v; } }",
+        ] {
+            let parquet_schema = Arc::new(
+                parse_message_type(&format!("message schema {{ {map} optional int32 after; }}",))
+                    .unwrap(),
+            );
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("map.parquet");
+            let props = WriterProperties::builder()
+                .set_data_page_row_count_limit(1)
+                .set_write_batch_size(1)
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .set_bloom_filter_enabled(true)
+                .build();
+            let mut writer = SerializedFileWriter::new(
+                File::create(&path).unwrap(),
+                parquet_schema,
+                Arc::new(props),
+            )
+            .unwrap();
+            let mut group = writer.next_row_group().unwrap();
+            let mut column = group.next_column().unwrap().unwrap();
+            column
+                .typed::<ByteArrayType>()
+                .write_batch(
+                    &[
+                        ByteArray::from("a"),
+                        ByteArray::from("b"),
+                        ByteArray::from("c"),
+                    ],
+                    Some(&[2, 2, 2]),
+                    Some(&[0, 0, 0]),
+                )
+                .unwrap();
+            column.close().unwrap();
+            let mut column = group.next_column().unwrap().unwrap();
+            column
+                .typed::<ParquetInt32Type>()
+                .write_batch(&[10, 20, 30], Some(&[3, 3, 3]), Some(&[0, 0, 0]))
+                .unwrap();
+            column.close().unwrap();
+            let mut column = group.next_column().unwrap().unwrap();
+            column
+                .typed::<ParquetInt32Type>()
+                .write_batch(&[1, 2, 3], Some(&[1, 1, 1]), None)
+                .unwrap();
+            column.close().unwrap();
+            group.close().unwrap();
+            writer.close().unwrap();
+            for mode in 0..5 {
+                let task = FileScanTask::builder()
+                    .with_file_size_in_bytes(std::fs::metadata(&path).unwrap().len())
+                    .with_start(0)
+                    .with_length(0)
+                    .with_data_file_path(path.to_str().unwrap().to_string())
+                    .with_data_file_format(DataFileFormat::Parquet)
+                    .with_schema(schema.clone())
+                    .with_project_field_ids(vec![4])
+                    .with_name_mapping(Some(mapping.clone()))
+                    .with_predicate((mode != 0).then(|| {
+                        Reference::new("after")
+                            .equal_to(Datum::int(2))
+                            .bind(schema.clone(), true)
+                            .unwrap()
+                    }))
+                    .with_case_sensitive(true)
+                    .build()
+                    .unwrap();
+                let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                    .with_row_group_filtering_enabled(mode == 2)
+                    .with_bloom_filter_enabled(mode == 3)
+                    .with_row_selection_enabled(mode == 4)
+                    .build();
+                let tasks = Box::pin(futures::stream::iter([Ok(task)])) as FileScanTaskStream;
+                let batches = reader
+                    .read(tasks)
+                    .unwrap()
+                    .stream()
+                    .try_collect::<Vec<RecordBatch>>()
+                    .await
+                    .unwrap();
+                let actual: Vec<_> = batches
+                    .iter()
+                    .flat_map(|batch| batch.column(0).as_primitive::<Int32Type>().iter())
+                    .collect();
+                let expected = if mode == 0 {
+                    vec![Some(1), Some(2), Some(3)]
+                } else {
+                    vec![Some(2)]
+                };
+                assert_eq!(actual, expected, "{map}, mode={mode}");
+            }
+        }
+    }
 
     #[test]
     fn test_name_mapping_duplicate_alias_preserves_first_match() {
