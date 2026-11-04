@@ -480,11 +480,16 @@ pub(crate) mod _serde {
                 },
                 RawLiteralEnum::String(v) => match ty {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
+                    // apache-avro deserializes an Avro uuid as its string form,
+                    // so uuid values read from manifests land here.
+                    // The hyphenated restriction matches behaviour with Java.
                     Type::Primitive(PrimitiveType::Uuid) => Hyphenated::from_str(&v)
-                        // The hyphenated UUID restriction is to match behaviour with Java.
                         .map(|hyphenated_uuid| Some(Literal::uuid(hyphenated_uuid.into_uuid())))
                         .map_err(|_| {
-                            invalid_err_with_reason("string", "UUID must be a valid UUID string")
+                            invalid_err_with_reason(
+                                "string",
+                                "UUID must be a hyphenated 8-4-4-4-12 string",
+                            )
                         }),
                     _ => Err(invalid_err("string")),
                 },
