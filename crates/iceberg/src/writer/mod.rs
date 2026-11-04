@@ -385,6 +385,7 @@
 //! ```
 
 pub mod base_writer;
+pub(crate) mod delta_writer;
 pub mod file_writer;
 pub mod partitioning;
 
