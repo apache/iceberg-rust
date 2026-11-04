@@ -29,7 +29,7 @@ pub(crate) mod delete_filter;
 
 mod int96;
 mod manifest;
-pub use manifest::*;
+pub use manifest::read_manifest_entries;
 mod reader;
 /// RecordBatch projection utilities
 pub mod record_batch_projector;
