@@ -1,0 +1,44 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Reads the entries of a manifest file into a `RecordBatch` with one row per entry."><title>read_manifest_entries in iceberg::arrow - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../static.files/rustdoc-17e0aaed.css"><meta name="rustdoc-vars" data-root-path="../../" data-static-root-path="../../static.files/" data-current-crate="iceberg" data-themes="" data-resource-suffix="" data-rustdoc-version="1.97.0-nightly (e8e4541ff 2026-04-15)" data-channel="nightly" data-search-js="search-b5634cc7.js" data-stringdex-js="stringdex-2da4960a.js" data-settings-js="settings-170eb4bf.js" ><script src="../../static.files/storage-41dd4d93.js"></script><script defer src="sidebar-items.js"></script><script defer src="../../static.files/main-5013f961.js"></script><noscript><link rel="stylesheet" href="../../static.files/noscript-f7c3ffd8.css"></noscript><link rel="alternate icon" type="image/png" href="../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../static.files/favicon-044be391.svg"></head><body class="rustdoc fn"><a class="skip-main-content" href="#main-content">Skip to main content</a><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">read_manifest_entries</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../iceberg/index.html">iceberg</a><span class="version">0.10.1</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">read_<wbr>manifest_<wbr>entries</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#example" title="Example">Example</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="index.html">In iceberg::<wbr>arrow</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content" tabindex="-1"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../index.html">iceberg</a>::<wbr><a href="index.html">arrow</a></div><h1>Function <span class="fn">read_<wbr>manifest_<wbr>entries</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../src/iceberg/arrow/manifest.rs.html#107-163">Source</a> </span></div><pre class="rust item-decl"><code>pub fn read_manifest_entries(
+    bytes: &amp;[<a class="primitive" href="https://doc.rust-lang.org/nightly/std/primitive.u8.html">u8</a>],
+    manifest_file: &amp;<a class="struct" href="../spec/struct.ManifestFile.html" title="struct iceberg::spec::ManifestFile">ManifestFile</a>,
+) -&gt; <a class="type" href="../type.Result.html" title="type iceberg::Result">Result</a>&lt;RecordBatch&gt;</code></pre><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Reads the entries of a manifest file into a [<code>RecordBatch</code>] with one row
+per entry.</p>
+<p><code>bytes</code> is the manifest file and <code>manifest_file</code> is its entry in the
+manifest list. The schema is the spec’s <code>manifest_entry</code> struct for the
+latest format version, with field IDs in the Arrow field metadata, so
+manifests of every format version read into the same schema apart from
+<code>data_file.partition</code>, which follows the manifest’s partition spec.</p>
+<p>Fields are matched to the manifest’s Avro schema by field ID. A v1
+manifest reads with the spec’s v2+ defaults, and null snapshot IDs,
+sequence numbers, and first row IDs are inherited from <code>manifest_file</code>.
+Lower and upper bounds keep the binary single-value serialization they were
+written with.</p>
+<h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>iceberg::arrow::read_manifest_entries;
+<span class="kw">use </span>iceberg::spec::{ManifestContentType, ManifestFile};
+
+<span class="kw">let </span>bytes = std::fs::read(<span class="macro">concat!</span>(
+    <span class="macro">env!</span>(<span class="string">"CARGO_MANIFEST_DIR"</span>),
+    <span class="string">"/testdata/manifests/pyiceberg-v2-data.avro"
+</span>))<span class="question-mark">?</span>;
+<span class="kw">let </span>manifest_file = ManifestFile {
+    manifest_path: <span class="string">"s3://bucket/metadata/manifest.avro"</span>.to_string(),
+    manifest_length: bytes.len() <span class="kw">as </span>i64,
+    partition_spec_id: <span class="number">0</span>,
+    content: ManifestContentType::Data,
+    sequence_number: <span class="number">1</span>,
+    min_sequence_number: <span class="number">1</span>,
+    added_snapshot_id: <span class="number">1</span>,
+    added_files_count: <span class="prelude-val">None</span>,
+    existing_files_count: <span class="prelude-val">None</span>,
+    deleted_files_count: <span class="prelude-val">None</span>,
+    added_rows_count: <span class="prelude-val">None</span>,
+    existing_rows_count: <span class="prelude-val">None</span>,
+    deleted_rows_count: <span class="prelude-val">None</span>,
+    partitions: <span class="prelude-val">None</span>,
+    key_metadata: <span class="prelude-val">None</span>,
+    first_row_id: <span class="prelude-val">None</span>,
+};
+
+<span class="kw">let </span>batch = read_manifest_entries(<span class="kw-2">&amp;</span>bytes, <span class="kw-2">&amp;</span>manifest_file)<span class="question-mark">?</span>;
+<span class="macro">assert_eq!</span>(batch.num_rows(), <span class="number">2</span>);</code></pre></div></div></details></section></div></main></body></html>
