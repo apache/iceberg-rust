@@ -163,7 +163,7 @@ impl PartitionValueCalculator {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{Int32Array, RecordBatch, StringArray};
+    use arrow_array::{BinaryArray, Int32Array, LargeBinaryArray, RecordBatch, StringArray};
     use arrow_schema::{Field, Schema as ArrowSchema};
 
     use super::*;
@@ -218,6 +218,68 @@ mod tests {
         assert_eq!(id_partition.value(0), 10);
         assert_eq!(id_partition.value(1), 20);
         assert_eq!(id_partition.value(2), 30);
+    }
+
+    #[test]
+    fn test_partition_calculator_binary_partition_accepts_large_binary_input() {
+        let table_schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "key", Type::Primitive(PrimitiveType::Binary)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let partition_spec = PartitionSpecBuilder::new(Arc::new(table_schema.clone()))
+            .add_partition_field("key", "key_identity", Transform::Identity)
+            .unwrap()
+            .add_partition_field("key", "key_trunc", Transform::Truncate(2))
+            .unwrap()
+            .build()
+            .unwrap();
+        let calculator = PartitionValueCalculator::try_new(&partition_spec, &table_schema).unwrap();
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("key", DataType::LargeBinary, true),
+        ]));
+        let batch = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(LargeBinaryArray::from_opt_vec(vec![
+                Some(b"abc"),
+                None,
+                Some(b"z"),
+            ])),
+        ])
+        .unwrap();
+
+        let result = calculator.calculate(&batch).unwrap();
+
+        let DataType::Struct(expected_fields) = calculator.partition_arrow_type() else {
+            unreachable!()
+        };
+        let expected = StructArray::try_new(
+            expected_fields.clone(),
+            vec![
+                Arc::new(BinaryArray::from_opt_vec(vec![
+                    Some(b"abc"),
+                    None,
+                    Some(b"z"),
+                ])),
+                Arc::new(BinaryArray::from_opt_vec(vec![
+                    Some(b"ab"),
+                    None,
+                    Some(b"z"),
+                ])),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_any().downcast_ref::<StructArray>().unwrap(),
+            &expected
+        );
     }
 
     #[test]

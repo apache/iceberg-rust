@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, RecordBatch, StructArray, make_array};
 use arrow_buffer::NullBuffer;
+use arrow_cast::cast;
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
 
 use crate::arrow::schema::{schema_to_arrow_schema, try_get_field_id_from_metadata};
@@ -160,8 +161,21 @@ impl RecordBatchProjector {
     /// Do projection with columns
     pub fn project_column(&self, batch: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
         let mut columns = Vec::with_capacity(self.field_indices.len());
-        for index_vec in &self.field_indices {
-            columns.push(Self::get_column_by_field_index(batch, index_vec)?);
+        for (index_vec, field) in self
+            .field_indices
+            .iter()
+            .zip(self.projected_schema.fields())
+        {
+            let column = Self::get_column_by_field_index(batch, index_vec)?;
+            let column = match (column.data_type(), field.data_type()) {
+                (DataType::LargeBinary, DataType::Binary) => cast(&column, &DataType::Binary)
+                    .map_err(|err| {
+                        invalid_data!("Failed to cast column {} to Binary", field.name())
+                            .with_source(err)
+                    })?,
+                _ => column,
+            };
+            columns.push(column);
         }
         Ok(columns)
     }

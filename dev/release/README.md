@@ -74,7 +74,7 @@ Pass `--check_publish 0` to skip it when offline or when iterating on the script
 dev/release/verify_rc.sh 0.9.1 2
 ```
 
-By default this downloads from `https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-rust-0.9.1-rc2/`, verifies checksum and signature with the local GPG keyring, checks source headers, and runs Rust and Python build/tests.
+By default this downloads from `https://dist.apache.org/repos/dist/dev/iceberg/apache-iceberg-rust-0.9.1-rc2/`, verifies checksum and signature with the local GPG keyring, checks source headers and that every publishable crate packages the root `LICENSE` and `NOTICE`, and runs Rust and Python build/tests.
 
 To verify artifacts already created under local `dist/`:
 
@@ -88,6 +88,7 @@ Common options:
 dev/release/verify_rc.sh 0.9.1 2 --verify_signature 0
 dev/release/verify_rc.sh 0.9.1 2 --import_gpg_keys 1
 dev/release/verify_rc.sh 0.9.1 2 --build 0 --python 0 --check_headers 0
+dev/release/verify_rc.sh 0.9.1 2 --check_crate_licenses 0
 ```
 
 Defaults:
@@ -97,6 +98,7 @@ Defaults:
 - `--verify_signature 1`: verify the `.asc` signature with the local GPG keyring.
 - `--import_gpg_keys 0`: download and import Apache Iceberg release keys before signature verification.
 - `--check_headers 1`: check Apache license headers against the extracted source archive.
+- `--check_crate_licenses 1`: run `dev/release/licenses.py crates check` against the extracted source archive, so every publishable crate must package the root `LICENSE` and `NOTICE`. Requires `cargo` and `python3`.
 - `--build 1`: build and test the Rust source distribution.
 - `--python 1`: build and test pyiceberg-core.
 - `--tmp_dir <auto>`: verification sandbox; auto-created and deleted on success when omitted.
@@ -137,7 +139,7 @@ git push origin "v0.9.1"
 Verify every dependency's license is one the project allows:
 
 ```shell
-python3 dev/release/licenses.py dependencies check
+make check-dependency-licenses
 ```
 
 CI also runs this check on every pull request.
