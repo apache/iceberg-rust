@@ -42,8 +42,6 @@ mod predicate_visitor;
 mod projection;
 mod row_filter;
 mod row_lineage;
-#[cfg(test)]
-mod tests;
 pub use file_reader::ArrowFileReader;
 pub use options::{ArrowReaderOptions, ParquetReadOptions};
 use predicate_visitor::{CollectFieldIdVisitor, PredicateConverter};
@@ -77,7 +75,7 @@ impl ArrowReaderBuilder {
 
     /// Replaces Parquet I/O settings while preserving other reader settings.
     pub fn with_parquet_options(mut self, options: ParquetReadOptions) -> Self {
-        self.options.set_parquet_options(options);
+        self.options = self.options.with_parquet_options(options);
         self
     }
 
@@ -89,7 +87,7 @@ impl ArrowReaderBuilder {
             .unwrap_or_else(|| available_parallelism().get())
             .max(1);
         ArrowReader {
-            batch_size: self.options.batch_size(),
+            options: self.options,
             file_io: self.file_io.clone(),
             delete_file_loader: CachingDeleteFileLoader::new(
                 self.file_io.clone(),
@@ -97,10 +95,6 @@ impl ArrowReaderBuilder {
                 self.runtime.clone(),
             ),
             concurrency_limit_data_files,
-            row_group_filtering_enabled: self.options.row_group_filtering_enabled(),
-            row_selection_enabled: self.options.row_selection_enabled(),
-            bloom_filter_enabled: self.options.bloom_filter_enabled(),
-            parquet_read_options: self.options.parquet_options().clone(),
             runtime: self.runtime.clone(),
         }
     }
@@ -109,16 +103,94 @@ impl ArrowReaderBuilder {
 /// Reads data from Parquet files
 #[derive(Clone)]
 pub struct ArrowReader {
-    batch_size: Option<usize>,
+    options: ArrowReaderOptions,
     file_io: FileIO,
     delete_file_loader: CachingDeleteFileLoader,
 
-    /// the maximum number of data files that can be fetched at the same time
+    /// Effective concurrency after resolving the host default and normalizing zero.
     concurrency_limit_data_files: usize,
 
-    row_group_filtering_enabled: bool,
-    row_selection_enabled: bool,
-    bloom_filter_enabled: bool,
-    parquet_read_options: ParquetReadOptions,
     runtime: Runtime,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use futures::{TryStreamExt, stream};
+
+    use super::{ArrowReaderBuilder, ArrowReaderOptions, ParquetReadOptions};
+    use crate::io::FileIO;
+    use crate::test_utils::test_runtime;
+    use crate::util::available_parallelism;
+
+    #[tokio::test]
+    async fn deserialized_zero_concurrency_completes_reads() {
+        let options: ArrowReaderOptions =
+            serde_json::from_str(r#"{"data_file_concurrency_limit":0}"#).unwrap();
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_memory(), test_runtime())
+            .with_options(options)
+            .build();
+        assert_eq!(reader.concurrency_limit_data_files, 1);
+        let batches = tokio::time::timeout(
+            Duration::from_secs(1),
+            reader
+                .read(Box::pin(stream::empty()))
+                .unwrap()
+                .stream()
+                .try_collect::<Vec<_>>(),
+        )
+        .await
+        .expect("zero concurrency must not stall the task stream")
+        .unwrap();
+        assert!(batches.is_empty());
+    }
+
+    #[test]
+    fn default_options_restore_local_reader_defaults() {
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_memory(), test_runtime())
+            .with_options(
+                ArrowReaderOptions::builder()
+                    .with_batch_size(1024)
+                    .with_data_file_concurrency_limit(3)
+                    .with_row_group_filtering_enabled(false)
+                    .with_row_selection_enabled(true)
+                    .with_bloom_filter_enabled(true)
+                    .with_parquet_options(
+                        ParquetReadOptions::builder()
+                            .with_range_fetch_concurrency(99)
+                            .build(),
+                    )
+                    .build(),
+            )
+            .with_options(ArrowReaderOptions::default())
+            .build();
+        assert_eq!(reader.options, ArrowReaderOptions::default());
+        assert_eq!(
+            reader.concurrency_limit_data_files,
+            available_parallelism().get()
+        );
+    }
+
+    #[test]
+    fn explicit_options_configure_reader_settings() {
+        let parquet = ParquetReadOptions::builder()
+            .with_metadata_size_hint(4096)
+            .with_range_coalesce_bytes(8192)
+            .with_range_fetch_concurrency(2)
+            .build();
+        let options = ArrowReaderOptions::builder()
+            .with_batch_size(17)
+            .with_data_file_concurrency_limit(3)
+            .with_row_group_filtering_enabled(false)
+            .with_row_selection_enabled(true)
+            .with_bloom_filter_enabled(true)
+            .with_parquet_options(parquet)
+            .build();
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_memory(), test_runtime())
+            .with_options(options.clone())
+            .build();
+        assert_eq!(reader.options, options);
+        assert_eq!(reader.concurrency_limit_data_files, 3);
+    }
 }

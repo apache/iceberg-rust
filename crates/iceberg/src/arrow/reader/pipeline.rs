@@ -69,15 +69,15 @@ impl ArrowReader {
         let scan_metrics = ScanMetrics::new();
 
         let task_reader = FileScanTaskReader {
-            batch_size: self.batch_size,
+            batch_size: self.options.batch_size(),
             file_io: self.file_io,
             delete_file_loader: self
                 .delete_file_loader
                 .with_scan_metrics(scan_metrics.clone()),
-            row_group_filtering_enabled: self.row_group_filtering_enabled,
-            row_selection_enabled: self.row_selection_enabled,
-            bloom_filter_enabled: self.bloom_filter_enabled,
-            parquet_read_options: self.parquet_read_options,
+            row_group_filtering_enabled: self.options.row_group_filtering_enabled(),
+            row_selection_enabled: self.options.row_selection_enabled(),
+            bloom_filter_enabled: self.options.bloom_filter_enabled(),
+            parquet_read_options: self.options.parquet_options().clone(),
             scan_metrics: scan_metrics.clone(),
             runtime: self.runtime,
         };
@@ -167,7 +167,10 @@ impl FileScanTaskReader {
         let file_size_in_bytes = task.file_size_in_bytes();
         let bytes_read = Arc::clone(self.scan_metrics.bytes_read_counter());
         let key_metadata = task.key_metadata().map(|km| km.to_vec());
-        let parquet_read_options = self.parquet_read_options.clone();
+        let parquet_read_options = self
+            .parquet_read_options
+            .clone()
+            .with_preload_page_index(should_load_page_index);
         let opening = self
             .runtime
             .io()
@@ -177,7 +180,6 @@ impl FileScanTaskReader {
                     &file_io,
                     file_size_in_bytes,
                     parquet_read_options,
-                    should_load_page_index,
                     &bytes_read,
                     key_metadata.as_deref(),
                 )
@@ -817,7 +819,6 @@ impl ArrowReader {
         file_io: &FileIO,
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
-        preload_page_index: bool,
         bytes_read: &Arc<AtomicU64>,
         key_metadata: Option<&[u8]>,
     ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
@@ -828,7 +829,6 @@ impl ArrowReader {
             Box::new(counting_reader),
             file_size_in_bytes,
             parquet_read_options,
-            preload_page_index,
             key_metadata,
         )
         .await
@@ -838,7 +838,6 @@ impl ArrowReader {
         parquet_reader: Box<dyn FileRead>,
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
-        preload_page_index: bool,
         key_metadata: Option<&[u8]>,
     ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let mut reader = ArrowFileReader::new(
@@ -847,8 +846,7 @@ impl ArrowReader {
             },
             parquet_reader,
         )
-        .with_parquet_read_options(parquet_read_options)
-        .with_preload_page_index(preload_page_index);
+        .with_parquet_read_options(parquet_read_options);
 
         let arrow_reader_options = Self::build_arrow_reader_options(key_metadata)?;
 

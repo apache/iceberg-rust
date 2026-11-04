@@ -73,7 +73,7 @@ impl Default for ArrowReaderOptions {
 
 impl ArrowReaderOptions {
     /// Supplies the scan's fallback limit without replacing an explicit reader limit.
-    pub(crate) fn with_default_data_file_concurrency_limit(mut self, limit: usize) -> Self {
+    pub(crate) fn with_data_file_concurrency_limit_if_unset(mut self, limit: usize) -> Self {
         self.data_file_concurrency_limit.get_or_insert(limit);
         self
     }
@@ -121,8 +121,9 @@ impl ArrowReaderOptions {
         &self.parquet_options
     }
 
-    pub(super) fn set_parquet_options(&mut self, value: ParquetReadOptions) {
+    pub(super) fn with_parquet_options(mut self, value: ParquetReadOptions) -> Self {
         self.parquet_options = value;
+        self
     }
 }
 
@@ -150,6 +151,16 @@ pub struct ParquetReadOptions {
     /// Defaults to 10, matching object_store's `OBJECT_STORE_COALESCE_PARALLEL`.
     #[builder(default = DEFAULT_RANGE_FETCH_CONCURRENCY)]
     range_fetch_concurrency: usize,
+    // Index preloading is derived during execution, not serialized reader configuration.
+    #[serde(skip)]
+    #[builder(default = true, setter(skip))]
+    preload_column_index: bool,
+    #[serde(skip)]
+    #[builder(default = true, setter(skip))]
+    preload_offset_index: bool,
+    #[serde(skip)]
+    #[builder(default = false, setter(skip))]
+    preload_page_index: bool,
 }
 
 impl Default for ParquetReadOptions {
@@ -159,6 +170,23 @@ impl Default for ParquetReadOptions {
 }
 
 impl ParquetReadOptions {
+    pub(super) fn with_preload_page_index(mut self, enabled: bool) -> Self {
+        self.preload_page_index = enabled;
+        self
+    }
+
+    pub(super) fn preload_column_index(&self) -> bool {
+        self.preload_column_index
+    }
+
+    pub(super) fn preload_offset_index(&self) -> bool {
+        self.preload_offset_index
+    }
+
+    pub(super) fn preload_page_index(&self) -> bool {
+        self.preload_page_index
+    }
+
     /// Returns the configured metadata size hint.
     pub fn metadata_size_hint(&self) -> usize {
         self.metadata_size_hint
@@ -197,7 +225,7 @@ mod tests {
         }))
         .unwrap();
         // Resolve the scan fallback; explicit zero is normalized later by the reader.
-        let options = options.with_default_data_file_concurrency_limit(7);
+        let options = options.with_data_file_concurrency_limit_if_unset(7);
         let expected = ArrowReaderOptions::builder()
             .with_batch_size(17)
             .with_data_file_concurrency_limit(expected)
@@ -228,6 +256,22 @@ mod tests {
             serde_json::to_value(ArrowReaderOptions::default()).unwrap()["data_file_concurrency_limit"],
             serde_json::Value::Null,
         );
+    }
+
+    #[test]
+    fn parquet_serialization_excludes_execution_settings() {
+        let options = ParquetReadOptions::default().with_preload_page_index(true);
+        let encoded = serde_json::to_value(options).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "metadata_size_hint": DEFAULT_METADATA_SIZE_HINT,
+                "range_coalesce_bytes": DEFAULT_RANGE_COALESCE_BYTES,
+                "range_fetch_concurrency": DEFAULT_RANGE_FETCH_CONCURRENCY,
+            }),
+        );
+        let decoded: ParquetReadOptions = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, ParquetReadOptions::default());
     }
 
     #[test]

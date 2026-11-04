@@ -523,7 +523,7 @@ impl TableScan {
     pub async fn to_arrow(&self, options: ArrowReaderOptions) -> Result<ArrowRecordBatchStream> {
         // Preserve the scan's data-file concurrency bound for backwards compatibility.
         let options =
-            options.with_default_data_file_concurrency_limit(self.concurrency_limit_data_files);
+            options.with_data_file_concurrency_limit_if_unset(self.concurrency_limit_data_files);
         ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
             .with_options(options)
             .build()
