@@ -1943,7 +1943,10 @@ mod tests {
                 "batch_size": 17, "data_file_concurrency_limit": 1,
                 "row_group_filtering_enabled": true, "row_selection_enabled": true,
                 "bloom_filter_enabled": true,
-                "parquet_options": { "metadata_size_hint": 4096, "range_coalesce_bytes": 1048576, "range_fetch_concurrency": 2 },
+                "parquet_options": {
+                    "metadata_size_hint": 4096, "range_coalesce_bytes": 1048576, "range_fetch_concurrency": 2,
+                    "preload_column_index": true, "preload_offset_index": true, "preload_page_index": false,
+                },
             })
         );
         let deserialized: ArrowReaderOptions = serde_json::from_value(serialized).unwrap();

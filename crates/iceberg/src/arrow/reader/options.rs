@@ -151,14 +151,11 @@ pub struct ParquetReadOptions {
     /// Defaults to 10, matching object_store's `OBJECT_STORE_COALESCE_PARALLEL`.
     #[builder(default = DEFAULT_RANGE_FETCH_CONCURRENCY)]
     range_fetch_concurrency: usize,
-    // Index preloading is derived during execution, not serialized reader configuration.
-    #[serde(skip)]
     #[builder(default = true, setter(skip))]
     preload_column_index: bool,
-    #[serde(skip)]
     #[builder(default = true, setter(skip))]
     preload_offset_index: bool,
-    #[serde(skip)]
+    // Execution derives page-index preloading per file from predicates and deletes.
     #[builder(default = false, setter(skip))]
     preload_page_index: bool,
 }
@@ -259,19 +256,27 @@ mod tests {
     }
 
     #[test]
-    fn parquet_serialization_excludes_execution_settings() {
-        let options = ParquetReadOptions::default().with_preload_page_index(true);
-        let encoded = serde_json::to_value(options).unwrap();
+    fn parquet_serialization_preserves_preload_settings() {
+        let options = ParquetReadOptions {
+            preload_column_index: false,
+            preload_offset_index: false,
+            preload_page_index: true,
+            ..ParquetReadOptions::default()
+        };
+        let encoded = serde_json::to_value(&options).unwrap();
         assert_eq!(
             encoded,
             serde_json::json!({
                 "metadata_size_hint": DEFAULT_METADATA_SIZE_HINT,
                 "range_coalesce_bytes": DEFAULT_RANGE_COALESCE_BYTES,
                 "range_fetch_concurrency": DEFAULT_RANGE_FETCH_CONCURRENCY,
+                "preload_column_index": false,
+                "preload_offset_index": false,
+                "preload_page_index": true,
             }),
         );
         let decoded: ParquetReadOptions = serde_json::from_value(encoded).unwrap();
-        assert_eq!(decoded, ParquetReadOptions::default());
+        assert_eq!(decoded, options);
     }
 
     #[test]
