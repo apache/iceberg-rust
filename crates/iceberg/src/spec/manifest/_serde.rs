@@ -76,17 +76,37 @@ impl ManifestEntryV2 {
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV1 {
     status: i32,
-    // Required in v1 by the spec. Java declares it optional and writes null when
-    // snapshot ID inheritance is enabled, which #3371 tracks.
-    pub snapshot_id: i64,
+    // Required in v1 by the spec, so it's always written and must be present
+    // when read. Java declares it optional and writes null when a v1 table
+    // enables `compatibility.snapshot-id-inheritance.enabled`, and fills it in
+    // from the manifest list on read, so a null reads as `None` here and
+    // `ManifestEntry::inherit_data` does the same.
+    #[serde(
+        serialize_with = "serialize_v1_snapshot_id",
+        deserialize_with = "deserialize_v1_snapshot_id"
+    )]
+    pub snapshot_id: Option<i64>,
     data_file: DataFileSerde,
+}
+
+fn serialize_v1_snapshot_id<S: serde::Serializer>(
+    snapshot_id: &Option<i64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_i64(snapshot_id.unwrap_or_default())
+}
+
+fn deserialize_v1_snapshot_id<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<i64>, D::Error> {
+    serde::Deserialize::deserialize(deserializer)
 }
 
 impl ManifestEntryV1 {
     pub fn try_from(value: ManifestEntry, partition_type: &Type) -> Result<Self, Error> {
         Ok(Self {
             status: value.status as i32,
-            snapshot_id: value.snapshot_id.unwrap_or_default(),
+            snapshot_id: value.snapshot_id,
             data_file: DataFileSerde::try_from(value.data_file, partition_type, FormatVersion::V1)?,
         })
     }
@@ -99,7 +119,7 @@ impl ManifestEntryV1 {
     ) -> Result<ManifestEntry, Error> {
         Ok(ManifestEntry {
             status: self.status.try_into()?,
-            snapshot_id: Some(self.snapshot_id),
+            snapshot_id: self.snapshot_id,
             sequence_number: Some(0),
             file_sequence_number: Some(0),
             data_file: self
@@ -522,7 +542,7 @@ mod tests {
         // Create a V1 manifest entry struct (lacks V2 sequence number fields)
         let v1_entry = ManifestEntryV1 {
             status: 1, // Added
-            snapshot_id: 12345,
+            snapshot_id: Some(12345),
             data_file: DataFileSerde {
                 content: 0, // DataFileSerde is shared between V1/V2
                 file_path: "test/path.parquet".to_string(),
