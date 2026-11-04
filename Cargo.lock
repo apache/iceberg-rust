@@ -3163,6 +3163,7 @@ dependencies = [
  "reqsign-aws-v4",
  "reqsign-core",
  "reqwest",
+ "rstest",
  "serde",
  "serde_json",
  "tempfile",

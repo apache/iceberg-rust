@@ -193,6 +193,7 @@ mod tests {
     use std::time::Duration;
 
     use iceberg::io::StorageCredential;
+    use rstest::rstest;
 
     use super::*;
     use crate::{OPENDAL_IO_TIMEOUT_MS, OpenDalStorageFactory};
@@ -222,23 +223,20 @@ mod tests {
         storage.storage_for(path).client_config().io_timeout()
     }
 
-    #[test]
-    fn test_routes_a_path_to_its_longest_matching_prefix() {
+    #[rstest]
+    #[case::longest_prefix("memory:/data/warehouse/f", 3000)]
+    #[case::shorter_prefix("memory:/data/other/f", 2000)]
+    #[case::prefix_of_a_longer_name("memory:/database/f", 2000)]
+    #[case::no_prefix("memory:/elsewhere/f", 1000)]
+    fn test_routes_a_path_to_its_longest_matching_prefix(
+        #[case] path: &str,
+        #[case] expected_ms: u64,
+    ) {
         let storage = memory_storage(&[("memory:/data", 2000), ("memory:/data/warehouse", 3000)]);
 
-        let timeouts: Vec<_> = [
-            "memory:/data/warehouse/f",
-            "memory:/data/other/f",
-            "memory:/database/f",
-            "memory:/elsewhere/f",
-        ]
-        .into_iter()
-        .map(|path| timeout_for(&storage, path))
-        .collect();
-
         assert_eq!(
-            timeouts,
-            [3000, 2000, 2000, 1000].map(Duration::from_millis)
+            timeout_for(&storage, path),
+            Duration::from_millis(expected_ms)
         );
     }
 
@@ -252,19 +250,20 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::without_slash("memory:/table")]
+    #[case::with_slash("memory:/table/")]
     #[tokio::test]
-    async fn test_delete_prefix_routes_a_directory_with_or_without_its_slash() {
-        for path in ["memory:/table", "memory:/table/"] {
-            let storage = memory_storage(&[("memory:/table/", 2000)]);
-            storage
-                .write("memory:/table/f", Bytes::from("data"))
-                .await
-                .unwrap();
+    async fn test_delete_prefix_routes_a_directory_with_or_without_its_slash(#[case] path: &str) {
+        let storage = memory_storage(&[("memory:/table/", 2000)]);
+        storage
+            .write("memory:/table/f", Bytes::from("data"))
+            .await
+            .unwrap();
 
-            storage.delete_prefix(path).await.unwrap();
+        storage.delete_prefix(path).await.unwrap();
 
-            assert!(!storage.exists("memory:/table/f").await.unwrap(), "{path}");
-        }
+        assert!(!storage.exists("memory:/table/f").await.unwrap());
     }
 
     #[tokio::test]
@@ -288,30 +287,16 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "opendal-s3")]
     #[test]
     fn test_debug_omits_prefixed_storages() {
-        let config = StorageConfig::builder()
-            .storage_credentials(vec![
-                StorageCredential::new(
-                    "s3://bucket/table/",
-                    HashMap::from([(
-                        iceberg::io::S3_SECRET_ACCESS_KEY.to_string(),
-                        "vended-secret".to_string(),
-                    )]),
-                )
-                .unwrap(),
-            ])
-            .build();
-        let factory = OpenDalStorageFactory::S3 {
-            customized_credential_load: None,
-        };
-        let storage =
-            PrefixedStorage::new(&config, |config| factory.build_storage(config)).unwrap();
+        let storage = memory_storage(&[("memory:/table/", 2000)]);
 
-        let debug = format!("{storage:?}");
-
-        assert!(!debug.contains("vended-secret"), "{debug}");
-        assert!(debug.contains("s3://bucket/table/"), "{debug}");
+        assert_eq!(
+            format!("{storage:?}"),
+            format!(
+                r#"PrefixedStorage {{ default: {:?}, prefixes: ["memory:/table/"], .. }}"#,
+                storage.default
+            )
+        );
     }
 }
