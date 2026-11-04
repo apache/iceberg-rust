@@ -921,4 +921,44 @@ mod tests {
         ])
         .await;
     }
+
+    #[tokio::test]
+    async fn test_write_manifest_with_repeated_uuid_partition_type_as_spec_fixed_uuid() {
+        let bs = roundtrip_two_partition_fields_of_type(Type::Primitive(PrimitiveType::Uuid), [
+            Literal::uuid(uuid::Uuid::from_u128(
+                0xf79c3e09_677c_4bbd_a479_3f349cb785e7,
+            )),
+            Literal::uuid(uuid::Uuid::from_u128(
+                0x1b2c3d4e_5f60_4718_8293_a4b5c6d7e8f9,
+            )),
+        ])
+        .await;
+
+        let writer_schema = serde_json::to_value(
+            apache_avro::Reader::new(bs.as_slice())
+                .unwrap()
+                .writer_schema(),
+        )
+        .unwrap();
+        let field = |record: &serde_json::Value, name: &str| {
+            record["fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|field| field["name"] == name)
+                .unwrap()
+                .clone()
+        };
+        let output =
+            field(&field(&writer_schema, "data_file")["type"], "partition")["type"]["fields"]
+                .clone();
+
+        let expected = serde_json::json!([
+            {"name": "a", "default": null, "field-id": 1000, "type": ["null", {
+                "type": "fixed", "name": "uuid_fixed", "size": 16, "logicalType": "uuid",
+            }]},
+            {"name": "b", "default": null, "field-id": 1001, "type": ["null", "uuid_fixed"]},
+        ]);
+        assert_eq!(output, expected);
+    }
 }
