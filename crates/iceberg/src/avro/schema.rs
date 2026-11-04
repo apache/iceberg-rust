@@ -275,12 +275,8 @@ impl SchemaVisitor for SchemaToAvroSchema {
             // already accepts both forms.
             PrimitiveType::Uuid => AvroSchema::Uuid(UuidSchema::String),
             PrimitiveType::Fixed(len) => self.define_once(avro_fixed_schema((*len) as usize)?),
-            PrimitiveType::Binary => AvroSchema::Bytes,
-            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!("Converting {p} to an Avro schema is not supported yet"),
-                ));
+            PrimitiveType::Binary | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                AvroSchema::Bytes
             }
             PrimitiveType::Decimal { precision, scale } => {
                 self.define_once(avro_decimal_schema(*precision as usize, *scale as usize)?)
@@ -1354,10 +1350,10 @@ mod tests {
     }
 
     #[test]
-    fn test_geospatial_to_avro_schema_is_unsupported() {
+    fn test_geospatial_to_avro_bytes_schema() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(
+                NestedField::required(
                     1,
                     "geom",
                     Type::Primitive(PrimitiveType::Geometry(Default::default())),
@@ -1367,7 +1363,9 @@ mod tests {
             .build()
             .unwrap();
 
-        let err = schema_to_avro_schema("t", &schema).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        let AvroSchema::Record(record) = schema_to_avro_schema("t", &schema).unwrap() else {
+            panic!("expected Avro record schema");
+        };
+        assert_eq!(record.fields[0].schema, AvroSchema::Bytes);
     }
 }

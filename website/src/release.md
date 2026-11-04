@@ -175,7 +175,7 @@ The changelog should reflect a summary of each commit in the new release.
 Run the following command to verify the licenses meet the project's policy.
 
 ```shell
-python3 dev/release/licenses.py dependencies check
+make check-dependency-licenses
 ```
 
 #### Check pyiceberg-core LICENSE and NOTICE

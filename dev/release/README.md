@@ -139,7 +139,7 @@ git push origin "v0.9.1"
 Verify every dependency's license is one the project allows:
 
 ```shell
-python3 dev/release/licenses.py dependencies check
+make check-dependency-licenses
 ```
 
 CI also runs this check on every pull request.

@@ -300,10 +300,16 @@ impl Display for Datum {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match (&self.r#type, &self.literal) {
             (_, PrimitiveLiteral::Boolean(val)) => write!(f, "{val}"),
-            (PrimitiveType::Int | PrimitiveType::Unknown, PrimitiveLiteral::Int(val)) => {
+            (
+                PrimitiveType::Int | PrimitiveType::Long | PrimitiveType::Unknown,
+                PrimitiveLiteral::Int(val),
+            ) => {
                 write!(f, "{val}")
             }
-            (PrimitiveType::Long | PrimitiveType::Unknown, PrimitiveLiteral::Long(val)) => {
+            (
+                PrimitiveType::Int | PrimitiveType::Long | PrimitiveType::Unknown,
+                PrimitiveLiteral::Long(val),
+            ) => {
                 write!(f, "{val}")
             }
             (_, PrimitiveLiteral::Float(val)) => write!(f, "{val}"),
@@ -327,7 +333,7 @@ impl Display for Datum {
                 write!(f, "{}", timestamptz::nanoseconds_to_datetimetz(*val))
             }
             (_, PrimitiveLiteral::String(val)) => write!(f, r#""{val}""#),
-            (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(val)) => {
+            (PrimitiveType::Uuid | PrimitiveType::Unknown, PrimitiveLiteral::UInt128(val)) => {
                 write!(f, "{}", uuid::Uuid::from_u128(*val))
             }
             (_, PrimitiveLiteral::Binary(val)) => display_bytes(val, f),
@@ -340,6 +346,8 @@ impl Display for Datum {
             ) => {
                 write!(f, "{}", decimal_from_i128_with_scale(*val, *scale))
             }
+            // The scale lives on the dropped source type, so only the unscaled value is left.
+            (PrimitiveType::Unknown, PrimitiveLiteral::Int128(val)) => write!(f, "{val}"),
             (_, _) => {
                 unreachable!()
             }
@@ -382,12 +390,6 @@ impl Datum {
                 return Err(Error::new(
                     ErrorKind::FeatureUnsupported,
                     "Cannot create datum for unknown type from bytes",
-                ));
-            }
-            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    "Cannot create geospatial datum from bytes yet",
                 ));
             }
             PrimitiveType::Boolean => {
@@ -439,8 +441,10 @@ impl Datum {
             PrimitiveType::Uuid => {
                 PrimitiveLiteral::UInt128(u128::from_be_bytes(bytes.try_into()?))
             }
-            PrimitiveType::Fixed(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
-            PrimitiveType::Binary => PrimitiveLiteral::Binary(Vec::from(bytes)),
+            PrimitiveType::Fixed(_)
+            | PrimitiveType::Binary
+            | PrimitiveType::Geometry(_)
+            | PrimitiveType::Geography(_) => PrimitiveLiteral::Binary(Vec::from(bytes)),
             PrimitiveType::Decimal { .. } => PrimitiveLiteral::Int128(
                 i128_from_be_bytes(bytes)
                     .ok_or_else(|| invalid_data!("Can't convert bytes to i128: {bytes:?}"))?,

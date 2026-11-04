@@ -65,20 +65,3 @@ license = "MIT"
 [[libm.clarify.files]]
 checksum = "3823dda7cf046602f4b4e77ec8e227863dc4736037cc85bb33d9f19febe16bb7"
 path = "LICENSE.txt"
-
-# zstd-sys vendors zstd's C code (BSD-3-Clause, Meta) next to the Rust
-# bindings (BSD-3-Clause, Facebook); neither is in its Cargo.toml license.
-[zstd-sys.clarify]
-license = "MIT AND BSD-3-Clause"
-[[zstd-sys.clarify.files]]
-checksum = "129e8edef29e9abcd2ebabe252f4ef1b1289cdca356bf0040284a2fbccfb96c8"
-license = "MIT"
-path = "LICENSE.Mit"
-[[zstd-sys.clarify.files]]
-checksum = "48341f685c87304089aa099b23c386f8bacc519ef555aa7a13e239908907b3fd"
-license = "BSD-3-Clause"
-path = "LICENSE.BSD-3-Clause"
-[[zstd-sys.clarify.files]]
-checksum = "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
-license = "BSD-3-Clause"
-path = "zstd/LICENSE"
