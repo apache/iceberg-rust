@@ -1613,14 +1613,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_missing_nullable_column_ordered_comparisons_return_no_rows() {
-        use arrow_array::Int64Array;
+    async fn test_predicates_on_missing_nullable_column() {
+        use arrow_array::{Int64Array, StringArray};
 
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
                     NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
-                    NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "b", Type::Primitive(PrimitiveType::String)).into(),
                 ])
                 .build()
                 .unwrap(),
@@ -1635,72 +1635,90 @@ mod tests {
         ))])
         .unwrap();
         let tmp_dir = TempDir::new().unwrap();
-        let path = tmp_dir.path().join("missing-b.parquet");
-        write_row_groups(path.to_str().unwrap(), arrow_schema, vec![batch], false);
+        let missing_path = tmp_dir.path().join("missing-b.parquet");
+        let null_path = tmp_dir.path().join("null-b.parquet");
+        let null_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("a", DataType::Int64, 1),
+            field_with_id("b", DataType::Utf8, 2).with_nullable(true),
+        ]));
+        let null_batch = RecordBatch::try_new(null_schema.clone(), vec![
+            batch.column(0).clone(),
+            Arc::new(StringArray::new_null(3)),
+        ])
+        .unwrap();
+        write_row_groups(
+            missing_path.to_str().unwrap(),
+            arrow_schema,
+            vec![batch],
+            false,
+        );
+        write_row_groups(
+            null_path.to_str().unwrap(),
+            null_schema,
+            vec![null_batch],
+            false,
+        );
         let spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(7)
             .add_partition_field("b", "b", Transform::Identity)
             .unwrap()
             .build()
             .unwrap();
-        let identity_value = Struct::from_iter([Some(Literal::long(7))]);
+        let identity_value = Struct::from_iter([Some(Literal::string("m"))]);
 
-        for (predicate, project_field_ids, has_identity_partition, expected_rows) in [
+        for (predicate, project_field_ids) in [
+            (Reference::new("b").less_than(Datum::string("z")), vec![1]),
             (
-                Reference::new("b").less_than(Datum::long(5)),
-                vec![1],
-                false,
-                0,
-            ),
-            (
-                Reference::new("b").less_than_or_equal_to(Datum::long(5)),
+                Reference::new("b").less_than_or_equal_to(Datum::string("z")),
                 vec![1, 2],
-                false,
-                0,
             ),
             (
-                Reference::new("b").less_than(Datum::long(10)),
+                Reference::new("b").is_not_in([Datum::string("x"), Datum::string("y")]),
                 vec![1],
-                true,
-                3,
             ),
             (
-                Reference::new("b").less_than_or_equal_to(Datum::long(10)),
-                vec![1],
-                true,
-                3,
+                Reference::new("b").not_starts_with(Datum::string("x")),
+                vec![1, 2],
             ),
         ] {
-            let task = FileScanTask::builder()
-                .with_file_size_in_bytes(std::fs::metadata(&path).unwrap().len())
-                .with_start(0)
-                .with_length(0)
-                .with_data_file_path(path.to_string_lossy().into_owned())
-                .with_data_file_format(DataFileFormat::Parquet)
-                .with_schema(schema.clone())
-                .with_project_field_ids(project_field_ids)
-                .with_predicate(Some(predicate.bind(schema.clone(), true).unwrap()))
-                .with_partition_spec(has_identity_partition.then(|| Arc::new(spec.clone())))
-                .with_partition(has_identity_partition.then(|| identity_value.clone()))
-                .with_case_sensitive(false)
-                .build()
-                .unwrap();
-            let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-                .with_row_group_filtering_enabled(false)
-                .build();
-            let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-            let batches: Vec<RecordBatch> = reader
-                .read(tasks)
-                .unwrap()
-                .stream()
-                .try_collect()
-                .await
-                .unwrap();
+            for (path, has_identity_partition, expected_rows) in [
+                (&null_path, false, 0),
+                (&missing_path, false, 0),
+                (&missing_path, true, 3),
+            ] {
+                let task = FileScanTask::builder()
+                    .with_file_size_in_bytes(std::fs::metadata(path).unwrap().len())
+                    .with_start(0)
+                    .with_length(0)
+                    .with_data_file_path(path.to_string_lossy().into_owned())
+                    .with_data_file_format(DataFileFormat::Parquet)
+                    .with_schema(schema.clone())
+                    .with_project_field_ids(project_field_ids.clone())
+                    .with_predicate(Some(predicate.clone().bind(schema.clone(), true).unwrap()))
+                    .with_partition_spec(has_identity_partition.then(|| Arc::new(spec.clone())))
+                    .with_partition(has_identity_partition.then(|| identity_value.clone()))
+                    .with_case_sensitive(false)
+                    .build()
+                    .unwrap();
+                let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                    .with_row_group_filtering_enabled(false)
+                    .build();
+                let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+                let batches: Vec<RecordBatch> = reader
+                    .read(tasks)
+                    .unwrap()
+                    .stream()
+                    .try_collect()
+                    .await
+                    .unwrap();
 
-            assert_eq!(
-                batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
-                expected_rows
-            );
+                assert_eq!(
+                    batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                    expected_rows,
+                    "{predicate} on {}",
+                    path.display()
+                );
+            }
         }
     }
 

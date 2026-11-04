@@ -596,8 +596,9 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
                 // update here if arrow ever adds a native not_starts_with
                 not(&starts_with(&left, literal.as_ref())?)
             }))
+        } else if self.missing_field_is_null(reference) {
+            self.build_always_false()
         } else {
-            // A missing column, treating it as null.
             self.build_always_true()
         }
     }
@@ -655,8 +656,9 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
                 Ok(acc)
             }))
+        } else if !literals.is_empty() && self.missing_field_is_null(reference) {
+            self.build_always_false()
         } else {
-            // A missing column, treating it as null.
             self.build_always_true()
         }
     }
