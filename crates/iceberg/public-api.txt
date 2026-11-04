@@ -3441,7 +3441,7 @@ pub fn iceberg::transaction::AddColumn::required(name: impl alloc::string::ToStr
 impl core::clone::Clone for iceberg::transaction::AddColumn
 pub fn iceberg::transaction::AddColumn::clone(&self) -> iceberg::transaction::AddColumn
 impl iceberg::transaction::AddColumn
-pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (), (), (), (), ())>
+pub fn iceberg::transaction::AddColumn::builder() -> AddColumnBuilder<((), (), (), (), (), (), (), ())>
 pub struct iceberg::transaction::ExpireSnapshotsAction
 impl iceberg::transaction::ExpireSnapshotsAction
 pub fn iceberg::transaction::ExpireSnapshotsAction::expire_older_than_ms(self, older_than_ms: i64) -> Self
