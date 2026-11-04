@@ -362,7 +362,10 @@ impl GeospatialBounds {
     }
 
     fn into_datums(self, ty: PrimitiveType) -> (Datum, Datum) {
-        let (xmin, xmax) = if self.x.is_wraparound() {
+        let (xmin, xmax) = if matches!(ty, PrimitiveType::Geography(_)) {
+            // A full interval union uses infinities; Geography requires canonical longitudes.
+            (self.x.lo().max(-180.0), self.x.hi().min(180.0))
+        } else if self.x.is_wraparound() {
             // Parquet permits wrapping geometry boxes; Iceberg only permits wrapping geography.
             (f64::NEG_INFINITY, f64::INFINITY)
         } else {
@@ -448,7 +451,7 @@ impl MinMaxColAggregator {
         };
 
         match ty {
-            PrimitiveType::Geometry(_) => {
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
                 // Null-only row groups do not contribute coordinates.
                 if column.num_values() == 0
                     || column
@@ -458,6 +461,7 @@ impl MinMaxColAggregator {
                 {
                     return Ok(());
                 }
+                // Parquet bounds already account for the logical type's edge interpolation.
                 let bbox = column
                     .geo_statistics()
                     .and_then(|stats| stats.bounding_box());
@@ -473,8 +477,6 @@ impl MinMaxColAggregator {
                     .or_insert_with(|| (ty.clone(), bbox.map(GeospatialBounds::from)));
                 return Ok(());
             }
-            // Geography edges can extend beyond their vertices; omit bounds until supported.
-            PrimitiveType::Geography(_) => return Ok(()),
             _ => {}
         }
         let Some(value) = column.statistics() else {
@@ -3022,13 +3024,48 @@ mod tests {
     }
 
     #[test]
-    fn test_geography_bounds_are_omitted() -> Result<()> {
+    fn test_geography_bounds_merge_from_parquet_statistics() -> Result<()> {
         let (schema, column) =
             geospatial_stats_fixture(PrimitiveType::Geography(GeographyType::default()));
-        let column = with_geo_box(&column, BoundingBox::new(-10.0, 10.0, -20.0, 20.0));
+        let first = with_geo_box(&column, BoundingBox::new(170.0, -170.0, -20.0, 20.0));
+        let second = with_geo_box(&column, BoundingBox::new(175.0, 178.0, -10.0, 30.0));
         let mut bounds = MinMaxColAggregator::new(schema);
-        bounds.update(1, &column)?;
-        assert_eq!(bounds.produce(), (HashMap::new(), HashMap::new()));
+        bounds.update(1, &first)?;
+        bounds.update(1, &second)?;
+        let (lower, upper) = bounds.produce();
+        assert_eq!(
+            (
+                lower[&1].to_bytes()?.into_vec(),
+                upper[&1].to_bytes()?.into_vec()
+            ),
+            (
+                coordinate_bytes(&[170.0, -20.0]),
+                coordinate_bytes(&[-170.0, 30.0])
+            ),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_geography_bounds_full_longitude_range() -> Result<()> {
+        let (schema, column) =
+            geospatial_stats_fixture(PrimitiveType::Geography(GeographyType::default()));
+        let first = with_geo_box(&column, BoundingBox::new(170.0, -170.0, -20.0, 20.0));
+        let second = with_geo_box(&column, BoundingBox::new(-175.0, 175.0, -10.0, 30.0));
+        let mut bounds = MinMaxColAggregator::new(schema);
+        bounds.update(1, &first)?;
+        bounds.update(1, &second)?;
+        let (lower, upper) = bounds.produce();
+        assert_eq!(
+            (
+                lower[&1].to_bytes()?.into_vec(),
+                upper[&1].to_bytes()?.into_vec()
+            ),
+            (
+                coordinate_bytes(&[-180.0, -20.0]),
+                coordinate_bytes(&[180.0, 30.0])
+            ),
+        );
         Ok(())
     }
 
