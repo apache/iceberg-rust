@@ -305,14 +305,14 @@ impl FileScanTaskReader {
 
         // Create projection mask based on field IDs
         // - If file has embedded IDs: field-ID-based projection
-        // - If name mapping applied: field-ID-based projection using the IDs the name
-        //   mapping assigned to the Arrow schema
+        // - If name mapping applied: field-ID-based projection using mapped Parquet names
         // - Otherwise: position-based fallback projection
         let mut projection_mask = ArrowReader::get_arrow_projection_mask(
             &project_field_ids_without_metadata,
             task.schema(),
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
+            task.name_mapping().map(Arc::as_ref),
             use_position_fallback, // Whether to use position-based (true) or field-ID-based (false) projection
         )?;
 
@@ -548,7 +548,7 @@ impl FileScanTaskReader {
 
             let (iceberg_field_ids, field_id_map) = ArrowReader::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
-                record_batch_stream_builder.schema(),
+                task.name_mapping().map(Arc::as_ref),
                 &predicate,
                 use_position_fallback,
             )?;
