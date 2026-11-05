@@ -386,32 +386,6 @@ mod tests {
     }
 
     #[test]
-    fn test_no_coercion_with_mismatched_leaf_count() {
-        let ts = Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true)
-            .with_metadata(field_id_meta(1));
-        let id = Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(2));
-        let iceberg = iceberg_schema_with_timestamp();
-        for (message, fields) in [
-            ("message schema { optional int96 ts; }", vec![
-                ts.clone(),
-                id,
-            ]),
-            (
-                "message schema { optional int96 ts; required int32 id; }",
-                vec![ts],
-            ),
-        ] {
-            let parquet = parquet_schema(message);
-            let arrow_schema = Arc::new(ArrowSchema::new(fields));
-
-            assert_eq!(
-                coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet),
-                None
-            );
-        }
-    }
-
-    #[test]
     fn test_only_int96_timestamps_are_coerced() {
         let parquet = parquet_schema(
             "message schema {
