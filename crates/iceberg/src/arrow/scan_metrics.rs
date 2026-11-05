@@ -26,22 +26,17 @@ use bytes::Bytes;
 use crate::error::Result;
 use crate::io::FileRead;
 use crate::scan::ArrowRecordBatchStream;
-
-/// The kind of file whose reads are being counted.
-pub(crate) enum ScanFileType {
-    Data,
-    Delete,
-}
+use crate::spec::DataContentType;
 
 /// Wraps a [`FileRead`] to count bytes read in the shared scan metrics.
 pub(crate) struct CountingFileRead<F: FileRead> {
     inner: F,
     scan_metrics: ScanMetrics,
-    file_type: ScanFileType,
+    file_type: DataContentType,
 }
 
 impl<F: FileRead> CountingFileRead<F> {
-    pub(crate) fn new(inner: F, scan_metrics: ScanMetrics, file_type: ScanFileType) -> Self {
+    pub(crate) fn new(inner: F, scan_metrics: ScanMetrics, file_type: DataContentType) -> Self {
         Self {
             inner,
             scan_metrics,
@@ -56,8 +51,10 @@ impl<F: FileRead> FileRead for CountingFileRead<F> {
         debug_assert!(range.end >= range.start);
         let bytes_read = range.end - range.start;
         match self.file_type {
-            ScanFileType::Data => self.scan_metrics.add_data_bytes_read(bytes_read),
-            ScanFileType::Delete => self.scan_metrics.add_delete_bytes_read(bytes_read),
+            DataContentType::Data => self.scan_metrics.add_data_bytes_read(bytes_read),
+            DataContentType::PositionDeletes | DataContentType::EqualityDeletes => {
+                self.scan_metrics.add_delete_bytes_read(bytes_read)
+            }
         }
         self.inner.read(range).await
     }
