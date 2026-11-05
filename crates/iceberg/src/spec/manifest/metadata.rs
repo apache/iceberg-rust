@@ -59,7 +59,7 @@ impl ManifestMetadata {
                 })
             })
             .transpose()?
-            .unwrap_or(0);
+            .unwrap_or(schema.schema_id());
         let partition_spec = {
             let fields = {
                 let bs = meta.get("partition-spec").ok_or_else(|| {
@@ -130,5 +130,44 @@ impl ManifestMetadata {
     /// Get the type of content files tracked by manifest
     pub fn content(&self) -> &ManifestContentType {
         &self.content
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metadata_without_schema_id(format_version: &str) -> HashMap<String, Vec<u8>> {
+        HashMap::from([
+            (
+                "schema".to_string(),
+                br#"{"type":"struct","schema-id":3,"fields":[]}"#.to_vec(),
+            ),
+            ("partition-spec".to_string(), b"[]".to_vec()),
+            ("partition-spec-id".to_string(), b"0".to_vec()),
+            (
+                "format-version".to_string(),
+                format_version.as_bytes().to_vec(),
+            ),
+            ("content".to_string(), b"data".to_vec()),
+        ])
+    }
+
+    #[test]
+    fn test_parse_takes_schema_id_from_schema_when_key_is_missing() {
+        for format_version in ["1", "2", "3"] {
+            let metadata =
+                ManifestMetadata::parse(&metadata_without_schema_id(format_version)).unwrap();
+
+            assert_eq!(metadata.schema_id(), 3);
+        }
+    }
+
+    #[test]
+    fn test_parse_prefers_schema_id_key_over_schema() {
+        let mut meta = metadata_without_schema_id("2");
+        meta.insert("schema-id".to_string(), b"5".to_vec());
+
+        assert_eq!(ManifestMetadata::parse(&meta).unwrap().schema_id(), 5);
     }
 }
