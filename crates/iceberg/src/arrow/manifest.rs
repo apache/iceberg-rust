@@ -40,27 +40,12 @@ use serde_json::Value as JsonValue;
 use crate::arrow::schema_to_arrow_schema;
 use crate::error::invalid_data;
 use crate::spec::{
-    FormatVersion, ManifestContentType, ManifestFile, ManifestMetadata, ManifestStatus, Schema,
-    manifest_entry_fields, manifest_file_fields,
+    DATA_FILE_CONTENT_FIELD_ID, DATA_FILE_FIELD_ID, FILE_SEQUENCE_NUMBER_FIELD_ID, FormatVersion,
+    MANIFEST_CONTENT_FIELD_ID, MANIFEST_SEQUENCE_NUMBER_FIELD_ID, MIN_SEQUENCE_NUMBER_FIELD_ID,
+    ManifestContentType, ManifestFile, ManifestMetadata, ManifestStatus, PARTITION_FIELD_ID,
+    SEQUENCE_NUMBER_FIELD_ID, Schema, manifest_entry_fields, manifest_file_fields,
 };
 use crate::{Error, Result};
-
-/// Field ID of `data_file`.
-const DATA_FILE_FIELD_ID: i64 = 2;
-/// Field ID of `data_file.partition`.
-const PARTITION_FIELD_ID: i64 = 102;
-/// Field ID of `data_file.content`.
-const CONTENT_FIELD_ID: i32 = 134;
-/// Field ID of `sequence_number`.
-const SEQUENCE_NUMBER_FIELD_ID: i32 = 3;
-/// Field ID of `file_sequence_number`.
-const FILE_SEQUENCE_NUMBER_FIELD_ID: i32 = 4;
-/// Field ID of `manifest_file.content`.
-const MANIFEST_CONTENT_FIELD_ID: i32 = 517;
-/// Field ID of `manifest_file.sequence_number`.
-const MANIFEST_SEQUENCE_NUMBER_FIELD_ID: i32 = 515;
-/// Field ID of `manifest_file.min_sequence_number`.
-const MIN_SEQUENCE_NUMBER_FIELD_ID: i32 = 516;
 
 /// Reads the entries of a manifest file into a [`RecordBatch`] with one row
 /// per entry.
@@ -156,11 +141,11 @@ pub fn read_manifest_entries(bytes: &[u8], manifest_file: &ManifestFile) -> Resu
     // wrote none before 1.1.0), which reads as null and is inherited.
     let zero_defaults: &[i32] = match metadata.format_version() {
         FormatVersion::V1 => &[
-            CONTENT_FIELD_ID,
+            DATA_FILE_CONTENT_FIELD_ID,
             SEQUENCE_NUMBER_FIELD_ID,
             FILE_SEQUENCE_NUMBER_FIELD_ID,
         ],
-        _ => &[CONTENT_FIELD_ID],
+        _ => &[DATA_FILE_CONTENT_FIELD_ID],
     };
     let entries = project_struct(
         &StructArray::from(batch),
@@ -248,7 +233,7 @@ fn only_batch(
 /// Removes `data_file.partition` from a manifest's Avro schema if it has no
 /// fields, and returns whether it did.
 fn remove_empty_partition(avro_schema: &mut JsonValue) -> bool {
-    let has_field_id = |field: &JsonValue, id: i64| field["field-id"].as_i64() == Some(id);
+    let has_field_id = |field: &JsonValue, id: i32| field["field-id"].as_i64() == Some(id.into());
     let Some(data_file_fields) = avro_schema["fields"]
         .as_array_mut()
         .and_then(|fields| {

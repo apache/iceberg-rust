@@ -24,6 +24,13 @@ use once_cell::sync::Lazy;
 use crate::avro::schema_to_avro_schema;
 use crate::spec::{ListType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type};
 
+/// Field ID of `manifest_file.sequence_number`.
+pub(crate) const MANIFEST_SEQUENCE_NUMBER_FIELD_ID: i32 = 515;
+/// Field ID of `manifest_file.min_sequence_number`.
+pub(crate) const MIN_SEQUENCE_NUMBER_FIELD_ID: i32 = 516;
+/// Field ID of `manifest_file.content`.
+pub(crate) const MANIFEST_CONTENT_FIELD_ID: i32 = 517;
+
 static MANIFEST_PATH: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::required(
@@ -54,7 +61,7 @@ static PARTITION_SPEC_ID: Lazy<NestedFieldRef> = {
 static CONTENT: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::required(
-            517,
+            MANIFEST_CONTENT_FIELD_ID,
             "content",
             Type::Primitive(PrimitiveType::Int),
         ))
@@ -63,7 +70,7 @@ static CONTENT: Lazy<NestedFieldRef> = {
 static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::required(
-            515,
+            MANIFEST_SEQUENCE_NUMBER_FIELD_ID,
             "sequence_number",
             Type::Primitive(PrimitiveType::Long),
         ))
@@ -72,7 +79,7 @@ static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
 static MIN_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::required(
-            516,
+            MIN_SEQUENCE_NUMBER_FIELD_ID,
             "min_sequence_number",
             Type::Primitive(PrimitiveType::Long),
         ))
