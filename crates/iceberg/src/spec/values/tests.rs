@@ -1583,6 +1583,14 @@ fn test_datum_ser_deser() {
 }
 
 #[test]
+fn test_datum_uuid_roundtrips_through_avro() {
+    let original = Datum::uuid(Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee));
+    let output: Datum = apache_avro::from_value(&to_value(&original).unwrap()).unwrap();
+
+    assert_eq!(output, original);
+}
+
+#[test]
 fn test_datum_date_convert_to_int() {
     let datum_date = Datum::date(12345);
 
