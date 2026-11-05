@@ -65,17 +65,12 @@ impl PrefixedStorage {
         build_fn: impl Fn(&StorageConfig) -> Result<OpenDalStorage>,
     ) -> Result<Self> {
         let base = StorageConfig::from_props(config.props().clone());
-        // The last credential for a prefix wins, as in Java's `clientByPrefix`.
-        let credentials: HashMap<&str, &HashMap<String, String>> = config
+        let mut prefixed = config
             .storage_credentials()
             .iter()
-            .map(|credential| (credential.prefix(), credential.config()))
-            .collect();
-        let mut prefixed = credentials
-            .into_iter()
-            .map(|(prefix, credential)| {
-                let config = base.clone().with_props(credential.clone());
-                Ok((prefix.to_string(), build_fn(&config)?))
+            .map(|credential| {
+                let config = base.clone().with_props(credential.config().clone());
+                Ok((credential.prefix().to_string(), build_fn(&config)?))
             })
             .collect::<Result<Vec<_>>>()?;
         prefixed.sort_by_key(|(prefix, _)| std::cmp::Reverse(prefix.len()));
@@ -237,16 +232,6 @@ mod tests {
         assert_eq!(
             timeout_for(&storage, path),
             Duration::from_millis(expected_ms)
-        );
-    }
-
-    #[test]
-    fn test_a_later_credential_replaces_an_earlier_one_for_its_prefix() {
-        let storage = memory_storage(&[("memory:/table/", 2000), ("memory:/table/", 3000)]);
-
-        assert_eq!(
-            timeout_for(&storage, "memory:/table/f"),
-            Duration::from_millis(3000)
         );
     }
 

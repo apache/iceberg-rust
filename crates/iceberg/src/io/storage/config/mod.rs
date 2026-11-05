@@ -37,7 +37,7 @@ mod hf;
 mod oss;
 mod s3;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub use azdls::*;
 pub use gcs::*;
@@ -61,9 +61,36 @@ pub struct StorageConfig {
     #[builder(default)]
     props: HashMap<String, String>,
     /// Credentials that apply to locations under their prefixes
-    #[builder(default)]
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(
+        default,
+        setter(transform = |storage_credentials: Vec<StorageCredential>| {
+            last_credential_per_prefix(storage_credentials)
+        })
+    )]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_storage_credentials"
+    )]
     storage_credentials: Vec<StorageCredential>,
+}
+
+/// Keeps the last credential for each prefix, as Java's `S3FileIO.clientByPrefix` does.
+fn last_credential_per_prefix(credentials: Vec<StorageCredential>) -> Vec<StorageCredential> {
+    let mut prefixes = HashSet::new();
+    let mut credentials: Vec<_> = credentials
+        .into_iter()
+        .rev()
+        .filter(|credential| prefixes.insert(credential.prefix.clone()))
+        .collect();
+    credentials.reverse();
+    credentials
+}
+
+fn deserialize_storage_credentials<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Vec<StorageCredential>, D::Error> {
+    Vec::deserialize(deserializer).map(last_credential_per_prefix)
 }
 
 impl StorageConfig {
@@ -136,8 +163,9 @@ impl StorageConfig {
 
     /// Get the credentials that apply to locations under their prefixes.
     ///
-    /// A factory that supports them overlays the props with the config of a
-    /// location's longest matching credential.
+    /// There is one per prefix, the last one given for it. A factory that
+    /// supports them overlays the props with the config of a location's
+    /// longest matching credential.
     pub fn storage_credentials(&self) -> &[StorageCredential] {
         &self.storage_credentials
     }
@@ -301,6 +329,39 @@ mod tests {
         let deserialized: StorageConfig = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_storage_config_keeps_the_last_credential_for_each_prefix() {
+        let credential = |prefix: &str, access_key_id: &str| {
+            StorageCredential::new(
+                prefix,
+                HashMap::from([("s3.access-key-id".to_string(), access_key_id.to_string())]),
+            )
+            .unwrap()
+        };
+
+        let credentials = vec![
+            credential("s3://bucket/a", "1"),
+            credential("s3://bucket/b", "2"),
+            credential("s3://bucket/a", "3"),
+        ];
+        let expected = [
+            credential("s3://bucket/b", "2"),
+            credential("s3://bucket/a", "3"),
+        ];
+
+        let built = StorageConfig::builder()
+            .storage_credentials(credentials.clone())
+            .build();
+        let deserialized: StorageConfig = serde_json::from_value(serde_json::json!({
+            "props": {},
+            "storage_credentials": credentials,
+        }))
+        .unwrap();
+
+        assert_eq!(built.storage_credentials(), expected);
+        assert_eq!(deserialized.storage_credentials(), expected);
     }
 
     #[test]
