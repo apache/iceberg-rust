@@ -1583,7 +1583,7 @@ fn test_datum_ser_deser() {
 }
 
 #[test]
-fn test_datum_uuid_converts_to_avro_uuid_value() {
+fn test_datum_uuid_converts_to_avro_fixed_value() {
     let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
     let output = to_value(Datum::uuid(uuid_value)).unwrap();
 
@@ -1599,6 +1599,19 @@ fn test_datum_uuid_converts_to_avro_uuid_value() {
 
 #[test]
 fn test_avro_uuid_value_converts_to_datum_uuid() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+    let avro_value = Value::Record(vec![
+        ("type".to_string(), Value::String("uuid".to_string())),
+        ("literal".to_string(), Value::Uuid(uuid_value)),
+    ]);
+
+    let output = apache_avro::from_value::<Datum>(&avro_value).unwrap();
+
+    assert_eq!(output, Datum::uuid(uuid_value));
+}
+
+#[test]
+fn test_avro_fixed_value_converts_to_datum_uuid() {
     let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
     let avro_value = Value::Record(vec![
         ("type".to_string(), Value::String("uuid".to_string())),
