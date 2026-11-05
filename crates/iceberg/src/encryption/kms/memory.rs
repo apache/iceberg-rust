@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use super::KeyManagementClient;
 use super::factory::KmsClientFactory;
 use crate::encryption::{AesGcmCipher, AesKeySize, SecureKey, SensitiveBytes};
-use crate::error::lock_error;
+use crate::error::{invalid_data, lock_error};
 use crate::{Error, ErrorKind, Result};
 
 /// In-memory KMS for testing. Not suitable for production use.
@@ -108,10 +108,7 @@ impl MemoryKeyManagementClient {
         let mut keys = self.master_keys.write().map_err(lock_error)?;
 
         if keys.contains_key(&key_id) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Master key already exists: {key_id}"),
-            ));
+            return Err(invalid_data!("Master key already exists: {key_id}"));
         }
 
         keys.insert(key_id, key);
@@ -121,12 +118,9 @@ impl MemoryKeyManagementClient {
     fn get_master_key(&self, key_id: &str) -> Result<SensitiveBytes> {
         let keys = self.master_keys.read().map_err(lock_error)?;
 
-        keys.get(key_id).cloned().ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Master key not found: {key_id}"),
-            )
-        })
+        keys.get(key_id)
+            .cloned()
+            .ok_or_else(|| invalid_data!("Master key not found: {key_id}"))
     }
 
     /// Number of master keys stored.

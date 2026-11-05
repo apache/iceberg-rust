@@ -27,7 +27,7 @@ use typed_builder::TypedBuilder;
 
 use super::transform::Transform;
 use crate::error::Result;
-use crate::spec::Schema;
+use crate::spec::{PrimitiveType, Schema, Type};
 use crate::{Error, ErrorKind};
 
 /// Reference to [`SortOrder`].
@@ -180,7 +180,7 @@ impl SortOrderBuilder {
             match schema.field_by_id(sort_field.source_id) {
                 None => {
                     return Err(Error::new(
-                        ErrorKind::Unexpected,
+                        ErrorKind::DataInvalid,
                         format!("Cannot find source column for sort field: {sort_field}"),
                     ));
                 }
@@ -189,20 +189,26 @@ impl SortOrderBuilder {
 
                     if !source_type.is_primitive() {
                         return Err(Error::new(
-                            ErrorKind::Unexpected,
+                            ErrorKind::DataInvalid,
                             format!("Cannot sort by non-primitive source field: {source_type}"),
                         ));
                     }
 
-                    let field_transform = sort_field.transform;
-                    if field_transform.result_type(source_type).is_err() {
+                    if matches!(
+                        source_type,
+                        Type::Primitive(PrimitiveType::Geometry(_) | PrimitiveType::Geography(_))
+                    ) {
                         return Err(Error::new(
-                            ErrorKind::Unexpected,
+                            ErrorKind::DataInvalid,
                             format!(
-                                "Invalid source type {source_type} for transform {field_transform}"
+                                "Cannot sort by geospatial source field: {}",
+                                source_field.name
                             ),
                         ));
                     }
+
+                    let field_transform = sort_field.transform;
+                    field_transform.result_type(source_type)?;
                 }
             }
         }
@@ -214,7 +220,7 @@ impl SortOrderBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spec::{ListType, NestedField, PrimitiveType, Type};
+    use crate::spec::{GeometryType, ListType, NestedField, PrimitiveType, Type};
 
     #[test]
     fn test_sort_field() {
@@ -403,12 +409,12 @@ mod tests {
             )
             .build(&schema);
 
+        let err = sort_order_builder_result.expect_err("Expected an Err value");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
-            sort_order_builder_result
-                .expect_err("Expected an Err value")
-                .message(),
+            err.message(),
             "Cannot find source column for sort field: SortField { source_id: 2, transform: identity, direction: ascending, null_order: first }"
-        )
+        );
     }
 
     #[test]
@@ -444,12 +450,12 @@ mod tests {
             )
             .build(&schema);
 
+        let err = sort_order_builder_result.expect_err("Expected an Err value");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
-            sort_order_builder_result
-                .expect_err("Expected an Err value")
-                .message(),
+            err.message(),
             "Cannot sort by non-primitive source field: list"
-        )
+        );
     }
 
     #[test]
@@ -473,12 +479,46 @@ mod tests {
             )
             .build(&schema);
 
+        let err = sort_order_builder_result.expect_err("Expected an Err value");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
-            sort_order_builder_result
-                .expect_err("Expected an Err value")
-                .message(),
+            err.message(),
             "Cannot sort by non-primitive source field: variant"
-        )
+        );
+    }
+
+    #[test]
+    fn test_build_should_reject_geospatial_source_fields() {
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let err = SortOrder::builder()
+            .with_sort_field(
+                SortField::builder()
+                    .source_id(1)
+                    .direction(SortDirection::Ascending)
+                    .null_order(NullOrder::First)
+                    .transform(Transform::Void)
+                    .build(),
+            )
+            .build(&schema)
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            "Cannot sort by geospatial source field: geom"
+        );
     }
 
     #[test]
@@ -502,12 +542,12 @@ mod tests {
             )
             .build(&schema);
 
+        let err = sort_order_builder_result.expect_err("Expected an Err value");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert_eq!(
-            sort_order_builder_result
-                .expect_err("Expected an Err value")
-                .message(),
-            "Invalid source type int for transform year"
-        )
+            err.message(),
+            "int is not a valid input type of year transform"
+        );
     }
 
     #[test]

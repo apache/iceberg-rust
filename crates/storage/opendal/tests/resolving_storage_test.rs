@@ -33,16 +33,16 @@ mod tests {
         S3_SECRET_ACCESS_KEY,
     };
     use iceberg_storage_opendal::OpenDalResolvingStorageFactory;
-    use iceberg_test_utils::{get_minio_endpoint, normalize_test_name_with_parts, set_up};
+    use iceberg_test_utils::{get_object_store_endpoint, normalize_test_name_with_parts, set_up};
 
     fn get_resolving_file_io() -> iceberg::io::FileIO {
         set_up();
 
-        let minio_endpoint = get_minio_endpoint();
+        let object_store_endpoint = get_object_store_endpoint();
 
         FileIOBuilder::new(Arc::new(OpenDalResolvingStorageFactory::new()))
             .with_props(vec![
-                (S3_ENDPOINT, minio_endpoint),
+                (S3_ENDPOINT, object_store_endpoint),
                 (S3_ACCESS_KEY_ID, "admin".to_string()),
                 (S3_SECRET_ACCESS_KEY, "password".to_string()),
                 (S3_REGION, "us-east-1".to_string()),
@@ -268,9 +268,9 @@ mod tests {
         use reqsign_core::Context;
 
         #[derive(Debug)]
-        struct MinioCredentialLoader;
+        struct ObjectStoreCredentialLoader;
 
-        impl ProvideCredential for MinioCredentialLoader {
+        impl ProvideCredential for ObjectStoreCredentialLoader {
             type Credential = AwsCredential;
 
             async fn provide_credential(
@@ -287,14 +287,14 @@ mod tests {
         }
 
         set_up();
-        let minio_endpoint = get_minio_endpoint();
+        let object_store_endpoint = get_object_store_endpoint();
 
         let factory = OpenDalResolvingStorageFactory::new()
-            .with_s3_credential_loader(CustomAwsCredentialLoader::new(MinioCredentialLoader));
+            .with_s3_credential_loader(CustomAwsCredentialLoader::new(ObjectStoreCredentialLoader));
 
         let file_io = FileIOBuilder::new(Arc::new(factory))
             .with_props(vec![
-                (S3_ENDPOINT, minio_endpoint),
+                (S3_ENDPOINT, object_store_endpoint),
                 (S3_REGION, "us-east-1".to_string()),
                 (S3_PATH_STYLE_ACCESS, "true".to_string()),
             ])

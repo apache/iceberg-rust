@@ -27,7 +27,7 @@ use fnv::FnvHashSet;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::expr::visitors::bound_predicate_visitor::visit as visit_bound;
 use crate::expr::visitors::predicate_visitor::visit;
 use crate::expr::visitors::rewrite_not::RewriteNotVisitor;
@@ -398,12 +398,9 @@ impl Bind for Predicate {
                     }
                     &PredicateOperator::IsNan | &PredicateOperator::NotNan => {
                         if !bound_expr.term.field().field_type.is_floating_type() {
-                            return Err(Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
-                                    "Expecting floating point type, but found {}",
-                                    bound_expr.term.field().field_type
-                                ),
+                            return Err(invalid_data!(
+                                "Expecting floating point type, but found {}",
+                                bound_expr.term.field().field_type
                             ));
                         }
                     }

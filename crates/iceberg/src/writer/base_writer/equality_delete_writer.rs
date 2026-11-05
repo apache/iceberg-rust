@@ -27,6 +27,7 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::record_batch_projector::RecordBatchProjector;
 use crate::arrow::schema_to_arrow_schema;
+use crate::error::invalid_data;
 use crate::spec::{DataFile, PartitionKey, Schema, SchemaRef};
 use crate::writer::file_writer::FileWriterBuilder;
 use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
@@ -78,28 +79,21 @@ pub struct EqualityDeleteWriterConfig {
 /// here produces clearer errors and avoids generating meaningless delete files.
 fn validate_equality_ids(equality_ids: &[i32], original_schema: &Schema) -> Result<()> {
     if equality_ids.is_empty() {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            "Equality delete field ids must not be empty.",
+        return Err(invalid_data!(
+            "Equality delete field ids must not be empty."
         ));
     }
 
     let mut seen = HashSet::with_capacity(equality_ids.len());
     for id in equality_ids {
         if !seen.insert(*id) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Duplicate equality delete field id: {id}"),
-            )
-            .with_context("field_id", id.to_string()));
+            return Err(invalid_data!("Duplicate equality delete field id: {id}")
+                .with_context("field_id", id.to_string()));
         }
 
         if original_schema.field_by_id(*id).is_none() {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid equality delete field id: {id}"),
-            )
-            .with_context("field_id", id.to_string()));
+            return Err(invalid_data!("Invalid equality delete field id: {id}")
+                .with_context("field_id", id.to_string()));
         }
     }
 
@@ -218,12 +212,8 @@ where
                         res.partition(pk.data().clone());
                         res.partition_spec_id(pk.spec().spec_id());
                     }
-                    res.build().map_err(|e| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("Failed to build data file: {e}"),
-                        )
-                    })
+                    res.build()
+                        .map_err(|e| invalid_data!("Failed to build data file: {e}"))
                 })
                 .collect()
         } else {
@@ -773,7 +763,7 @@ mod test {
             )
             .unwrap(),
         ) as ArrayRef;
-        let col13 = Arc::new(arrow_array::LargeBinaryArray::from_opt_vec(vec![
+        let col13 = Arc::new(arrow_array::BinaryArray::from_opt_vec(vec![
             Some(b"one"),
             Some(b""),
             Some(b"zzzz"),
@@ -789,6 +779,80 @@ mod test {
             &file_io,
             &res.into_iter().next().unwrap(),
             &to_write,
+        )
+        .await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_equality_delete_accepts_large_binary_input() -> Result<(), anyhow::Error> {
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let location_gen = DefaultLocationGenerator::with_data_location(
+            temp_dir.path().to_str().unwrap().to_string(),
+        );
+        let file_name_gen =
+            DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "key", Type::Primitive(PrimitiveType::Binary)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let config = EqualityDeleteWriterConfig::new(vec![2], schema.clone()).unwrap();
+        let delete_arrow_schema = config.projected_arrow_schema_ref().clone();
+        let delete_schema = arrow_schema_to_schema(&delete_arrow_schema).unwrap();
+
+        let pb =
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(delete_schema));
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            pb,
+            file_io.clone(),
+            location_gen,
+            file_name_gen,
+        );
+        let mut equality_delete_writer =
+            EqualityDeleteFileWriterBuilder::new(rolling_writer_builder, config)
+                .build(None)
+                .await?;
+
+        let input_schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+            Field::new("key", DataType::LargeBinary, true).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "2".to_string(),
+            )])),
+        ]));
+        let to_write = RecordBatch::try_new(input_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            Arc::new(arrow_array::LargeBinaryArray::from_opt_vec(vec![
+                Some(b"one"),
+                None,
+                Some(b"zzzz"),
+            ])) as ArrayRef,
+        ])
+        .unwrap();
+        equality_delete_writer.write(to_write).await?;
+        let res = equality_delete_writer.close().await?;
+        assert_eq!(res.len(), 1);
+
+        let expected = RecordBatch::try_new(delete_arrow_schema, vec![Arc::new(
+            arrow_array::BinaryArray::from_opt_vec(vec![Some(b"one"), None, Some(b"zzzz")]),
+        ) as ArrayRef])
+        .unwrap();
+        check_parquet_data_file_with_equality_delete_write(
+            &file_io,
+            &res.into_iter().next().unwrap(),
+            &expected,
         )
         .await;
 

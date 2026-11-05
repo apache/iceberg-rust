@@ -37,7 +37,6 @@ The Apache Iceberg Rust project is composed of the following components:
 | [iceberg-catalog-s3tables]    | [![iceberg-catalog-s3tables image]][iceberg-catalog-s3tables link]       | [![docs release]][iceberg-catalog-s3tables release docs] [![docs dev]][iceberg-catalog-s3tables dev docs]       |
 | [iceberg-catalog-sql]         | [![iceberg-catalog-sql image]][iceberg-catalog-sql link]                 | [![docs release]][iceberg-catalog-sql release docs] [![docs dev]][iceberg-catalog-sql dev docs]                 |
 | [iceberg-cache-moka]          | [![iceberg-cache-moka image]][iceberg-cache-moka link]                   | [![docs release]][iceberg-cache-moka release docs] [![docs dev]][iceberg-cache-moka dev docs]                   |
-| [iceberg-datafusion]          | [![iceberg-datafusion image]][iceberg-datafusion link]                   | [![docs release]][iceberg-datafusion release docs] [![docs dev]][iceberg-datafusion dev docs]                   |
 | [iceberg-storage-opendal]     | [![iceberg-storage-opendal image]][iceberg-storage-opendal link]         | [![docs release]][iceberg-storage-opendal release docs] [![docs dev]][iceberg-storage-opendal dev docs]         |
 
 [docs release]: https://img.shields.io/badge/docs-release-blue
@@ -47,12 +46,6 @@ The Apache Iceberg Rust project is composed of the following components:
 [iceberg link]: https://crates.io/crates/iceberg
 [iceberg release docs]: https://docs.rs/iceberg
 [iceberg dev docs]: https://rust.iceberg.apache.org/api/iceberg/
-
-[iceberg-datafusion]: crates/integrations/datafusion/README.md
-[iceberg-datafusion image]: https://img.shields.io/crates/v/iceberg-datafusion.svg
-[iceberg-datafusion link]: https://crates.io/crates/iceberg-datafusion
-[iceberg-datafusion dev docs]: https://rust.iceberg.apache.org/api/iceberg_datafusion/
-[iceberg-datafusion release docs]: https://docs.rs/iceberg-datafusion
 
 [iceberg-catalog-glue]: crates/catalog/glue/README.md
 [iceberg-catalog-glue image]: https://img.shields.io/crates/v/iceberg-catalog-glue.svg

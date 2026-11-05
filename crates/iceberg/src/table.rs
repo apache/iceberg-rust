@@ -22,6 +22,7 @@ use std::sync::Arc;
 use crate::arrow::ArrowReaderBuilder;
 use crate::encryption::EncryptionManager;
 use crate::encryption::kms::KeyManagementClient;
+use crate::error::invalid_data;
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
@@ -30,7 +31,7 @@ use crate::scan::TableScanBuilder;
 use crate::spec::{
     ManifestListReader, ManifestReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef,
 };
-use crate::{Error, ErrorKind, Result, TableIdent};
+use crate::{Result, TableIdent};
 
 /// Builder to create table scan.
 pub struct TableBuilder {
@@ -135,30 +136,26 @@ impl TableBuilder {
         } = self;
 
         let Some(file_io) = file_io else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "FileIO must be provided with TableBuilder.file_io()",
+            return Err(invalid_data!(
+                "FileIO must be provided with TableBuilder.file_io()"
             ));
         };
 
         let Some(metadata) = metadata else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "TableMetadataRef must be provided with TableBuilder.metadata()",
+            return Err(invalid_data!(
+                "TableMetadataRef must be provided with TableBuilder.metadata()"
             ));
         };
 
         let Some(identifier) = identifier else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "TableIdent must be provided with TableBuilder.identifier()",
+            return Err(invalid_data!(
+                "TableIdent must be provided with TableBuilder.identifier()"
             ));
         };
 
         let Some(runtime) = runtime else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Runtime must be provided with TableBuilder.runtime()",
+            return Err(invalid_data!(
+                "Runtime must be provided with TableBuilder.runtime()"
             ));
         };
 
@@ -222,6 +219,15 @@ impl Table {
         self
     }
 
+    /// Returns this table bound to `runtime`, sharing its manifest cache.
+    ///
+    /// Tasks such as scan planning and reads are spawned on `runtime`. A table rebuilt
+    /// through [`Table::builder`] starts with an empty cache.
+    pub fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = runtime;
+        self
+    }
+
     /// Returns a TableBuilder to build a table
     pub fn builder() -> TableBuilder {
         TableBuilder::new()
@@ -248,12 +254,9 @@ impl Table {
 
     /// Returns current metadata location in a result.
     pub fn metadata_location_result(&self) -> Result<&str> {
-        self.metadata_location.as_deref().ok_or(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Metadata location does not exist for table: {}",
-                self.identifier
-            ),
+        self.metadata_location.as_deref().ok_or(invalid_data!(
+            "Metadata location does not exist for table: {}",
+            self.identifier
         ))
     }
 
@@ -415,6 +418,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::ErrorKind;
     use crate::encryption::SensitiveBytes;
     use crate::encryption::kms::MemoryKeyManagementClient;
     use crate::spec::TableProperties;
@@ -500,6 +504,31 @@ mod tests {
             .unwrap();
         assert!(!table.readonly());
         assert_eq!(table.identifier.name(), "table");
+    }
+
+    #[tokio::test]
+    async fn test_table_with_runtime_moves_work_and_keeps_object_cache() {
+        let old = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        let table = Table::builder()
+            .metadata(load_test_metadata("TableMetadataV2Valid.json"))
+            .identifier(TableIdent::from_strs(["ns", "table"]).unwrap())
+            .file_io(FileIO::new_with_memory())
+            .runtime(Runtime::new(&old))
+            .build()
+            .unwrap();
+        // With the old runtime shut down, the spawn below succeeds only if
+        // `rebound` uses the new one.
+        old.shutdown_background();
+
+        let rebound = table.clone().with_runtime(Runtime::try_current().unwrap());
+
+        assert!(Arc::ptr_eq(&table.object_cache(), &rebound.object_cache()));
+        assert_eq!(
+            rebound.runtime().io().spawn(async { 42 }).await.unwrap(),
+            42
+        );
     }
 
     fn make_kms() -> Arc<dyn KeyManagementClient> {

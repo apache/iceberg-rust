@@ -29,9 +29,8 @@ use typed_builder::TypedBuilder;
 use super::INITIAL_VIEW_VERSION_ID;
 use super::view_metadata::ViewVersionLog;
 use crate::catalog::NamespaceIdent;
-use crate::error::{Result, timestamp_ms_to_utc};
+use crate::error::{Result, invalid_data, timestamp_ms_to_utc};
 use crate::spec::{SchemaId, SchemaRef, ViewMetadata};
-use crate::{Error, ErrorKind};
 
 /// Reference to [`ViewVersion`].
 pub type ViewVersionRef = Arc<ViewVersion>;
@@ -116,12 +115,7 @@ impl ViewVersion {
     pub fn schema(&self, view_metadata: &ViewMetadata) -> Result<SchemaRef> {
         view_metadata
             .schema_by_id(self.schema_id())
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Schema with id {} not found", self.schema_id()),
-                )
-            })
+            .ok_or_else(|| invalid_data!("Schema with id {} not found", self.schema_id()))
             .cloned()
     }
 

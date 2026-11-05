@@ -21,13 +21,13 @@ use apache_avro::Schema as AvroSchema;
 use once_cell::sync::Lazy;
 use typed_builder::TypedBuilder;
 
+use crate::Error;
 use crate::avro::schema_to_avro_schema;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::spec::{
     DataContentType, DataFile, INITIAL_SEQUENCE_NUMBER, ListType, Literal, ManifestFile, MapType,
     NestedField, NestedFieldRef, PrimitiveLiteral, PrimitiveType, Schema, StructType, Type,
 };
-use crate::{Error, ErrorKind};
 
 /// Reference to [`ManifestEntry`].
 pub type ManifestEntryRef = Arc<ManifestEntry>;
@@ -170,10 +170,7 @@ impl TryFrom<i32> for ManifestStatus {
             0 => Ok(ManifestStatus::Existing),
             1 => Ok(ManifestStatus::Added),
             2 => Ok(ManifestStatus::Deleted),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("manifest status {v} is invalid"),
-            )),
+            _ => Err(invalid_data!("manifest status {v} is invalid")),
         }
     }
 }
@@ -535,6 +532,24 @@ fn data_file_fields_v3(partition_type: &StructType) -> Vec<NestedFieldRef> {
         REFERENCE_DATA_FILE.clone(),
         CONTENT_OFFSET.clone(),
         CONTENT_SIZE_IN_BYTES.clone(),
+    ]
+}
+
+/// Fields of the `manifest_entry` struct in the latest format version. A
+/// [`ManifestEntry`] of any version fits them: earlier versions lack only
+/// optional fields, apart from the deprecated v1 `block_size_in_bytes`, which
+/// [`DataFile`] doesn't keep.
+pub(crate) fn manifest_entry_fields(partition_type: &StructType) -> Vec<NestedFieldRef> {
+    vec![
+        STATUS.clone(),
+        SNAPSHOT_ID_V2.clone(),
+        SEQUENCE_NUMBER.clone(),
+        FILE_SEQUENCE_NUMBER.clone(),
+        Arc::new(NestedField::required(
+            2,
+            "data_file",
+            Type::Struct(StructType::new(data_file_fields_v3(partition_type))),
+        )),
     ]
 }
 
