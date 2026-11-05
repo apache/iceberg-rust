@@ -1584,9 +1584,22 @@ fn test_datum_ser_deser() {
 
 #[test]
 fn test_datum_uuid_roundtrips_through_avro() {
-    let original = Datum::uuid(Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee));
-    let output: Datum = apache_avro::from_value(&to_value(&original).unwrap()).unwrap();
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+    let original = Datum::uuid(uuid_value);
 
+    let intermediate = to_value(&original).unwrap();
+    assert_eq!(
+        intermediate,
+        Value::Record(vec![
+            ("type".to_string(), Value::String("uuid".to_string())),
+            (
+                "literal".to_string(),
+                Value::Fixed(16, uuid_value.as_bytes().to_vec())
+            ),
+        ])
+    );
+
+    let output = apache_avro::from_value::<Datum>(&intermediate).unwrap();
     assert_eq!(output, original);
 }
 
