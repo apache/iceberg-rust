@@ -493,12 +493,12 @@ pub(crate) mod _serde {
                         }),
                     _ => Err(invalid_err("string")),
                 },
-                RawLiteralEnum::Uuid(v) => match ty {
-                    Type::Primitive(PrimitiveType::Uuid) => {
-                        Ok(Some(Literal::uuid(Uuid::from_bytes(v))))
-                    }
-                    _ => Err(invalid_err("uuid")),
-                },
+                // `Uuid` is only built when writing, so that apache-avro gets a fixed
+                // value. Avro uuid values are read back as `String`.
+                RawLiteralEnum::Uuid(_) => Err(invalid_err_with_reason(
+                    "uuid",
+                    "RawLiteralEnum::Uuid is only used for serialization",
+                )),
                 RawLiteralEnum::Bytes(v) => match ty {
                     Type::Primitive(PrimitiveType::Binary) => Ok(Some(Literal::binary(v.to_vec()))),
                     Type::Primitive(PrimitiveType::Fixed(expected_len)) => {
