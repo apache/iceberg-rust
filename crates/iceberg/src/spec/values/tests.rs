@@ -1583,24 +1583,85 @@ fn test_datum_ser_deser() {
 }
 
 #[test]
-fn test_datum_uuid_roundtrips_through_avro() {
+fn test_datum_uuid_converts_to_avro_uuid_value() {
     let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
-    let original = Datum::uuid(uuid_value);
+    let output = to_value(Datum::uuid(uuid_value)).unwrap();
 
-    let intermediate = to_value(&original).unwrap();
-    assert_eq!(
-        intermediate,
-        Value::Record(vec![
-            ("type".to_string(), Value::String("uuid".to_string())),
-            (
-                "literal".to_string(),
-                Value::Fixed(16, uuid_value.as_bytes().to_vec())
-            ),
-        ])
-    );
+    let expected = Value::Record(vec![
+        ("type".to_string(), Value::String("uuid".to_string())),
+        (
+            "literal".to_string(),
+            Value::Fixed(16, uuid_value.as_bytes().to_vec()),
+        ),
+    ]);
+    assert_eq!(output, expected);
+}
 
-    let output = apache_avro::from_value::<Datum>(&intermediate).unwrap();
-    assert_eq!(output, original);
+#[test]
+fn test_avro_uuid_value_converts_to_datum_uuid() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+    let avro_value = Value::Record(vec![
+        ("type".to_string(), Value::String("uuid".to_string())),
+        (
+            "literal".to_string(),
+            Value::Fixed(16, uuid_value.as_bytes().to_vec()),
+        ),
+    ]);
+
+    let output = apache_avro::from_value::<Datum>(&avro_value).unwrap();
+
+    assert_eq!(output, Datum::uuid(uuid_value));
+}
+
+#[test]
+fn test_datum_16_fixed_converts_to_avro_fixed_value() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+    let output = to_value(Datum::fixed(bytes)).unwrap();
+
+    let expected = Value::Record(vec![
+        ("type".to_string(), Value::String("fixed[16]".to_string())),
+        ("literal".to_string(), Value::Fixed(16, bytes.to_vec())),
+    ]);
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_avro_fixed_value_converts_to_datum_16_fixed() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+    let avro_value = Value::Record(vec![
+        ("type".to_string(), Value::String("fixed[16]".to_string())),
+        ("literal".to_string(), Value::Fixed(16, bytes.to_vec())),
+    ]);
+
+    let output = apache_avro::from_value::<Datum>(&avro_value).unwrap();
+
+    assert_eq!(output, Datum::fixed(bytes));
+}
+
+#[test]
+fn test_datum_16_binary_converts_to_avro_bytes_value() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+
+    let output = to_value(Datum::binary(bytes)).unwrap();
+
+    let expected = Value::Record(vec![
+        ("type".to_string(), Value::String("binary".to_string())),
+        ("literal".to_string(), Value::Bytes(bytes.to_vec())),
+    ]);
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_avro_bytes_value_converts_to_datum_16_binary() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+    let avro_value = Value::Record(vec![
+        ("type".to_string(), Value::String("binary".to_string())),
+        ("literal".to_string(), Value::Bytes(bytes.to_vec())),
+    ]);
+
+    let output = apache_avro::from_value::<Datum>(&avro_value).unwrap();
+
+    assert_eq!(output, Datum::binary(bytes));
 }
 
 #[test]
