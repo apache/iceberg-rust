@@ -24,7 +24,7 @@ use futures::{StreamExt, TryStreamExt};
 use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, PosDelLoadAction};
-use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
+use crate::arrow::delete_file_loader::{BasicDeleteFileLoader, evolve_equality_delete_stream};
 use crate::arrow::scan_metrics::ScanMetrics;
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
@@ -302,9 +302,9 @@ impl CachingDeleteFileLoader {
                 del_filter.insert_equality_delete(task.file_path(), receiver);
 
                 // Per the Iceberg spec, evolve schema for equality deletes but only for the
-                // equality_ids columns, not all table columns.
+                // columns holding the equality_ids, not all table columns.
                 let equality_ids_vec = task.equality_ids().unwrap().to_vec();
-                let evolved_stream = BasicDeleteFileLoader::evolve_schema(
+                let evolved_stream = evolve_equality_delete_stream(
                     basic_delete_file_loader
                         .parquet_to_batch_stream(
                             task.file_path(),
@@ -312,10 +312,9 @@ impl CachingDeleteFileLoader {
                             task.key_metadata(),
                         )
                         .await?,
-                    schema,
+                    &schema,
                     &equality_ids_vec,
-                )
-                .await?;
+                )?;
 
                 Ok(DeleteFileContext::FreshEqDel {
                     batch_stream: evolved_stream,
@@ -604,7 +603,7 @@ impl CachingDeleteFileLoader {
 
             let root_array: ArrayRef = Arc::new(StructArray::from(record_batch));
 
-            let mut processor = EqDelColumnProcessor::new(&equality_ids);
+            let mut processor = EqDelColumnProcessor::new(&equality_ids, schema);
             visit_schema_with_partner(schema, &root_array, &mut processor, &accessor)?;
 
             let mut datum_columns_with_names = processor.finish()?;
@@ -661,13 +660,15 @@ impl CachingDeleteFileLoader {
 
 struct EqDelColumnProcessor<'a> {
     equality_ids: &'a HashSet<i32>,
+    schema: &'a Schema,
     collected_columns: Vec<(ArrayRef, String, Type)>,
 }
 
 impl<'a> EqDelColumnProcessor<'a> {
-    fn new(equality_ids: &'a HashSet<i32>) -> Self {
+    fn new(equality_ids: &'a HashSet<i32>, schema: &'a Schema) -> Self {
         Self {
             equality_ids,
+            schema,
             collected_columns: Vec::with_capacity(equality_ids.len()),
         }
     }
@@ -723,9 +724,17 @@ impl SchemaWithPartnerVisitor<ArrayRef> for EqDelColumnProcessor<'_> {
 
     fn field(&mut self, field: &NestedFieldRef, partner: &ArrayRef, _value: ()) -> Result<()> {
         if self.equality_ids.contains(&field.id) && field.field_type.as_primitive_type().is_some() {
+            // Use the full name so a nested field (`s.f`) binds to itself, not to a top-level
+            // column with the same leaf name.
+            let name = self.schema.name_by_field_id(field.id).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    format!("equality delete field {} not found in schema", field.id),
+                )
+            })?;
             self.collected_columns.push((
                 partner.clone(),
-                field.name.clone(),
+                name.to_string(),
                 field.field_type.as_ref().clone(),
             ));
         }
@@ -888,7 +897,7 @@ mod tests {
         .await
         .expect("error parsing batch stream");
 
-        let expected = "((((((y IS NULL) OR (y != 1)) OR ((z IS NULL) OR (z != 100))) OR ((a IS NULL) OR (a != \"HELP\"))) OR ((sa IS NULL) OR (sa != 4))) OR ((b IS NULL) OR (b != 62696E6172795F64617461))) AND ((((((y IS NULL) OR (y != 2)) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR ((sa IS NULL) OR (sa != 5))) OR (b IS NOT NULL))".to_string();
+        let expected = "((((((y IS NULL) OR (y != 1)) OR ((z IS NULL) OR (z != 100))) OR ((a IS NULL) OR (a != \"HELP\"))) OR ((s.sa IS NULL) OR (s.sa != 4))) OR ((b IS NULL) OR (b != 62696E6172795F64617461))) AND ((((((y IS NULL) OR (y != 2)) OR (z IS NOT NULL)) OR (a IS NOT NULL)) OR ((s.sa IS NULL) OR (s.sa != 5))) OR (b IS NOT NULL))".to_string();
 
         assert_eq!(parsed_eq_delete.to_string(), expected);
     }
@@ -1790,5 +1799,215 @@ mod tests {
                 .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.message().contains("expected 2 from record_count"));
+    }
+
+    /// Top-level `f` (id 1) and `s.f` (id 3, in struct `s` with id 2), so a predicate that
+    /// binds by leaf name would pick the wrong column.
+    fn nested_eq_delete_table_schema() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "f", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(
+                        2,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(3, "f", Type::Primitive(PrimitiveType::Long))
+                                .into(),
+                            NestedField::required(4, "g", Type::Primitive(PrimitiveType::Long))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Loads one equality delete file with `equality_ids` through `load_deletes` and returns the
+    /// predicate the delete filter builds for a scan of `schema`.
+    async fn load_eq_delete_predicate(
+        path: &str,
+        equality_ids: Vec<i32>,
+        schema: SchemaRef,
+    ) -> Result<Option<crate::expr::BoundPredicate>> {
+        use crate::scan::FileScanTask;
+
+        let eq_del = FileScanTaskDeleteFile::builder()
+            .with_file_path(path.to_string())
+            .with_file_size_in_bytes(std::fs::metadata(path).unwrap().len())
+            .with_file_type(DataContentType::EqualityDeletes)
+            .with_file_format(DataFileFormat::Parquet)
+            .with_partition_spec_id(0)
+            .with_equality_ids(Some(equality_ids))
+            .build()
+            .unwrap();
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(format!("{path}.data"))
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema.clone())
+            .with_project_field_ids(vec![1, 2])
+            .with_deletes(vec![eq_del])
+            .with_case_sensitive(true)
+            .build()
+            .unwrap();
+        let loader = CachingDeleteFileLoader::new(FileIO::new_with_fs(), 10, Runtime::current());
+        let filter = loader
+            .load_deletes(task.deletes(), task.schema_ref())
+            .await
+            .unwrap()?;
+        filter.build_equality_delete_predicate(&task).await
+    }
+
+    /// Field ids of the references in a bound predicate.
+    fn bound_field_ids(predicate: &crate::expr::BoundPredicate, ids: &mut Vec<i32>) {
+        use crate::expr::BoundPredicate;
+        match predicate {
+            BoundPredicate::And(expr) | BoundPredicate::Or(expr) => {
+                for input in expr.inputs() {
+                    bound_field_ids(input, ids);
+                }
+            }
+            BoundPredicate::Not(expr) => bound_field_ids(expr.inputs()[0], ids),
+            BoundPredicate::Unary(expr) => ids.push(expr.term().field().id),
+            BoundPredicate::Binary(expr) => ids.push(expr.term().field().id),
+            BoundPredicate::Set(expr) => ids.push(expr.term().field().id),
+            BoundPredicate::AlwaysTrue | BoundPredicate::AlwaysFalse => {}
+        }
+    }
+
+    /// The predicate for deleting `s.f = 7`, bound to field 3 and not to the top-level `f`.
+    fn assert_keeps_rows_unless_nested_f_is_7(
+        predicate: Option<crate::expr::BoundPredicate>,
+        schema: SchemaRef,
+    ) {
+        use crate::expr::Bind;
+
+        let predicate = predicate.expect("an equality delete predicate");
+        let s_f = Reference::new("s.f");
+        let expected = s_f
+            .clone()
+            .is_null()
+            .or(s_f.not_equal_to(Datum::long(7)))
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(predicate, expected);
+        let mut ids = Vec::new();
+        bound_field_ids(&predicate, &mut ids);
+        assert_eq!(ids, vec![3, 3]);
+    }
+
+    /// A delete file in Java's layout: `s.f` under its parent struct `s`.
+    #[tokio::test]
+    async fn test_nested_field_equality_delete_in_struct_layout() {
+        let tmp_dir = TempDir::new().unwrap();
+        let schema = nested_eq_delete_table_schema();
+
+        let f_field = Arc::new(simple_field("f", DataType::Int64, true, "3"));
+        let s_field = simple_field(
+            "s",
+            DataType::Struct(Fields::from(vec![f_field.clone()])),
+            true,
+            "2",
+        );
+        let delete_schema = Arc::new(arrow_schema::Schema::new(vec![s_field]));
+        let s = StructArray::from(vec![(
+            f_field,
+            Arc::new(Int64Array::from(vec![7])) as ArrayRef,
+        )]);
+        let batch = RecordBatch::try_new(delete_schema.clone(), vec![Arc::new(s)]).unwrap();
+        let path = format!(
+            "{}/nested-eq-delete.parquet",
+            tmp_dir.path().to_str().unwrap()
+        );
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), delete_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let predicate = load_eq_delete_predicate(&path, vec![3], schema.clone())
+            .await
+            .unwrap();
+        assert_keeps_rows_unless_nested_f_is_7(predicate, schema);
+    }
+
+    /// A delete file from `EqualityDeleteWriter`, which writes `s.f` as a top-level column.
+    #[tokio::test]
+    async fn test_nested_field_equality_delete_from_equality_delete_writer() {
+        use crate::arrow::schema_to_arrow_schema;
+        use crate::writer::base_writer::equality_delete_writer::{
+            EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
+        };
+        use crate::writer::file_writer::ParquetWriterBuilder;
+        use crate::writer::file_writer::location_generator::{
+            DefaultFileNameGenerator, DefaultLocationGenerator,
+        };
+        use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
+        use crate::writer::{IcebergWriter, IcebergWriterBuilder};
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let schema = nested_eq_delete_table_schema();
+
+        let config = EqualityDeleteWriterConfig::new(vec![3], schema.clone()).unwrap();
+        let delete_schema = arrow_schema_to_schema(config.projected_arrow_schema_ref()).unwrap();
+        let rolling = RollingFileWriterBuilder::new_with_default_file_size(
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(delete_schema)),
+            file_io.clone(),
+            DefaultLocationGenerator::with_data_location(
+                tmp_dir.path().to_str().unwrap().to_string(),
+            ),
+            DefaultFileNameGenerator::new("eq-del".to_string(), None, DataFileFormat::Parquet),
+        );
+        let mut writer = EqualityDeleteFileWriterBuilder::new(rolling, config)
+            .build(None)
+            .await
+            .unwrap();
+
+        // Rows of the table: f = 1, s = {f: 7, g: 0}.
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let DataType::Struct(s_fields) = arrow_schema.field(1).data_type().clone() else {
+            unreachable!()
+        };
+        let s = StructArray::new(
+            s_fields,
+            vec![
+                Arc::new(Int64Array::from(vec![7])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![0])) as ArrayRef,
+            ],
+            None,
+        );
+        let rows = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            Arc::new(s) as ArrayRef,
+        ])
+        .unwrap();
+        writer.write(rows).await.unwrap();
+        let data_file = writer.close().await.unwrap().pop().unwrap();
+
+        let predicate = load_eq_delete_predicate(data_file.file_path(), vec![3], schema.clone())
+            .await
+            .unwrap();
+        assert_keeps_rows_unless_nested_f_is_7(predicate, schema);
+    }
+
+    /// An equality id the scan schema does not have is an error, not a column to skip.
+    #[tokio::test]
+    async fn test_equality_delete_with_id_missing_from_schema_fails() {
+        let tmp_dir = TempDir::new().unwrap();
+        let table_location = tmp_dir.path().to_str().unwrap();
+        // Columns y (id 2) and z (id 3).
+        let path = setup_write_equality_delete_file_1(table_location);
+        let schema = nested_eq_delete_table_schema();
+
+        let err = load_eq_delete_predicate(&path, vec![1, 9], schema)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("field id 9"), "{err}");
     }
 }

@@ -15,18 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions, StructArray};
+use arrow_schema::{FieldRef, Fields, Schema as ArrowSchema};
 use futures::{StreamExt, TryStreamExt};
-use parquet::arrow::ParquetRecordBatchStreamBuilder;
+use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder};
 
 use crate::arrow::ArrowReader;
 use crate::arrow::reader::ParquetReadOptions;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::ScanMetrics;
+use crate::arrow::schema::try_get_field_id_from_metadata;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
-use crate::spec::{Schema, SchemaRef};
+use crate::spec::{Schema, SchemaRef, prune_columns};
 use crate::{Error, ErrorKind, Result};
 
 /// Delete File Loader
@@ -115,6 +119,136 @@ impl BasicDeleteFileLoader {
     }
 }
 
+/// Reads an equality delete file as `schema` pruned to its equality fields, the way Java's
+/// `DeleteFilter` selects them, so a field nested in a struct keeps its parent struct.
+///
+/// Java writes a nested equality field under its parent structs, while `EqualityDeleteWriter`
+/// writes it as a top-level column. Such a column is put back under its parents before schema
+/// evolution, so both layouts read the same way.
+pub(crate) fn evolve_equality_delete_stream(
+    record_batch_stream: ArrowRecordBatchStream,
+    schema: &Schema,
+    equality_ids: &[i32],
+) -> Result<ArrowRecordBatchStream> {
+    if let Some(id) = equality_ids
+        .iter()
+        .find(|&&id| schema.field_by_id(id).is_none())
+    {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Equality delete field id {id} is not in the scan schema"),
+        ));
+    }
+    let crate::spec::Type::Struct(pruned) =
+        prune_columns(schema, equality_ids.iter().copied(), false)?
+    else {
+        return Err(Error::new(
+            ErrorKind::Unexpected,
+            "pruning a schema did not return a struct",
+        ));
+    };
+    let projection: Vec<i32> = pruned.fields().iter().map(|field| field.id).collect();
+    let pruned = Arc::new(
+        Schema::builder()
+            .with_schema_id(schema.schema_id())
+            .with_fields(pruned.fields().to_vec())
+            .build()?,
+    );
+    let mut transformer = RecordBatchTransformerBuilder::new(pruned.clone(), &projection).build();
+    Ok(Box::pin(record_batch_stream.map(move |batch| {
+        batch
+            .and_then(|batch| nest_top_level_equality_columns(batch, &pruned))
+            .and_then(|batch| transformer.process_record_batch(batch))
+    })) as ArrowRecordBatchStream)
+}
+
+/// Moves top-level columns whose field ids belong to fields nested in `schema` back under their
+/// parent structs. A batch with no such column is returned as is.
+fn nest_top_level_equality_columns(batch: RecordBatch, schema: &Schema) -> Result<RecordBatch> {
+    let top_level_ids: HashSet<i32> = schema
+        .as_struct()
+        .fields()
+        .iter()
+        .map(|field| field.id)
+        .collect();
+    let mut flat = HashMap::new();
+    for (index, field) in batch.schema().fields().iter().enumerate() {
+        if let Some(id) = try_get_field_id_from_metadata(field)?
+            && !top_level_ids.contains(&id)
+            && schema.field_by_id(id).is_some()
+        {
+            flat.insert(id, index);
+        }
+    }
+    if flat.is_empty() {
+        return Ok(batch);
+    }
+
+    fn nest(
+        field: &crate::spec::NestedField,
+        batch: &RecordBatch,
+        flat: &HashMap<i32, usize>,
+    ) -> Option<(FieldRef, ArrayRef)> {
+        if let Some(&index) = flat.get(&field.id) {
+            return Some((
+                batch.schema().field(index).clone().into(),
+                batch.column(index).clone(),
+            ));
+        }
+        let crate::spec::Type::Struct(struct_type) = field.field_type.as_ref() else {
+            return None;
+        };
+        let (fields, columns): (Vec<FieldRef>, Vec<ArrayRef>) = struct_type
+            .fields()
+            .iter()
+            .filter_map(|child| nest(child, batch, flat))
+            .unzip();
+        if fields.is_empty() {
+            return None;
+        }
+        let fields = Fields::from(fields);
+        let array = StructArray::new(fields.clone(), columns, None);
+        let arrow_field =
+            arrow_schema::Field::new(&field.name, arrow_schema::DataType::Struct(fields), true)
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    field.id.to_string(),
+                )]));
+        Some((Arc::new(arrow_field), Arc::new(array)))
+    }
+
+    let mut fields: Vec<FieldRef> = Vec::new();
+    let mut columns: Vec<ArrayRef> = Vec::new();
+    for (index, field) in batch.schema().fields().iter().enumerate() {
+        if !flat.values().any(|&flat_index| flat_index == index) {
+            fields.push(field.clone());
+            columns.push(batch.column(index).clone());
+        }
+    }
+    let present: HashSet<i32> = fields
+        .iter()
+        .map(|field| try_get_field_id_from_metadata(field))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+    for field in schema.as_struct().fields() {
+        if present.contains(&field.id) {
+            continue;
+        }
+        if let Some((arrow_field, column)) = nest(field, &batch, &flat) {
+            fields.push(arrow_field);
+            columns.push(column);
+        }
+    }
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    Ok(RecordBatch::try_new_with_options(
+        Arc::new(ArrowSchema::new(fields)),
+        columns,
+        &options,
+    )?)
+}
+
 #[async_trait::async_trait]
 impl DeleteFileLoader for BasicDeleteFileLoader {
     async fn read_delete_file(
@@ -130,14 +264,15 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
             )
             .await?;
 
-        // For equality deletes, only evolve the equality_ids columns.
+        // For equality deletes, only evolve the columns holding the equality_ids.
         // For positional deletes (equality_ids is None), use all field IDs.
-        let field_ids = match task.equality_ids() {
-            Some(ids) => ids.to_vec(),
-            None => schema.field_id_to_name_map().keys().cloned().collect(),
-        };
-
-        Self::evolve_schema(raw_batch_stream, schema, &field_ids).await
+        match task.equality_ids() {
+            Some(ids) => evolve_equality_delete_stream(raw_batch_stream, &schema, ids),
+            None => {
+                let field_ids: Vec<i32> = schema.field_id_to_name_map().keys().cloned().collect();
+                Self::evolve_schema(raw_batch_stream, schema, &field_ids).await
+            }
+        }
     }
 }
 
