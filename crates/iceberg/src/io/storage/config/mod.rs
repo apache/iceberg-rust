@@ -37,7 +37,7 @@ mod hf;
 mod oss;
 mod s3;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub use azdls::*;
 pub use gcs::*;
@@ -45,17 +45,52 @@ pub use hdfs_native::*;
 pub use hf::*;
 pub use oss::*;
 pub use s3::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use typed_builder::TypedBuilder;
+
+use crate::{Error, ErrorKind, Result};
 
 /// Configuration properties for storage backends.
 ///
 /// This struct contains only configuration properties without specifying
 /// which storage backend to use. The storage type is determined by the
 /// explicit factory selection.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default, TypedBuilder)]
 pub struct StorageConfig {
     /// Configuration properties for the storage backend
+    #[builder(default)]
     props: HashMap<String, String>,
+    /// Credentials that apply to locations under their prefixes
+    #[builder(
+        default,
+        setter(transform = |storage_credentials: Vec<StorageCredential>| {
+            last_credential_per_prefix(storage_credentials)
+        })
+    )]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_storage_credentials"
+    )]
+    storage_credentials: Vec<StorageCredential>,
+}
+
+/// Keeps the last credential for each prefix, as Java's `S3FileIO.clientByPrefix` does.
+fn last_credential_per_prefix(credentials: Vec<StorageCredential>) -> Vec<StorageCredential> {
+    let mut prefixes = HashSet::new();
+    let mut credentials: Vec<_> = credentials
+        .into_iter()
+        .rev()
+        .filter(|credential| prefixes.insert(credential.prefix.clone()))
+        .collect();
+    credentials.reverse();
+    credentials
+}
+
+fn deserialize_storage_credentials<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Vec<StorageCredential>, D::Error> {
+    Vec::deserialize(deserializer).map(last_credential_per_prefix)
 }
 
 impl StorageConfig {
@@ -63,6 +98,7 @@ impl StorageConfig {
     pub fn new() -> Self {
         Self {
             props: HashMap::new(),
+            storage_credentials: Vec::new(),
         }
     }
 
@@ -72,7 +108,10 @@ impl StorageConfig {
     ///
     /// * `props` - Configuration properties for the storage backend
     pub fn from_props(props: HashMap<String, String>) -> Self {
-        Self { props }
+        Self {
+            props,
+            storage_credentials: Vec::new(),
+        }
     }
 
     /// Get all configuration properties.
@@ -120,6 +159,76 @@ impl StorageConfig {
         self.props
             .extend(props.into_iter().map(|(k, v)| (k.into(), v.into())));
         self
+    }
+
+    /// Get the credentials that apply to locations under their prefixes.
+    ///
+    /// There is one per prefix, the last one given for it. A factory that
+    /// supports them overlays the props with the config of a location's
+    /// longest matching credential.
+    pub fn storage_credentials(&self) -> &[StorageCredential] {
+        &self.storage_credentials
+    }
+}
+
+/// Storage properties, such as a vended credential, that apply to locations
+/// under a prefix, like Java's `StorageCredential`.
+#[derive(Clone, PartialEq, Eq, Serialize)]
+pub struct StorageCredential {
+    /// Location prefix, such as `s3://bucket/table`
+    prefix: String,
+    /// Storage properties holding the credential
+    config: HashMap<String, String>,
+}
+
+impl StorageCredential {
+    /// Create a credential for locations under `prefix`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `prefix` is empty.
+    pub fn new(prefix: impl Into<String>, config: HashMap<String, String>) -> Result<Self> {
+        let prefix = prefix.into();
+        if prefix.is_empty() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                "Invalid storage credential: prefix must be non-empty",
+            ));
+        }
+        Ok(Self { prefix, config })
+    }
+
+    /// Return the location prefix this credential applies to.
+    pub fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
+    /// Return the storage properties holding the credential.
+    pub fn config(&self) -> &HashMap<String, String> {
+        &self.config
+    }
+}
+
+impl<'de> Deserialize<'de> for StorageCredential {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Fields {
+            prefix: String,
+            config: HashMap<String, String>,
+        }
+
+        let Fields { prefix, config } = Fields::deserialize(deserializer)?;
+        Self::new(prefix, config).map_err(serde::de::Error::custom)
+    }
+}
+
+// The config values are secrets.
+impl std::fmt::Debug for StorageCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageCredential")
+            .field("prefix", &self.prefix)
+            .field("config_keys", &self.config.keys())
+            .finish()
     }
 }
 
@@ -198,6 +307,87 @@ mod tests {
         let deserialized: StorageConfig = serde_json::from_str(&serialized).unwrap();
 
         assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_storage_config_serialization_keeps_storage_credentials() {
+        let config = StorageConfig::builder()
+            .props(HashMap::from([(
+                "region".to_string(),
+                "us-east-1".to_string(),
+            )]))
+            .storage_credentials(vec![
+                StorageCredential::new(
+                    "s3://bucket/table",
+                    HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]),
+                )
+                .unwrap(),
+            ])
+            .build();
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        let deserialized: StorageConfig = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(config, deserialized);
+    }
+
+    #[test]
+    fn test_storage_config_keeps_the_last_credential_for_each_prefix() {
+        let credential = |prefix: &str, access_key_id: &str| {
+            StorageCredential::new(
+                prefix,
+                HashMap::from([("s3.access-key-id".to_string(), access_key_id.to_string())]),
+            )
+            .unwrap()
+        };
+
+        let credentials = vec![
+            credential("s3://bucket/a", "1"),
+            credential("s3://bucket/b", "2"),
+            credential("s3://bucket/a", "3"),
+        ];
+        let expected = [
+            credential("s3://bucket/b", "2"),
+            credential("s3://bucket/a", "3"),
+        ];
+
+        let built = StorageConfig::builder()
+            .storage_credentials(credentials.clone())
+            .build();
+        let deserialized: StorageConfig = serde_json::from_value(serde_json::json!({
+            "props": {},
+            "storage_credentials": credentials,
+        }))
+        .unwrap();
+
+        assert_eq!(built.storage_credentials(), expected);
+        assert_eq!(deserialized.storage_credentials(), expected);
+    }
+
+    #[test]
+    fn test_storage_credential_debug_omits_config_values() {
+        let credential = StorageCredential::new(
+            "s3://bucket/table",
+            HashMap::from([("s3.secret-access-key".to_string(), "secret".to_string())]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            format!("{credential:?}"),
+            r#"StorageCredential { prefix: "s3://bucket/table", config_keys: ["s3.secret-access-key"] }"#
+        );
+    }
+
+    #[test]
+    fn test_storage_credential_rejects_an_empty_prefix() {
+        let config = HashMap::from([("s3.access-key-id".to_string(), "vended".to_string())]);
+
+        let err = StorageCredential::new("", config).unwrap_err();
+        let deserialized =
+            serde_json::from_str::<StorageCredential>(r#"{"prefix":"","config":{}}"#);
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(deserialized.is_err());
     }
 
     #[test]

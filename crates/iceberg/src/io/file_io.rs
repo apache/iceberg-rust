@@ -275,6 +275,12 @@ impl FileIOBuilder {
         self
     }
 
+    /// Replace the storage configuration set so far.
+    pub fn with_config(mut self, config: StorageConfig) -> Self {
+        self.config = config;
+        self
+    }
+
     /// Get the storage configuration.
     pub fn config(&self) -> &StorageConfig {
         &self.config
@@ -453,7 +459,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{FileIO, FileIOBuilder};
-    use crate::io::{LocalFsStorageFactory, MemoryStorageFactory};
+    use crate::io::{LocalFsStorageFactory, MemoryStorageFactory, StorageConfig};
 
     fn create_local_file_io() -> FileIO {
         FileIO::new_with_fs()
@@ -599,6 +605,17 @@ mod tests {
 
         assert_eq!(file_io.config().get("key1"), Some(&"value1".to_string()));
         assert_eq!(file_io.config().get("key2"), Some(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_file_io_builder_with_config_replaces_config() {
+        let config = StorageConfig::new().with_prop("key2", "value2");
+        let file_io = FileIOBuilder::new(Arc::new(MemoryStorageFactory))
+            .with_prop("key1", "value1")
+            .with_config(config.clone())
+            .build();
+
+        assert_eq!(file_io.config(), &config);
     }
 
     #[tokio::test]
