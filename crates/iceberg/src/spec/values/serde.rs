@@ -480,8 +480,8 @@ pub(crate) mod _serde {
                 },
                 RawLiteralEnum::String(v) => match ty {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
-                    // apache-avro deserializes an Avro uuid as its string form,
-                    // so uuid values read from manifests land here.
+                    // apache-avro deserializes a UUID as a hyphenated string.
+                    // UUID values read via `Value` (i.e. `read_data_files_from_avro`), land here.
                     // The hyphenated restriction matches behaviour with Java.
                     Type::Primitive(PrimitiveType::Uuid) => Hyphenated::from_str(&v)
                         .map(|hyphenated_uuid| Some(Literal::uuid(hyphenated_uuid.into_uuid())))
@@ -493,8 +493,8 @@ pub(crate) mod _serde {
                         }),
                     _ => Err(invalid_err("string")),
                 },
-                // `Uuid` is only built when writing, so that apache-avro gets a fixed
-                // value. Avro uuid values are read back as `String`.
+                // `Uuid` is only built when writing, so that apache-avro gets a fixed value.
+                // Avro uuid values are read back as `String` or `Bytes`.
                 RawLiteralEnum::Uuid(_) => Err(invalid_err_with_reason(
                     "uuid",
                     "RawLiteralEnum::Uuid is only used for serialization",
