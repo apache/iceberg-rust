@@ -109,7 +109,7 @@ pub(crate) mod _serde {
         Double(f64),
         String(String),
         Bytes(ByteBuf),
-        Uuid(#[serde(serialize_with = "apache_avro::serde::fixed::serialize")] [u8; 16]),
+        Fixed(#[serde(serialize_with = "apache_avro::serde::fixed::serialize")] ByteBuf),
         List(List),
         StringMap(StringMap),
         Record(Record),
@@ -292,10 +292,15 @@ pub(crate) mod _serde {
                     PrimitiveLiteral::Double(v) => RawLiteralEnum::Double(v.0),
                     PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
                     PrimitiveLiteral::UInt128(v) if *ty == Type::Primitive(PrimitiveType::Uuid) => {
-                        RawLiteralEnum::Uuid(v.to_be_bytes())
+                        RawLiteralEnum::Fixed(ByteBuf::from(v.to_be_bytes()))
                     }
                     PrimitiveLiteral::UInt128(v) => {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
+                    }
+                    PrimitiveLiteral::Binary(v)
+                        if matches!(ty, Type::Primitive(PrimitiveType::Fixed(_))) =>
+                    {
+                        RawLiteralEnum::Fixed(ByteBuf::from(v))
                     }
                     PrimitiveLiteral::Binary(v) => RawLiteralEnum::Bytes(ByteBuf::from(v)),
                     PrimitiveLiteral::Int128(v) => {
@@ -493,11 +498,11 @@ pub(crate) mod _serde {
                         }),
                     _ => Err(invalid_err("string")),
                 },
-                // `Uuid` is only built when writing, so that apache-avro gets a fixed value.
-                // Avro uuid values are read back as `String` or `Bytes`.
-                RawLiteralEnum::Uuid(_) => Err(invalid_err_with_reason(
-                    "uuid",
-                    "RawLiteralEnum::Uuid is only used for serialization",
+                // `Fixed` is only built when writing, so that apache-avro gets a fixed value.
+                // Avro fixed values are read back as `Bytes`, and uuid values as `String` or `Bytes`.
+                RawLiteralEnum::Fixed(_) => Err(invalid_err_with_reason(
+                    "fixed",
+                    "RawLiteralEnum::Fixed is only used for serialization",
                 )),
                 RawLiteralEnum::Bytes(v) => match ty {
                     Type::Primitive(PrimitiveType::Binary) => Ok(Some(Literal::binary(v.to_vec()))),
