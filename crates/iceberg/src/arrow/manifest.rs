@@ -40,10 +40,11 @@ use serde_json::Value as JsonValue;
 use crate::arrow::schema_to_arrow_schema;
 use crate::error::invalid_data;
 use crate::spec::{
-    DATA_FILE_CONTENT_FIELD_ID, DATA_FILE_FIELD_ID, FILE_SEQUENCE_NUMBER_FIELD_ID, FormatVersion,
-    MANIFEST_CONTENT_FIELD_ID, MANIFEST_SEQUENCE_NUMBER_FIELD_ID, MIN_SEQUENCE_NUMBER_FIELD_ID,
-    ManifestContentType, ManifestFile, ManifestMetadata, ManifestStatus, PARTITION_FIELD_ID,
-    SEQUENCE_NUMBER_FIELD_ID, Schema, manifest_entry_fields, manifest_file_fields,
+    DATA_FILE_CONTENT_FIELD_ID, DATA_FILE_FIELD_ID, DATA_FILE_PARTITION_FIELD_ID,
+    FILE_SEQUENCE_NUMBER_FIELD_ID, FormatVersion, MANIFEST_CONTENT_FIELD_ID,
+    MANIFEST_SEQUENCE_NUMBER_FIELD_ID, MIN_SEQUENCE_NUMBER_FIELD_ID, ManifestContentType,
+    ManifestFile, ManifestMetadata, ManifestStatus, SEQUENCE_NUMBER_FIELD_ID, Schema,
+    manifest_entry_fields, manifest_file_fields,
 };
 use crate::{Error, Result};
 
@@ -162,9 +163,11 @@ pub fn read_manifest_entries(bytes: &[u8], manifest_file: &ManifestFile) -> Resu
 /// The schema is the spec's `manifest_file` struct for the latest format
 /// version, with field IDs in the Arrow field metadata, so manifest lists of
 /// every format version read into the same schema. Fields are matched to the
-/// manifest list's Avro schema by field ID, and a v1 manifest list reads with
-/// the spec's v2+ defaults. Partition summary bounds keep the binary
-/// single-value serialization they were written with.
+/// manifest list's Avro schema by field ID. The format version comes from the
+/// `format-version` key that writers put in the file's metadata, and a
+/// manifest list without one is v1. A v1 manifest list reads with the spec's
+/// v2+ defaults. Partition summary bounds keep the binary single-value
+/// serialization they were written with.
 ///
 /// # Example
 ///
@@ -186,12 +189,22 @@ pub fn read_manifest_list(bytes: &[u8]) -> Result<RecordBatch> {
         .with_batch_size(usize::MAX)
         .build(bytes)
         .map_err(invalid_manifest_list)?;
+    let header = reader.avro_header();
     let avro_schema: JsonValue = serde_json::from_slice(
-        reader
-            .avro_header()
+        header
             .get("avro.schema")
             .ok_or_else(|| invalid_data!("manifest list has no avro.schema"))?,
     )?;
+    // The spec doesn't define this key, but Java, PyIceberg, and iceberg-rust
+    // all write it, and rejecting an unknown version keeps a newer manifest
+    // list from reading as an older one.
+    let format_version = match header.get("format-version") {
+        Some(bytes) => serde_json::from_slice::<FormatVersion>(bytes).map_err(|err| {
+            invalid_data!("failed to parse format version in manifest list metadata")
+                .with_source(err)
+        })?,
+        None => FormatVersion::V1,
+    };
     let schema = Arc::new(schema_to_arrow_schema(
         &Schema::builder()
             .with_fields(manifest_file_fields())
@@ -200,13 +213,22 @@ pub fn read_manifest_list(bytes: &[u8]) -> Result<RecordBatch> {
     let Some(batch) = only_batch(reader, invalid_manifest_list)? else {
         return Ok(RecordBatch::new_empty(schema));
     };
-    // The spec gives manifest lists no format version, and v2+ requires these
-    // fields, so a manifest list without them is v1 and they read as 0.
-    let manifests = project_struct(&StructArray::from(batch), &avro_schema, schema.fields(), &[
-        MANIFEST_CONTENT_FIELD_ID,
-        MANIFEST_SEQUENCE_NUMBER_FIELD_ID,
-        MIN_SEQUENCE_NUMBER_FIELD_ID,
-    ])?;
+    // v1 manifest lists have no content or sequence number columns, which v2+
+    // readers read as 0.
+    let zero_defaults: &[i32] = match format_version {
+        FormatVersion::V1 => &[
+            MANIFEST_CONTENT_FIELD_ID,
+            MANIFEST_SEQUENCE_NUMBER_FIELD_ID,
+            MIN_SEQUENCE_NUMBER_FIELD_ID,
+        ],
+        _ => &[],
+    };
+    let manifests = project_struct(
+        &StructArray::from(batch),
+        &avro_schema,
+        schema.fields(),
+        zero_defaults,
+    )?;
     Ok(RecordBatch::from(manifests))
 }
 
@@ -247,7 +269,7 @@ fn remove_empty_partition(avro_schema: &mut JsonValue) -> bool {
     };
     let len = data_file_fields.len();
     data_file_fields.retain(|field| {
-        !(has_field_id(field, PARTITION_FIELD_ID)
+        !(has_field_id(field, DATA_FILE_PARTITION_FIELD_ID)
             && field["type"]["fields"]
                 .as_array()
                 .is_some_and(Vec::is_empty))
@@ -702,6 +724,26 @@ mod tests {
         Type::List(ListType::new(
             NestedField::list_element(element_id, Type::Primitive(element), true).into(),
         ))
+    }
+
+    /// Rewrites an Avro file with the user metadata `key` set to `value`, or
+    /// without it if `value` is `None`.
+    fn set_avro_metadata(bytes: &[u8], key: &str, value: Option<&str>) -> Vec<u8> {
+        let reader = apache_avro::Reader::new(bytes).unwrap();
+        let schema = reader.writer_schema().clone();
+        let mut metadata = reader.user_metadata().clone();
+        match value {
+            Some(value) => metadata.insert(key.to_string(), value.as_bytes().to_vec()),
+            None => metadata.remove(key),
+        };
+        let mut writer = apache_avro::Writer::new(&schema, Vec::new()).unwrap();
+        for (key, value) in metadata {
+            writer.add_user_metadata(key, value).unwrap();
+        }
+        for record in reader {
+            writer.append_value(record.unwrap()).unwrap();
+        }
+        writer.into_inner().unwrap()
     }
 
     /// Rewrites a manifest with `codec`, `edit_schema` applied to its Avro
@@ -1680,28 +1722,32 @@ mod tests {
             unknown_counts,
         ])
         .await;
-        let batch = read_manifest_list(&bytes).unwrap();
+        // A manifest list without a format version reads as v1.
+        let without_format_version = set_avro_metadata(&bytes, "format-version", None);
+        for bytes in [bytes, without_format_version] {
+            let batch = read_manifest_list(&bytes).unwrap();
 
-        assert_eq!(
-            column(&batch, "content").as_ref(),
-            &Int32Array::from(vec![0, 0]) as &dyn Array
-        );
-        for name in ["sequence_number", "min_sequence_number"] {
             assert_eq!(
-                column(&batch, name).as_ref(),
-                &Int64Array::from(vec![0, 0]) as &dyn Array,
-                "{name}"
+                column(&batch, "content").as_ref(),
+                &Int32Array::from(vec![0, 0]) as &dyn Array
             );
+            for name in ["sequence_number", "min_sequence_number"] {
+                assert_eq!(
+                    column(&batch, name).as_ref(),
+                    &Int64Array::from(vec![0, 0]) as &dyn Array,
+                    "{name}"
+                );
+            }
+            assert_eq!(
+                column(&batch, "added_files_count").as_ref(),
+                &Int32Array::from(vec![Some(1), None]) as &dyn Array
+            );
+            assert_eq!(
+                column(&batch, "deleted_rows_count").as_ref(),
+                &Int64Array::from(vec![Some(30), None]) as &dyn Array
+            );
+            assert_eq!(column(&batch, "first_row_id").null_count(), 2);
         }
-        assert_eq!(
-            column(&batch, "added_files_count").as_ref(),
-            &Int32Array::from(vec![Some(1), None]) as &dyn Array
-        );
-        assert_eq!(
-            column(&batch, "deleted_rows_count").as_ref(),
-            &Int64Array::from(vec![Some(30), None]) as &dyn Array
-        );
-        assert_eq!(column(&batch, "first_row_id").null_count(), 2);
     }
 
     #[tokio::test]
@@ -1755,7 +1801,7 @@ mod tests {
         .await;
         // A manifest_path under another field ID leaves the required
         // manifest_path missing.
-        let bytes = rewrite_manifest(
+        let moved_manifest_path = rewrite_manifest(
             &bytes,
             Codec::Null,
             |schema| {
@@ -1767,8 +1813,32 @@ mod tests {
             },
             |_| {},
         );
-        let err = read_manifest_list(&bytes).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        // Only v1 manifest lists read a missing sequence number as 0.
+        let without_sequence_number = rewrite_manifest(
+            &bytes,
+            Codec::Null,
+            |schema| {
+                schema["fields"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|field| field["name"] != "sequence_number")
+            },
+            |record| {
+                let AvroValue::Record(fields) = record else {
+                    panic!("manifest list entry is not a record");
+                };
+                fields.retain(|(name, _)| name != "sequence_number");
+            },
+        );
+        let unknown_format_version = set_avro_metadata(&bytes, "format-version", Some("4"));
+        for bytes in [
+            moved_manifest_path,
+            without_sequence_number,
+            unknown_format_version,
+        ] {
+            let err = read_manifest_list(&bytes).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        }
     }
 
     #[test]

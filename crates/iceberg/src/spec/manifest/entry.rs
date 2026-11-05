@@ -184,7 +184,7 @@ pub(crate) const SEQUENCE_NUMBER_FIELD_ID: i32 = 3;
 /// Field ID of `manifest_entry.file_sequence_number`.
 pub(crate) const FILE_SEQUENCE_NUMBER_FIELD_ID: i32 = 4;
 /// Field ID of `data_file.partition`.
-pub(crate) const PARTITION_FIELD_ID: i32 = 102;
+pub(crate) const DATA_FILE_PARTITION_FIELD_ID: i32 = 102;
 /// Field ID of `data_file.content`.
 pub(crate) const DATA_FILE_CONTENT_FIELD_ID: i32 = 134;
 
@@ -527,7 +527,7 @@ fn data_file_fields_v3(partition_type: &StructType) -> Vec<NestedFieldRef> {
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
         Arc::new(NestedField::required(
-            PARTITION_FIELD_ID,
+            DATA_FILE_PARTITION_FIELD_ID,
             "partition",
             Type::Struct(partition_type.clone()),
         )),
@@ -581,7 +581,7 @@ fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
         Arc::new(NestedField::required(
-            PARTITION_FIELD_ID,
+            DATA_FILE_PARTITION_FIELD_ID,
             "partition",
             Type::Struct(partition_type.clone()),
         )),
@@ -634,7 +634,7 @@ fn data_file_fields_v1(partition_type: &StructType) -> Vec<NestedFieldRef> {
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
         Arc::new(NestedField::required(
-            PARTITION_FIELD_ID,
+            DATA_FILE_PARTITION_FIELD_ID,
             "partition",
             Type::Struct(partition_type.clone()),
         )),
