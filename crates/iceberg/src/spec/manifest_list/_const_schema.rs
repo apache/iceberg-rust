@@ -318,6 +318,36 @@ static V3_SCHEMA: Lazy<Schema> = {
     })
 };
 
+/// Fields of the `manifest_file` struct in the latest format version, with the
+/// file and row counts optional as in v1, so a manifest list of any version
+/// fits them.
+pub(crate) fn manifest_file_fields() -> Vec<NestedFieldRef> {
+    let optional = |field: &NestedFieldRef| {
+        Arc::new(NestedField {
+            required: false,
+            ..field.as_ref().clone()
+        })
+    };
+    vec![
+        MANIFEST_PATH.clone(),
+        MANIFEST_LENGTH.clone(),
+        PARTITION_SPEC_ID.clone(),
+        CONTENT.clone(),
+        SEQUENCE_NUMBER.clone(),
+        MIN_SEQUENCE_NUMBER.clone(),
+        ADDED_SNAPSHOT_ID.clone(),
+        optional(&ADDED_FILES_COUNT_V2),
+        optional(&EXISTING_FILES_COUNT_V2),
+        optional(&DELETED_FILES_COUNT_V2),
+        optional(&ADDED_ROWS_COUNT_V2),
+        optional(&EXISTING_ROWS_COUNT_V2),
+        optional(&DELETED_ROWS_COUNT_V2),
+        PARTITIONS.clone(),
+        KEY_METADATA.clone(),
+        FIRST_ROW_ID.clone(),
+    ]
+}
+
 pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V1: Lazy<AvroSchema> =
     Lazy::new(|| schema_to_avro_schema("manifest_file", &V1_SCHEMA).unwrap());
 
