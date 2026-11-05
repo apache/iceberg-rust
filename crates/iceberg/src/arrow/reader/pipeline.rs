@@ -23,7 +23,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use arrow_schema::{DataType, Field};
 use futures::{StreamExt, TryStreamExt};
@@ -58,7 +57,7 @@ use crate::metadata_columns::{
 };
 use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, PartitionSpec, Struct};
+use crate::spec::{DataContentType, Datum, PartitionSpec, Struct};
 use crate::{Error, ErrorKind};
 
 impl ArrowReader {
@@ -167,7 +166,7 @@ impl FileScanTaskReader {
         let path = task.data_file_path().to_string();
         let file_io = self.file_io.clone();
         let file_size_in_bytes = task.file_size_in_bytes();
-        let bytes_read = Arc::clone(self.scan_metrics.bytes_read_counter());
+        let scan_metrics = self.scan_metrics.clone();
         let key_metadata = task.key_metadata().map(|km| km.to_vec());
         let opening = self
             .runtime
@@ -178,13 +177,16 @@ impl FileScanTaskReader {
                     &file_io,
                     file_size_in_bytes,
                     parquet_read_options,
-                    &bytes_read,
+                    scan_metrics,
+                    DataContentType::Data,
                     key_metadata.as_deref(),
                 )
                 .await
             })
             .abort_on_drop();
         let (parquet_file_reader, arrow_metadata) = opening.await??;
+
+        self.scan_metrics.add_data_files_opened(1);
 
         // Check if Parquet file has embedded field IDs
         // Corresponds to Java's ParquetSchemaUtil.hasIds()
@@ -659,13 +661,19 @@ impl FileScanTaskReader {
         // batches (using the reader-produced `_pos` position) before the transformer, which
         // then passes it through as a virtual field.
         let first_row_id = task.first_row_id();
+        let scan_metrics = self.scan_metrics;
         let record_batch_stream = record_batch_stream_builder.build()?.map(move |batch| {
             let mut batch = batch.map_err(|err| -> Error { err.into() })?;
             if project_row_id {
                 batch = synthesize_row_id_column(batch, first_row_id)?;
             }
             // Process the record batch (type promotion, column reordering, virtual fields, etc.)
-            record_batch_transformer.process_record_batch(batch)
+            let record_batch = record_batch_transformer.process_record_batch(batch);
+            if let Ok(records) = &record_batch {
+                scan_metrics.add_rows_emitted(records.num_rows() as u64);
+            }
+
+            record_batch
         });
 
         Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
@@ -811,18 +819,20 @@ impl FileScanTaskReader {
 
 impl ArrowReader {
     /// Opens a Parquet file and loads its metadata, wrapping the reader with
-    /// [`CountingFileRead`] so all I/O is accumulated into `bytes_read`.
+    /// [`CountingFileRead`] so all I/O is accumulated into the scan metrics
+    /// for the specified file type.
     pub(crate) async fn open_parquet_file(
         data_file_path: &str,
         file_io: &FileIO,
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
-        bytes_read: &Arc<AtomicU64>,
+        scan_metrics: ScanMetrics,
+        file_type: DataContentType,
         key_metadata: Option<&[u8]>,
     ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let parquet_file = file_io.new_input(data_file_path)?;
         let counting_reader =
-            CountingFileRead::new(parquet_file.reader().await?, Arc::clone(bytes_read));
+            CountingFileRead::new(parquet_file.reader().await?, scan_metrics, file_type);
         Self::build_parquet_reader(
             Box::new(counting_reader),
             file_size_in_bytes,
@@ -910,7 +920,7 @@ mod tests {
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_ROW_ID, RESERVED_FIELD_ID_FILE,
         RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_ROW_ID,
     };
-    use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream, ScanMetrics};
     use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     // INT96 encoding: [nanos_low_u32, nanos_high_u32, julian_day_u32]
@@ -1800,7 +1810,8 @@ mod tests {
             vec![RESERVED_FIELD_ID_ROW_ID],
             Some(100),
         );
-        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+        let (batches, meta_only_metrics) = scan_task(meta_only).await;
+        let meta_only_bytes = meta_only_metrics.bytes_read();
 
         assert_eq!(batches[0].num_columns(), 1);
         assert_row_id_column(&batches, &[Some(100), Some(101), Some(102)]);
@@ -1812,7 +1823,8 @@ mod tests {
             vec![2, RESERVED_FIELD_ID_ROW_ID],
             Some(100),
         );
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             meta_only_bytes < with_data_bytes,
@@ -1836,7 +1848,8 @@ mod tests {
             vec![RESERVED_FIELD_ID_ROW_ID],
             None,
         );
-        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+        let (batches, meta_only_metrics) = scan_task(meta_only).await;
+        let meta_only_bytes = meta_only_metrics.bytes_read();
 
         assert_eq!(batches[0].num_columns(), 1);
         assert_row_id_column(&batches, &[None, None, None]);
@@ -1847,7 +1860,8 @@ mod tests {
             vec![2, RESERVED_FIELD_ID_ROW_ID],
             None,
         );
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             meta_only_bytes < with_data_bytes,
@@ -1887,7 +1901,8 @@ mod tests {
             write_parquet_with_wide_column(dir, "lusn_only.parquet", vec![], vec![]),
             vec![RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER],
         );
-        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+        let (batches, meta_only_metrics) = scan_task(meta_only).await;
+        let meta_only_bytes = meta_only_metrics.bytes_read();
 
         assert_eq!(batches[0].num_columns(), 1);
         assert_last_updated_seq_column(&batches, &[Some(7), Some(7), Some(7)]);
@@ -1896,7 +1911,8 @@ mod tests {
             write_parquet_with_wide_column(dir, "lusn_only_ref.parquet", vec![], vec![]),
             vec![2, RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER],
         );
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             meta_only_bytes < with_data_bytes,
@@ -1950,7 +1966,8 @@ mod tests {
             write_parquet_with_wide_column(dir, "partition_only.parquet", vec![], vec![]),
             vec![RESERVED_FIELD_ID_PARTITION],
         );
-        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+        let (batches, meta_only_metrics) = scan_task(meta_only).await;
+        let meta_only_bytes = meta_only_metrics.bytes_read();
 
         assert_eq!(batches[0].num_columns(), 1);
         let partition_col = batches[0]
@@ -1971,7 +1988,8 @@ mod tests {
             write_parquet_with_wide_column(dir, "partition_only_ref.parquet", vec![], vec![]),
             vec![2, RESERVED_FIELD_ID_PARTITION],
         );
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             meta_only_bytes < with_data_bytes,
@@ -3372,14 +3390,14 @@ mod tests {
             .unwrap()
     }
 
-    /// Runs a single-task scan and returns the batches plus the bytes read from storage.
-    async fn scan_task(task: FileScanTask) -> (Vec<RecordBatch>, u64) {
+    /// Runs a single-task scan and returns the batches plus its metrics.
+    async fn scan_task(task: FileScanTask) -> (Vec<RecordBatch>, ScanMetrics) {
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let scan = reader.read(tasks).unwrap();
         let metrics = scan.metrics().clone();
         let batches = scan.stream().try_collect().await.unwrap();
-        (batches, metrics.bytes_read())
+        (batches, metrics)
     }
 
     #[tokio::test]
@@ -3392,7 +3410,8 @@ mod tests {
             id_and_wide_schema(),
             vec![RESERVED_FIELD_ID_POS],
         );
-        let (batches, pos_only_bytes) = scan_task(pos_only).await;
+        let (batches, pos_only_metrics) = scan_task(pos_only).await;
+        let pos_only_bytes = pos_only_metrics.bytes_read();
 
         // Only `_pos` is materialized -- no data columns.
         assert_eq!(batches[0].num_columns(), 1);
@@ -3409,7 +3428,8 @@ mod tests {
             id_and_wide_schema(),
             vec![2, RESERVED_FIELD_ID_POS],
         );
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             pos_only_bytes < with_data_bytes,
@@ -3428,7 +3448,8 @@ mod tests {
             id_and_wide_schema(),
             vec![],
         );
-        let (batches, empty_bytes) = scan_task(empty).await;
+        let (batches, empty_metrics) = scan_task(empty).await;
+        let empty_bytes = empty_metrics.bytes_read();
 
         // No data columns come out, but the fixture's 3 rows are still counted.
         assert!(batches.iter().all(|b| b.num_columns() == 0));
@@ -3439,7 +3460,8 @@ mod tests {
             id_and_wide_schema(),
             vec![2],
         );
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             empty_bytes < with_data_bytes,
@@ -3477,9 +3499,18 @@ mod tests {
             .build()
             .unwrap();
 
-        let (batches, _) = scan_task(task).await;
+        let (batches, metrics) = scan_task(task).await;
 
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+        assert!(metrics.data_bytes_read() > 0);
+        assert!(metrics.delete_bytes_read() > 0);
+        assert_eq!(
+            metrics.bytes_read(),
+            metrics.data_bytes_read() + metrics.delete_bytes_read()
+        );
+        assert_eq!(metrics.data_files_opened(), 1);
+        assert_eq!(metrics.delete_files_opened(), 1);
+        assert_eq!(metrics.rows_emitted(), 2);
     }
 
     #[tokio::test]
@@ -3512,6 +3543,31 @@ mod tests {
         let (batches, _) = scan_task(task).await;
 
         assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_scan_metrics_for_data_file() {
+        let tmp_dir = TempDir::new().unwrap();
+        let dir = tmp_dir.path().to_str().unwrap();
+
+        let task = metadata_projection_task(
+            write_parquet_with_wide_column(dir, "scan_metrics.parquet", vec![], vec![]),
+            id_and_wide_schema(),
+            vec![1, 2],
+        );
+
+        let (batches, metrics) = scan_task(task).await;
+        let rows = batches
+            .iter()
+            .map(|batch| batch.num_rows() as u64)
+            .sum::<u64>();
+
+        assert!(metrics.data_bytes_read() > 0);
+        assert_eq!(metrics.delete_bytes_read(), 0);
+        assert_eq!(metrics.bytes_read(), metrics.data_bytes_read());
+        assert_eq!(metrics.data_files_opened(), 1);
+        assert_eq!(metrics.delete_files_opened(), 0);
+        assert_eq!(metrics.rows_emitted(), rows);
     }
 
     #[tokio::test]
@@ -3651,7 +3707,8 @@ mod tests {
             RESERVED_FIELD_ID_POS,
             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
         ]);
-        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+        let (batches, meta_only_metrics) = scan_task(meta_only).await;
+        let meta_only_bytes = meta_only_metrics.bytes_read();
 
         // `_pos` and the coalesced sequence column materialize; the wide column does not.
         let pos_col = batches[0]
@@ -3677,7 +3734,8 @@ mod tests {
             RESERVED_FIELD_ID_POS,
             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
         ]);
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             meta_only_bytes < with_data_bytes,
@@ -3725,7 +3783,8 @@ mod tests {
         let meta_only = seq_task(write("seq_only.parquet"), vec![
             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
         ]);
-        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+        let (batches, meta_only_metrics) = scan_task(meta_only).await;
+        let meta_only_bytes = meta_only_metrics.bytes_read();
 
         let seq_col = batches[0]
             .column_by_name(RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER)
@@ -3743,7 +3802,8 @@ mod tests {
             2,
             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
         ]);
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             meta_only_bytes < with_data_bytes,
@@ -3790,7 +3850,8 @@ mod tests {
         let meta_only = seq_task("seq_only_null_first.parquet", vec![
             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
         ]);
-        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+        let (batches, meta_only_metrics) = scan_task(meta_only).await;
+        let meta_only_bytes = meta_only_metrics.bytes_read();
 
         assert_eq!(batches[0].num_columns(), 1);
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -3806,7 +3867,8 @@ mod tests {
             2,
             RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
         ]);
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             meta_only_bytes < with_data_bytes,
@@ -3829,7 +3891,8 @@ mod tests {
         let meta_only = metadata_projection_task(file_path.clone(), id_and_wide_schema(), vec![
             RESERVED_FIELD_ID_FILE,
         ]);
-        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+        let (batches, meta_only_metrics) = scan_task(meta_only).await;
+        let meta_only_bytes = meta_only_metrics.bytes_read();
 
         assert_eq!(batches[0].num_columns(), 1);
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -3846,7 +3909,8 @@ mod tests {
             id_and_wide_schema(),
             vec![2, RESERVED_FIELD_ID_FILE],
         );
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             meta_only_bytes < with_data_bytes,
@@ -3895,7 +3959,8 @@ mod tests {
             write_parquet_with_wide_column(dir, "spec_id_only.parquet", vec![], vec![]),
             vec![RESERVED_FIELD_ID_SPEC_ID],
         );
-        let (batches, meta_only_bytes) = scan_task(meta_only).await;
+        let (batches, meta_only_metrics) = scan_task(meta_only).await;
+        let meta_only_bytes = meta_only_metrics.bytes_read();
 
         assert_eq!(batches[0].num_columns(), 1);
         let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
@@ -3911,7 +3976,8 @@ mod tests {
             write_parquet_with_wide_column(dir, "spec_id_only_ref.parquet", vec![], vec![]),
             vec![2, RESERVED_FIELD_ID_SPEC_ID],
         );
-        let (_, with_data_bytes) = scan_task(with_data).await;
+        let (_, with_data_metrics) = scan_task(with_data).await;
+        let with_data_bytes = with_data_metrics.bytes_read();
 
         assert!(
             meta_only_bytes < with_data_bytes,

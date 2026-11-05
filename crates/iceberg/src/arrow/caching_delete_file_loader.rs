@@ -25,14 +25,14 @@ use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, PosDelLoadAction};
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
-use crate::arrow::scan_metrics::ScanMetrics;
+use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics};
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
 use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
 use crate::error::invalid_data;
 use crate::expr::Predicate::AlwaysTrue;
 use crate::expr::{Predicate, Reference};
-use crate::io::FileIO;
+use crate::io::{FileIO, FileRead};
 use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
 use crate::spec::{
@@ -286,6 +286,7 @@ impl CachingDeleteFileLoader {
                             .parquet_to_batch_stream(
                                 task.file_path(),
                                 task.file_size_in_bytes(),
+                                task.file_type(),
                                 task.key_metadata(),
                             )
                             .await?,
@@ -309,6 +310,7 @@ impl CachingDeleteFileLoader {
                         .parquet_to_batch_stream(
                             task.file_path(),
                             task.file_size_in_bytes(),
+                            task.file_type(),
                             task.key_metadata(),
                         )
                         .await?,
@@ -409,17 +411,29 @@ impl CachingDeleteFileLoader {
         let input_file = basic_delete_file_loader
             .file_io()
             .new_input(task.file_path())?;
-        let blob = match task.key_metadata() {
+        let count_reads = |reader| -> Box<dyn FileRead> {
+            Box::new(CountingFileRead::new(
+                reader,
+                basic_delete_file_loader.scan_metrics().clone(),
+                task.file_type(),
+            ))
+        };
+        let reader = match task.key_metadata() {
             Some(key_metadata) => {
                 let key_metadata = StandardKeyMetadata::decode(key_metadata)?;
+
                 EncryptedInputFile::new(input_file, key_metadata)
-                    .reader()
-                    .await?
-                    .read(start..start + len)
+                    .reader_with_wrapper(count_reads)
                     .await?
             }
-            None => input_file.reader().await?.read(start..start + len).await?,
+            None => count_reads(input_file.reader().await?),
         };
+
+        basic_delete_file_loader
+            .scan_metrics()
+            .add_delete_files_opened(1);
+
+        let blob = reader.read(start..start + len).await?;
 
         Ok(DeleteFileContext::DelVec {
             data_file_path,
@@ -874,6 +888,7 @@ mod tests {
             .parquet_to_batch_stream(
                 &eq_delete_file_path,
                 std::fs::metadata(&eq_delete_file_path).unwrap().len(),
+                DataContentType::EqualityDeletes,
                 None,
             )
             .await
@@ -1313,6 +1328,7 @@ mod tests {
             .parquet_to_batch_stream(
                 &delete_file_path,
                 std::fs::metadata(&delete_file_path).unwrap().len(),
+                DataContentType::EqualityDeletes,
                 None,
             )
             .await
@@ -1438,8 +1454,10 @@ mod tests {
             .unwrap();
 
         // Load the deletes - should handle both types without error
+        let scan_metrics = ScanMetrics::new();
         let delete_file_loader =
-            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current());
+            CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current())
+                .with_scan_metrics(scan_metrics.clone());
         let delete_filter = delete_file_loader
             .load_deletes(file_scan_task.deletes(), file_scan_task.schema_ref())
             .await
@@ -1455,6 +1473,12 @@ mod tests {
             "Failed to build equality delete predicate: {:?}",
             result.err()
         );
+        assert_eq!(scan_metrics.data_bytes_read(), 0);
+        assert!(scan_metrics.delete_bytes_read() > 0);
+        assert_eq!(scan_metrics.bytes_read(), scan_metrics.delete_bytes_read());
+        assert_eq!(scan_metrics.data_files_opened(), 0);
+        assert_eq!(scan_metrics.delete_files_opened(), 2);
+        assert_eq!(scan_metrics.rows_emitted(), 0);
     }
 
     #[tokio::test]
@@ -1490,7 +1514,12 @@ mod tests {
         let basic_delete_file_loader =
             BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
         let record_batch_stream = basic_delete_file_loader
-            .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len(), None)
+            .parquet_to_batch_stream(
+                &path,
+                std::fs::metadata(&path).unwrap().len(),
+                DataContentType::EqualityDeletes,
+                None,
+            )
             .await
             .expect("could not get batch stream");
 
@@ -1610,7 +1639,9 @@ mod tests {
                 .unwrap(),
         );
 
-        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current());
+        let scan_metrics = ScanMetrics::new();
+        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current())
+            .with_scan_metrics(scan_metrics.clone());
         let delete_filter = loader.load_deletes(&[dv], schema).await.unwrap().unwrap();
 
         let delete_vector = delete_filter
@@ -1619,11 +1650,17 @@ mod tests {
         let mut positions: Vec<u64> = delete_vector.lock().unwrap().iter().collect();
         positions.sort_unstable();
         assert_eq!(positions, vec![0, 1, 5]);
+        assert_eq!(scan_metrics.data_bytes_read(), 0);
+        assert_eq!(scan_metrics.delete_bytes_read(), content_size);
+        assert_eq!(scan_metrics.bytes_read(), content_size);
+        assert_eq!(scan_metrics.data_files_opened(), 0);
+        assert_eq!(scan_metrics.delete_files_opened(), 1);
+        assert_eq!(scan_metrics.rows_emitted(), 0);
     }
 
     #[tokio::test]
     async fn test_load_deletes_decrypts_deletion_vector() {
-        use crate::encryption::{EncryptedOutputFile, StandardKeyMetadata};
+        use crate::encryption::{AesGcmCipher, EncryptedOutputFile, StandardKeyMetadata};
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
@@ -1634,29 +1671,6 @@ mod tests {
             .with_aad_prefix(b"test-aad-prefix!");
 
         let blob = encode_dv_blob([2u64, 4]);
-        let plaintext_size = blob.len() as u64;
-        let dv_path = format!("{table_location}/deletes.puffin");
-        let output = EncryptedOutputFile::new(file_io.new_output(&dv_path).unwrap(), key_metadata);
-        let file_metadata = output.write(Bytes::from(blob)).await.unwrap();
-        let encoded_key_metadata = output
-            .key_metadata_with_saved_file_metadata(&file_metadata)
-            .encode()
-            .unwrap();
-
-        // content_offset / content_size_in_bytes are in the plaintext coordinate space, distinct
-        // from the ciphertext's on-disk size (header, nonce, and tag overhead).
-        let file_size = std::fs::metadata(&dv_path).unwrap().len();
-        let data_file_path = format!("{table_location}/data-1.parquet");
-        let dv = dv_task(
-            dv_path.clone(),
-            file_size,
-            data_file_path.clone(),
-            0,
-            plaintext_size,
-            2,
-            Some(encoded_key_metadata),
-        );
-
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
@@ -1666,15 +1680,75 @@ mod tests {
                 .unwrap(),
         );
 
-        let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current());
-        let delete_filter = loader.load_deletes(&[dv], schema).await.unwrap().unwrap();
+        let block_size = 1024 * 1024;
+        let block_overhead = AesGcmCipher::NONCE_LEN + AesGcmCipher::TAG_LEN;
+        // AGS1 reads fetch complete encrypted blocks, excluding the 8-byte stream header.
+        for (offset, plaintext_size, storage_bytes) in [
+            (0, blob.len(), blob.len() + block_overhead),
+            (12, blob.len() + 28, blob.len() + 28 + block_overhead),
+            (
+                block_size - 4,
+                2 * block_size + 64,
+                2 * (block_size + block_overhead),
+            ),
+        ] {
+            let mut plaintext = vec![0; plaintext_size];
+            plaintext[offset..offset + blob.len()].copy_from_slice(&blob);
+            let dv_path = format!("{table_location}/deletes.puffin");
+            let output = EncryptedOutputFile::new(
+                file_io.new_output(&dv_path).unwrap(),
+                key_metadata.clone(),
+            );
+            let file_metadata = output.write(Bytes::from(plaintext)).await.unwrap();
 
-        let delete_vector = delete_filter
-            .get_delete_vector_for_path(&data_file_path)
-            .expect("a delete vector should be indexed for the referenced data file");
-        let mut positions: Vec<u64> = delete_vector.lock().unwrap().iter().collect();
-        positions.sort_unstable();
-        assert_eq!(positions, vec![2, 4]);
+            for wrong_aad in [false, true] {
+                let mut metadata = output.key_metadata_with_saved_file_metadata(&file_metadata);
+                if wrong_aad {
+                    metadata = metadata.with_aad_prefix(b"wrong-aad");
+                }
+                let data_file_path = format!("{table_location}/data-1.parquet");
+                let dv = dv_task(
+                    dv_path.clone(),
+                    file_metadata.size,
+                    data_file_path.clone(),
+                    offset as u64,
+                    blob.len() as u64,
+                    2,
+                    Some(metadata.encode().unwrap()),
+                );
+                let scan_metrics = ScanMetrics::new();
+                let loader = CachingDeleteFileLoader::new(file_io.clone(), 10, Runtime::current())
+                    .with_scan_metrics(scan_metrics.clone());
+                let result = loader.load_deletes(&[dv], schema.clone()).await.unwrap();
+
+                if wrong_aad {
+                    let err = result.unwrap_err();
+                    assert_eq!(err.kind(), ErrorKind::Unexpected);
+                    assert!(err.message().contains("AES-GCM decryption failed"));
+                } else {
+                    let delete_filter = result.unwrap();
+                    let delete_vector = delete_filter
+                        .get_delete_vector_for_path(&data_file_path)
+                        .expect("a delete vector should be indexed for the referenced data file");
+                    let mut positions: Vec<u64> = delete_vector.lock().unwrap().iter().collect();
+                    positions.sort_unstable();
+                    assert_eq!(positions, vec![2, 4]);
+                }
+
+                assert_eq!(
+                    (
+                        scan_metrics.data_bytes_read(),
+                        scan_metrics.delete_bytes_read(),
+                        scan_metrics.bytes_read(),
+                        scan_metrics.data_files_opened(),
+                        scan_metrics.delete_files_opened(),
+                        scan_metrics.rows_emitted(),
+                    ),
+                    (0, storage_bytes as u64, storage_bytes as u64, 0, 1, 0),
+                    "offset={offset}, wrong_aad={wrong_aad}",
+                );
+            }
+        }
     }
 
     #[tokio::test]
