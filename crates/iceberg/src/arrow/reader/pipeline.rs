@@ -41,7 +41,7 @@ use crate::arrow::build_partition_constant;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
-use crate::arrow::scan_metrics::{CountingFileRead, ScanFileType, ScanMetrics, ScanResult};
+use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
 use crate::encryption::StandardKeyMetadata;
 use crate::error::{Result, invalid_data};
 use crate::expr::BoundPredicate;
@@ -57,7 +57,7 @@ use crate::metadata_columns::{
 };
 use crate::runtime::Runtime;
 use crate::scan::{ArrowRecordBatchStream, FileScanTask, FileScanTaskStream};
-use crate::spec::{Datum, PartitionSpec, Struct};
+use crate::spec::{DataContentType, Datum, PartitionSpec, Struct};
 use crate::{Error, ErrorKind};
 
 impl ArrowReader {
@@ -178,7 +178,7 @@ impl FileScanTaskReader {
                     file_size_in_bytes,
                     parquet_read_options,
                     scan_metrics,
-                    ScanFileType::Data,
+                    DataContentType::Data,
                     key_metadata.as_deref(),
                 )
                 .await
@@ -827,7 +827,7 @@ impl ArrowReader {
         file_size_in_bytes: u64,
         parquet_read_options: ParquetReadOptions,
         scan_metrics: ScanMetrics,
-        file_type: ScanFileType,
+        file_type: DataContentType,
         key_metadata: Option<&[u8]>,
     ) -> Result<(ArrowFileReader, ArrowReaderMetadata)> {
         let parquet_file = file_io.new_input(data_file_path)?;

@@ -25,7 +25,7 @@ use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, PosDelLoadAction, PosDelLoadGuard};
 use crate::arrow::delete_file_loader::BasicDeleteFileLoader;
-use crate::arrow::scan_metrics::{CountingFileRead, ScanFileType, ScanMetrics};
+use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics};
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
 use crate::encryption::{EncryptedInputFile, StandardKeyMetadata};
@@ -289,6 +289,7 @@ impl CachingDeleteFileLoader {
                                 .parquet_to_batch_stream(
                                     task.file_path(),
                                     task.file_size_in_bytes(),
+                                    task.file_type(),
                                     task.key_metadata(),
                                 )
                                 .await
@@ -321,6 +322,7 @@ impl CachingDeleteFileLoader {
                         .parquet_to_batch_stream(
                             task.file_path(),
                             task.file_size_in_bytes(),
+                            task.file_type(),
                             task.key_metadata(),
                         )
                         .await?,
@@ -425,7 +427,7 @@ impl CachingDeleteFileLoader {
             Box::new(CountingFileRead::new(
                 reader,
                 basic_delete_file_loader.scan_metrics().clone(),
-                ScanFileType::Delete,
+                task.file_type(),
             ))
         };
         let reader = match task.key_metadata() {
@@ -903,6 +905,7 @@ mod tests {
             .parquet_to_batch_stream(
                 &eq_delete_file_path,
                 std::fs::metadata(&eq_delete_file_path).unwrap().len(),
+                DataContentType::EqualityDeletes,
                 None,
             )
             .await
@@ -1342,6 +1345,7 @@ mod tests {
             .parquet_to_batch_stream(
                 &delete_file_path,
                 std::fs::metadata(&delete_file_path).unwrap().len(),
+                DataContentType::EqualityDeletes,
                 None,
             )
             .await
@@ -1527,7 +1531,12 @@ mod tests {
         let basic_delete_file_loader =
             BasicDeleteFileLoader::new(file_io.clone(), ScanMetrics::new());
         let record_batch_stream = basic_delete_file_loader
-            .parquet_to_batch_stream(&path, std::fs::metadata(&path).unwrap().len(), None)
+            .parquet_to_batch_stream(
+                &path,
+                std::fs::metadata(&path).unwrap().len(),
+                DataContentType::EqualityDeletes,
+                None,
+            )
             .await
             .expect("could not get batch stream");
 

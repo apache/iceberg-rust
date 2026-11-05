@@ -23,10 +23,10 @@ use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use crate::arrow::ArrowReader;
 use crate::arrow::reader::ParquetReadOptions;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
-use crate::arrow::scan_metrics::{ScanFileType, ScanMetrics};
+use crate::arrow::scan_metrics::ScanMetrics;
 use crate::io::FileIO;
 use crate::scan::{ArrowRecordBatchStream, FileScanTaskDeleteFile};
-use crate::spec::{Schema, SchemaRef};
+use crate::spec::{DataContentType, Schema, SchemaRef};
 use crate::{Error, ErrorKind, Result};
 
 /// Delete File Loader
@@ -71,6 +71,7 @@ impl BasicDeleteFileLoader {
         &self,
         data_file_path: &str,
         file_size_in_bytes: u64,
+        file_type: DataContentType,
         key_metadata: Option<&[u8]>,
     ) -> Result<ArrowRecordBatchStream> {
         /*
@@ -85,7 +86,7 @@ impl BasicDeleteFileLoader {
             file_size_in_bytes,
             parquet_read_options,
             self.scan_metrics.clone(),
-            ScanFileType::Delete,
+            file_type,
             key_metadata,
         )
         .await?;
@@ -133,6 +134,7 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
             .parquet_to_batch_stream(
                 task.file_path(),
                 task.file_size_in_bytes(),
+                task.file_type(),
                 task.key_metadata(),
             )
             .await?;
