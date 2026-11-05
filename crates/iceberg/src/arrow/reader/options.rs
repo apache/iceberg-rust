@@ -151,12 +151,12 @@ pub struct ParquetReadOptions {
     /// Defaults to 10, matching object_store's `OBJECT_STORE_COALESCE_PARALLEL`.
     #[builder(default = DEFAULT_RANGE_FETCH_CONCURRENCY)]
     range_fetch_concurrency: usize,
-    #[builder(default = true, setter(skip))]
+    #[builder(default = true)]
     preload_column_index: bool,
-    #[builder(default = true, setter(skip))]
+    #[builder(default = true)]
     preload_offset_index: bool,
     // Execution derives page-index preloading per file from predicates and deletes.
-    #[builder(default = false, setter(skip))]
+    #[builder(default = false)]
     preload_page_index: bool,
 }
 

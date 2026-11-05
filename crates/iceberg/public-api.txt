@@ -111,7 +111,7 @@ impl core::fmt::Debug for iceberg::arrow::ParquetReadOptions
 pub fn iceberg::arrow::ParquetReadOptions::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::arrow::ParquetReadOptions
 impl iceberg::arrow::ParquetReadOptions
-pub fn iceberg::arrow::ParquetReadOptions::builder() -> ParquetReadOptionsBuilder<((), (), ())>
+pub fn iceberg::arrow::ParquetReadOptions::builder() -> ParquetReadOptionsBuilder<((), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::arrow::ParquetReadOptions
 pub fn iceberg::arrow::ParquetReadOptions::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::arrow::ParquetReadOptions where iceberg::arrow::ParquetReadOptions: core::default::Default
