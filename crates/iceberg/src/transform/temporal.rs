@@ -2384,8 +2384,12 @@ mod test {
             let values = vec![Some(-1i64), None, Some(0)];
             let inputs: [ArrayRef; 4] = [
                 Arc::new(TimestampSecondArray::from(values.clone()).with_timezone_opt(timezone)),
-                Arc::new(TimestampMillisecondArray::from(values.clone()).with_timezone_opt(timezone)),
-                Arc::new(TimestampMicrosecondArray::from(values.clone()).with_timezone_opt(timezone)),
+                Arc::new(
+                    TimestampMillisecondArray::from(values.clone()).with_timezone_opt(timezone),
+                ),
+                Arc::new(
+                    TimestampMicrosecondArray::from(values.clone()).with_timezone_opt(timezone),
+                ),
                 Arc::new(TimestampNanosecondArray::from(values).with_timezone_opt(timezone)),
             ];
             for input in inputs {
