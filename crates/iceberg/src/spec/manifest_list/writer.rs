@@ -149,9 +149,12 @@ impl ManifestListWriter {
             FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
-        let mut avro_writer = Writer::new(avro_schema, Vec::new()).expect(
-            "Manifest list Avro schemas should resolve because they refer to no named types.",
-        );
+        let mut avro_writer = Writer::with_codec(
+            avro_schema,
+            Vec::new(),
+            apache_avro::Codec::Deflate(Default::default()),
+        )
+        .expect("Manifest list Avro schemas should resolve because they refer to no named types.");
         for (key, value) in metadata {
             avro_writer
                 .add_user_metadata(key, value)
@@ -453,6 +456,14 @@ mod test {
         expected_manifest_list.entries[0].min_sequence_number = seq_num;
         expected_manifest_list.entries[0].first_row_id = Some(10);
         assert_eq!(manifest_list, expected_manifest_list);
+        // the header names its codec: a reader that assumes a default for a missing
+        // `avro.codec` (PyIceberg 0.12 assumes gzip) refuses an uncompressed file
+        let header = &bs[..bs.len().min(4096)];
+        let at = header
+            .windows(10)
+            .position(|w| w == b"avro.codec")
+            .expect("avro.codec in the header");
+        assert!(header[at..].windows(7).any(|w| w == b"deflate"));
 
         temp_dir.close().unwrap();
     }

@@ -432,7 +432,11 @@ impl ManifestWriter {
             // Manifest schema did not change between V2 and V3
             FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
         };
-        let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new())?;
+        let mut avro_writer = AvroWriter::with_codec(
+            &avro_schema,
+            Vec::new(),
+            apache_avro::Codec::Deflate(Default::default()),
+        )?;
         avro_writer.add_user_metadata(
             "schema".to_string(),
             to_vec(table_schema)
