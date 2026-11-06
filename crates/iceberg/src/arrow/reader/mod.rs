@@ -34,6 +34,7 @@ const DEFAULT_RANGE_FETCH_CONCURRENCY: usize = 10;
 /// Matches DataFusion's default `ParquetOptions::metadata_size_hint`.
 const DEFAULT_METADATA_SIZE_HINT: usize = 512 * 1024;
 
+mod batch_stream;
 mod file_reader;
 mod options;
 mod pipeline;
@@ -63,7 +64,12 @@ pub struct ArrowReaderBuilder {
 }
 
 impl ArrowReaderBuilder {
-    /// Create a new ArrowReaderBuilder
+    /// Create a new ArrowReaderBuilder.
+    ///
+    /// File opens and byte reads use the I/O runtime. Parquet metadata and page
+    /// decoding, filtering, and batch transformation use the CPU runtime,
+    /// regardless of which runtime polls the returned scan stream. Each data
+    /// file producer buffers at most one output batch ahead of its consumer.
     pub fn new(file_io: FileIO, runtime: Runtime) -> Self {
         let num_cpus = available_parallelism().get();
 
