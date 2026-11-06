@@ -193,6 +193,13 @@ pub trait SessionCatalog: Debug + Send + Sync {
         metadata_location: String,
     ) -> Result<Table>;
 
+    /// Unregister a table without deleting its data or metadata files.
+    ///
+    /// Returns the table's last committed metadata and its location, which can
+    /// be passed to [`SessionCatalog::register_table`] to register it again.
+    async fn unregister_table(&self, context: &SessionContext, table: &TableIdent)
+    -> Result<Table>;
+
     /// Update a table to the catalog.
     async fn update_table(&self, context: &SessionContext, commit: TableCommit) -> Result<Table>;
 }
