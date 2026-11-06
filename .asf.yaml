@@ -109,6 +109,17 @@ github:
     creation_cap:
       enabled: true
       max_open_pull_requests: 3
+      # The cap is not applied to these contributors. ASF makes GitHub's bypass list
+      # match this list exactly, so a login added by hand in the repository settings
+      # is removed on the next sync. An unknown login fails the whole sync.
+      bypass_users:
+        - JanKaul
+        - c-thiel
+        - mbutrovich
+        - CTTY
+        - comphead
+        - dannycjones
+        - xanderbailey
   features:
     wiki: false
     issues: true
