@@ -291,6 +291,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_overwrite_rejects_adding_a_live_path_it_does_not_delete() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+        let file = test_data_file("test/a.parquet", spec_id);
+        let table = append(&catalog, &table, vec![file.clone()]).await;
+
+        let action = Transaction::new(&table).overwrite().add_data_files([file]);
+        let err = commit_with_fresh_state(action, &table).await.err().unwrap();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("test/a.parquet"), "{err}");
+    }
+
+    #[tokio::test]
     async fn test_overwrite_readds_a_deleted_path_by_default() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
