@@ -94,7 +94,7 @@ impl Eq for Schema {}
 /// Schema builder.
 #[derive(Debug)]
 pub struct SchemaBuilder {
-    schema_id: i32,
+    schema_id: SchemaId,
     fields: Vec<NestedFieldRef>,
     alias_to_id: BiHashMap<String, i32>,
     identifier_field_ids: HashSet<i32>,
@@ -118,7 +118,7 @@ impl SchemaBuilder {
     }
 
     /// Set schema id.
-    pub fn with_schema_id(mut self, schema_id: i32) -> Self {
+    pub fn with_schema_id(mut self, schema_id: SchemaId) -> Self {
         self.schema_id = schema_id;
         self
     }
