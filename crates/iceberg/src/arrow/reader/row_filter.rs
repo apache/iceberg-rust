@@ -229,7 +229,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::{
         ArrayRef, Decimal128Array, Float32Array, Int32Array, Int64Array, LargeStringArray,
-        RecordBatch, StringArray,
+        RecordBatch, StringArray, Time64MicrosecondArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
@@ -385,6 +385,63 @@ mod tests {
         let result_data = test_perform_read(predicate, schema, table_location, reader).await;
 
         assert_eq!(result_data, expected);
+    }
+
+    #[tokio::test]
+    async fn test_time_column_row_filter() {
+        let tmp = TempDir::new().unwrap();
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "v", Type::Primitive(PrimitiveType::Time)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            field_with_id(
+                "v",
+                DataType::Time64(arrow_schema::TimeUnit::Microsecond),
+                2,
+            )
+            .with_nullable(true),
+        ]));
+        let batch = RecordBatch::try_new(file_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            Arc::new(Time64MicrosecondArray::from(vec![
+                None,
+                Some(0),
+                Some(3_600_000_000),
+                Some(3_600_000_001),
+                Some(86_399_999_999),
+            ])),
+        ])
+        .unwrap();
+        let path = format!("{}/time.parquet", tmp.path().display());
+        write_row_groups(&path, file_schema, vec![batch], false);
+        let result_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "id",
+            DataType::Int32,
+            false,
+        )]));
+        let reference = Reference::new("v");
+        let time = Datum::time_micros(3_600_000_001).unwrap();
+        let times = [Datum::time_micros(0).unwrap(), time.clone()];
+        for (predicate, ids) in [
+            (reference.clone().less_than(time), vec![2, 3]),
+            (reference.clone().is_in(times.clone()), vec![2, 4]),
+            (reference.is_not_in(times), vec![3, 5]),
+        ] {
+            let (batches, _) =
+                read_once(&path, schema.clone(), vec![1], predicate.clone(), false).await;
+            let actual = arrow_select::concat::concat_batches(&result_schema, &batches).unwrap();
+            let expected =
+                RecordBatch::try_new(result_schema.clone(), vec![Arc::new(Int32Array::from(ids))])
+                    .unwrap();
+            assert_eq!(actual, expected, "{predicate}");
+        }
     }
 
     #[tokio::test]
