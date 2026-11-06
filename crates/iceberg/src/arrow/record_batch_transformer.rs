@@ -24,7 +24,7 @@ use arrow_array::{
     Array as ArrowArray, ArrayRef, Int32Array, Int64Array, ListArray, MapArray, RecordBatch,
     RecordBatchOptions, RunArray, StructArray,
 };
-use arrow_cast::cast;
+use arrow_cast::{CastOptions, cast, cast_with_options};
 use arrow_schema::{
     DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
     SchemaRef,
@@ -397,7 +397,14 @@ impl PromotePlan {
     fn apply(&self, array: &ArrayRef) -> Result<ArrayRef> {
         match self {
             PromotePlan::PassThrough => Ok(Arc::clone(array)),
-            PromotePlan::Cast(target_type) => Ok(cast(array.as_ref(), target_type)?),
+            PromotePlan::Cast(target_type) => Ok(cast_with_options(
+                array.as_ref(),
+                target_type,
+                &CastOptions {
+                    safe: false,
+                    ..Default::default()
+                },
+            )?),
             PromotePlan::Struct { fields, children } => {
                 let source = array
                     .as_struct_opt()
@@ -1427,7 +1434,8 @@ mod test {
     use arrow_array::types::Int32Type;
     use arrow_array::{
         Array, ArrayRef, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
-        LargeListArray, ListArray, MapArray, RecordBatch, StringArray, StructArray, new_null_array,
+        LargeListArray, ListArray, MapArray, RecordBatch, StringArray, StructArray,
+        TimestampMillisecondArray, new_null_array,
     };
     use arrow_buffer::{NullBuffer, OffsetBuffer};
     use arrow_cast::cast;
@@ -1498,6 +1506,14 @@ mod test {
         ])
         .unwrap();
         Ok(transformer.process_record_batch(batch)?.column(1).clone())
+    }
+
+    #[test]
+    fn promote_millisecond_timestamp_overflow_errors() {
+        let column = NestedField::optional(2, "ts", Type::Primitive(PrimitiveType::Timestamp));
+        let file_column = Arc::new(TimestampMillisecondArray::from(vec![i64::MAX])) as ArrayRef;
+
+        assert!(transform_top_level(column, file_column).is_err());
     }
 
     #[test]

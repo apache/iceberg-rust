@@ -24,7 +24,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_schema::{
-    DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+    DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
@@ -189,6 +189,22 @@ impl ArrowReader {
             }),
             arrow_schema.metadata().clone(),
         );
+        // A millisecond column under a nanosecond field would otherwise read as nulls.
+        for field in projected_arrow_schema.flattened_fields() {
+            if let DataType::Timestamp(TimeUnit::Millisecond, _) = field.data_type()
+                && let Some(field_id) = parquet_field_id(field)
+                && let Some(Type::Primitive(
+                    PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs,
+                )) = iceberg_schema_of_task
+                    .field_by_id(field_id)
+                    .map(|field| field.field_type.as_ref())
+            {
+                return Err(invalid_data!(
+                    "Unsupported Arrow data type: {}",
+                    field.data_type()
+                ));
+            }
+        }
         let iceberg_schema = arrow_schema_to_schema(&projected_arrow_schema)?;
 
         fields.filter_leaves(|idx, field| {
@@ -716,6 +732,60 @@ message schema {
         )
         .expect("Some ProjectionMask");
         assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
+    }
+
+    #[test]
+    fn test_arrow_projection_mask_rejects_millisecond_column_under_nanosecond_field() {
+        let message_type = "
+message schema {
+  optional int64 ts (TIMESTAMP(MILLIS,false)) = 1;
+}
+    ";
+        let parquet_type = parse_message_type(message_type).expect("should parse schema");
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+
+        for (field_type, tz) in [
+            (PrimitiveType::TimestampNs, None),
+            (PrimitiveType::TimestamptzNs, Some("UTC".into())),
+            (PrimitiveType::Timestamp, None),
+        ] {
+            let schema = Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "ts", Type::Primitive(field_type.clone())).into(),
+                ])
+                .build()
+                .unwrap();
+            let arrow_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("ts", DataType::Timestamp(TimeUnit::Millisecond, tz), true)
+                    .with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        "1".to_string(),
+                    )])),
+            ]));
+
+            let result = ArrowReader::get_arrow_projection_mask(
+                &[1],
+                &schema,
+                &parquet_schema,
+                &arrow_schema,
+                false,
+            );
+
+            if field_type == PrimitiveType::Timestamp {
+                assert_eq!(
+                    result.unwrap(),
+                    ProjectionMask::leaves(&parquet_schema, vec![0])
+                );
+            } else {
+                let err = result.unwrap_err();
+                assert_eq!(err.kind(), ErrorKind::DataInvalid, "{field_type}");
+                assert!(
+                    err.to_string()
+                        .contains("Unsupported Arrow data type: Timestamp(ms"),
+                    "{err}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -38,7 +38,7 @@ use parquet_geospatial::interval::{Interval, IntervalTrait, WraparoundInterval};
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
-    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
+    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, parquet_timestamp_unit,
 };
 use crate::compression::CompressionCodec;
 use crate::encryption::{EncryptionManager, StandardKeyMetadata};
@@ -483,9 +483,10 @@ impl MinMaxColAggregator {
             return Ok(());
         };
         let ty = ty.clone();
+        let timestamp_unit = parquet_timestamp_unit(column.column_descr());
 
         if value.min_is_exact() {
-            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, value)? else {
+            let Some(min_datum) = get_parquet_stat_min_as_datum(&ty, value, timestamp_unit)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
@@ -499,7 +500,7 @@ impl MinMaxColAggregator {
         }
 
         if value.max_is_exact() {
-            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, value)? else {
+            let Some(max_datum) = get_parquet_stat_max_as_datum(&ty, value, timestamp_unit)? else {
                 return Err(Error::new(
                     ErrorKind::Unexpected,
                     format!("Statistics {value} is not match with field type {ty}."),
@@ -878,13 +879,13 @@ mod tests {
     use arrow_array::types::{Float32Type, Int64Type};
     use arrow_array::{
         Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
-        Int64Array, ListArray, MapArray, RecordBatch, StructArray,
+        Int64Array, ListArray, MapArray, RecordBatch, StructArray, TimestampMillisecondArray,
     };
-    use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef};
+    use arrow_schema::{DataType, Field, Fields, SchemaRef as ArrowSchemaRef, TimeUnit};
     use arrow_select::concat::concat_batches;
     use futures::TryStreamExt;
-    use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::{
         BrotliLevel, Compression, EdgeInterpolationAlgorithm, GzipLevel, LogicalType, ZstdLevel,
     };
@@ -3160,6 +3161,58 @@ mod tests {
 
         assert_eq!(lower_bounds, HashMap::from([(0, Datum::float(1.5_f32))]));
         assert_eq!(upper_bounds, HashMap::from([(0, Datum::float(2.5_f32))]));
+    }
+
+    #[test]
+    fn test_parquet_to_data_file_scales_millisecond_timestamp_bounds() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            false,
+        )]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(
+            TimestampMillisecondArray::from(vec![-1_500, 2_000]),
+        )])
+        .unwrap();
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, arrow_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let metadata = ParquetRecordBatchReaderBuilder::try_new(Bytes::from(buf))
+            .unwrap()
+            .metadata()
+            .clone();
+
+        let data_file = ParquetWriter::parquet_to_data_file_builder(
+            schema,
+            metadata,
+            0,
+            "ts.parquet".to_string(),
+            HashMap::new(),
+            None,
+        )
+        .unwrap()
+        .partition_spec_id(0)
+        .build()
+        .unwrap();
+
+        assert_eq!(
+            data_file.lower_bounds(),
+            &HashMap::from([(1, Datum::timestamp_micros(-1_500_000))])
+        );
+        assert_eq!(
+            data_file.upper_bounds(),
+            &HashMap::from([(1, Datum::timestamp_micros(2_000_000))])
+        );
     }
 
     fn cdc_test_schema() -> SchemaRef {
