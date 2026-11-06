@@ -101,6 +101,7 @@ async fn test_catalog_namespace_lifecycle(#[case] kind: CatalogKind) -> Result<(
 
 // Common behavior: update_namespace persists changes when supported.
 #[rstest]
+#[case::rest_catalog(CatalogKind::Rest)]
 #[case::glue_catalog(CatalogKind::Glue)]
 #[case::hms_catalog(CatalogKind::Hms)]
 #[case::sql_catalog(CatalogKind::Sql)]
@@ -132,7 +133,6 @@ async fn test_catalog_update_namespace_supported(#[case] kind: CatalogKind) -> R
 
 // Common behavior: update_namespace returns FeatureUnsupported when not implemented.
 #[rstest]
-#[case::rest_catalog(CatalogKind::Rest)]
 #[case::s3tables_catalog(CatalogKind::S3Tables)]
 #[tokio::test]
 async fn test_catalog_update_namespace_unsupported(#[case] kind: CatalogKind) -> Result<()> {
@@ -299,6 +299,7 @@ async fn test_catalog_create_namespace_duplicate_fails(#[case] kind: CatalogKind
 
 // Common behavior: update on a missing namespace should return NamespaceNotFound.
 #[rstest]
+#[case::rest_catalog(CatalogKind::Rest)]
 #[case::glue_catalog(CatalogKind::Glue)]
 #[case::hms_catalog(CatalogKind::Hms)]
 #[case::sql_catalog(CatalogKind::Sql)]
