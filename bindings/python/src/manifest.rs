@@ -17,10 +17,17 @@
 
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
+use arrow::datatypes::SchemaRef;
+use arrow::error::ArrowError;
+use arrow::pyarrow::IntoPyArrow;
+use arrow::record_batch::{RecordBatchIterator, RecordBatchReader};
 use iceberg::spec::{
-    FieldSummary, FormatVersion, Manifest, ManifestEntry, ManifestFile, ManifestList,
+    FieldSummary, FormatVersion, Manifest, ManifestContentType, ManifestEntry, ManifestFile,
+    ManifestList,
 };
 use pyo3::prelude::*;
+use pyo3::pybacked::PyBackedBytes;
 
 use crate::data_file::PyDataFile;
 use crate::error::to_py_err;
@@ -226,11 +233,98 @@ pub fn read_manifest_list(bs: &[u8]) -> PyResult<PyManifestList> {
     })
 }
 
+/// Reads the entries of a manifest as a `pyarrow.RecordBatchReader`.
+///
+/// The other arguments are the manifest's entry in the manifest list, which
+/// the entries inherit snapshot IDs, sequence numbers, and first row IDs from.
+/// Raises `ValueError` for an invalid manifest header. An error while reading
+/// raises `pyarrow.ArrowInvalid`, which subclasses `ValueError`. The reader
+/// holds a reference to `bs` until it's closed or collected, and the next call
+/// into `pyiceberg_core` releases it.
+#[pyfunction]
+#[pyo3(signature = (
+    bs,
+    *,
+    manifest_path,
+    manifest_length,
+    partition_spec_id,
+    content,
+    sequence_number,
+    min_sequence_number,
+    added_snapshot_id,
+    first_row_id = None,
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn read_manifest_entries_as_arrow(
+    py: Python<'_>,
+    bs: PyBackedBytes,
+    manifest_path: String,
+    manifest_length: i64,
+    partition_spec_id: i32,
+    content: i32,
+    sequence_number: i64,
+    min_sequence_number: i64,
+    added_snapshot_id: i64,
+    first_row_id: Option<u64>,
+) -> PyResult<Bound<'_, PyAny>> {
+    // Inheritance reads none of the optional fields left as None.
+    let manifest_file = ManifestFile {
+        manifest_path,
+        manifest_length,
+        partition_spec_id,
+        content: ManifestContentType::try_from(content).map_err(to_py_err)?,
+        sequence_number,
+        min_sequence_number,
+        added_snapshot_id,
+        added_files_count: None,
+        existing_files_count: None,
+        deleted_files_count: None,
+        added_rows_count: None,
+        existing_rows_count: None,
+        deleted_rows_count: None,
+        partitions: None,
+        key_metadata: None,
+        first_row_id,
+    };
+    let reader = iceberg::arrow::read_manifest_entries(bs, &manifest_file).map_err(to_py_err)?;
+    into_pyarrow_reader(py, reader.schema(), reader)
+}
+
+/// Reads the entries of a manifest list as a `pyarrow.RecordBatchReader`.
+///
+/// Raises `ValueError` for an invalid manifest list header. An error while
+/// reading raises `pyarrow.ArrowInvalid`, which subclasses `ValueError`. The
+/// reader holds a reference to `bs` until it's closed or collected, and the
+/// next call into `pyiceberg_core` releases it.
+#[pyfunction]
+pub fn read_manifest_list_as_arrow(
+    py: Python<'_>,
+    bs: PyBackedBytes,
+) -> PyResult<Bound<'_, PyAny>> {
+    let reader = iceberg::arrow::read_manifest_list(bs).map_err(to_py_err)?;
+    into_pyarrow_reader(py, reader.schema(), reader)
+}
+
+/// Exports `batches` through the Arrow C stream interface.
+fn into_pyarrow_reader<'py>(
+    py: Python<'py>,
+    schema: SchemaRef,
+    batches: impl Iterator<Item = iceberg::Result<RecordBatch>> + Send + 'static,
+) -> PyResult<Bound<'py, PyAny>> {
+    let batches =
+        batches.map(|batch| batch.map_err(|err| ArrowError::ExternalError(Box::new(err))));
+    let reader: Box<dyn RecordBatchReader + Send> =
+        Box::new(RecordBatchIterator::new(batches, schema));
+    reader.into_pyarrow(py)
+}
+
 pub fn register_module(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let this = PyModule::new(py, "manifest")?;
 
     this.add_function(wrap_pyfunction!(read_manifest_entries, &this)?)?;
     this.add_function(wrap_pyfunction!(read_manifest_list, &this)?)?;
+    this.add_function(wrap_pyfunction!(read_manifest_entries_as_arrow, &this)?)?;
+    this.add_function(wrap_pyfunction!(read_manifest_list_as_arrow, &this)?)?;
 
     m.add_submodule(&this)?;
     py.import("sys")?
