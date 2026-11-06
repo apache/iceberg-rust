@@ -48,7 +48,8 @@ include = [
 module-name = "pyiceberg_core.pyiceberg_core_rust"
 profile = "release"
 python-source = "python"
-# Keep symbols: macOS rejects the stripped .so with "mis-aligned LINKEDIT string pool".
+# Don't strip: depending on the binary's layout, a stripped macOS .so fails to import
+# with "mis-aligned LINKEDIT string pool" (https://github.com/apache/iceberg-rust/issues/3646).
 config = [
   "profile.release.lto=\"thin\"",
   "profile.release.codegen-units=1",
