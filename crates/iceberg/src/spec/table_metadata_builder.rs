@@ -206,10 +206,9 @@ impl TableMetadataBuilder {
     /// Partition fields reuse the highest id an equivalent field has in any of the table's specs,
     /// and other fields get ids above `last_partition_id`.
     ///
-    /// `location` moves the table, `None` leaves it in place. `properties` are applied on top of
-    /// the existing ones, so an existing `write.parquet.compression-codec` is kept.
-    /// `format-version` upgrades the table without being persisted; other reserved properties are
-    /// ignored.
+    /// `location` moves the table, `None` leaves it in place. `format_version` upgrades the table,
+    /// `None` keeps its version. `properties` are applied on top of the existing ones, so an
+    /// existing `write.parquet.compression-codec` is kept.
     ///
     /// The caller adds the snapshot holding the new contents, if any, before building:
     ///
@@ -249,7 +248,14 @@ impl TableMetadataBuilder {
     /// let builder = metadata
     ///     .clone()
     ///     .into_builder(Some("s3://bucket/table/metadata/v2.metadata.json".to_string()))
-    ///     .build_replacement(schema, spec, SortOrder::unsorted_order(), None, HashMap::new())?;
+    ///     .build_replacement(
+    ///         schema,
+    ///         spec,
+    ///         SortOrder::unsorted_order(),
+    ///         None,
+    ///         None,
+    ///         HashMap::new(),
+    ///     )?;
     ///
     /// let snapshot = Snapshot::builder()
     ///     .with_snapshot_id(1)
@@ -280,16 +286,18 @@ impl TableMetadataBuilder {
     ///
     /// # Errors
     /// - The table is format version 1, which is not supported.
-    /// - `format-version` is invalid or would downgrade the table.
+    /// - `format_version` would downgrade the table.
     /// - The partition spec or sort order names a column missing from `schema`.
     /// - `schema` takes the name of a partition field in one of the table's specs without being
     ///   that field's source column.
+    /// - `properties` contains a reserved property.
     pub fn build_replacement(
         self,
         schema: Schema,
         spec: impl Into<UnboundPartitionSpec>,
         sort_order: SortOrder,
         location: Option<String>,
+        format_version: Option<FormatVersion>,
         properties: HashMap<String, String>,
     ) -> Result<Self> {
         if self.metadata.format_version == FormatVersion::V1 {
@@ -299,19 +307,7 @@ impl TableMetadataBuilder {
             ));
         }
 
-        let format_version = properties
-            .get(TableProperties::PROPERTY_FORMAT_VERSION)
-            .map(|value| {
-                serde_json::from_str::<FormatVersion>(value).map_err(|err| {
-                    invalid_data!("Unsupported format version: {value}").with_source(err)
-                })
-            })
-            .transpose()?
-            .unwrap_or(self.metadata.format_version);
-        let properties = properties
-            .into_iter()
-            .filter(|(key, _)| !TableProperties::RESERVED_PROPERTIES.contains(&key.as_str()))
-            .collect();
+        let format_version = format_version.unwrap_or(self.metadata.format_version);
         let spec = spec.into();
 
         let previous_id_to_name = schema.field_id_to_name_map().clone();
@@ -4507,6 +4503,7 @@ mod tests {
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
+                None,
                 HashMap::new(),
             )
             .unwrap()
@@ -4541,6 +4538,7 @@ mod tests {
                 replacement,
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
+                None,
                 None,
                 HashMap::new(),
             )
@@ -4580,7 +4578,14 @@ mod tests {
             .unwrap();
 
         let metadata = builder_without_changes(FormatVersion::V2)
-            .build_replacement(replacement_schema(), spec, sort_order, None, HashMap::new())
+            .build_replacement(
+                replacement_schema(),
+                spec,
+                sort_order,
+                None,
+                None,
+                HashMap::new(),
+            )
             .unwrap()
             .build()
             .unwrap()
@@ -4626,6 +4631,7 @@ mod tests {
                 updated_spec,
                 SortOrder::unsorted_order(),
                 None,
+                None,
                 HashMap::new(),
             )
             .unwrap()
@@ -4660,6 +4666,7 @@ mod tests {
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
+                None,
                 HashMap::new(),
             )
             .unwrap()
@@ -4682,6 +4689,7 @@ mod tests {
                 replacement_schema(),
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
+                None,
                 None,
                 HashMap::new(),
             )
@@ -4723,6 +4731,7 @@ mod tests {
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 Some("s3://bucket/somewhere/else".to_string()),
+                None,
                 HashMap::new(),
             )
             .unwrap()
@@ -4734,7 +4743,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_replacement_applies_format_version_without_persisting_reserved_properties() {
+    fn test_build_replacement_applies_format_version_and_properties() {
         let result = builder_without_changes(FormatVersion::V2)
             .set_properties(HashMap::from_iter([(
                 "existing".to_string(),
@@ -4746,17 +4755,8 @@ mod tests {
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
-                HashMap::from_iter([
-                    (
-                        TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
-                        "3".to_string(),
-                    ),
-                    (
-                        TableProperties::PROPERTY_UUID.to_string(),
-                        "ignored".to_string(),
-                    ),
-                    ("new".to_string(), "value".to_string()),
-                ]),
+                Some(FormatVersion::V3),
+                HashMap::from_iter([("new".to_string(), "value".to_string())]),
             )
             .unwrap()
             .build()
@@ -4802,10 +4802,8 @@ mod tests {
                 spec.clone(),
                 sort_order.clone(),
                 None,
-                HashMap::from_iter([(
-                    TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
-                    "3".to_string(),
-                )]),
+                Some(FormatVersion::V3),
+                HashMap::new(),
             )
             .unwrap()
             .build()
@@ -4838,6 +4836,7 @@ mod tests {
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
+                None,
                 HashMap::new(),
             )
             .unwrap_err();
@@ -4859,10 +4858,8 @@ mod tests {
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
-                HashMap::from_iter([(
-                    TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
-                    "2".to_string(),
-                )]),
+                Some(FormatVersion::V2),
+                HashMap::new(),
             )
             .unwrap_err();
 
@@ -4876,23 +4873,27 @@ mod tests {
     }
 
     #[test]
-    fn test_build_replacement_rejects_an_invalid_format_version() {
+    fn test_build_replacement_rejects_reserved_properties() {
         let err = builder_without_changes(FormatVersion::V2)
             .build_replacement(
                 replacement_schema(),
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
+                None,
                 HashMap::from_iter([(
-                    TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
-                    "abc".to_string(),
+                    TableProperties::PROPERTY_UUID.to_string(),
+                    "ignored".to_string(),
                 )]),
             )
             .unwrap_err();
 
         assert_eq!(
             (err.kind(), err.message()),
-            (ErrorKind::DataInvalid, "Unsupported format version: abc")
+            (
+                ErrorKind::DataInvalid,
+                "Table properties should not contain reserved properties, but got: [uuid]"
+            )
         );
     }
 
@@ -4906,6 +4907,7 @@ mod tests {
                     .unwrap()
                     .build(),
                 SortOrder::unsorted_order(),
+                None,
                 None,
                 HashMap::new(),
             )
@@ -4928,10 +4930,8 @@ mod tests {
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
-                HashMap::from_iter([(
-                    TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
-                    "2".to_string(),
-                )]),
+                Some(FormatVersion::V2),
+                HashMap::new(),
             )
             .unwrap_err();
 
@@ -4961,6 +4961,7 @@ mod tests {
                 replacement_schema(),
                 UnboundPartitionSpec::builder().build(),
                 sort_order,
+                None,
                 None,
                 HashMap::new(),
             )
@@ -5009,6 +5010,7 @@ mod tests {
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
+                None,
                 HashMap::new(),
             )
             .unwrap_err();
@@ -5047,6 +5049,7 @@ mod tests {
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
+                None,
                 HashMap::new(),
             )
             .unwrap()
@@ -5079,6 +5082,7 @@ mod tests {
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
                 None,
+                None,
                 HashMap::new(),
             )
             .unwrap()
@@ -5105,6 +5109,7 @@ mod tests {
                 replacement_schema(),
                 UnboundPartitionSpec::builder().build(),
                 SortOrder::unsorted_order(),
+                None,
                 None,
                 HashMap::new(),
             )
