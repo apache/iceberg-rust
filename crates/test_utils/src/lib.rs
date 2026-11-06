@@ -21,6 +21,8 @@
 
 #[cfg(feature = "tests")]
 mod runtime;
+#[cfg(feature = "tests")]
+pub mod storage;
 
 #[cfg(feature = "tests")]
 pub use common::*;

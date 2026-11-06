@@ -28,11 +28,13 @@ repository = { workspace = true }
 
 [dependencies]
 iceberg = { workspace = true }
-tokio = { workspace = true }
+reqwest = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["time"], optional = true }
 tracing-subscriber = { workspace = true }
 
 [features]
-tests = []
+tests = ["dep:reqwest", "dep:tempfile", "dep:tokio"]
 
 [lints]
 workspace = true
