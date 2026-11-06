@@ -300,6 +300,62 @@ mod test {
     }
 
     #[test]
+    fn test_projection_truncate_string_compares_width_in_code_points() -> Result<()> {
+        // "Év" is two code points but three UTF-8 bytes, so it is shorter than
+        // truncate[3] and the prefix must not collapse to an equality predicate.
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(3),
+            "city",
+            NestedField::required(1, "city", Primitive(PrimitiveType::String)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::StartsWith, Datum::string("Év")),
+            Some(r#"city STARTS WITH "Év""#),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::NotStartsWith, Datum::string("Év")),
+            Some(r#"city NOT STARTS WITH "Év""#),
+        )?;
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::StartsWith, Datum::string("Évr")),
+            Some(r#"city = "Évr""#),
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_strict_projection_truncate_string_compares_width_in_code_points() -> Result<()> {
+        let transform = Transform::Truncate(3);
+        let fixture = TestProjectionFixture::new(
+            transform.clone(),
+            "city",
+            NestedField::required(1, "city", Primitive(PrimitiveType::String)),
+        );
+
+        for (prefix, expected) in [
+            ("Év", Some(r#"city STARTS WITH "Év""#)),
+            ("Évr", Some(r#"city = "Évr""#)),
+            ("Évry", None),
+        ] {
+            let predicate =
+                fixture.binary_predicate(PredicateOperator::StartsWith, Datum::string(prefix));
+            assert_eq!(
+                expected,
+                transform
+                    .strict_project("city", &predicate)?
+                    .map(|p| p.to_string())
+                    .as_deref(),
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_strict_projection_truncate_binary() -> Result<()> {
         let transform = Transform::Truncate(3);
         let fixture = TestProjectionFixture::new(
