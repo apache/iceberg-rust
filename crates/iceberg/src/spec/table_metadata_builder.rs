@@ -197,16 +197,86 @@ impl TableMetadataBuilder {
     /// current snapshot. Backs `REPLACE TABLE`.
     ///
     /// The table keeps its uuid, properties and snapshots, so earlier snapshots stay readable.
-    /// Columns the table already has keep their field ids, so data written before the replacement
-    /// stays readable through the columns both schemas share; new columns get ids above
-    /// `last_column_id`, never a dropped column's id.
+    /// Only the `main` branch is removed; other branches and tags are kept.
+    ///
+    /// Columns are matched to the current schema by full name and keep their field ids, even
+    /// when their type changes; new columns get ids above `last_column_id`, never a dropped
+    /// column's id.
     ///
     /// Partition fields reuse the highest id an equivalent field has in any of the table's specs,
     /// and other fields get ids above `last_partition_id`.
     ///
     /// `location` moves the table, `None` leaves it in place. `properties` are applied on top of
-    /// the existing ones. `format-version` upgrades the table without being persisted; other
-    /// reserved properties are ignored.
+    /// the existing ones, so an existing `write.parquet.compression-codec` is kept.
+    /// `format-version` upgrades the table without being persisted; other reserved properties are
+    /// ignored.
+    ///
+    /// The caller adds the snapshot holding the new contents, if any, before building:
+    ///
+    /// ```
+    /// # use std::collections::HashMap;
+    /// # use iceberg::spec::{
+    /// #     FormatVersion, MAIN_BRANCH, NestedField, Operation, PartitionSpec, PrimitiveType, Schema,
+    /// #     Snapshot, SnapshotReference, SnapshotRetention, SortOrder, Summary, TableMetadataBuilder,
+    /// #     Transform, Type, UnboundPartitionSpec,
+    /// # };
+    /// # fn main() -> iceberg::Result<()> {
+    /// # let schema = Schema::builder()
+    /// #     .with_fields(vec![
+    /// #         NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+    /// #     ])
+    /// #     .build()?;
+    /// # let metadata = TableMetadataBuilder::new(
+    /// #     schema,
+    /// #     UnboundPartitionSpec::builder().build(),
+    /// #     SortOrder::unsorted_order(),
+    /// #     "s3://bucket/table".to_string(),
+    /// #     FormatVersion::V2,
+    /// #     HashMap::new(),
+    /// # )?
+    /// # .build()?
+    /// # .metadata;
+    /// let schema = Schema::builder()
+    ///     .with_fields(vec![
+    ///         NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+    ///         NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+    ///     ])
+    ///     .build()?;
+    /// let spec = PartitionSpec::builder(schema.clone())
+    ///     .add_partition_field("id", "id_bucket", Transform::Bucket(16))?
+    ///     .build()?;
+    ///
+    /// let builder = metadata
+    ///     .clone()
+    ///     .into_builder(Some("s3://bucket/table/metadata/v2.metadata.json".to_string()))
+    ///     .build_replacement(schema, spec, SortOrder::unsorted_order(), None, HashMap::new())?;
+    ///
+    /// let snapshot = Snapshot::builder()
+    ///     .with_snapshot_id(1)
+    ///     .with_timestamp_ms(metadata.last_updated_ms() + 1)
+    ///     .with_sequence_number(metadata.next_sequence_number())
+    ///     .with_schema_id(1)
+    ///     .with_manifest_list("s3://bucket/table/metadata/snap-1.avro")
+    ///     .with_summary(Summary {
+    ///         operation: Operation::Overwrite,
+    ///         additional_properties: HashMap::new(),
+    ///     })
+    ///     .build();
+    /// let replaced = builder
+    ///     .add_snapshot(snapshot)?
+    ///     .set_ref(MAIN_BRANCH, SnapshotReference {
+    ///         snapshot_id: 1,
+    ///         retention: SnapshotRetention::branch(None, None, None),
+    ///     })?
+    ///     .build()?
+    ///     .metadata;
+    ///
+    /// assert_eq!(replaced.uuid(), metadata.uuid());
+    /// assert_eq!(replaced.current_schema().highest_field_id(), 2);
+    /// assert_eq!(replaced.current_snapshot_id(), Some(1));
+    /// # Ok(())
+    /// # }
+    /// ```
     ///
     /// # Errors
     /// - The table is format version 1, which is not supported.
@@ -4848,6 +4918,202 @@ mod tests {
                 "Cannot find source column with id 99 for partition column nope in schema."
             )
         );
+    }
+
+    #[test]
+    fn test_build_replacement_rejects_a_format_version_downgrade() {
+        let err = builder_without_changes(FormatVersion::V3)
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::from_iter([(
+                    TableProperties::PROPERTY_FORMAT_VERSION.to_string(),
+                    "2".to_string(),
+                )]),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            (err.kind(), err.message()),
+            (
+                ErrorKind::DataInvalid,
+                "Cannot downgrade FormatVersion from v3 to v2"
+            )
+        );
+    }
+
+    #[test]
+    fn test_build_replacement_rejects_a_sort_order_on_a_missing_column() {
+        let sort_order = SortOrder::builder()
+            .with_sort_field(SortField {
+                source_id: 99,
+                transform: Transform::Identity,
+                direction: SortDirection::Ascending,
+                null_order: NullOrder::First,
+            })
+            .build_unbound()
+            .unwrap();
+
+        let err = builder_without_changes(FormatVersion::V2)
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                sort_order,
+                None,
+                HashMap::new(),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            (err.kind(), err.message()),
+            (
+                ErrorKind::DataInvalid,
+                "Cannot find source column with id 99 for sort column in schema."
+            )
+        );
+    }
+
+    #[test]
+    fn test_build_replacement_rejects_a_column_named_after_a_partition_field() {
+        let builder = TableMetadataBuilder::new(
+            schema(),
+            UnboundPartitionSpec::builder()
+                .add_partition_field(unbound_field(1, "x_bucket", Transform::Bucket(8)))
+                .unwrap()
+                .build(),
+            SortOrder::unsorted_order(),
+            TEST_LOCATION.to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata
+        .into_builder(Some(
+            "s3://bucket/test/location/metadata/metadata1.json".to_string(),
+        ));
+        let replacement = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "x_bucket", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let err = builder
+            .build_replacement(
+                replacement,
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            (err.kind(), err.message()),
+            (
+                ErrorKind::DataInvalid,
+                "Cannot set current schema 1: field 'x_bucket' with id 4 conflicts with a \
+                 partition field of that name in spec 0 sourced from field id 1"
+            )
+        );
+    }
+
+    #[test]
+    fn test_build_replacement_keeps_refs_other_than_main() {
+        let audit = SnapshotReference {
+            snapshot_id: 1,
+            retention: SnapshotRetention::branch(None, None, None),
+        };
+        let release = SnapshotReference {
+            snapshot_id: 1,
+            retention: SnapshotRetention::Tag {
+                max_ref_age_ms: None,
+            },
+        };
+        let builder = populated_builder()
+            .set_ref("audit", audit.clone())
+            .unwrap()
+            .set_ref("release", release.clone())
+            .unwrap();
+
+        let metadata = builder
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(
+            metadata.refs,
+            HashMap::from_iter([
+                ("audit".to_string(), audit),
+                ("release".to_string(), release),
+            ])
+        );
+        assert_eq!(metadata.current_snapshot_id, None);
+    }
+
+    #[test]
+    fn test_build_replacement_keeps_the_id_of_a_column_whose_type_changes() {
+        let replacement = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = builder_without_changes(FormatVersion::V2)
+            .build_replacement(
+                replacement,
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let x = metadata.current_schema().field_by_name("x").unwrap();
+        assert_eq!(x.id, 1);
+        assert_eq!(*x.field_type, Type::Primitive(PrimitiveType::String));
+    }
+
+    #[test]
+    fn test_build_replacement_keeps_the_existing_compression_codec() {
+        let codec = HashMap::from_iter([(
+            TableProperties::PROPERTY_PARQUET_COMPRESSION_CODEC.to_string(),
+            "gzip".to_string(),
+        )]);
+
+        let metadata = builder_without_changes(FormatVersion::V2)
+            .set_properties(codec.clone())
+            .unwrap()
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                HashMap::new(),
+            )
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata.properties, codec);
     }
 
     #[test]
