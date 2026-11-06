@@ -172,15 +172,18 @@ impl ParquetReadOptions {
         self
     }
 
-    pub(super) fn preload_column_index(&self) -> bool {
+    /// Returns whether to preload the column index when reading Parquet metadata.
+    pub fn preload_column_index(&self) -> bool {
         self.preload_column_index
     }
 
-    pub(super) fn preload_offset_index(&self) -> bool {
+    /// Returns whether to preload the offset index when reading Parquet metadata.
+    pub fn preload_offset_index(&self) -> bool {
         self.preload_offset_index
     }
 
-    pub(super) fn preload_page_index(&self) -> bool {
+    /// Returns whether to preload the page index when reading Parquet metadata.
+    pub fn preload_page_index(&self) -> bool {
         self.preload_page_index
     }
 

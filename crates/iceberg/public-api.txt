@@ -99,6 +99,9 @@ pub fn iceberg::arrow::ArrowReaderOptions::deserialize<__D>(__deserializer: __D)
 pub struct iceberg::arrow::ParquetReadOptions
 impl iceberg::arrow::ParquetReadOptions
 pub fn iceberg::arrow::ParquetReadOptions::metadata_size_hint(&self) -> usize
+pub fn iceberg::arrow::ParquetReadOptions::preload_column_index(&self) -> bool
+pub fn iceberg::arrow::ParquetReadOptions::preload_offset_index(&self) -> bool
+pub fn iceberg::arrow::ParquetReadOptions::preload_page_index(&self) -> bool
 pub fn iceberg::arrow::ParquetReadOptions::range_coalesce_bytes(&self) -> u64
 pub fn iceberg::arrow::ParquetReadOptions::range_fetch_concurrency(&self) -> usize
 impl core::clone::Clone for iceberg::arrow::ParquetReadOptions
