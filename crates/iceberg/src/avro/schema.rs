@@ -54,6 +54,7 @@ impl SchemaToAvroSchema {
     fn define_once(&mut self, schema: AvroSchema) -> AvroSchema {
         let name = match &schema {
             AvroSchema::Fixed(FixedSchema { name, .. })
+            | AvroSchema::Uuid(UuidSchema::Fixed(FixedSchema { name, .. }))
             | AvroSchema::Decimal(DecimalSchema {
                 inner: InnerDecimalSchema::Fixed(FixedSchema { name, .. }),
                 ..
@@ -271,9 +272,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             PrimitiveType::TimestampNs => AvroSchema::TimestampNanos,
             PrimitiveType::TimestamptzNs => AvroSchema::TimestampNanos,
             PrimitiveType::String => AvroSchema::String,
-            // TODO(#2913): write the spec's `fixed[16]` uuid. The manifest reader
-            // already accepts both forms.
-            PrimitiveType::Uuid => AvroSchema::Uuid(UuidSchema::String),
+            PrimitiveType::Uuid => self.define_once(avro_uuid_schema()?),
             PrimitiveType::Fixed(len) => self.define_once(avro_fixed_schema((*len) as usize)?),
             PrimitiveType::Binary | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
                 AvroSchema::Bytes
@@ -328,6 +327,20 @@ pub(crate) fn avro_fixed_schema(len: usize) -> Result<AvroSchema> {
         size: len,
         attributes: Default::default(),
     }))
+}
+
+/// Build the Avro schema for the Iceberg `uuid` primitive type.
+///
+/// The Iceberg spec maps `uuid` to `{"type": "fixed", "size": 16, "logicalType": "uuid"}`,
+/// i.e. 16 raw bytes, which is what iceberg-java writes.
+fn avro_uuid_schema() -> Result<AvroSchema> {
+    Ok(AvroSchema::Uuid(UuidSchema::Fixed(FixedSchema {
+        name: Name::new("uuid_fixed")?,
+        aliases: None,
+        doc: None,
+        size: 16,
+        attributes: Default::default(),
+    })))
 }
 
 pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<AvroSchema> {
