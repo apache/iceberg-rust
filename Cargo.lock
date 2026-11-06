@@ -4878,7 +4878,10 @@ version = "0.10.1"
 dependencies = [
  "arrow",
  "iceberg",
+ "iceberg-storage-opendal",
  "pyo3",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
