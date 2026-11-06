@@ -237,7 +237,10 @@ pub fn read_manifest_list(bs: &[u8]) -> PyResult<PyManifestList> {
 ///
 /// The other arguments are the manifest's entry in the manifest list, which
 /// the entries inherit snapshot IDs, sequence numbers, and first row IDs from.
-/// The reader keeps `bs` alive until it's closed.
+/// Raises `ValueError` for an invalid manifest header. An error while reading
+/// raises `pyarrow.ArrowInvalid`, which subclasses `ValueError`. The reader
+/// holds a reference to `bs` until it's closed or collected, and the next call
+/// into `pyiceberg_core` releases it.
 #[pyfunction]
 #[pyo3(signature = (
     bs,
@@ -289,7 +292,10 @@ pub fn read_manifest_entries_as_arrow(
 
 /// Reads the entries of a manifest list as a `pyarrow.RecordBatchReader`.
 ///
-/// The reader keeps `bs` alive until it's closed.
+/// Raises `ValueError` for an invalid manifest list header. An error while
+/// reading raises `pyarrow.ArrowInvalid`, which subclasses `ValueError`. The
+/// reader holds a reference to `bs` until it's closed or collected, and the
+/// next call into `pyiceberg_core` releases it.
 #[pyfunction]
 pub fn read_manifest_list_as_arrow(
     py: Python<'_>,
@@ -299,8 +305,7 @@ pub fn read_manifest_list_as_arrow(
     into_pyarrow_reader(py, reader.schema(), reader)
 }
 
-/// Exports `batches` through the Arrow C stream interface. pyarrow raises an
-/// error from `batches` as `ArrowInvalid`, a subclass of `ValueError`.
+/// Exports `batches` through the Arrow C stream interface.
 fn into_pyarrow_reader<'py>(
     py: Python<'py>,
     schema: SchemaRef,

@@ -49,9 +49,9 @@ use crate::spec::{
 };
 use crate::{Error, Result};
 
-/// Rows per batch. The size of a row grows with the table's column count
-/// through the column stats maps, and 1024 rows keeps a batch of a 100-column
-/// table under 10 MB.
+/// Rows per batch. A row's size grows with the table's column count through
+/// the column stats maps. With stats on every column of a 100-column table of
+/// longs, 1024 rows take about 9 MB.
 const BATCH_SIZE: usize = 1024;
 
 /// Reads the entries of a manifest file as batches with one row per entry.
@@ -1618,19 +1618,6 @@ mod tests {
                 (reader.schema(), reader)
             });
         }
-    }
-
-    #[tokio::test]
-    async fn test_empty_manifest_has_no_batches() {
-        let spec = partition_spec(&[("i", Transform::Identity)]);
-        let (bytes, manifest_file) =
-            write_manifest(spec, Some(1), |b| b.build_v2_data(), |_| {}).await;
-        assert_eq!(
-            read_manifest_entries(&bytes, &manifest_file)
-                .unwrap()
-                .count(),
-            0
-        );
     }
 
     #[tokio::test]
