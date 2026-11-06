@@ -66,13 +66,34 @@ impl BasicDeleteFileLoader {
     pub(crate) async fn parquet_to_batch_stream(
         &self,
         data_file_path: &str,
-        file_size_in_bytes: u64,
+        file_size_in_bytes: Option<u64>,
         key_metadata: Option<&[u8]>,
     ) -> Result<ArrowRecordBatchStream> {
         /*
            Essentially a super-cut-down ArrowReader. We can't use ArrowReader directly
            as that introduces a circular dependency.
         */
+        // `None` means the task did not carry a size (see `FileScanTaskDeleteFile`).
+        // Resolve it when the file is first loaded.
+        let file_size_in_bytes = match file_size_in_bytes {
+            Some(file_size_in_bytes) => file_size_in_bytes,
+            None => {
+                self.file_io
+                    .new_input(data_file_path)?
+                    .metadata()
+                    .await
+                    .map_err(|error| {
+                        // Keep the storage error's kind and retryability.
+                        Error::new(
+                            error.kind(),
+                            format!("Failed to stat delete file '{data_file_path}'"),
+                        )
+                        .with_retryable(error.retryable())
+                        .with_source(error)
+                    })?
+                    .size
+            }
+        };
         let parquet_read_options = ParquetReadOptions::builder().build();
 
         let (parquet_file_reader, arrow_metadata) = ArrowReader::open_parquet_file(
@@ -230,27 +251,30 @@ mod tests {
                 .unwrap(),
         );
 
-        let task = FileScanTaskDeleteFile::builder()
-            .with_file_path(del_path.clone())
-            .with_file_size_in_bytes(std::fs::metadata(&del_path).unwrap().len())
-            .with_file_type(DataContentType::PositionDeletes)
-            .with_file_format(DataFileFormat::Parquet)
-            .with_partition_spec_id(0)
-            .with_key_metadata(Some(Box::from(key_metadata.as_ref())))
-            .build()
-            .unwrap();
-
         let scan_metrics = ScanMetrics::new();
         let delete_file_loader = BasicDeleteFileLoader::new(file_io, scan_metrics);
 
-        let result = delete_file_loader
-            .read_delete_file(&task, schema)
-            .await
-            .unwrap();
+        // A known size, and an unknown size resolved before decryption.
+        for file_size_in_bytes in [Some(std::fs::metadata(&del_path).unwrap().len()), None] {
+            let task = FileScanTaskDeleteFile::builder()
+                .with_file_path(del_path.clone())
+                .with_file_size_in_bytes_opt(file_size_in_bytes)
+                .with_file_type(DataContentType::PositionDeletes)
+                .with_file_format(DataFileFormat::Parquet)
+                .with_partition_spec_id(0)
+                .with_key_metadata(Some(Box::from(key_metadata.as_ref())))
+                .build()
+                .unwrap();
 
-        let batches: Vec<_> = result.try_collect().await.unwrap();
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].num_rows(), 4);
+            let result = delete_file_loader
+                .read_delete_file(&task, Arc::clone(&schema))
+                .await
+                .unwrap();
+
+            let batches: Vec<_> = result.try_collect().await.unwrap();
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].num_rows(), 4);
+        }
     }
 
     #[tokio::test]
@@ -327,5 +351,24 @@ mod tests {
         let batches: Vec<_> = result.try_collect().await.unwrap();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].num_rows(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_delete_file_too_small_for_footer_fails() {
+        let temp = TempDir::new().unwrap();
+        let loader = BasicDeleteFileLoader::new(FileIO::new_with_fs(), ScanMetrics::new());
+
+        // A size too small for a Parquet footer fails the read, whether it was
+        // resolved from storage or supplied by the task.
+        let empty = temp.path().join("empty.parquet");
+        std::fs::write(&empty, []).unwrap();
+        for size in [None, Some(0), Some(4)] {
+            let error = loader
+                .parquet_to_batch_stream(empty.to_str().unwrap(), size, None)
+                .await
+                .err()
+                .unwrap();
+            assert!(error.to_string().contains("is less than footer"), "{error}");
+        }
     }
 }
