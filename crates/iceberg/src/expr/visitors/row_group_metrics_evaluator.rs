@@ -1357,6 +1357,40 @@ mod tests {
     }
 
     #[test]
+    fn eval_true_for_deprecated_string_bounds_filter_eq() -> Result<()> {
+        // Deprecated bounds use signed byte order, so "é" sorts before "a"
+        let row_group_metadata = create_row_group_metadata(
+            1,
+            1,
+            None,
+            1,
+            Some(Statistics::byte_array(
+                Some(ByteArray::from("é")),
+                Some(ByteArray::from("a")),
+                None,
+                Some(0),
+                true,
+            )),
+        )?;
+
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let filter = Reference::new("col_string")
+            .equal_to(Datum::string("é"))
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = RowGroupMetricsEvaluator::eval(
+            &filter,
+            &row_group_metadata,
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert!(result);
+        Ok(())
+    }
+
+    #[test]
     fn eval_true_for_meta_all_nulls_filter_not_starts_with() -> Result<()> {
         let row_group_metadata = create_row_group_metadata(
             1,

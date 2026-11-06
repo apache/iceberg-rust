@@ -996,10 +996,27 @@ pub(crate) fn get_arrow_datum(datum: &Datum) -> Result<Arc<dyn ArrowDatum + Send
     }
 }
 
+/// Deprecated `min`/`max` statistics, written by parquet-mr before 1.10, use signed byte order,
+/// which is wrong for types Parquet compares as unsigned bytes. Like parquet-java, only trust
+/// them when `min` equals `max`.
+fn has_unreliable_deprecated_bounds(primitive_type: &PrimitiveType, stats: &Statistics) -> bool {
+    matches!(
+        primitive_type,
+        PrimitiveType::String
+            | PrimitiveType::Binary
+            | PrimitiveType::Fixed(_)
+            | PrimitiveType::Uuid
+    ) && stats.is_min_max_deprecated()
+        && stats.min_bytes_opt() != stats.max_bytes_opt()
+}
+
 pub(crate) fn get_parquet_stat_min_as_datum(
     primitive_type: &PrimitiveType,
     stats: &Statistics,
 ) -> Result<Option<Datum>> {
+    if has_unreliable_deprecated_bounds(primitive_type, stats) {
+        return Ok(None);
+    }
     Ok(match (primitive_type, stats) {
         (PrimitiveType::Boolean, Statistics::Boolean(stats)) => {
             stats.min_opt().map(|val| Datum::bool(*val))
@@ -1150,6 +1167,9 @@ pub(crate) fn get_parquet_stat_max_as_datum(
     primitive_type: &PrimitiveType,
     stats: &Statistics,
 ) -> Result<Option<Datum>> {
+    if has_unreliable_deprecated_bounds(primitive_type, stats) {
+        return Ok(None);
+    }
     Ok(match (primitive_type, stats) {
         (PrimitiveType::Boolean, Statistics::Boolean(stats)) => {
             stats.max_opt().map(|val| Datum::bool(*val))
@@ -2719,6 +2739,41 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn test_deprecated_unsigned_parquet_statistics() {
+        use parquet::data_type::ByteArray;
+        use parquet::file::statistics::ValueStatistics;
+
+        let byte_array_stats = |min: &str, max: &str, deprecated: bool| {
+            Statistics::ByteArray(ValueStatistics::new(
+                Some(ByteArray::from(min)),
+                Some(ByteArray::from(max)),
+                None,
+                None,
+                deprecated,
+            ))
+        };
+        let string_bounds = |stats: &Statistics| {
+            (
+                get_parquet_stat_min_as_datum(&PrimitiveType::String, stats).unwrap(),
+                get_parquet_stat_max_as_datum(&PrimitiveType::String, stats).unwrap(),
+            )
+        };
+
+        assert_eq!(
+            string_bounds(&byte_array_stats("é", "a", true)),
+            (None, None)
+        );
+        assert_eq!(
+            string_bounds(&byte_array_stats("a", "a", true)),
+            (Some(Datum::string("a")), Some(Datum::string("a")))
+        );
+        assert_eq!(
+            string_bounds(&byte_array_stats("a", "é", false)),
+            (Some(Datum::string("a")), Some(Datum::string("é")))
+        );
     }
 
     #[test]
