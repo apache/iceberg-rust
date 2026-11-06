@@ -130,8 +130,7 @@ impl TransactionAction for FastAppendAction {
     ) -> Result<ActionCommit> {
         self.validate()?;
         if self.check_duplicate {
-            validate_files_not_live(table, self.added_data_files.iter().map(DataFile::file_path))
-                .await?;
+            validate_files_not_live(table, &self.added_data_files).await?;
         }
         state.apply(table).await
     }
