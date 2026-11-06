@@ -274,7 +274,10 @@ fn build_summary(
                 metadata
                     .schemas_iter()
                     .filter(|schema| {
-                        let mut source_ids = partition_spec.fields().iter().map(|f| f.source_id);
+                        let mut source_ids = partition_spec
+                            .fields()
+                            .iter()
+                            .flat_map(|f| f.source_ids().iter().copied());
                         source_ids.all(|id| schema.field_by_id(id).is_some())
                     })
                     .max_by_key(|schema| schema.schema_id())

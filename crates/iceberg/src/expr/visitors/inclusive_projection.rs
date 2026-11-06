@@ -41,7 +41,8 @@ impl InclusiveProjection {
         if let std::collections::hash_map::Entry::Vacant(e) = self.cached_parts.entry(field_id) {
             let mut parts: Vec<PartitionField> = vec![];
             for partition_spec_field in self.partition_spec.fields() {
-                if partition_spec_field.source_id == field_id {
+                // A multi-argument field has an unknown transform, which cannot project
+                if partition_spec_field.source_ids() == [field_id] {
                     parts.push(partition_spec_field.clone())
                 }
             }
@@ -68,7 +69,7 @@ impl InclusiveProjection {
             .iter()
             .try_fold(Predicate::AlwaysTrue, |res, part| {
                 Ok(
-                    if let Some(pred_for_part) = part.transform.project(&part.name, predicate)? {
+                    if let Some(pred_for_part) = part.transform().project(part.name(), predicate)? {
                         if res == Predicate::AlwaysTrue {
                             pred_for_part
                         } else {

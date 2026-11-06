@@ -73,15 +73,15 @@ impl PartitionValueCalculator {
         let transform_functions: Vec<BoxedTransformFunction> = partition_spec
             .fields()
             .iter()
-            .map(|pf| create_transform_function(&pf.transform))
+            .map(|pf| create_transform_function(&pf.transform()))
             .collect::<Result<Vec<_>>>()?;
 
         // Extract source field IDs for projection
         let source_field_ids: Vec<i32> = partition_spec
             .fields()
             .iter()
-            .map(|pf| pf.source_id)
-            .collect();
+            .map(|pf| pf.source_id())
+            .collect::<Result<_>>()?;
 
         // Create projector for extracting source columns
         let projector = RecordBatchProjector::from_iceberg_schema(
