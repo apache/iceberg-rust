@@ -30,7 +30,7 @@ use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 use super::{ArrowReader, CollectFieldIdVisitor};
-use crate::arrow::schema::is_variant_binary;
+use crate::arrow::schema::validate_unshredded_variant;
 use crate::arrow::{VariantExtensionType, arrow_schema_to_schema};
 use crate::error::{Result, invalid_data};
 use crate::expr::BoundPredicate;
@@ -493,50 +493,6 @@ fn type_contains_variant(field_type: &Type) -> bool {
         }
         Type::Primitive(_) => false,
     }
-}
-
-/// Checks that a projected variant is stored unshredded as `metadata` and `value` bytes,
-/// matched by name.
-fn validate_unshredded_variant(field: &Field, variant_field_id: i32) -> Result<()> {
-    let invalid = |problem: String| {
-        invalid_data!(
-            "Variant column `{}` (field id {variant_field_id}) {problem}",
-            field.name()
-        )
-    };
-    let DataType::Struct(subfields) = field.data_type() else {
-        return Err(invalid(format!(
-            "must be stored as a group, found {}",
-            field.data_type()
-        )));
-    };
-    if subfields.find("typed_value").is_some() {
-        return Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            format!(
-                "Reading shredded variant column `{}` (field id {variant_field_id}) is not supported yet, see https://github.com/apache/iceberg-rust/issues/3606",
-                field.name()
-            ),
-        ));
-    }
-    for name in ["metadata", "value"] {
-        match subfields.find(name) {
-            Some((_, subfield)) if is_variant_binary(subfield.data_type()) => {}
-            Some((_, subfield)) => {
-                return Err(invalid(format!(
-                    "has a non-binary `{name}` field: {}",
-                    subfield.data_type()
-                )));
-            }
-            None => return Err(invalid(format!("is missing the `{name}` field"))),
-        }
-    }
-    if subfields.len() != 2 {
-        return Err(invalid(
-            "has fields other than `metadata` and `value`".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 /// Build the map of parquet field id to Parquet column index in the schema.
@@ -1146,6 +1102,7 @@ message schema {
             .build()
             .unwrap();
         let binary = |name: &str| Field::new(name, DataType::Binary, true);
+        let metadata = || Field::new("metadata", DataType::Binary, false);
         let mask_for = |storage: DataType| {
             let arrow_schema = Arc::new(ArrowSchema::new(vec![
                 Field::new("c1", DataType::Utf8, false).with_metadata(field_id_meta(1)),
@@ -1183,7 +1140,7 @@ message schema {
 
         assert_eq!(
             error_of(DataType::Struct(Fields::from(vec![
-                binary("metadata"),
+                metadata(),
                 binary("value"),
                 binary("foo"),
             ]))),
@@ -1191,10 +1148,17 @@ message schema {
         );
         assert_eq!(
             error_of(DataType::Struct(Fields::from(vec![
-                binary("metadata"),
+                metadata(),
                 binary("foo"),
             ]))),
             invalid("is missing the `value` field")
+        );
+        assert_eq!(
+            error_of(DataType::Struct(Fields::from(vec![
+                binary("metadata"),
+                binary("value"),
+            ]))),
+            invalid("has an optional `metadata` field, which must be required")
         );
         assert_eq!(
             error_of(DataType::Struct(Fields::from(vec![binary("value")]))),
@@ -3432,6 +3396,75 @@ message schema {
         assert_eq!(batches[0].num_rows(), 3);
         assert_id_values(batches[0].column_by_name("id").unwrap());
         assert!(batches[0].column_by_name("v").is_none());
+    }
+
+    /// Null variant rows stay null when the variant is rebuilt into the table type, here because
+    /// the file's `value` is required and the table type's is nullable.
+    #[tokio::test]
+    async fn test_read_variant_with_null_rows() {
+        use arrow_array::StructArray;
+        use arrow_buffer::NullBuffer;
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+        let with_null_row = |fields: Fields| {
+            Arc::new(StructArray::new(
+                fields,
+                variant_struct_array().as_struct().columns().to_vec(),
+                Some(NullBuffer::from(vec![true, false, true])),
+            )) as ArrayRef
+        };
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("v", DataType::Struct(variant_arrow_fields()), true)
+                .with_metadata(field_id_meta(2)),
+        ]));
+        let path = write_variant_parquet(
+            arrow_schema,
+            vec![with_null_row(variant_arrow_fields())],
+            dir,
+        );
+
+        let batches = read_variant(top_level_variant_schema(), &path, vec![2]).await;
+        let DataType::Struct(table_fields) =
+            crate::arrow::type_to_arrow_type(&Type::Variant(VariantType)).unwrap()
+        else {
+            unreachable!()
+        };
+        let schema = batches[0].schema();
+        assert_eq!(
+            schema.field_with_name("v").unwrap().extension_type_name(),
+            Some("arrow.parquet.variant")
+        );
+        assert_eq!(
+            batches[0].column_by_name("v").unwrap(),
+            &with_null_row(table_fields)
+        );
+    }
+
+    /// A file written before `v` was added to the table reads `v` as null in every row.
+    #[tokio::test]
+    async fn test_read_variant_missing_from_file() {
+        use arrow_array::{Int32Array, new_null_array};
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(1)),
+        ]));
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let path = write_variant_parquet(arrow_schema, vec![id], dir);
+        let table_type = crate::arrow::type_to_arrow_type(&Type::Variant(VariantType)).unwrap();
+
+        for project_field_ids in [vec![1, 2], vec![2]] {
+            let batches = read_variant(top_level_variant_schema(), &path, project_field_ids).await;
+            let schema = batches[0].schema();
+            assert_eq!(
+                schema.field_with_name("v").unwrap().extension_type_name(),
+                Some("arrow.parquet.variant")
+            );
+            assert_eq!(
+                batches[0].column_by_name("v").unwrap(),
+                &new_null_array(&table_type, 3)
+            );
+        }
     }
 
     /// The file stores the variant exactly as the table schema's Arrow type, so only the

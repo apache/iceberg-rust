@@ -32,7 +32,10 @@ use arrow_schema::{
 use arrow_select::zip::zip;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::schema::{is_variant_binary, is_variant_field, try_get_field_id_from_metadata};
+use crate::arrow::schema::{
+    get_field_id_from_metadata, is_variant_field, try_get_field_id_from_metadata,
+    validate_unshredded_variant,
+};
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
 use crate::arrow::{
     datum_to_arrow_type_with_ree, primitive_type_to_arrow_type_with_ree, schema_to_arrow_schema,
@@ -241,7 +244,7 @@ impl PromotePlan {
         constant_fields: &HashMap<i32, ColumnConstant>,
     ) -> Result<Self> {
         if is_variant_field(target) {
-            return Self::build_variant(source.data_type(), target.data_type());
+            return Self::build_variant(source, target);
         }
         Self::build(
             source.data_type(),
@@ -251,22 +254,22 @@ impl PromotePlan {
         )
     }
 
-    /// A variant's `metadata` and `value` carry no field ids, so they are matched by name.
-    /// When reading data files, projection reports unsupported or malformed storage before this
-    /// runs.
-    fn build_variant(source: &DataType, target: &DataType) -> Result<Self> {
-        if source == target {
+    /// Checks the storage as projection does. A variant's `metadata` and `value` carry no field
+    /// ids, so they are matched by name.
+    fn build_variant(source: &Field, target: &Field) -> Result<Self> {
+        validate_unshredded_variant(source, get_field_id_from_metadata(target)?)?;
+        let (source_type, target_type) = (source.data_type(), target.data_type());
+        if source_type == target_type {
             return Ok(PromotePlan::PassThrough);
         }
-        let mismatch =
-            || invalid_data!("cannot read variant stored as {source:?}, expected {target:?}");
-        let (DataType::Struct(source_fields), DataType::Struct(target_fields)) = (source, target)
+        let mismatch = || {
+            invalid_data!("cannot read variant stored as {source_type:?}, expected {target_type:?}")
+        };
+        let (DataType::Struct(source_fields), DataType::Struct(target_fields)) =
+            (source_type, target_type)
         else {
             return Err(mismatch());
         };
-        if source_fields.len() != target_fields.len() {
-            return Err(mismatch());
-        }
         let children = target_fields
             .iter()
             .map(|target_field| {
@@ -275,10 +278,8 @@ impl PromotePlan {
                     .ok_or_else(mismatch)?;
                 let plan = if source_field.data_type() == target_field.data_type() {
                     PromotePlan::PassThrough
-                } else if is_variant_binary(source_field.data_type()) {
-                    PromotePlan::Cast(target_field.data_type().clone())
                 } else {
-                    return Err(mismatch());
+                    PromotePlan::Cast(target_field.data_type().clone())
                 };
                 Ok(ChildPlan::FromSource { source_index, plan })
             })
@@ -1864,13 +1865,14 @@ mod test {
     }
 
     fn variant_target() -> Field {
-        Field::new(
+        field_with_id(
             "v",
             DataType::Struct(Fields::from(vec![
                 Field::new("metadata", DataType::Binary, false),
                 Field::new("value", DataType::Binary, true),
             ])),
             true,
+            2,
         )
         .with_extension_type(VariantExtensionType)
     }
@@ -1915,41 +1917,62 @@ mod test {
         assert_eq!(promoted.as_struct(), &expected);
     }
 
+    /// Reports the same errors as projection, which validates data files before this runs.
     #[test]
     fn promote_variant_rejects_unsupported_storage() {
-        let binary = |name: &str| Field::new(name, DataType::Binary, true);
-        let target = variant_target();
-        for storage in [
-            DataType::Struct(Fields::from(vec![
-                binary("metadata"),
-                binary("value"),
-                Field::new("typed_value", DataType::Int64, true),
-            ])),
-            DataType::Struct(Fields::from(vec![binary("metadata"), binary("foo")])),
-            DataType::Struct(Fields::from(vec![
-                Field::new("metadata", DataType::Utf8, false),
-                binary("value"),
-            ])),
-            DataType::Binary,
+        let binary = |name: &str, nullable: bool| Field::new(name, DataType::Binary, nullable);
+        let invalid = |problem: &str| {
+            (
+                ErrorKind::DataInvalid,
+                format!("Variant column `v` (field id 2) {problem}"),
+            )
+        };
+        for (storage, expected) in [
+            (
+                DataType::Struct(Fields::from(vec![
+                    binary("metadata", true),
+                    binary("value", true),
+                    Field::new("typed_value", DataType::Int64, true),
+                ])),
+                (
+                    ErrorKind::FeatureUnsupported,
+                    "Reading shredded variant column `v` (field id 2) is not supported yet, see https://github.com/apache/iceberg-rust/issues/3606".to_string(),
+                ),
+            ),
+            (
+                DataType::Struct(Fields::from(vec![
+                    binary("metadata", true),
+                    binary("value", true),
+                ])),
+                invalid("has an optional `metadata` field, which must be required"),
+            ),
+            (
+                DataType::Struct(Fields::from(vec![
+                    binary("metadata", false),
+                    binary("foo", true),
+                ])),
+                invalid("is missing the `value` field"),
+            ),
+            (
+                DataType::Struct(Fields::from(vec![
+                    Field::new("metadata", DataType::Utf8, false),
+                    binary("value", true),
+                ])),
+                invalid("has a non-binary `metadata` field: Utf8"),
+            ),
+            (
+                DataType::Binary,
+                invalid("must be stored as a group, found Binary"),
+            ),
         ] {
             let err = PromotePlan::build_field(
-                &Field::new("v", storage.clone(), true),
-                &target,
+                &Field::new("v", storage, true),
+                &variant_target(),
                 &empty_schema(),
                 &HashMap::new(),
             )
             .unwrap_err();
-            assert_eq!(
-                (err.kind(), err.message()),
-                (
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "cannot read variant stored as {storage:?}, expected {:?}",
-                        target.data_type()
-                    )
-                    .as_str()
-                )
-            );
+            assert_eq!((err.kind(), err.message().to_string()), expected);
         }
     }
 
