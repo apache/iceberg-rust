@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
 use super::decimal_utils::{
-    Decimal, decimal_from_i128_with_scale, decimal_from_str_exact, decimal_mantissa,
+    Decimal, decimal_from_i128_with_scale, decimal_from_str_exact, decimal_mantissa_at_scale,
     decimal_precision, decimal_scale, i128_from_be_bytes, i128_to_be_bytes_min,
 };
 use super::literal::Literal;
@@ -1029,18 +1029,7 @@ impl Datum {
     /// assert_eq!(&format!("{t}"), "1.23");
     /// ```
     pub fn decimal(value: Decimal) -> Result<Self> {
-        ensure_data_valid!(value.is_finite(), "Decimal value must be finite: {}", value);
-        let scale = decimal_scale(&value);
-
-        let r#type = Type::decimal(MAX_DECIMAL_PRECISION, scale)?;
-        if let Type::Primitive(p) = r#type {
-            Ok(Self {
-                r#type: p,
-                literal: PrimitiveLiteral::Int128(decimal_mantissa(&value)),
-            })
-        } else {
-            unreachable!("Decimal type must be primitive.")
-        }
+        Self::decimal_with_precision(value, MAX_DECIMAL_PRECISION)
     }
 
     /// Try to create a decimal literal from [`Decimal`] with precision.
@@ -1049,11 +1038,12 @@ impl Datum {
     /// which is useful when you need to control the storage requirements.
     /// Use [`Datum::decimal`] if you want to use the maximum precision (38).
     pub fn decimal_with_precision(value: Decimal, precision: u32) -> Result<Self> {
-        ensure_data_valid!(value.is_finite(), "Decimal value must be finite: {}", value);
         let scale = decimal_scale(&value);
-        let mantissa = decimal_mantissa(&value);
-
-        Self::decimal_from_mantissa(mantissa, precision, scale)
+        let Type::Primitive(data_type) = Type::decimal(precision, scale)? else {
+            unreachable!("Decimal type must be primitive.");
+        };
+        let mantissa = decimal_mantissa_at_scale(value, scale, precision)?;
+        Ok(Self::new(data_type, PrimitiveLiteral::Int128(mantissa)))
     }
 
     fn i64_to_i32<T: Into<i64> + PartialOrd<i64>>(val: T) -> Datum {
