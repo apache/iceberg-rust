@@ -27,7 +27,8 @@ use uuid::Uuid;
 
 use super::Map;
 use super::decimal_utils::{
-    decimal_from_str_exact, decimal_mantissa, decimal_rescale, try_decimal_from_i128_with_scale,
+    decimal_from_str_exact, decimal_mantissa, decimal_mantissa_at_scale,
+    try_decimal_from_i128_with_scale,
 };
 use super::primitive::PrimitiveLiteral;
 use super::struct_value::Struct;
@@ -391,7 +392,7 @@ impl Literal {
     /// ```
     pub fn decimal_from_str<S: AsRef<str>>(s: S) -> Result<Self> {
         let decimal = decimal_from_str_exact(s.as_ref())?;
-        Ok(Self::decimal(decimal_mantissa(&decimal)))
+        Ok(Self::decimal(decimal_mantissa(decimal)?))
     }
 
     /// Attempts to convert the Literal to a PrimitiveLiteral
@@ -515,18 +516,10 @@ impl Literal {
                     ErrorKind::FeatureUnsupported,
                     "WKT deserialization for geospatial types is not yet supported",
                 )),
-                (
-                    PrimitiveType::Decimal {
-                        precision: _,
-                        scale,
-                    },
-                    JsonValue::String(s),
-                ) => {
+                (PrimitiveType::Decimal { precision, scale }, JsonValue::String(s)) => {
                     let decimal = decimal_from_str_exact(&s)?;
-                    let rescaled = decimal_rescale(decimal, *scale);
-                    Ok(Some(Literal::Primitive(PrimitiveLiteral::Int128(
-                        decimal_mantissa(&rescaled),
-                    ))))
+                    let mantissa = decimal_mantissa_at_scale(decimal, *scale, *precision)?;
+                    Ok(Some(Literal::decimal(mantissa)))
                 }
                 (PrimitiveType::Unknown, value) if !value.is_null() => Err(invalid_data!(
                     "Unknown type only supports null default values"
