@@ -16,6 +16,7 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 
 use iceberg_property_macro::properties_view;
 
@@ -173,6 +174,13 @@ pub struct TableProperties {
         getter
     )]
     write_datafusion_fanout_enabled: bool,
+    /// Maximum active fanout writers; unset means unlimited and does not bound memory in bytes.
+    #[property(
+        key = Self::PROPERTY_DATAFUSION_WRITE_FANOUT_MAX_OPEN_PARTITIONS,
+        default = None,
+        getter
+    )]
+    write_datafusion_fanout_max_open_partitions: Option<NonZeroUsize>,
     /// Whether garbage collection is enabled on drop.
     /// When `false`, data files will not be deleted when a table is dropped.
     #[property(
@@ -448,6 +456,9 @@ impl TableProperties<'_> {
     /// If false, uses `ClusteredWriter` (requires sorted data, more memory efficient).
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED: &'static str =
         "write.datafusion.fanout.enabled";
+    /// Property key for the maximum number of active fanout writers.
+    pub const PROPERTY_DATAFUSION_WRITE_FANOUT_MAX_OPEN_PARTITIONS: &'static str =
+        "write.datafusion.fanout.max-open-partitions";
     /// Default value for fanout writer enabled
     pub const PROPERTY_DATAFUSION_WRITE_FANOUT_ENABLED_DEFAULT: bool = true;
 
@@ -560,6 +571,44 @@ mod tests {
     use super::*;
     use crate::ErrorKind;
     use crate::compression::CompressionCodec;
+
+    #[test]
+    fn test_fanout_max_open_partitions() {
+        let properties = HashMap::new();
+        assert_eq!(
+            TableProperties::new(&properties)
+                .write_datafusion_fanout_max_open_partitions()
+                .unwrap(),
+            None
+        );
+        for (value, expected) in [("1", 1), ("128", 128)] {
+            let properties = HashMap::from([(
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_MAX_OPEN_PARTITIONS.to_string(),
+                value.to_string(),
+            )]);
+            assert_eq!(
+                TableProperties::new(&properties)
+                    .write_datafusion_fanout_max_open_partitions()
+                    .unwrap(),
+                NonZeroUsize::new(expected)
+            );
+        }
+        for value in ["0", "-1", "", "invalid", "18446744073709551616"] {
+            let properties = HashMap::from([(
+                TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_MAX_OPEN_PARTITIONS.to_string(),
+                value.to_string(),
+            )]);
+            let error = TableProperties::new(&properties)
+                .write_datafusion_fanout_max_open_partitions()
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert!(
+                error.to_string().contains(
+                    TableProperties::PROPERTY_DATAFUSION_WRITE_FANOUT_MAX_OPEN_PARTITIONS
+                )
+            );
+        }
+    }
 
     #[test]
     fn test_table_properties_default() {
