@@ -331,7 +331,7 @@ mod test {
     fn test_strict_projection_truncate_string_compares_width_in_code_points() -> Result<()> {
         let transform = Transform::Truncate(3);
         let fixture = TestProjectionFixture::new(
-            transform.clone(),
+            transform,
             "city",
             NestedField::required(1, "city", Primitive(PrimitiveType::String)),
         );
