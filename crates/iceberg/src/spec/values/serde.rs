@@ -53,9 +53,8 @@ pub(crate) mod _serde {
         /// record lacks. Record fields that `struct_type` lacks are dropped. Values
         /// other than records are returned unchanged.
         ///
-        /// Fields aren't matched by field ID. A writer that stores a field under
-        /// another name, such as Java replacing characters that Avro names don't
-        /// allow, reads as a missing field.
+        /// Fields aren't matched by field ID; callers that need that rename
+        /// `struct_type`'s fields to the writer's names first.
         pub fn project_by_name(self, struct_type: &StructType) -> Result<Self, Error> {
             let (mut required, optional) = match self.0 {
                 RawLiteralEnum::Record(Record { required, optional }) => (required, optional),
