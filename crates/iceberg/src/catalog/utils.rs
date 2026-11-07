@@ -105,7 +105,7 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
 }
 
 /// Deletes the previous metadata files tracked by `base` that `new` no longer tracks, if
-/// `write.metadata.delete-after-commit.enabled` is set on `new`.
+/// `write.metadata.delete-after-commit.enabled` is `true` on `new`.
 ///
 /// This mirrors the Java implementation's `CatalogUtil.deleteRemovedMetadataFiles`. Call it
 /// only after `new` has been committed over `base`. Deletion is best-effort: failures are

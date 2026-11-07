@@ -2078,6 +2078,45 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_table_deletes_removed_metadata_files_on_commit_that_enables_cleanup() {
+        let catalog = new_memory_catalog().await;
+        let table = create_table_with_properties(
+            &catalog,
+            HashMap::from([(
+                TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                "1".to_string(),
+            )]),
+        )
+        .await;
+        let file_io = table.file_io().clone();
+        let v0 = table.metadata_location().unwrap().to_string();
+        let v1_table = commit_property_update(&catalog, &table, "1").await;
+        let v1 = v1_table.metadata_location().unwrap().to_string();
+        let v2_table = commit_property_update(&catalog, &v1_table, "2").await;
+        let v2 = v2_table.metadata_location().unwrap().to_string();
+
+        let tx = Transaction::new(&v2_table);
+        let v3_table = tx
+            .update_table_properties()
+            .set(
+                TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED.to_string(),
+                "true".to_string(),
+            )
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let v3 = v3_table.metadata_location().unwrap().to_string();
+
+        // v0 fell out of the log while cleanup was disabled, so only v1 is deleted.
+        assert_eq!(
+            existing_files(&file_io, &[v0.clone(), v1, v2.clone(), v3.clone()]).await,
+            vec![v0, v2, v3]
+        );
+    }
+
+    #[tokio::test]
     async fn test_update_table_keeps_metadata_files_removed_from_log_when_not_enabled() {
         for delete_after_commit in [None, Some("false")] {
             let catalog = new_memory_catalog().await;
