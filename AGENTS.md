@@ -53,11 +53,12 @@ the code they describe or they are wrong.
 
 ## Public API
 
-Consider how a new public item would be changed or removed later, and prefer
-additive changes to breaking ones. Derives such as `#[derive(Clone)]` count as
-public API. A type that needs table-scoped context to construct gets an
-accessor on `Table` instead of a public `new()`, so new parameters do not break
-callers. Prefer expandable types, such as structs and enums, for configuration
+Justify each new public item: check that it needs to be public and that it
+fits the existing abstractions. Consider how it would be changed or removed
+later, and prefer additive changes to breaking ones. Derives such as
+`#[derive(Clone)]` count as public API. A type that needs table-scoped context
+to construct gets an accessor on `Table` instead of a public `new()`, so new
+parameters do not break callers. Prefer expandable types, such as structs and enums, for configuration
 over adding parameters to a function, so options can grow without breaking
 callers.
 
