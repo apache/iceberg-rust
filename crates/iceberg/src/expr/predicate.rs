@@ -383,16 +383,16 @@ impl Bind for Predicate {
                 })
             }
             Predicate::Unary(expr) => {
-                let bound_expr = expr.bind(schema, case_sensitive)?;
+                let bound_expr = expr.bind(schema.clone(), case_sensitive)?;
 
                 match &bound_expr.op {
                     &PredicateOperator::IsNull => {
-                        if bound_expr.term.field().required {
+                        if schema.is_field_and_ancestors_required(bound_expr.term.field().id) {
                             return Ok(BoundPredicate::AlwaysFalse);
                         }
                     }
                     &PredicateOperator::NotNull => {
-                        if bound_expr.term.field().required {
+                        if schema.is_field_and_ancestors_required(bound_expr.term.field().id) {
                             return Ok(BoundPredicate::AlwaysTrue);
                         }
                     }
@@ -821,7 +821,7 @@ mod tests {
 
     use crate::expr::Predicate::{AlwaysFalse, AlwaysTrue};
     use crate::expr::{Bind, BoundPredicate, Reference};
-    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, StructType, Type};
 
     #[test]
     fn test_logical_or_rewrite_not() {
@@ -1058,6 +1058,106 @@ mod tests {
         let bound_expr = expr.bind(schema, true).unwrap();
         assert_eq!(&format!("{bound_expr}"), "True");
         test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    /// `person: {required|optional} struct<age: required int, score: optional int>`.
+    fn schema_with_person_struct(person_required: bool) -> SchemaRef {
+        let inner = Type::Struct(StructType::new(vec![
+            NestedField::required(2, "age", Type::Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(3, "score", Type::Primitive(PrimitiveType::Int)).into(),
+        ]));
+        let person = if person_required {
+            NestedField::required(1, "person", inner)
+        } else {
+            NestedField::optional(1, "person", inner)
+        };
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![person.into()])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn test_bind_is_null_required_leaf_under_optional_parent_is_kept() {
+        // `person` is optional, so a null `person` makes `person.age` null even though `age`
+        // is required. The IS NULL short-circuit must not fire; the predicate is evaluated.
+        let schema = schema_with_person_struct(false);
+        let bound = Reference::new("person.age")
+            .is_null()
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(&format!("{bound}"), "person.age IS NULL");
+        test_bound_predicate_serialize_diserialize(bound);
+    }
+
+    #[test]
+    fn test_bind_is_not_null_required_leaf_under_optional_parent_is_kept() {
+        let schema = schema_with_person_struct(false);
+        let bound = Reference::new("person.age")
+            .is_not_null()
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(&format!("{bound}"), "person.age IS NOT NULL");
+        test_bound_predicate_serialize_diserialize(bound);
+    }
+
+    #[test]
+    fn test_bind_null_predicates_on_leaf_under_required_parent_short_circuit() {
+        // Whole path required: the leaf can never be null, so the short-circuit still applies.
+        let schema = schema_with_person_struct(true);
+        let is_null = Reference::new("person.age")
+            .is_null()
+            .bind(schema.clone(), true)
+            .unwrap();
+        assert_eq!(&format!("{is_null}"), "False");
+        let is_not_null = Reference::new("person.age")
+            .is_not_null()
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(&format!("{is_not_null}"), "True");
+    }
+
+    #[test]
+    fn test_bind_is_null_required_leaf_under_optional_grandparent_is_kept() {
+        // `a` (required) > `b` (optional) > `c` (required int). The optional middle struct
+        // means `a.b.c` can be null, so the walk must reject the short-circuit even though
+        // both `a` and `c` are required.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "a",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(
+                                2,
+                                "b",
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(
+                                        3,
+                                        "c",
+                                        Type::Primitive(PrimitiveType::Int),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let bound = Reference::new("a.b.c")
+            .is_null()
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(&format!("{bound}"), "a.b.c IS NULL");
     }
 
     #[test]
