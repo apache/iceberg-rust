@@ -122,7 +122,8 @@ impl Manifest {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?,
-            // Manifest Schema & Manifest Entry did not change between V2 and V3
+            // V2 and V3 entries read into the same struct; the v3-only data file
+            // fields are `None` when the writer schema omits them.
             FormatVersion::V2 | FormatVersion::V3 => reader
                 .into_deser_iter::<Resolved<_serde::ManifestEntryV2>>()
                 .map(|entry| {
@@ -1662,7 +1663,7 @@ mod tests {
             .partition_type(&metadata.schema)
             .unwrap();
         let full_schema =
-            serde_json::to_value(manifest_schema_v2(&partition_type).unwrap()).unwrap();
+            serde_json::to_value(manifest_schema_v3(&partition_type).unwrap()).unwrap();
         let mut full_entry = expected_entry(Struct::from_iter([
             Some(Literal::long(5)),
             Some(Literal::string("a")),
@@ -1754,14 +1755,21 @@ mod tests {
             &["data_file", "record_count"],
             &["data_file", "file_size_in_bytes"],
         ];
-        assert_reads_without_each_field(
-            &metadata,
-            &full_schema,
-            &full_value,
-            &full_entry,
-            &optional,
-            &required,
-        );
+        // Older iceberg-rust versions wrote v2 manifests with the v3 data file fields.
+        for format_version in [FormatVersion::V2, FormatVersion::V3] {
+            let metadata = ManifestMetadata {
+                format_version,
+                ..metadata.clone()
+            };
+            assert_reads_without_each_field(
+                &metadata,
+                &full_schema,
+                &full_value,
+                &full_entry,
+                &optional,
+                &required,
+            );
+        }
     }
 
     #[test]

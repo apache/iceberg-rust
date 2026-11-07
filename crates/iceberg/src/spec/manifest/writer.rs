@@ -30,7 +30,7 @@ use crate::encryption::EncryptedOutputFile;
 use crate::error::{Result, invalid_data};
 use crate::io::{FileMetadata, FileWrite, OutputFile};
 use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
-use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
+use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2, manifest_schema_v3};
 use crate::spec::{
     DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
     ManifestStatus, PrimitiveLiteral, SchemaRef, StructType, Type,
@@ -429,8 +429,8 @@ impl ManifestWriter {
         let table_schema = &self.metadata.schema;
         let avro_schema = match self.metadata.format_version {
             FormatVersion::V1 => manifest_schema_v1(&partition_type)?,
-            // Manifest schema did not change between V2 and V3
-            FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
+            FormatVersion::V2 => manifest_schema_v2(&partition_type)?,
+            FormatVersion::V3 => manifest_schema_v3(&partition_type)?,
         };
         let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new())?;
         avro_writer.add_user_metadata(
@@ -472,7 +472,7 @@ impl ManifestWriter {
                     to_value(ManifestEntryV1::try_from(entry, &partition_struct_type)?)?
                         .resolve(&avro_schema)?
                 }
-                // Manifest entry format did not change between V2 and V3
+                // Resolving against the V2 schema drops the v3-only data file fields.
                 FormatVersion::V2 | FormatVersion::V3 => {
                     to_value(ManifestEntryV2::try_from(entry, &partition_struct_type)?)?
                         .resolve(&avro_schema)?
@@ -822,6 +822,101 @@ mod tests {
             actual_manifest.metadata().content,
             ManifestContentType::Deletes,
         );
+    }
+
+    fn data_file_field_ids(bs: &[u8]) -> Vec<i64> {
+        let reader = apache_avro::Reader::new(bs).unwrap();
+        let apache_avro::Schema::Record(entry) = reader.writer_schema() else {
+            panic!("manifest entry schema is not a record");
+        };
+        let data_file = entry.fields.iter().find(|f| f.name == "data_file").unwrap();
+        let apache_avro::Schema::Record(data_file) = &data_file.schema else {
+            panic!("data_file schema is not a record");
+        };
+        data_file
+            .fields
+            .iter()
+            .map(|f| f.custom_attributes["field-id"].as_i64().unwrap())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_write_manifest_data_file_fields_by_format_version() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("s3://bucket/table/data/a.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition_spec_id(0)
+            .record_count(1)
+            .file_size_in_bytes(10)
+            .first_row_id(Some(1000))
+            .referenced_data_file(Some("s3://bucket/table/data/b.parquet".to_string()))
+            .content_offset(Some(4))
+            .content_size_in_bytes(Some(8))
+            .build()
+            .unwrap();
+        let v2_data_file = DataFile {
+            first_row_id: None,
+            content_offset: None,
+            content_size_in_bytes: None,
+            ..data_file.clone()
+        };
+        let v2_field_ids = vec![
+            134, 100, 101, 102, 103, 104, 108, 109, 110, 137, 125, 128, 131, 132, 135, 140, 143,
+        ];
+        let v3_field_ids = vec![
+            134, 100, 101, 102, 103, 104, 108, 109, 110, 137, 125, 128, 131, 132, 135, 140, 142,
+            143, 144, 145,
+        ];
+
+        for (format_version, expected_field_ids, expected_data_file) in [
+            (FormatVersion::V2, v2_field_ids, v2_data_file),
+            (FormatVersion::V3, v3_field_ids, data_file.clone()),
+        ] {
+            let tmp_dir = TempDir::new().unwrap();
+            let path = tmp_dir.path().join("manifest.avro");
+            let output_file = FileIO::new_with_fs()
+                .new_output(path.to_str().unwrap())
+                .unwrap();
+            let builder = ManifestWriterBuilder::new(
+                output_file,
+                Some(1),
+                schema.clone(),
+                partition_spec.clone(),
+            );
+            let mut writer = match format_version {
+                FormatVersion::V2 => builder.build_v2_data(),
+                _ => builder.build_v3_data(),
+            };
+            writer.add_file(data_file.clone(), 1).unwrap();
+            writer.write_manifest_file().await.unwrap();
+            let bs = fs::read(&path).unwrap();
+
+            let manifest = Manifest::parse_avro(&bs).unwrap();
+
+            assert_eq!(
+                data_file_field_ids(&bs),
+                expected_field_ids,
+                "{format_version}"
+            );
+            assert_eq!(
+                *manifest.entries()[0].data_file(),
+                expected_data_file,
+                "{format_version}"
+            );
+        }
     }
 
     /// Writes a manifest partitioned by identity on two columns of `field_type`,
