@@ -43,6 +43,7 @@ use iceberg::{Error, ErrorKind, Result};
 use iceberg_property_macro::Properties;
 use opendal::Operator;
 use opendal::layers::{RetryLayer, TimeoutLayer};
+use opendal::options::WriteOptions;
 use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
 
@@ -74,6 +75,14 @@ cfg_if! {
         mod gcs;
         use gcs::*;
         use opendal::services::GcsConfig;
+    }
+}
+
+cfg_if! {
+    if #[cfg(feature = "opendal-hdfs-native")] {
+        mod hdfs_native;
+        use hdfs_native::*;
+        pub use hdfs_native::HdfsNativeStorage;
     }
 }
 
@@ -186,6 +195,9 @@ pub enum OpenDalStorageFactory {
     /// GCS storage factory.
     #[cfg(feature = "opendal-gcs")]
     Gcs,
+    /// HDFS storage factory.
+    #[cfg(feature = "opendal-hdfs-native")]
+    HdfsNative,
     /// OSS storage factory.
     #[cfg(feature = "opendal-oss")]
     Oss,
@@ -228,6 +240,7 @@ impl StorageFactory for OpenDalStorageFactory {
                 customized_credential_load,
             } => Ok(Arc::new(OpenDalStorage::S3 {
                 config: s3_config_parse(config.props().clone())?.into(),
+                multipart_part_size: s3_multipart_part_size_parse(config.props())?,
                 customized_credential_load: customized_credential_load.clone(),
                 client_config,
             })),
@@ -236,6 +249,13 @@ impl StorageFactory for OpenDalStorageFactory {
                 config: gcs_config_parse(config.props().clone())?.into(),
                 client_config,
             })),
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorageFactory::HdfsNative => Ok(Arc::new(OpenDalStorage::HdfsNative(
+                HdfsNativeStorage::new(
+                    hdfs_native_config_parse(config.props().clone())?,
+                    client_config,
+                ),
+            ))),
             #[cfg(feature = "opendal-oss")]
             OpenDalStorageFactory::Oss => Ok(Arc::new(OpenDalStorage::Oss {
                 config: oss_config_parse(config.props().clone())?.into(),
@@ -259,6 +279,7 @@ impl StorageFactory for OpenDalStorageFactory {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -301,9 +322,13 @@ pub enum OpenDalStorage {
     /// Accepts any S3-family URL (`s3://`, `s3a://`, `s3n://`); the scheme is
     /// derived from the path at call time.
     #[cfg(feature = "opendal-s3")]
+    #[non_exhaustive]
     S3 {
         /// S3 configuration.
         config: Arc<S3Config>,
+        /// Bytes carried by one multipart upload request.
+        #[serde(default = "default_multipart_part_size")]
+        multipart_part_size: u64,
         /// Custom AWS credential loader.
         #[serde(skip)]
         customized_credential_load: Option<CustomAwsCredentialLoader>,
@@ -320,6 +345,9 @@ pub enum OpenDalStorage {
         #[serde(default)]
         client_config: OpenDalClientConfig,
     },
+    /// HDFS storage variant; see [`HdfsNativeStorage`].
+    #[cfg(feature = "opendal-hdfs-native")]
+    HdfsNative(HdfsNativeStorage),
     /// OSS storage variant.
     #[cfg(feature = "opendal-oss")]
     Oss {
@@ -435,6 +463,10 @@ impl OpenDalStorage {
                     ));
                 }
             }
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::HdfsNative(storage) => {
+                hdfs_native_create_operator(path, &storage.config, &storage.operators)?
+            }
             #[cfg(feature = "opendal-oss")]
             OpenDalStorage::Oss { config, .. } => {
                 let op = oss_config_build(config, path)?;
@@ -459,6 +491,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => {
                 return Err(Error::new(
@@ -500,6 +533,8 @@ impl OpenDalStorage {
             OpenDalStorage::Azdls { client_config, .. } => client_config,
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { client_config, .. } => client_config,
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::HdfsNative(storage) => &storage.client_config,
             #[cfg(all(
                 not(feature = "opendal-memory"),
                 not(feature = "opendal-s3"),
@@ -508,8 +543,27 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => unreachable!(),
+        }
+    }
+
+    /// Bounds the S3 request size. Without a chunk size OpenDAL turns each caller
+    /// buffer into one request, and `ParquetWriter` hands over a whole row group
+    /// at a time. Other backends keep OpenDAL's defaults.
+    #[allow(unreachable_patterns)]
+    fn write_options(&self) -> WriteOptions {
+        match self {
+            #[cfg(feature = "opendal-s3")]
+            OpenDalStorage::S3 {
+                multipart_part_size,
+                ..
+            } => WriteOptions {
+                chunk: Some(usize::try_from(*multipart_part_size).unwrap_or(usize::MAX)),
+                ..WriteOptions::default()
+            },
+            _ => WriteOptions::default(),
         }
     }
 
@@ -521,6 +575,10 @@ impl OpenDalStorage {
         match self {
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { .. } => hf_batch_key(path),
+            // The URL host alone would merge distinct NameNodes that differ
+            // only by port; key by the effective NameNode instead.
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::HdfsNative(storage) => hdfs_native_batch_key(&storage.config, path),
             _ => url::Url::parse(path)
                 .ok()
                 .and_then(|u| u.host_str().map(|s| s.to_string()))
@@ -580,6 +638,11 @@ impl OpenDalStorage {
                     ))
                 }
             }
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorage::HdfsNative(storage) => {
+                let (_, relative_path) = hdfs_native_effective_name_node(&storage.config, path)?;
+                Ok(relative_path)
+            }
             #[cfg(feature = "opendal-oss")]
             OpenDalStorage::Oss { .. } => {
                 let url = url::Url::parse(path)?;
@@ -619,6 +682,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs-native"),
             ))]
             _ => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
@@ -662,7 +726,7 @@ impl Storage for OpenDalStorage {
 
     async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
         let (op, relative_path) = self.create_operator(&path)?;
-        op.write(relative_path, bs)
+        op.write_options(relative_path, bs, self.write_options())
             .await
             .map_err(from_opendal_error)?;
         Ok(())
@@ -671,7 +735,9 @@ impl Storage for OpenDalStorage {
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
         let (op, relative_path) = self.create_operator(&path)?;
         Ok(Box::new(OpenDalWriter::new(
-            op.writer(relative_path).await.map_err(from_opendal_error)?,
+            op.writer_options(relative_path, self.write_options())
+                .await
+                .map_err(from_opendal_error)?,
         )))
     }
 
@@ -866,6 +932,7 @@ mod tests {
     fn test_client_config_serde_round_trip() {
         let storage = OpenDalStorage::S3 {
             config: Arc::new(S3Config::default()),
+            multipart_part_size: default_multipart_part_size(),
             customized_credential_load: None,
             client_config: client_config("45000").unwrap(),
         };
@@ -929,6 +996,8 @@ mod tests {
             OpenDalStorageFactory::Azdls,
             #[cfg(feature = "opendal-hf")]
             OpenDalStorageFactory::Hf,
+            #[cfg(feature = "opendal-hdfs-native")]
+            OpenDalStorageFactory::HdfsNative,
         ];
         for factory in factories {
             // `build` returns `dyn Storage`, so read the config back from its serialized form.
@@ -1080,6 +1149,7 @@ mod tests {
     fn test_relativize_path_s3() {
         let storage = OpenDalStorage::S3 {
             config: Arc::new(S3Config::default()),
+            multipart_part_size: default_multipart_part_size(),
             customized_credential_load: None,
             client_config: OpenDalClientConfig::default(),
         };

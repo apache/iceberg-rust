@@ -50,17 +50,24 @@ impl Truncate {
 
     #[inline]
     fn truncate_i32(v: i32, width: i32) -> i32 {
-        v - v.rem_euclid(width)
+        // The spec requires a non-negative remainder, which `rem_euclid` computes without
+        // overflow. Only the subtraction can overflow, when the result is below `i32::MIN`.
+        // The spec doesn't cover that case, so wrap as Java's `TruncateUtil` does.
+        // The wrapped result isn't order-preserving, which truncate projection assumes.
+        v.wrapping_sub(v.rem_euclid(width))
     }
 
     #[inline]
     fn truncate_i64(v: i64, width: i64) -> i64 {
-        v - (((v % width) + width) % width)
+        // See `truncate_i32`.
+        v.wrapping_sub(v.rem_euclid(width))
     }
 
     #[inline]
     fn truncate_decimal_i128(v: i128, width: i128) -> i128 {
-        v - (((v % width) + width) % width)
+        // Only mantissas outside the 38-digit decimal range can wrap. Java's `truncateDecimal`
+        // uses `BigInteger`, so there is no Java result to match and the wrap only avoids a panic.
+        v.wrapping_sub(v.rem_euclid(width))
     }
 }
 
@@ -826,6 +833,22 @@ mod test {
         Ok(())
     }
 
+    #[test]
+    fn test_projection_truncate_integer_large_width() -> Result<()> {
+        let fixture = TestProjectionFixture::new(
+            Transform::Truncate(2_000_000_000),
+            "name",
+            NestedField::required(1, "value", Primitive(Int)),
+        );
+
+        fixture.assert_projection(
+            &fixture.binary_predicate(PredicateOperator::Eq, Datum::int(1_500_000_000)),
+            Some("name = 0"),
+        )?;
+
+        Ok(())
+    }
+
     // Test case ref from: https://iceberg.apache.org/spec/#truncate-transform-details
     #[test]
     fn test_truncate_simple() {
@@ -903,6 +926,32 @@ mod test {
     }
 
     #[test]
+    fn test_truncate_long_min_matches_java() {
+        // Expected values computed with Iceberg Java's `TruncateUtil.truncateLong`
+        // (iceberg 1.11.0, JDK 17).
+        for (width, value, expected) in [
+            (1000, i64::MIN, 9_223_372_036_854_775_616), // i64::MAX - 191: rem_euclid is 192
+            // i64::MAX - 2_147_483_644: rem_euclid is 2_147_483_645
+            (i32::MAX as u32, i64::MIN, 9_223_372_034_707_292_163),
+        ] {
+            let truncate = super::Truncate::new(width);
+            let input = Arc::new(Int64Array::from(vec![Some(value), None]));
+            let result = truncate.transform(input).unwrap();
+            let expected_array = Int64Array::from(vec![Some(expected), None]);
+            assert_eq!(
+                result.as_any().downcast_ref::<Int64Array>(),
+                Some(&expected_array),
+                "width: {width}, value: {value}"
+            );
+            assert_eq!(
+                truncate.transform_literal(&Datum::long(value)).unwrap(),
+                Some(Datum::long(expected)),
+                "width: {width}, value: {value}"
+            );
+        }
+    }
+
+    #[test]
     fn test_string_truncate() {
         let test1 = "イロハニホヘト";
         let test1_2_expected = "イロ";
@@ -969,6 +1018,35 @@ mod test {
     }
 
     #[test]
+    fn test_truncate_int_large_width() {
+        // Expected values follow the spec: `v - (v % W)` with a non-negative remainder.
+        // Below `i32::MIN` the spec is silent, and the result wraps as Java's `TruncateUtil` does.
+        for (width, value, expected) in [
+            (2_000_000_000, 1_500_000_000, 0),
+            (i32::MAX as u32, i32::MAX - 1, 0),
+            (1000, i32::MIN, 2_147_483_296), // i32::MAX - 351: rem_euclid is 352
+            // Smallest width where `(v % w) + w` can overflow i32.
+            (1_073_741_825, 1_073_741_824, 0),
+            (i32::MAX as u32, 1, 0),
+        ] {
+            let truncate = super::Truncate::new(width);
+            let input = Arc::new(Int32Array::from(vec![Some(value), None]));
+            let result = truncate.transform(input).unwrap();
+            let expected_array = Int32Array::from(vec![Some(expected), None]);
+            assert_eq!(
+                result.as_any().downcast_ref::<Int32Array>(),
+                Some(&expected_array),
+                "width: {width}, value: {value}"
+            );
+            assert_eq!(
+                truncate.transform_literal(&Datum::int(value)).unwrap(),
+                Some(Datum::int(expected)),
+                "width: {width}, value: {value}"
+            );
+        }
+    }
+
+    #[test]
     fn test_literal_long() {
         let input = Datum::long(1);
         let res = super::Truncate::new(10)
@@ -1008,6 +1086,17 @@ mod test {
                 "input: {input:?}"
             );
         }
+    }
+
+    #[test]
+    fn test_truncate_decimal_i128_min_does_not_panic() {
+        // `i128::MIN` is outside the range of a 38-digit Iceberg decimal, and Java's
+        // `TruncateUtil.truncateDecimal` works on `BigInteger`, so there is no wrapping
+        // result to match.
+        assert_eq!(
+            super::Truncate::truncate_decimal_i128(i128::MIN, 1000),
+            170_141_183_460_469_231_731_687_303_715_884_105_456, // i128::MAX - 271
+        );
     }
 
     #[test]

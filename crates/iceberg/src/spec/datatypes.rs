@@ -696,12 +696,12 @@ pub type NestedFieldRef = Arc<NestedField>;
 
 impl NestedField {
     /// Construct a new field.
-    pub fn new(id: i32, name: impl ToString, field_type: Type, required: bool) -> Self {
+    pub fn new(id: i32, name: impl ToString, field_type: impl Into<Type>, required: bool) -> Self {
         Self {
             id,
             name: name.to_string(),
             required,
-            field_type: Box::new(field_type),
+            field_type: Box::new(field_type.into()),
             doc: None,
             initial_default: None,
             write_default: None,
@@ -709,27 +709,27 @@ impl NestedField {
     }
 
     /// Construct a required field.
-    pub fn required(id: i32, name: impl ToString, field_type: Type) -> Self {
+    pub fn required(id: i32, name: impl ToString, field_type: impl Into<Type>) -> Self {
         Self::new(id, name, field_type, true)
     }
 
     /// Construct an optional field.
-    pub fn optional(id: i32, name: impl ToString, field_type: Type) -> Self {
+    pub fn optional(id: i32, name: impl ToString, field_type: impl Into<Type>) -> Self {
         Self::new(id, name, field_type, false)
     }
 
     /// Construct list type's element field.
-    pub fn list_element(id: i32, field_type: Type, required: bool) -> Self {
+    pub fn list_element(id: i32, field_type: impl Into<Type>, required: bool) -> Self {
         Self::new(id, LIST_FIELD_NAME, field_type, required)
     }
 
     /// Construct map type's key field.
-    pub fn map_key_element(id: i32, field_type: Type) -> Self {
+    pub fn map_key_element(id: i32, field_type: impl Into<Type>) -> Self {
         Self::required(id, MAP_KEY_FIELD_NAME, field_type)
     }
 
     /// Construct map type's value field.
-    pub fn map_value_element(id: i32, field_type: Type, required: bool) -> Self {
+    pub fn map_value_element(id: i32, field_type: impl Into<Type>, required: bool) -> Self {
         Self::new(id, MAP_VALUE_FIELD_NAME, field_type, required)
     }
 
@@ -921,7 +921,12 @@ impl MapType {
     }
 
     /// Construct an optional map type with the given key and value fields.
-    pub fn optional(key_id: i32, key_type: Type, value_id: i32, value_type: Type) -> Self {
+    pub fn optional(
+        key_id: i32,
+        key_type: impl Into<Type>,
+        value_id: i32,
+        value_type: impl Into<Type>,
+    ) -> Self {
         Self {
             key_field: NestedField::map_key_element(key_id, key_type).into(),
             value_field: NestedField::map_value_element(value_id, value_type, false).into(),
@@ -929,7 +934,12 @@ impl MapType {
     }
 
     /// Construct a required map type with the given key and value fields.
-    pub fn required(key_id: i32, key_type: Type, value_id: i32, value_type: Type) -> Self {
+    pub fn required(
+        key_id: i32,
+        key_type: impl Into<Type>,
+        value_id: i32,
+        value_type: impl Into<Type>,
+    ) -> Self {
         Self {
             key_field: NestedField::map_key_element(key_id, key_type).into(),
             value_field: NestedField::map_value_element(value_id, value_type, true).into(),

@@ -638,11 +638,6 @@ impl TableScan {
         F: Fn(ManifestEntryContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
-        }
-
         // abort the plan if we encounter a manifest entry for a delete file
         if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
             return Err(Error::new(
@@ -695,11 +690,6 @@ impl TableScan {
         manifest_entry_context: ManifestEntryContext,
         mut delete_file_ctx_tx: Sender<DeleteFileContext>,
     ) -> Result<()> {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
-        }
-
         // abort the plan if we encounter a manifest entry that is not for a delete file
         if manifest_entry_context.manifest_entry.content_type() == DataContentType::Data {
             return Err(Error::new(
@@ -837,9 +827,9 @@ mod tests {
     fn test_resolve_field_id_case_insensitive_rejects_ambiguous_name() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
-                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
-                NestedField::optional(3, "data", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "id", PrimitiveType::Int).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int).into(),
             ])
             .build()
             .unwrap();
@@ -858,9 +848,9 @@ mod tests {
         let schema = Schema::builder()
             .with_schema_id(metadata.current_schema_id())
             .with_fields(vec![
-                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
-                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
-                NestedField::optional(3, "data", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "id", PrimitiveType::Int).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int).into(),
             ])
             .build()
             .unwrap();
@@ -1617,6 +1607,196 @@ mod tests {
             tasks[1].data_file_path(),
             format!("{}/3.parquet", &fixture.table_location)
         );
+    }
+
+    #[tokio::test]
+    async fn test_scan_widens_old_partition_so_pruning_and_deletes_match() {
+        // Guards the reader-side normalization through a real scan: a data manifest
+        // written when the partition source `x` was `int` must have its `int(7)`
+        // partition widened to `long(7)` during planning, so (a) a `x = 7` (long)
+        // filter keeps the file and (b) the equality delete keyed by `long(7)`
+        // attaches. Without the normalization the int/long mismatch drops the delete
+        // (and prunes the file under the filter).
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete(false).await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].deletes().len(),
+            1,
+            "equality delete must attach after widening the old int partition to long"
+        );
+        assert_eq!(
+            tasks[0].partition(),
+            Some(&Struct::from_iter([Some(Literal::long(7))])),
+            "the widened long(7) tuple must reach FileScanTask::partition()"
+        );
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").equal_to(Datum::long(7)))
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            tasks.len(),
+            1,
+            "filter on the promoted type must not prune the file"
+        );
+        assert_eq!(tasks[0].deletes().len(), 1);
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").equal_to(Datum::long(8)))
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(
+            tasks.is_empty(),
+            "a file in partition x=7 must be pruned by an x=8 filter"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_scan_widens_old_partition_with_pre_promotion_delete() {
+        // Data file and equality delete both written before the promotion (int
+        // partition). They matched on main; after both sides widen to long they must
+        // still match, so the delete stays attached.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete(true).await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_widens_old_partition_so_deletion_vector_matches() {
+        // A v3 deletion vector written after the promotion (long partition) references
+        // an older data file (int partition). The widening must make the partitions
+        // agree so the DV attaches, instead of failing the DV partition check.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_dv().await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_eq_delete_after_dropping_promoted_source() {
+        // Partition source `x` promoted int -> long, then dropped. The data file (int)
+        // and its equality delete (long) must still normalize to the same long partition
+        // so the delete stays attached; otherwise it silently detaches.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete(false).await;
+        fixture.drop_partition_source(1);
+        let table = fixture.table;
+
+        let tasks: Vec<FileScanTask> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_deletion_vector_after_dropping_promoted_source() {
+        // Same as above for a deletion vector: without widening the dropped numeric
+        // source the DV partition check errors (long(7) vs int(7)).
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_dv().await;
+        fixture.drop_partition_source(1);
+        let table = fixture.table;
+
+        let tasks: Vec<FileScanTask> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_eq_delete_when_dropped_source_is_date() {
+        // A promoted numeric source `x` sits beside a dropped `date` source `d`. The gate
+        // fires on `x`'s int -> long widening, but `d` (stored as an int) must be copied
+        // through, not widened to long, or the data file's partition diverges from the
+        // equality delete's and detaches it.
+        let mut fixture = TableTestFixture::new();
+        fixture
+            .setup_promoted_partition_with_eq_delete_and_dropped_date()
+            .await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
     }
 
     #[tokio::test]

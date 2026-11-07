@@ -39,6 +39,7 @@ apache-avro = { workspace = true }
 array-init = { workspace = true }
 arrow-arith = { workspace = true }
 arrow-array = { workspace = true }
+arrow-avro = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-cast = { workspace = true }
 arrow-ord = { workspace = true }
@@ -69,7 +70,9 @@ parquet = { workspace = true, features = [
   "async",
   "encryption",
   "arrow_canonical_extension_types",
+  "geospatial",
 ] }
+parquet-geospatial = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 roaring = { workspace = true }
