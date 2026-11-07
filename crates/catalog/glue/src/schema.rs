@@ -25,8 +25,8 @@ pub(crate) const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
 use std::collections::HashMap;
 
 use aws_sdk_glue::types::Column;
+use iceberg::Result;
 use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, VariantType, visit_schema};
-use iceberg::{Error, ErrorKind, Result};
 
 use crate::error::from_aws_build_error;
 
@@ -149,35 +149,24 @@ impl SchemaVisitor for GlueSchemaBuilder {
 
     fn primitive(&mut self, p: &PrimitiveType) -> Result<Self::T> {
         // Glue column types are informational for Iceberg tables; readers use Iceberg metadata as
-        // the source of truth. Keep the existing Glue-compatible spellings and use the Iceberg
-        // display representation for geospatial types. A non-failing fallback for all other types
-        // is tracked in https://github.com/apache/iceberg-rust/issues/3375.
+        // the source of truth, so every type gets a display string. Keep Glue-compatible spellings
+        // where they exist, as iceberg-java's `IcebergToGlueConverter` does.
         let glue_type = match p {
-            PrimitiveType::Unknown => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!("Conversion from {p:?} is not supported"),
-                ));
-            }
             PrimitiveType::Boolean => "boolean".to_string(),
             PrimitiveType::Int => "int".to_string(),
             PrimitiveType::Long => "bigint".to_string(),
             PrimitiveType::Float => "float".to_string(),
             PrimitiveType::Double => "double".to_string(),
             PrimitiveType::Date => "date".to_string(),
-            PrimitiveType::Timestamp => "timestamp".to_string(),
-            PrimitiveType::TimestampNs => "timestamp_ns".to_string(),
-            PrimitiveType::Timestamptz | PrimitiveType::TimestamptzNs => {
-                return Err(Error::new(
-                    ErrorKind::FeatureUnsupported,
-                    format!("Conversion from {p:?} is not supported"),
-                ));
-            }
+            PrimitiveType::Timestamp | PrimitiveType::Timestamptz => "timestamp".to_string(),
+            PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs => "timestamp_ns".to_string(),
             PrimitiveType::Time | PrimitiveType::String | PrimitiveType::Uuid => {
                 "string".to_string()
             }
             PrimitiveType::Binary | PrimitiveType::Fixed(_) => "binary".to_string(),
-            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => p.to_string(),
+            PrimitiveType::Unknown | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                p.to_string()
+            }
             PrimitiveType::Decimal { precision, scale } => {
                 format!("decimal({precision},{scale})")
             }
@@ -325,6 +314,12 @@ mod tests {
                     "name": "c13",
                     "required": true,
                     "type": "binary"
+                },
+                {
+                    "id": 14,
+                    "name": "c14",
+                    "required": true,
+                    "type": "timestamptz"
                 }
             ]
         }"#;
@@ -348,6 +343,7 @@ mod tests {
             create_column("c11", "string", "11", false)?,
             create_column("c12", "binary", "12", false)?,
             create_column("c13", "binary", "13", false)?,
+            create_column("c14", "timestamp", "14", false)?,
         ];
 
         assert_eq!(result, expected);
@@ -535,6 +531,41 @@ mod tests {
         let expected = vec![
             create_column("required_field", "string", "1", false)?,
             create_column("optional_field", "int", "2", true)?,
+        ];
+
+        assert_eq!(result, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_v3_primitive_types() -> Result<()> {
+        let record = r#"{
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "c1",
+                    "required": true,
+                    "type": "timestamptz_ns"
+                },
+                {
+                    "id": 2,
+                    "name": "c2",
+                    "required": false,
+                    "type": "unknown"
+                }
+            ]
+        }"#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
+        let metadata = create_metadata_with_format_version(schema, FormatVersion::V3)?;
+
+        let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
+
+        let expected = vec![
+            create_column("c1", "timestamp_ns", "1", false)?,
+            create_column("c2", "unknown", "2", true)?,
         ];
 
         assert_eq!(result, expected);
