@@ -31,6 +31,10 @@ pub use serde_bytes::ByteBuf;
 pub use writer::*;
 
 use self::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V1;
+pub(crate) use self::_const_schema::{
+    MANIFEST_CONTENT_FIELD_ID, MANIFEST_SEQUENCE_NUMBER_FIELD_ID, MIN_SEQUENCE_NUMBER_FIELD_ID,
+    manifest_file_fields,
+};
 use super::FormatVersion;
 use crate::error::Result;
 

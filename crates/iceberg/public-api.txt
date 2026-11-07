@@ -132,6 +132,7 @@ pub fn iceberg::arrow::arrow_struct_to_literal(struct_array: &arrow_array::array
 pub fn iceberg::arrow::arrow_type_to_type(ty: &arrow_schema::datatype::DataType) -> iceberg::Result<iceberg::spec::Type>
 pub fn iceberg::arrow::datum_to_arrow_type_with_ree(datum: &iceberg::spec::Datum) -> arrow_schema::datatype::DataType
 pub fn iceberg::arrow::read_manifest_entries(bytes: &[u8], manifest_file: &iceberg::spec::ManifestFile) -> iceberg::Result<arrow_array::record_batch::RecordBatch>
+pub fn iceberg::arrow::read_manifest_list(bytes: &[u8]) -> iceberg::Result<arrow_array::record_batch::RecordBatch>
 pub fn iceberg::arrow::schema_to_arrow_schema(schema: &iceberg::spec::Schema) -> iceberg::Result<arrow_schema::schema::Schema>
 pub fn iceberg::arrow::strip_metadata_from_schema(schema: &arrow_schema::schema::Schema) -> iceberg::Result<arrow_schema::schema::Schema>
 pub fn iceberg::arrow::type_to_arrow_type(ty: &iceberg::spec::Type) -> iceberg::Result<arrow_schema::datatype::DataType>
@@ -1114,6 +1115,7 @@ pub const iceberg::io::S3_ASSUME_ROLE_SESSION_NAME: &str
 pub const iceberg::io::S3_DISABLE_CONFIG_LOAD: &str
 pub const iceberg::io::S3_DISABLE_EC2_METADATA: &str
 pub const iceberg::io::S3_ENDPOINT: &str
+pub const iceberg::io::S3_MULTIPART_PART_SIZE_BYTES: &str
 pub const iceberg::io::S3_PATH_STYLE_ACCESS: &str
 pub const iceberg::io::S3_REGION: &str
 pub const iceberg::io::S3_SECRET_ACCESS_KEY: &str

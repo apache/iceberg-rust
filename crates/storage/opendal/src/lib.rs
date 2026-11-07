@@ -43,6 +43,7 @@ use iceberg::{Error, ErrorKind, Result};
 use iceberg_property_macro::Properties;
 use opendal::Operator;
 use opendal::layers::{RetryLayer, TimeoutLayer};
+use opendal::options::WriteOptions;
 use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
 
@@ -239,6 +240,7 @@ impl StorageFactory for OpenDalStorageFactory {
                 customized_credential_load,
             } => Ok(Arc::new(OpenDalStorage::S3 {
                 config: s3_config_parse(config.props().clone())?.into(),
+                multipart_part_size: s3_multipart_part_size_parse(config.props())?,
                 customized_credential_load: customized_credential_load.clone(),
                 client_config,
             })),
@@ -320,9 +322,13 @@ pub enum OpenDalStorage {
     /// Accepts any S3-family URL (`s3://`, `s3a://`, `s3n://`); the scheme is
     /// derived from the path at call time.
     #[cfg(feature = "opendal-s3")]
+    #[non_exhaustive]
     S3 {
         /// S3 configuration.
         config: Arc<S3Config>,
+        /// Bytes carried by one multipart upload request.
+        #[serde(default = "default_multipart_part_size")]
+        multipart_part_size: u64,
         /// Custom AWS credential loader.
         #[serde(skip)]
         customized_credential_load: Option<CustomAwsCredentialLoader>,
@@ -543,6 +549,24 @@ impl OpenDalStorage {
         }
     }
 
+    /// Bounds the S3 request size. Without a chunk size OpenDAL turns each caller
+    /// buffer into one request, and `ParquetWriter` hands over a whole row group
+    /// at a time. Other backends keep OpenDAL's defaults.
+    #[allow(unreachable_patterns)]
+    fn write_options(&self) -> WriteOptions {
+        match self {
+            #[cfg(feature = "opendal-s3")]
+            OpenDalStorage::S3 {
+                multipart_part_size,
+                ..
+            } => WriteOptions {
+                chunk: Some(usize::try_from(*multipart_part_size).unwrap_or(usize::MAX)),
+                ..WriteOptions::default()
+            },
+            _ => WriteOptions::default(),
+        }
+    }
+
     /// Returns a cache key used by `delete_stream` to group paths by storage operator.
     ///
     /// For most backends the URL host (bucket name) is sufficient. For HF the host
@@ -702,7 +726,7 @@ impl Storage for OpenDalStorage {
 
     async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
         let (op, relative_path) = self.create_operator(&path)?;
-        op.write(relative_path, bs)
+        op.write_options(relative_path, bs, self.write_options())
             .await
             .map_err(from_opendal_error)?;
         Ok(())
@@ -711,7 +735,9 @@ impl Storage for OpenDalStorage {
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
         let (op, relative_path) = self.create_operator(&path)?;
         Ok(Box::new(OpenDalWriter::new(
-            op.writer(relative_path).await.map_err(from_opendal_error)?,
+            op.writer_options(relative_path, self.write_options())
+                .await
+                .map_err(from_opendal_error)?,
         )))
     }
 
@@ -906,6 +932,7 @@ mod tests {
     fn test_client_config_serde_round_trip() {
         let storage = OpenDalStorage::S3 {
             config: Arc::new(S3Config::default()),
+            multipart_part_size: default_multipart_part_size(),
             customized_credential_load: None,
             client_config: client_config("45000").unwrap(),
         };
@@ -1122,6 +1149,7 @@ mod tests {
     fn test_relativize_path_s3() {
         let storage = OpenDalStorage::S3 {
             config: Arc::new(S3Config::default()),
+            multipart_part_size: default_multipart_part_size(),
             customized_credential_load: None,
             client_config: OpenDalClientConfig::default(),
         };

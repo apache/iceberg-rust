@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Reading manifest entries into Arrow.
+//! Reading manifests and manifest lists into Arrow.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,7 +28,7 @@ use arrow_array::{
     Array, ArrayRef, BooleanArray, Int32Array, Int64Array, ListArray, MapArray, RecordBatch,
     StructArray, new_null_array,
 };
-use arrow_avro::reader::ReaderBuilder;
+use arrow_avro::reader::{Reader, ReaderBuilder};
 use arrow_avro::schema::AvroSchema;
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_ord::cmp::eq;
@@ -40,21 +40,13 @@ use serde_json::Value as JsonValue;
 use crate::arrow::schema_to_arrow_schema;
 use crate::error::invalid_data;
 use crate::spec::{
-    FormatVersion, ManifestContentType, ManifestFile, ManifestMetadata, ManifestStatus, Schema,
-    manifest_entry_fields,
+    DATA_FILE_CONTENT_FIELD_ID, DATA_FILE_FIELD_ID, DATA_FILE_PARTITION_FIELD_ID,
+    FILE_SEQUENCE_NUMBER_FIELD_ID, FormatVersion, MANIFEST_CONTENT_FIELD_ID,
+    MANIFEST_SEQUENCE_NUMBER_FIELD_ID, MIN_SEQUENCE_NUMBER_FIELD_ID, ManifestContentType,
+    ManifestFile, ManifestMetadata, ManifestStatus, SEQUENCE_NUMBER_FIELD_ID, Schema,
+    manifest_entry_fields, manifest_file_fields,
 };
 use crate::{Error, Result};
-
-/// Field ID of `data_file`.
-const DATA_FILE_FIELD_ID: i64 = 2;
-/// Field ID of `data_file.partition`.
-const PARTITION_FIELD_ID: i64 = 102;
-/// Field ID of `data_file.content`.
-const CONTENT_FIELD_ID: i32 = 134;
-/// Field ID of `sequence_number`.
-const SEQUENCE_NUMBER_FIELD_ID: i32 = 3;
-/// Field ID of `file_sequence_number`.
-const FILE_SEQUENCE_NUMBER_FIELD_ID: i32 = 4;
 
 /// Reads the entries of a manifest file into a [`RecordBatch`] with one row
 /// per entry.
@@ -142,30 +134,128 @@ pub fn read_manifest_entries(bytes: &[u8], manifest_file: &ManifestFile) -> Resu
             .map_err(invalid_manifest)?;
     }
 
-    let Some(batch) = reader.next() else {
+    let Some(batch) = only_batch(reader, invalid_manifest)? else {
         return Ok(RecordBatch::new_empty(schema));
     };
-    let batch = batch.map_err(invalid_manifest)?;
-    // Taking only the first batch relies on arrow-avro filling it to the batch
-    // size, so fail instead of dropping entries if that changes.
-    if reader.next().is_some() {
-        return Err(invalid_data!(
-            "arrow-avro split the manifest into more than one batch"
-        ));
-    }
+    // v1 manifests have no content or sequence number columns, which v2+
+    // readers read as 0. A v2+ manifest may lack file_sequence_number (Java
+    // wrote none before 1.1.0), which reads as null and is inherited.
+    let zero_defaults: &[i32] = match metadata.format_version() {
+        FormatVersion::V1 => &[
+            DATA_FILE_CONTENT_FIELD_ID,
+            SEQUENCE_NUMBER_FIELD_ID,
+            FILE_SEQUENCE_NUMBER_FIELD_ID,
+        ],
+        _ => &[DATA_FILE_CONTENT_FIELD_ID],
+    };
     let entries = project_struct(
         &StructArray::from(batch),
         &avro_schema,
         schema.fields(),
-        *metadata.format_version(),
+        zero_defaults,
     )?;
     Ok(RecordBatch::from(inherit(entries, manifest_file)?))
+}
+
+/// Reads the entries of a manifest list into a [`RecordBatch`] with one row
+/// per manifest.
+///
+/// The schema is the spec's `manifest_file` struct for the latest format
+/// version, with field IDs in the Arrow field metadata, so manifest lists of
+/// every format version read into the same schema. Fields are matched to the
+/// manifest list's Avro schema by field ID. The format version comes from the
+/// `format-version` key that writers put in the file's metadata, and a
+/// manifest list without one is v1. A v1 manifest list reads with the spec's
+/// v2+ defaults. Partition summary bounds keep the binary single-value
+/// serialization they were written with.
+///
+/// # Example
+///
+/// ```
+/// use iceberg::arrow::read_manifest_list;
+///
+/// let bytes = std::fs::read(concat!(
+///     env!("CARGO_MANIFEST_DIR"),
+///     "/testdata/manifests_lists/manifest-list-v2-2.avro"
+/// ))?;
+/// let batch = read_manifest_list(&bytes)?;
+/// assert_eq!(batch.num_rows(), 1);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn read_manifest_list(bytes: &[u8]) -> Result<RecordBatch> {
+    // usize::MAX decodes the whole manifest list into one batch, which
+    // `only_batch` checks.
+    let reader = ReaderBuilder::new()
+        .with_batch_size(usize::MAX)
+        .build(bytes)
+        .map_err(invalid_manifest_list)?;
+    let header = reader.avro_header();
+    let avro_schema: JsonValue = serde_json::from_slice(
+        header
+            .get("avro.schema")
+            .ok_or_else(|| invalid_data!("manifest list has no avro.schema"))?,
+    )?;
+    // The spec doesn't define this key, but Java, PyIceberg, and iceberg-rust
+    // all write it, and rejecting an unknown version keeps a newer manifest
+    // list from reading as an older one.
+    let format_version = match header.get("format-version") {
+        Some(bytes) => serde_json::from_slice::<FormatVersion>(bytes).map_err(|err| {
+            invalid_data!("failed to parse format version in manifest list metadata")
+                .with_source(err)
+        })?,
+        None => FormatVersion::V1,
+    };
+    let schema = Arc::new(schema_to_arrow_schema(
+        &Schema::builder()
+            .with_fields(manifest_file_fields())
+            .build()?,
+    )?);
+    let Some(batch) = only_batch(reader, invalid_manifest_list)? else {
+        return Ok(RecordBatch::new_empty(schema));
+    };
+    // v1 manifest lists have no content or sequence number columns, which v2+
+    // readers read as 0.
+    let zero_defaults: &[i32] = match format_version {
+        FormatVersion::V1 => &[
+            MANIFEST_CONTENT_FIELD_ID,
+            MANIFEST_SEQUENCE_NUMBER_FIELD_ID,
+            MIN_SEQUENCE_NUMBER_FIELD_ID,
+        ],
+        _ => &[],
+    };
+    let manifests = project_struct(
+        &StructArray::from(batch),
+        &avro_schema,
+        schema.fields(),
+        zero_defaults,
+    )?;
+    Ok(RecordBatch::from(manifests))
+}
+
+/// Returns the only batch that `reader` decodes, or `None` for a file without
+/// records.
+fn only_batch(
+    mut reader: Reader<&[u8]>,
+    invalid: fn(ArrowError) -> Error,
+) -> Result<Option<RecordBatch>> {
+    let Some(batch) = reader.next() else {
+        return Ok(None);
+    };
+    let batch = batch.map_err(invalid)?;
+    // Taking only the first batch relies on arrow-avro filling it to the batch
+    // size, so fail instead of dropping records if that changes.
+    if reader.next().is_some() {
+        return Err(invalid_data!(
+            "arrow-avro split the file into more than one batch"
+        ));
+    }
+    Ok(Some(batch))
 }
 
 /// Removes `data_file.partition` from a manifest's Avro schema if it has no
 /// fields, and returns whether it did.
 fn remove_empty_partition(avro_schema: &mut JsonValue) -> bool {
-    let has_field_id = |field: &JsonValue, id: i64| field["field-id"].as_i64() == Some(id);
+    let has_field_id = |field: &JsonValue, id: i32| field["field-id"].as_i64() == Some(id.into());
     let Some(data_file_fields) = avro_schema["fields"]
         .as_array_mut()
         .and_then(|fields| {
@@ -179,7 +269,7 @@ fn remove_empty_partition(avro_schema: &mut JsonValue) -> bool {
     };
     let len = data_file_fields.len();
     data_file_fields.retain(|field| {
-        !(has_field_id(field, PARTITION_FIELD_ID)
+        !(has_field_id(field, DATA_FILE_PARTITION_FIELD_ID)
             && field["type"]["fields"]
                 .as_array()
                 .is_some_and(Vec::is_empty))
@@ -191,8 +281,17 @@ fn invalid_manifest(err: ArrowError) -> Error {
     invalid_data!("failed to read manifest").with_source(err)
 }
 
+fn invalid_manifest_list(err: ArrowError) -> Error {
+    invalid_data!("failed to read manifest list").with_source(err)
+}
+
+fn invalid_column(err: ArrowError) -> Error {
+    invalid_data!("failed to build Arrow column from Avro").with_source(err)
+}
+
 /// Returns the field ID of a field in the schema built from
-/// `manifest_entry_fields`, which gives every field one.
+/// `manifest_entry_fields` or `manifest_file_fields`, which give every field
+/// one.
 fn field_id(field: &Field) -> i32 {
     field.metadata()[PARQUET_FIELD_ID_META_KEY].parse().unwrap()
 }
@@ -210,16 +309,17 @@ fn non_null_type(avro_type: &JsonValue) -> &JsonValue {
 }
 
 /// Builds each of `fields` from the column of `array` that the Avro record
-/// `record` gives the same field ID.
+/// `record` gives the same field ID. A field that `record` lacks reads as 0 if
+/// its ID is in `zero_defaults`, and as null otherwise.
 fn project_struct(
     array: &StructArray,
     record: &JsonValue,
     fields: &Fields,
-    format_version: FormatVersion,
+    zero_defaults: &[i32],
 ) -> Result<StructArray> {
     let avro_fields = record["fields"]
         .as_array()
-        .ok_or_else(|| invalid_data!("manifest Avro type {record} is not a record"))?;
+        .ok_or_else(|| invalid_data!("Avro type {record} is not a record"))?;
     let mut columns = Vec::with_capacity(fields.len());
     for field in fields {
         let id = field_id(field);
@@ -232,34 +332,29 @@ fn project_struct(
                     array.column(index),
                     non_null_type(&avro_fields[index]["type"]),
                     field,
-                    format_version,
+                    zero_defaults,
                 )?,
-                None => missing_field(field, array.len(), format_version)?,
+                None => missing_field(field, array.len(), zero_defaults)?,
             },
         );
     }
     StructArray::try_new_with_length(fields.clone(), columns, array.nulls().cloned(), array.len())
-        .map_err(invalid_manifest)
+        .map_err(invalid_column)
 }
 
-/// Builds the column for a field that the manifest doesn't have.
-fn missing_field(field: &Field, len: usize, format_version: FormatVersion) -> Result<ArrayRef> {
-    // v1 manifests have no content or sequence number columns, which v2+
-    // readers read as 0. A v2+ manifest may lack file_sequence_number (Java
-    // wrote none before 1.1.0), which reads as null and is inherited.
-    match field_id(field) {
-        CONTENT_FIELD_ID => Ok(Arc::new(Int32Array::from_value(0, len))),
-        SEQUENCE_NUMBER_FIELD_ID | FILE_SEQUENCE_NUMBER_FIELD_ID
-            if format_version == FormatVersion::V1 =>
-        {
-            Ok(Arc::new(Int64Array::from_value(0, len)))
-        }
+/// Builds the column for a field that the Avro file doesn't have.
+fn missing_field(field: &Field, len: usize, zero_defaults: &[i32]) -> Result<ArrayRef> {
+    let id = field_id(field);
+    let zero = zero_defaults.contains(&id);
+    match field.data_type() {
+        DataType::Int32 if zero => Ok(Arc::new(Int32Array::from_value(0, len))),
+        DataType::Int64 if zero => Ok(Arc::new(Int64Array::from_value(0, len))),
         _ if field.is_nullable() => Ok(new_null_array(field.data_type(), len)),
-        _ if matches!(field.data_type(), DataType::Struct(fields) if fields.is_empty()) => {
+        DataType::Struct(fields) if fields.is_empty() => {
             Ok(Arc::new(StructArray::new_empty_fields(len, None)))
         }
-        id => Err(invalid_data!(
-            "manifest has no required field {} with field ID {id}",
+        _ => Err(invalid_data!(
+            "Avro file has no required field {} with field ID {id}",
             field.name()
         )),
     }
@@ -271,11 +366,11 @@ fn project(
     array: &ArrayRef,
     avro_type: &JsonValue,
     field: &Field,
-    format_version: FormatVersion,
+    zero_defaults: &[i32],
 ) -> Result<ArrayRef> {
     let type_mismatch = || {
         invalid_data!(
-            "manifest field {} has Avro type {avro_type}, which doesn't match {}",
+            "field {} has Avro type {avro_type}, which doesn't match {}",
             field.name(),
             field.data_type()
         )
@@ -285,7 +380,7 @@ fn project(
             array.as_struct_opt().ok_or_else(type_mismatch)?,
             avro_type,
             fields,
-            format_version,
+            zero_defaults,
         )?),
         DataType::List(element) => {
             let list = array.as_list_opt::<i32>().ok_or_else(type_mismatch)?;
@@ -293,7 +388,7 @@ fn project(
                 list.values(),
                 non_null_type(&avro_type["items"]),
                 element,
-                format_version,
+                zero_defaults,
             )?;
             Arc::new(
                 ListArray::try_new(
@@ -302,7 +397,7 @@ fn project(
                     values,
                     list.nulls().cloned(),
                 )
-                .map_err(invalid_manifest)?,
+                .map_err(invalid_column)?,
             )
         }
         // Avro stores maps with int keys as arrays of key-value records.
@@ -315,7 +410,7 @@ fn project(
                 list.values().as_struct_opt().ok_or_else(type_mismatch)?,
                 &avro_type["items"],
                 key_value,
-                format_version,
+                zero_defaults,
             )?;
             Arc::new(
                 MapArray::try_new(
@@ -325,7 +420,7 @@ fn project(
                     list.nulls().cloned(),
                     false,
                 )
-                .map_err(invalid_manifest)?,
+                .map_err(invalid_column)?,
             )
         }
         // arrow-avro gives every timestamp a UTC time zone, so only the type
@@ -351,7 +446,7 @@ fn project(
             safe: false,
             ..Default::default()
         })
-        .map_err(invalid_manifest)?,
+        .map_err(invalid_column)?,
     })
 }
 
@@ -477,16 +572,18 @@ mod tests {
         FixedSizeBinaryArray, Float32Array, Float64Array, Int32Array, Int64Array, StringArray,
         Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
     };
+    use arrow_buffer::{NullBuffer, OffsetBuffer};
 
     use super::*;
     use crate::ErrorKind;
     use crate::arrow::arrow_schema_to_schema;
     use crate::io::FileIO;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, ListType, Literal,
-        Manifest, ManifestEntry, ManifestStatus, ManifestWriter, ManifestWriterBuilder, MapType,
-        NestedField, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema, Struct, StructType,
-        Transform, Type,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, FieldSummary, ListType,
+        Literal, Manifest, ManifestEntry, ManifestList, ManifestListWriter, ManifestStatus,
+        ManifestWriter, ManifestWriterBuilder, MapType, NestedField, PartitionSpec,
+        PrimitiveLiteral, PrimitiveType, Schema, Struct, StructType, Transform, Type,
+        UNASSIGNED_SEQUENCE_NUMBER,
     };
 
     fn table_schema() -> Schema {
@@ -629,6 +726,26 @@ mod tests {
         ))
     }
 
+    /// Rewrites an Avro file with the user metadata `key` set to `value`, or
+    /// without it if `value` is `None`.
+    fn set_avro_metadata(bytes: &[u8], key: &str, value: Option<&str>) -> Vec<u8> {
+        let reader = apache_avro::Reader::new(bytes).unwrap();
+        let schema = reader.writer_schema().clone();
+        let mut metadata = reader.user_metadata().clone();
+        match value {
+            Some(value) => metadata.insert(key.to_string(), value.as_bytes().to_vec()),
+            None => metadata.remove(key),
+        };
+        let mut writer = apache_avro::Writer::new(&schema, Vec::new()).unwrap();
+        for (key, value) in metadata {
+            writer.add_user_metadata(key, value).unwrap();
+        }
+        for record in reader {
+            writer.append_value(record.unwrap()).unwrap();
+        }
+        writer.into_inner().unwrap()
+    }
+
     /// Rewrites a manifest with `codec`, `edit_schema` applied to its Avro
     /// schema, and `edit_record` applied to each record.
     fn rewrite_manifest(
@@ -696,6 +813,29 @@ mod tests {
             }
             _ => {}
         }
+    }
+
+    /// Renames record fields in an Avro file's schema and records, keeping
+    /// their field IDs.
+    fn rename_fields(bytes: &[u8], renames: &[(&str, &str)]) -> Vec<u8> {
+        rewrite_manifest(
+            bytes,
+            Codec::Null,
+            |schema| {
+                for_each_avro_field(schema, &|field| {
+                    for (from, to) in renames {
+                        if field["name"] == *from {
+                            field["name"] = (*to).into();
+                        }
+                    }
+                })
+            },
+            |record| {
+                for (from, to) in renames {
+                    rename_avro_field(record, from, to);
+                }
+            },
+        )
     }
 
     #[tokio::test]
@@ -1304,25 +1444,10 @@ mod tests {
             |writer| writer.add_file(file, 1).unwrap(),
         )
         .await;
-        let renames = [("file_path", "path"), ("i_identity", "renamed_partition")];
-        let bytes = rewrite_manifest(
-            &bytes,
-            Codec::Null,
-            |schema| {
-                for_each_avro_field(schema, &|field| {
-                    for (from, to) in renames {
-                        if field["name"] == from {
-                            field["name"] = to.into();
-                        }
-                    }
-                })
-            },
-            |record| {
-                for (from, to) in renames {
-                    rename_avro_field(record, from, to);
-                }
-            },
-        );
+        let bytes = rename_fields(&bytes, &[
+            ("file_path", "path"),
+            ("i_identity", "renamed_partition"),
+        ]);
         let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
 
         assert_eq!(
@@ -1417,6 +1542,356 @@ mod tests {
                 binary_map(&data_file_column(&batch, "lower_bounds"), row),
                 lower_bounds
             );
+        }
+    }
+
+    /// A manifest list entry that a manifest list writer for snapshot 1
+    /// assigns sequence numbers to.
+    fn listed_manifest(path: &str, content: ManifestContentType) -> ManifestFile {
+        ManifestFile {
+            manifest_path: path.to_string(),
+            manifest_length: 100,
+            partition_spec_id: 0,
+            content,
+            sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+            min_sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+            added_snapshot_id: 1,
+            added_files_count: Some(1),
+            existing_files_count: Some(2),
+            deleted_files_count: Some(3),
+            added_rows_count: Some(10),
+            existing_rows_count: Some(20),
+            deleted_rows_count: Some(30),
+            partitions: None,
+            key_metadata: None,
+            first_row_id: None,
+        }
+    }
+
+    /// Writes a manifest list for snapshot 1 with sequence number 5 and, in
+    /// v3, first row ID 100.
+    async fn write_manifest_list(version: FormatVersion, manifests: Vec<ManifestFile>) -> Vec<u8> {
+        let io = FileIO::new_with_memory();
+        let path = "memory:///manifest-list.avro";
+        let output = io.new_output(path).unwrap().writer().await.unwrap();
+        let mut writer = match version {
+            FormatVersion::V1 => ManifestListWriter::v1(output, 1, None),
+            FormatVersion::V2 => ManifestListWriter::v2(output, 1, None, 5),
+            FormatVersion::V3 => ManifestListWriter::v3(output, 1, None, 5, Some(100)),
+        };
+        writer.add_manifests(manifests.into_iter()).unwrap();
+        writer.close().await.unwrap();
+        io.new_input(path).unwrap().read().await.unwrap().to_vec()
+    }
+
+    #[tokio::test]
+    async fn test_schema_is_spec_manifest_file() {
+        let bytes = write_manifest_list(FormatVersion::V3, vec![]).await;
+        let batch = read_manifest_list(&bytes).unwrap();
+        assert_eq!(batch.num_rows(), 0);
+
+        let long = || Type::Primitive(PrimitiveType::Long);
+        let int = || Type::Primitive(PrimitiveType::Int);
+        let boolean = || Type::Primitive(PrimitiveType::Boolean);
+        let binary = || Type::Primitive(PrimitiveType::Binary);
+        let field_summary = StructType::new(vec![
+            NestedField::required(509, "contains_null", boolean()).into(),
+            NestedField::optional(518, "contains_nan", boolean()).into(),
+            NestedField::optional(510, "lower_bound", binary()).into(),
+            NestedField::optional(511, "upper_bound", binary()).into(),
+        ]);
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(500, "manifest_path", Type::Primitive(PrimitiveType::String))
+                    .into(),
+                NestedField::required(501, "manifest_length", long()).into(),
+                NestedField::required(502, "partition_spec_id", int()).into(),
+                NestedField::required(517, "content", int()).into(),
+                NestedField::required(515, "sequence_number", long()).into(),
+                NestedField::required(516, "min_sequence_number", long()).into(),
+                NestedField::required(503, "added_snapshot_id", long()).into(),
+                NestedField::optional(504, "added_files_count", int()).into(),
+                NestedField::optional(505, "existing_files_count", int()).into(),
+                NestedField::optional(506, "deleted_files_count", int()).into(),
+                NestedField::optional(512, "added_rows_count", long()).into(),
+                NestedField::optional(513, "existing_rows_count", long()).into(),
+                NestedField::optional(514, "deleted_rows_count", long()).into(),
+                NestedField::optional(
+                    507,
+                    "partitions",
+                    Type::List(ListType::new(
+                        NestedField::list_element(508, Type::Struct(field_summary), true).into(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(519, "key_metadata", binary()).into(),
+                NestedField::optional(520, "first_row_id", long()).into(),
+            ])
+            .build()
+            .unwrap();
+        assert_eq!(
+            arrow_schema_to_schema(&batch.schema()).unwrap().as_struct(),
+            expected.as_struct()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_columns() {
+        let data = ManifestFile {
+            partitions: Some(vec![FieldSummary {
+                contains_null: true,
+                contains_nan: Some(false),
+                lower_bound: Some(Datum::int(1).to_bytes().unwrap()),
+                upper_bound: Some(Datum::int(9).to_bytes().unwrap()),
+            }]),
+            key_metadata: Some(vec![1, 2]),
+            ..listed_manifest("s3://b/metadata/data.avro", ManifestContentType::Data)
+        };
+        let existing_deletes = ManifestFile {
+            partition_spec_id: 1,
+            sequence_number: 3,
+            min_sequence_number: 2,
+            added_snapshot_id: 0,
+            added_files_count: Some(0),
+            ..listed_manifest("s3://b/metadata/deletes.avro", ManifestContentType::Deletes)
+        };
+        let bytes = write_manifest_list(FormatVersion::V3, vec![data, existing_deletes]).await;
+        let batch = read_manifest_list(&bytes).unwrap();
+
+        let schema = batch.schema();
+        let DataType::List(summary) = schema.field_with_name("partitions").unwrap().data_type()
+        else {
+            panic!("partitions is not a list");
+        };
+        let DataType::Struct(summary_fields) = summary.data_type() else {
+            panic!("partitions element is not a struct");
+        };
+        let summaries = StructArray::new(
+            summary_fields.clone(),
+            vec![
+                Arc::new(BooleanArray::from(vec![true])),
+                Arc::new(BooleanArray::from(vec![Some(false)])),
+                Arc::new(BinaryArray::from(vec![&1i32.to_le_bytes()[..]])),
+                Arc::new(BinaryArray::from(vec![&9i32.to_le_bytes()[..]])),
+            ],
+            None,
+        );
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec![
+                "s3://b/metadata/data.avro",
+                "s3://b/metadata/deletes.avro",
+            ])),
+            Arc::new(Int64Array::from(vec![100, 100])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Int32Array::from(vec![0, 1])),
+            Arc::new(Int64Array::from(vec![5, 3])),
+            Arc::new(Int64Array::from(vec![5, 2])),
+            Arc::new(Int64Array::from(vec![1, 0])),
+            Arc::new(Int32Array::from(vec![1, 0])),
+            Arc::new(Int32Array::from(vec![2, 2])),
+            Arc::new(Int32Array::from(vec![3, 3])),
+            Arc::new(Int64Array::from(vec![10, 10])),
+            Arc::new(Int64Array::from(vec![20, 20])),
+            Arc::new(Int64Array::from(vec![30, 30])),
+            Arc::new(ListArray::new(
+                summary.clone(),
+                OffsetBuffer::from_lengths([1, 0]),
+                Arc::new(summaries),
+                Some(NullBuffer::from(vec![true, false])),
+            )),
+            Arc::new(BinaryArray::from(vec![Some(&[1u8, 2][..]), None])),
+            // The writer assigns the data manifest the snapshot's first row ID.
+            Arc::new(Int64Array::from(vec![Some(100), None])),
+        ];
+        assert_eq!(batch, RecordBatch::try_new(schema, columns).unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_v1_manifest_list_reads_with_v2_defaults() {
+        let unknown_counts = ManifestFile {
+            added_files_count: None,
+            existing_files_count: None,
+            deleted_files_count: None,
+            added_rows_count: None,
+            existing_rows_count: None,
+            deleted_rows_count: None,
+            ..listed_manifest("s3://b/metadata/1.avro", ManifestContentType::Data)
+        };
+        let bytes = write_manifest_list(FormatVersion::V1, vec![
+            listed_manifest("s3://b/metadata/0.avro", ManifestContentType::Data),
+            unknown_counts,
+        ])
+        .await;
+        // A manifest list without a format version reads as v1.
+        let without_format_version = set_avro_metadata(&bytes, "format-version", None);
+        for bytes in [bytes, without_format_version] {
+            let batch = read_manifest_list(&bytes).unwrap();
+
+            assert_eq!(
+                column(&batch, "content").as_ref(),
+                &Int32Array::from(vec![0, 0]) as &dyn Array
+            );
+            for name in ["sequence_number", "min_sequence_number"] {
+                assert_eq!(
+                    column(&batch, name).as_ref(),
+                    &Int64Array::from(vec![0, 0]) as &dyn Array,
+                    "{name}"
+                );
+            }
+            assert_eq!(
+                column(&batch, "added_files_count").as_ref(),
+                &Int32Array::from(vec![Some(1), None]) as &dyn Array
+            );
+            assert_eq!(
+                column(&batch, "deleted_rows_count").as_ref(),
+                &Int64Array::from(vec![Some(30), None]) as &dyn Array
+            );
+            assert_eq!(column(&batch, "first_row_id").null_count(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_fields_are_matched_by_field_id() {
+        let manifest = ManifestFile {
+            partitions: Some(vec![FieldSummary {
+                contains_null: true,
+                contains_nan: None,
+                lower_bound: None,
+                upper_bound: None,
+            }]),
+            ..listed_manifest("s3://b/metadata/0.avro", ManifestContentType::Data)
+        };
+        let bytes = write_manifest_list(FormatVersion::V2, vec![manifest]).await;
+        let bytes = rename_fields(&bytes, &[
+            ("manifest_path", "path"),
+            ("added_files_count", "added_data_files_count"),
+            ("contains_null", "has_null"),
+        ]);
+        let batch = read_manifest_list(&bytes).unwrap();
+
+        assert_eq!(
+            column(&batch, "manifest_path").as_ref(),
+            &StringArray::from(vec!["s3://b/metadata/0.avro"]) as &dyn Array
+        );
+        assert_eq!(
+            column(&batch, "added_files_count").as_ref(),
+            &Int32Array::from(vec![1]) as &dyn Array
+        );
+        let partitions = column(&batch, "partitions");
+        assert_eq!(
+            partitions
+                .as_list::<i32>()
+                .value(0)
+                .as_struct()
+                .column(0)
+                .as_ref(),
+            &BooleanArray::from(vec![true]) as &dyn Array
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalid_manifest_list_is_an_error() {
+        let err = read_manifest_list(&[]).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+
+        let bytes = write_manifest_list(FormatVersion::V2, vec![listed_manifest(
+            "s3://b/metadata/0.avro",
+            ManifestContentType::Data,
+        )])
+        .await;
+        // A manifest_path under another field ID leaves the required
+        // manifest_path missing.
+        let moved_manifest_path = rewrite_manifest(
+            &bytes,
+            Codec::Null,
+            |schema| {
+                for_each_avro_field(schema, &|field| {
+                    if field["name"] == "manifest_path" {
+                        field["field-id"] = 999.into();
+                    }
+                })
+            },
+            |_| {},
+        );
+        // Only v1 manifest lists read a missing sequence number as 0.
+        let without_sequence_number = rewrite_manifest(
+            &bytes,
+            Codec::Null,
+            |schema| {
+                schema["fields"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|field| field["name"] != "sequence_number")
+            },
+            |record| {
+                let AvroValue::Record(fields) = record else {
+                    panic!("manifest list entry is not a record");
+                };
+                fields.retain(|(name, _)| name != "sequence_number");
+            },
+        );
+        let unknown_format_version = set_avro_metadata(&bytes, "format-version", Some("4"));
+        for bytes in [
+            moved_manifest_path,
+            without_sequence_number,
+            unknown_format_version,
+        ] {
+            let err = read_manifest_list(&bytes).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        }
+    }
+
+    #[test]
+    fn test_manifest_lists_written_by_java() {
+        // Written by Java 1.4.0, with the v1 file count names, and 1.5.0.
+        for name in ["manifest-list-v2-1.avro", "manifest-list-v2-2.avro"] {
+            let bytes = std::fs::read(format!(
+                "{}/testdata/manifests_lists/{name}",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .unwrap();
+            let manifest_list =
+                ManifestList::parse_with_version(&bytes, FormatVersion::V2).unwrap();
+            let batch = read_manifest_list(&bytes).unwrap();
+
+            assert_eq!(batch.num_rows(), manifest_list.entries().len(), "{name}");
+            let paths = column(&batch, "manifest_path");
+            let sequence_numbers = column(&batch, "sequence_number");
+            let added_files_counts = column(&batch, "added_files_count");
+            let partitions = column(&batch, "partitions");
+            for (row, manifest) in manifest_list.entries().iter().enumerate() {
+                assert_eq!(
+                    paths.as_string::<i32>().value(row),
+                    manifest.manifest_path,
+                    "{name}"
+                );
+                assert_eq!(
+                    sequence_numbers.as_primitive::<Int64Type>().value(row),
+                    manifest.sequence_number,
+                    "{name}"
+                );
+                assert_eq!(
+                    added_files_counts.as_primitive::<Int32Type>().value(row),
+                    manifest.added_files_count.unwrap() as i32,
+                    "{name}"
+                );
+                let summaries = partitions.as_list::<i32>().value(row);
+                let lower_bounds: Vec<_> = summaries
+                    .as_struct()
+                    .column_by_name("lower_bound")
+                    .unwrap()
+                    .as_binary::<i32>()
+                    .iter()
+                    .map(|bound| bound.map(<[u8]>::to_vec))
+                    .collect();
+                let expected: Vec<_> = manifest
+                    .partitions
+                    .iter()
+                    .flatten()
+                    .map(|summary| summary.lower_bound.as_ref().map(|bound| bound.to_vec()))
+                    .collect();
+                assert_eq!(lower_bounds, expected, "{name}");
+            }
         }
     }
 }
