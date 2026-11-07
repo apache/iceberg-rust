@@ -1213,9 +1213,9 @@ mod tests {
         assert_eq!(
             partition_spec.partition_type(&schema).unwrap(),
             StructType::new(vec![
-                NestedField::optional(1000, "ts_day", PrimitiveType::Date.into()).into(),
-                NestedField::optional(1001, "id_bucket", PrimitiveType::Int.into()).into(),
-                NestedField::optional(1002, "id_truncate", PrimitiveType::String.into()).into(),
+                NestedField::optional(1000, "ts_day", PrimitiveType::Date).into(),
+                NestedField::optional(1001, "id_bucket", PrimitiveType::Int).into(),
+                NestedField::optional(1002, "id_truncate", PrimitiveType::String).into(),
             ])
         );
 
@@ -1224,16 +1224,16 @@ mod tests {
         assert_eq!(
             partition_spec.partition_type(&empty_schema).unwrap(),
             StructType::new(vec![
-                NestedField::optional(1000, "ts_day", PrimitiveType::Date.into()).into(),
-                NestedField::optional(1001, "id_bucket", PrimitiveType::Int.into()).into(),
-                NestedField::optional(1002, "id_truncate", PrimitiveType::Unknown.into()).into(),
+                NestedField::optional(1000, "ts_day", PrimitiveType::Date).into(),
+                NestedField::optional(1001, "id_bucket", PrimitiveType::Int).into(),
+                NestedField::optional(1002, "id_truncate", PrimitiveType::Unknown).into(),
             ])
         );
 
         // Missing sources must not suppress validation of transforms on remaining sources.
         let incompatible_schema = Schema::builder()
             .with_fields(vec![
-                NestedField::required(1, "id", PrimitiveType::Boolean.into()).into(),
+                NestedField::required(1, "id", PrimitiveType::Boolean).into(),
             ])
             .build()
             .unwrap();
@@ -1273,7 +1273,7 @@ mod tests {
             assert_eq!(
                 spec.partition_type(&schema).unwrap(),
                 StructType::new(vec![
-                    NestedField::optional(1000, "partition", expected_type.into()).into(),
+                    NestedField::optional(1000, "partition", expected_type).into(),
                 ])
             );
         }
@@ -2090,11 +2090,26 @@ mod tests {
                 Literal::int(10),
                 "p=10",
             ),
+            (
+                PrimitiveType::Decimal {
+                    precision: 9,
+                    scale: 2,
+                },
+                Transform::Identity,
+                Literal::decimal(123),
+                "p=123",
+            ),
+            (
+                PrimitiveType::Uuid,
+                Transform::Identity,
+                Literal::uuid_from_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap(),
+                "p=f79c3e09-677c-4bbd-a479-3f349cb785e7",
+            ),
         ] {
             let schema = Schema::builder()
                 .with_fields(vec![
-                    NestedField::required(1, "kept", PrimitiveType::Int.into()).into(),
-                    NestedField::required(2, "dropped", source_type.into()).into(),
+                    NestedField::required(1, "kept", PrimitiveType::Int).into(),
+                    NestedField::required(2, "dropped", source_type).into(),
                 ])
                 .build()
                 .unwrap();
@@ -2105,7 +2120,7 @@ mod tests {
                 .unwrap();
             let current_schema = Schema::builder()
                 .with_fields(vec![
-                    NestedField::required(1, "kept", PrimitiveType::Int.into()).into(),
+                    NestedField::required(1, "kept", PrimitiveType::Int).into(),
                 ])
                 .build()
                 .unwrap();

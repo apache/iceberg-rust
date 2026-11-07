@@ -97,8 +97,7 @@ fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
 }
 
 impl ManifestFileContext {
-    /// Consumes this [`ManifestFileContext`], fetching its Manifest from FileIO and then
-    /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
+    /// Fetches the manifest and streams its live entries to the context's channel.
     pub(crate) async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
         let ManifestFileContext {
             object_cache,
@@ -135,6 +134,10 @@ impl ManifestFileContext {
         };
 
         for manifest_entry in manifest.entries() {
+            if !manifest_entry.is_alive() {
+                continue;
+            }
+
             let manifest_entry = match promotion_target.as_ref() {
                 Some((current, written)) => {
                     let mut entry = manifest_entry.as_ref().clone();
