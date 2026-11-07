@@ -33,6 +33,7 @@ use parquet::arrow::{
 };
 use parquet::encryption::decrypt::FileDecryptionProperties;
 
+use super::projection::has_field_ids;
 use super::row_lineage::synthesize_row_id_column;
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
@@ -189,12 +190,8 @@ impl FileScanTaskReader {
         // Check if Parquet file has embedded field IDs
         // Corresponds to Java's ParquetSchemaUtil.hasIds()
         // Reference: parquet/src/main/java/org/apache/iceberg/parquet/ParquetSchemaUtil.java:118
-        let missing_field_ids = arrow_metadata
-            .schema()
-            .fields()
-            .iter()
-            .next()
-            .is_some_and(|f| f.metadata().get(PARQUET_FIELD_ID_META_KEY).is_none());
+        let missing_field_ids =
+            !has_field_ids(arrow_metadata.metadata().file_metadata().schema_descr());
 
         // Position-based fallback applies only when the file has no embedded field IDs
         // AND no name mapping is available. With a name mapping, field IDs are assigned
@@ -305,14 +302,14 @@ impl FileScanTaskReader {
 
         // Create projection mask based on field IDs
         // - If file has embedded IDs: field-ID-based projection
-        // - If name mapping applied: field-ID-based projection using the IDs the name
-        //   mapping assigned to the Arrow schema
+        // - If name mapping applied: field-ID-based projection using mapped Parquet names
         // - Otherwise: position-based fallback projection
         let mut projection_mask = ArrowReader::get_arrow_projection_mask(
             &project_field_ids_without_metadata,
             task.schema(),
             record_batch_stream_builder.parquet_schema(),
             record_batch_stream_builder.schema(),
+            task.name_mapping().map(Arc::as_ref),
             use_position_fallback, // Whether to use position-based (true) or field-ID-based (false) projection
         )?;
 
@@ -548,7 +545,7 @@ impl FileScanTaskReader {
 
             let (iceberg_field_ids, field_id_map) = ArrowReader::build_field_id_set_and_map(
                 record_batch_stream_builder.parquet_schema(),
-                record_batch_stream_builder.schema(),
+                task.name_mapping().map(Arc::as_ref),
                 &predicate,
                 use_position_fallback,
             )?;
