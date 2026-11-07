@@ -45,8 +45,8 @@ where
 {
     inner_builder: B,
     current_writer: Option<B::R>,
-    current_partition: Option<Struct>,
-    closed_partitions: HashSet<Struct>,
+    current_partition: Option<(i32, Struct)>,
+    closed_partitions: HashSet<(i32, Struct)>,
     output: Vec<<O as IntoIterator>::Item>,
     _phantom: PhantomData<I>,
 }
@@ -94,10 +94,10 @@ where
     <O as IntoIterator>::Item: Send + Clone,
 {
     async fn write(&mut self, partition_key: PartitionKey, input: I) -> Result<()> {
-        let partition_value = partition_key.data();
+        let partition = (partition_key.spec().spec_id(), partition_key.data().clone());
 
         // Check if this partition has been closed already
-        if self.closed_partitions.contains(partition_value) {
+        if self.closed_partitions.contains(&partition) {
             return Err(Error::new(
                 ErrorKind::Unexpected,
                 format!(
@@ -107,10 +107,7 @@ where
         }
 
         // Check if we need to switch to a new partition
-        let need_new_writer = match &self.current_partition {
-            Some(current) => current != partition_value,
-            None => true,
-        };
+        let need_new_writer = self.current_partition.as_ref() != Some(&partition);
 
         if need_new_writer {
             self.close_current_writer().await?;
@@ -121,7 +118,7 @@ where
                     .build(Some(partition_key.clone()))
                     .await?,
             );
-            self.current_partition = Some(partition_value.clone());
+            self.current_partition = Some(partition);
         }
 
         // do write
@@ -145,9 +142,12 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
     use arrow_array::{Float64Array, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
@@ -588,6 +588,83 @@ mod tests {
             partition_value(0.0)
         ]);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clustered_separates_specs_with_equal_partition_values() -> Result<()> {
+        use crate::spec::{Literal, PartitionSpec, Transform};
+
+        let temp_dir = TempDir::new()?;
+        let schema = Arc::new(
+            crate::spec::Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "b", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()?,
+        );
+        let spec_a = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("a", "a_part", Transform::Identity)?
+            .build()?;
+        let spec_b = PartitionSpec::builder(schema.clone())
+            .with_spec_id(1)
+            .with_last_assigned_field_id(1000)
+            .add_partition_field("b", "b_part", Transform::Identity)?
+            .build()?;
+        let partition_one = Struct::from_iter([Some(Literal::int(1))]);
+        let key_a = PartitionKey::new(spec_a, schema.clone(), partition_one.clone());
+        let key_b = PartitionKey::new(spec_b, schema.clone(), partition_one.clone());
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema)?);
+        let batch = |a: i32, b: i32| {
+            RecordBatch::try_new(arrow_schema.clone(), vec![
+                Arc::new(Int32Array::from(vec![a])),
+                Arc::new(Int32Array::from(vec![b])),
+            ])
+        };
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone()),
+            FileIO::new_with_fs(),
+            DefaultLocationGenerator::with_data_location(temp_dir.path().to_str().unwrap().into()),
+            DefaultFileNameGenerator::new("test".into(), None, DataFileFormat::Parquet),
+        );
+        for close_first_partition in [false, true] {
+            let mut writer =
+                ClusteredWriter::new(DataFileWriterBuilder::new(rolling_writer_builder.clone()));
+            writer.write(key_a.clone(), batch(1, 2)?).await?;
+            let mut expected = vec![(0, partition_one.clone(), vec![(1, 2)])];
+            if close_first_partition {
+                let partition_two = Struct::from_iter([Some(Literal::int(2))]);
+                writer
+                    .write(key_a.copy_with_data(partition_two.clone()), batch(2, 2)?)
+                    .await?;
+                expected.push((0, partition_two, vec![(2, 2)]));
+            }
+            writer.write(key_b.clone(), batch(2, 1)?).await?;
+            let error = writer.write(key_a.clone(), batch(1, 4)?).await.unwrap_err();
+            assert!(error.message().contains("previously closed"));
+            writer.write(key_b.clone(), batch(3, 1)?).await?;
+            expected.push((1, partition_one.clone(), vec![(2, 1), (3, 1)]));
+            let mut written = Vec::new();
+            for file in writer.close().await? {
+                let reader = ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(
+                    file.file_path(),
+                )?)?
+                .build()?;
+                let mut rows = Vec::new();
+                for batch in reader {
+                    let batch = batch?;
+                    let a = batch.column(0).as_primitive::<Int32Type>();
+                    let b = batch.column(1).as_primitive::<Int32Type>();
+                    rows.extend(a.values().iter().copied().zip(b.values().iter().copied()));
+                }
+                rows.sort_unstable();
+                written.push((file.partition_spec_id, file.partition().clone(), rows));
+            }
+            written.sort_by_key(|(spec, _, rows)| (*spec, rows.clone()));
+            assert_eq!(written, expected);
+        }
         Ok(())
     }
 }
