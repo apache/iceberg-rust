@@ -163,43 +163,40 @@ impl ArrowReader {
                 .flat_map(|candidate| candidate.leaves)
                 .collect();
 
-        // Pre-project only the fields that have been selected, possibly avoiding converting
-        // some Arrow types that are not yet supported.
-        let projected_arrow_schema = ArrowSchema::new_with_metadata(
-            fields.filter_leaves(|idx, f| {
-                presence.contains(&idx)
-                    || parquet_field_id(f)
-                        .is_some_and(|field_id| leaf_field_id_set.contains(&field_id))
-            }),
-            arrow_schema.metadata().clone(),
-        );
-        let iceberg_schema = arrow_schema_to_schema(&projected_arrow_schema)?;
-
-        fields.filter_leaves(|idx, field| {
-            let Some(field_id) = parquet_field_id(field) else {
-                return false;
-            };
-
-            let iceberg_field = iceberg_schema_of_task.field_by_id(field_id);
-            let parquet_iceberg_field = iceberg_schema.field_by_id(field_id);
-
-            if iceberg_field.is_none() || parquet_iceberg_field.is_none() {
-                return false;
-            }
-
-            if !type_promotion_is_valid(
-                parquet_iceberg_field
-                    .unwrap()
-                    .field_type
-                    .as_primitive_type(),
-                iceberg_field.unwrap().field_type.as_primitive_type(),
-            ) {
-                return false;
-            }
-
-            column_map.insert(field_id, idx);
-            true
+        // Check the field ids of the projected subtree as converting it would. It is not
+        // converted, because a map that keeps only its key does not convert (#3557).
+        let projected_fields = fields.filter_leaves(|idx, f| {
+            presence.contains(&idx)
+                || parquet_field_id(f).is_some_and(|field_id| leaf_field_id_set.contains(&field_id))
         });
+        check_field_ids(projected_fields.iter(), &mut HashSet::new())?;
+
+        // Convert each selected leaf on its own, so a map that keeps only its key is never
+        // converted.
+        let mut selected_leaves = Vec::with_capacity(leaf_field_ids.len());
+        fields.filter_leaves(|idx, field| {
+            if let Some(field_id) = parquet_field_id(field)
+                && leaf_field_id_set.contains(&field_id)
+            {
+                selected_leaves.push((idx, field_id, field.clone()));
+            }
+            false
+        });
+        for (idx, field_id, field) in selected_leaves {
+            let Some(iceberg_field) = iceberg_schema_of_task.field_by_id(field_id) else {
+                continue;
+            };
+            let file_schema = arrow_schema_to_schema(&ArrowSchema::new(vec![field]))?;
+            let file_type = file_schema
+                .field_by_id(field_id)
+                .map(|f| f.field_type.as_ref());
+            if type_promotion_is_valid(
+                file_type.and_then(Type::as_primitive_type),
+                iceberg_field.field_type.as_primitive_type(),
+            ) {
+                column_map.insert(field_id, idx);
+            }
+        }
 
         // Schema evolution: New columns may not exist in old Parquet files.
         // We only project existing columns; RecordBatchTransformer adds default/NULL values.
@@ -212,6 +209,7 @@ impl ArrowReader {
 
         // Read only for struct validity; `RecordBatchTransformer` drops these leaves.
         indices.extend(presence);
+        add_map_value_leaves(parquet_schema, fields, iceberg_schema_of_task, &mut indices)?;
 
         if indices.is_empty() {
             // Edge case: All requested columns are new (don't exist in file).
@@ -543,6 +541,174 @@ impl PresenceWalk<'_> {
         let best = best.filter(|_| !covered && id.is_some());
         (covered, best)
     }
+}
+
+/// Fails on a field id that is missing or repeated, as `arrow_schema_to_schema` would.
+fn check_field_ids<'a>(
+    fields: impl Iterator<Item = &'a FieldRef>,
+    seen: &mut HashSet<i32>,
+) -> Result<()> {
+    for field in fields {
+        let field_id = parquet_field_id(field)
+            .ok_or_else(|| invalid_data!("Field id not found in metadata"))?;
+        if !seen.insert(field_id) {
+            return Err(invalid_data!(
+                "Found duplicate 'field.id' {field_id}. Field ids must be unique."
+            ));
+        }
+        check_child_field_ids(field.data_type(), seen)?;
+    }
+    Ok(())
+}
+
+fn check_child_field_ids(data_type: &DataType, seen: &mut HashSet<i32>) -> Result<()> {
+    match data_type {
+        DataType::Struct(fields) => check_field_ids(fields.iter(), seen),
+        DataType::List(element)
+        | DataType::LargeList(element)
+        | DataType::FixedSizeList(element, _) => check_field_ids(std::iter::once(element), seen),
+        // The entries struct carries no field id.
+        DataType::Map(entries, _) => check_child_field_ids(entries.data_type(), seen),
+        DataType::Dictionary(_, value) => check_child_field_ids(value, seen),
+        DataType::RunEndEncoded(_, value) => check_child_field_ids(value.data_type(), seen),
+        _ => Ok(()),
+    }
+}
+
+/// Number of Parquet leaves under `data_type`, counted as [`Fields::filter_leaves`] does.
+fn arrow_leaf_count(data_type: &DataType) -> usize {
+    match data_type {
+        DataType::Dictionary(_, value) => arrow_leaf_count(value),
+        DataType::RunEndEncoded(_, value) => arrow_leaf_count(value.data_type()),
+        DataType::List(child)
+        | DataType::LargeList(child)
+        | DataType::FixedSizeList(child, _)
+        | DataType::Map(child, _) => arrow_leaf_count(child.data_type()),
+        DataType::Struct(fields) => fields.iter().map(|f| arrow_leaf_count(f.data_type())).sum(),
+        DataType::Union(fields, _) => fields
+            .iter()
+            .map(|(_, f)| arrow_leaf_count(f.data_type()))
+            .sum(),
+        _ => 1,
+    }
+}
+
+/// Leaf index ranges of one map's key and value.
+struct MapLeafRanges {
+    key: Range<usize>,
+    value: Range<usize>,
+    /// Value subtrees that match no table field and so read as NULL; `None` unless the value
+    /// is a struct, as other values match the table by position.
+    null_subtrees: Option<Vec<Range<usize>>>,
+}
+
+/// Collects map leaf ranges in pre-order, so an outer map precedes the maps in its value.
+fn collect_map_leaf_ranges(
+    data_type: &DataType,
+    next_leaf: &mut usize,
+    table_schema: &Schema,
+    maps: &mut Vec<MapLeafRanges>,
+) {
+    let children: Vec<&DataType> = match data_type {
+        DataType::Dictionary(_, value) => vec![value],
+        DataType::RunEndEncoded(_, value) => vec![value.data_type()],
+        DataType::List(child) | DataType::LargeList(child) | DataType::FixedSizeList(child, _) => {
+            vec![child.data_type()]
+        }
+        DataType::Map(entries, _) => match entries.data_type() {
+            DataType::Struct(entry_fields) if entry_fields.len() == 2 => {
+                let (key, value) = (&entry_fields[0], &entry_fields[1]);
+                let value_start = *next_leaf + arrow_leaf_count(key.data_type());
+                let value_end = value_start + arrow_leaf_count(value.data_type());
+                let null_subtrees = match value.data_type() {
+                    DataType::Struct(fields) => {
+                        let mut subtrees = Vec::new();
+                        collect_null_subtrees(fields, value_start, table_schema, &mut subtrees);
+                        Some(subtrees)
+                    }
+                    _ => None,
+                };
+                maps.push(MapLeafRanges {
+                    key: *next_leaf..value_start,
+                    value: value_start..value_end,
+                    null_subtrees,
+                });
+                vec![key.data_type(), value.data_type()]
+            }
+            other => vec![other],
+        },
+        DataType::Struct(fields) => fields.iter().map(|f| f.data_type()).collect(),
+        DataType::Union(fields, _) => fields.iter().map(|(_, f)| f.data_type()).collect(),
+        _ => {
+            *next_leaf += 1;
+            return;
+        }
+    };
+    for child in children {
+        collect_map_leaf_ranges(child, next_leaf, table_schema, maps);
+    }
+}
+
+/// Collects the leaf ranges of struct fields whose id is not in the table: the reader matches
+/// struct fields by id and drops them. Fields under a list or map match by position instead.
+fn collect_null_subtrees(
+    fields: &Fields,
+    start: usize,
+    table_schema: &Schema,
+    subtrees: &mut Vec<Range<usize>>,
+) {
+    let mut next = start;
+    for field in fields {
+        let range = next..next + arrow_leaf_count(field.data_type());
+        next = range.end;
+        match parquet_field_id(field) {
+            Some(field_id) if table_schema.field_by_id(field_id).is_some() => {
+                if let DataType::Struct(children) = field.data_type() {
+                    collect_null_subtrees(children, range.start, table_schema, subtrees);
+                }
+            }
+            _ if !range.is_empty() => subtrees.push(range),
+            _ => {}
+        }
+    }
+}
+
+/// Parquet reads a map only when both its key and value are projected. When the key is selected
+/// but no value leaf matched the table (#3557), also read the smallest value subtree that matches
+/// no table field, so the value comes back as a struct of NULLs (#3437). A struct field whose id
+/// is in the table is never read this way: its leaves were either rejected by type promotion or
+/// sit under a list or map, which match by position and would be cast.
+fn add_map_value_leaves(
+    parquet_schema: &SchemaDescriptor,
+    arrow_fields: &Fields,
+    table_schema: &Schema,
+    indices: &mut Vec<usize>,
+) -> Result<()> {
+    let mut maps = Vec::new();
+    let mut next_leaf = 0;
+    for field in arrow_fields {
+        collect_map_leaf_ranges(field.data_type(), &mut next_leaf, table_schema, &mut maps);
+    }
+    let mut selected: HashSet<usize> = indices.iter().copied().collect();
+    for map in &maps {
+        let key_read = map.key.clone().any(|idx| selected.contains(&idx));
+        let value_read = map.value.clone().any(|idx| selected.contains(&idx));
+        let Some(null_subtrees) = &map.null_subtrees else {
+            continue;
+        };
+        if !key_read || value_read {
+            continue;
+        }
+        let Some(subtree) = null_subtrees.iter().min_by_key(|range| range.len()) else {
+            return Err(invalid_data!(
+                "Cannot read map containing {}: no value field can be read as NULL",
+                parquet_schema.column(map.value.start).path()
+            ));
+        };
+        selected.extend(subtree.clone());
+        indices.extend(subtree.clone());
+    }
+    Ok(())
 }
 
 /// Apply name mapping to Arrow schema for Parquet files lacking field IDs.
@@ -3649,5 +3815,339 @@ message schema {
             .unwrap();
         assert_eq!(fallback.len(), 1);
         assert_top_list(&fallback[0]);
+    }
+
+    mod map_value_rescue {
+        // ---- map value rescue (#3557) ----
+        use arrow_array::{Int32Array, StructArray};
+
+        use super::*;
+        use crate::spec::{
+            DataFileFormat, MapType, MappedField, NameMapping, NestedField, PrimitiveType, Schema,
+            StructType, Type,
+        };
+
+        /// A struct column `name` (id `id`) with one Int32 child `child` (id `child_id`).
+        fn strukt_column(
+            name: &str,
+            id: i32,
+            children: Vec<(&str, i32, Int32Array)>,
+        ) -> (Field, ArrayRef) {
+            let child_fields: Vec<Field> = children
+                .iter()
+                .map(|(n, cid, _)| with_field_id(Field::new(*n, DataType::Int32, true), *cid))
+                .collect();
+            let arrays: Vec<(Arc<Field>, ArrayRef)> = children
+                .into_iter()
+                .zip(child_fields)
+                .map(|((_, _, a), f)| (Arc::new(f), Arc::new(a) as ArrayRef))
+                .collect();
+            let arr = StructArray::from(arrays);
+            (
+                with_field_id(Field::new(name, arr.data_type().clone(), true), id),
+                Arc::new(arr),
+            )
+        }
+
+        /// Writes one Parquet file with the given top-level columns.
+        fn write_columns(cols: Vec<(Field, ArrayRef)>) -> (TempDir, String) {
+            let (fields, arrays): (Vec<Field>, Vec<ArrayRef>) = cols.into_iter().unzip();
+            let batch = RecordBatch::try_new(Arc::new(ArrowSchema::new(fields)), arrays).unwrap();
+            let tmp_dir = TempDir::new().unwrap();
+            let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
+            let mut writer =
+                ArrowWriter::try_new(File::create(&file_path).unwrap(), batch.schema(), None)
+                    .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            (tmp_dir, file_path)
+        }
+
+        /// Reads `project` from a file with the given table schema and returns the first batch.
+        async fn read_map_file_generic(
+            file_path: &str,
+            schema: Arc<Schema>,
+            project: Vec<i32>,
+        ) -> crate::Result<RecordBatch> {
+            read_map_file(file_path, schema, None, project).await
+        }
+
+        /// `1: id int, 2: m map<3: string, 4: value>`.
+        fn map_schema(value: Type) -> Arc<Schema> {
+            Arc::new(
+                Schema::builder()
+                    .with_schema_id(1)
+                    .with_fields(vec![
+                        NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(
+                            2,
+                            "m",
+                            Type::Map(MapType::new(
+                                NestedField::map_key_element(
+                                    3,
+                                    Type::Primitive(PrimitiveType::String),
+                                )
+                                .into(),
+                                NestedField::map_value_element(4, value, false).into(),
+                            )),
+                        )
+                        .into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            )
+        }
+
+        fn struct_of(id: i32, name: &str, ty: PrimitiveType) -> Type {
+            Type::Struct(StructType::new(vec![
+                NestedField::optional(id, name, Type::Primitive(ty)).into(),
+            ]))
+        }
+
+        fn with_field_id(field: Field, id: i32) -> Field {
+            field.with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                id.to_string(),
+            )]))
+        }
+
+        fn int_struct(children: Vec<(Field, Vec<i32>)>) -> ArrayRef {
+            Arc::new(StructArray::from(
+                children
+                    .into_iter()
+                    .map(|(field, values)| {
+                        (
+                            Arc::new(field),
+                            Arc::new(Int32Array::from(values)) as ArrayRef,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+        }
+
+        /// Writes three rows of `id int, m map<string, value>`. With `value_id`, embeds ids 1, 2 and
+        /// 3 and `value_id` on the map value; struct children must carry their own ids.
+        fn write_map_parquet(value: ArrayRef, value_id: Option<i32>) -> (TempDir, String) {
+            use arrow_array::MapArray;
+            use arrow_buffer::OffsetBuffer;
+
+            let id = |field: Field, id: i32| match value_id {
+                Some(_) => with_field_id(field, id),
+                None => field,
+            };
+            let value_field = Field::new("value", value.data_type().clone(), true);
+            let value_field = match value_id {
+                Some(value_id) => with_field_id(value_field, value_id),
+                None => value_field,
+            };
+            let entry_fields = Fields::from(vec![
+                id(Field::new("key", DataType::Utf8, false), 3),
+                value_field,
+            ]);
+            let entries = StructArray::new(
+                entry_fields.clone(),
+                vec![Arc::new(StringArray::from(vec!["a", "b", "c"])), value],
+                None,
+            );
+            let map = MapArray::new(
+                Arc::new(Field::new(
+                    "key_value",
+                    DataType::Struct(entry_fields),
+                    false,
+                )),
+                OffsetBuffer::from_lengths([1, 1, 1]),
+                entries,
+                None,
+                false,
+            );
+            let schema = Arc::new(ArrowSchema::new(vec![
+                id(Field::new("id", DataType::Int32, true), 1),
+                id(Field::new("m", map.data_type().clone(), true), 2),
+            ]));
+            let batch = RecordBatch::try_new(schema, vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])),
+                Arc::new(map),
+            ])
+            .unwrap();
+            let tmp_dir = TempDir::new().unwrap();
+            let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
+            let mut writer =
+                ArrowWriter::try_new(File::create(&file_path).unwrap(), batch.schema(), None)
+                    .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            (tmp_dir, file_path)
+        }
+
+        /// Projects the map (field 2) and returns its value column.
+        async fn read_map_values(
+            file_path: &str,
+            schema: Arc<Schema>,
+            name_mapping: Option<Arc<NameMapping>>,
+        ) -> crate::Result<ArrayRef> {
+            let batch = read_map_file(file_path, schema, name_mapping, vec![2]).await?;
+            Ok(batch.column(0).as_map().values().clone())
+        }
+
+        async fn read_map_file(
+            file_path: &str,
+            schema: Arc<Schema>,
+            name_mapping: Option<Arc<NameMapping>>,
+            project_field_ids: Vec<i32>,
+        ) -> crate::Result<RecordBatch> {
+            let tasks = Box::pin(futures::stream::iter([Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path.to_string())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema)
+                .with_project_field_ids(project_field_ids)
+                .with_case_sensitive(false)
+                .with_name_mapping(name_mapping)
+                .build()
+                .unwrap())])) as FileScanTaskStream;
+            let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+            let batches = reader
+                .read(tasks)?
+                .stream()
+                .try_collect::<Vec<RecordBatch>>()
+                .await?;
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].num_rows(), 3);
+            Ok(batches.into_iter().next().unwrap())
+        }
+
+        #[tokio::test]
+        async fn test_name_mapped_map_value_with_unmapped_child_reads_null() {
+            let mapping =
+                Arc::new(NameMapping::new(vec![
+                    MappedField::new(Some(1), vec!["id".to_string()], vec![]),
+                    MappedField::new(Some(2), vec!["m".to_string()], vec![
+                        MappedField::new(Some(3), vec!["key".to_string()], vec![]),
+                        MappedField::new(Some(4), vec!["value".to_string()], vec![
+                            MappedField::new(Some(5), vec!["x".to_string()], vec![]),
+                        ]),
+                    ]),
+                ]));
+            // #3557: `old_x` is not in the mapping and used to fail the read.
+            for (physical_name, expected) in [
+                ("x", vec![Some(10), Some(20), Some(30)]),
+                ("old_x", vec![None, None, None]),
+            ] {
+                let value = int_struct(vec![(
+                    Field::new(physical_name, DataType::Int32, true),
+                    vec![10, 20, 30],
+                )]);
+                let (_tmp, path) = write_map_parquet(value, None);
+                let values = read_map_values(
+                    &path,
+                    map_schema(struct_of(5, "x", PrimitiveType::Int)),
+                    Some(mapping.clone()),
+                )
+                .await
+                .unwrap();
+                let values = values.as_struct();
+                assert_eq!(
+                    values.null_count(),
+                    0,
+                    "{physical_name}: struct of NULLs (#3437)"
+                );
+                let x = values
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int32Type>();
+                assert_eq!(x.iter().collect::<Vec<_>>(), expected, "{physical_name}");
+            }
+        }
+
+        #[tokio::test]
+        async fn test_map_value_with_unmatched_embedded_id_reads_null() {
+            let value = int_struct(vec![(
+                with_field_id(Field::new("x", DataType::Int32, true), 5),
+                vec![10, 20, 30],
+            )]);
+            let (_tmp, path) = write_map_parquet(value, Some(4));
+            let table_schema = map_schema(struct_of(6, "y", PrimitiveType::Int));
+            let values = read_map_values(&path, table_schema.clone(), None)
+                .await
+                .unwrap();
+            let values = values.as_struct();
+            assert_eq!(values.null_count(), 0);
+            assert_eq!(
+                values.column(0).null_count(),
+                3,
+                "file id 5 does not match table id 6"
+            );
+
+            // A map that is not projected must not have its value leaves rescued.
+            let batch = read_map_file(&path, table_schema, None, vec![1])
+                .await
+                .unwrap();
+            assert_eq!(batch.num_columns(), 1);
+        }
+
+        #[tokio::test]
+        async fn test_map_value_with_invalid_promotion_is_not_cast() {
+            let x = with_field_id(Field::new("x", DataType::Int32, true), 5);
+            let table_schema = map_schema(struct_of(5, "x", PrimitiveType::String));
+
+            let (_tmp, path) =
+                write_map_parquet(int_struct(vec![(x.clone(), vec![10, 20, 30])]), Some(4));
+            let err = read_map_values(&path, table_schema.clone(), None)
+                .await
+                .expect_err("int -> string must not be rescued and cast");
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+
+            // An unmatched sibling keeps the map readable; the rejected leaf still reads as NULL.
+            let extra = with_field_id(Field::new("extra", DataType::Int32, true), 6);
+            let value = int_struct(vec![(x, vec![10, 20, 30]), (extra, vec![1, 2, 3])]);
+            let (_tmp, path) = write_map_parquet(value, Some(4));
+            let values = read_map_values(&path, table_schema, None).await.unwrap();
+            assert_eq!(
+                values.as_struct().column(0).null_count(),
+                3,
+                "rejected leaf must be NULL"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_map_primitive_value_with_unmatched_id_is_not_cast() {
+            let value: ArrayRef = Arc::new(StringArray::from(vec!["12", "x", "34"]));
+            let (_tmp, path) = write_map_parquet(value, Some(7));
+            let result =
+                read_map_values(&path, map_schema(Type::Primitive(PrimitiveType::Int)), None).await;
+            assert!(
+                result.is_err(),
+                "value id 7 does not match table id 4 and must not be cast: {result:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn test_duplicate_field_id_in_projected_subtree_fails() {
+            // Struct `s` (id 5) holds leaf `a` (id 5). Main fails with a duplicate id here.
+            let s = strukt_column("s", 5, vec![("a", 5, Int32Array::from(vec![1, 2, 3]))]);
+            let (_tmp, path) = write_columns(vec![s]);
+            let table = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(
+                            2,
+                            "s",
+                            Type::Struct(StructType::new(vec![
+                                NestedField::optional(5, "a", Type::Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
+                        )
+                        .into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let err = read_map_file_generic(&path, table, vec![2])
+                .await
+                .expect_err("a duplicate field id in the projected subtree must fail");
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+            assert!(err.to_string().contains("duplicate"), "{err}");
+        }
     }
 }
