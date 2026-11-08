@@ -78,6 +78,7 @@ impl EncryptedInputFile {
         self.decrypt_reader(raw_reader)
     }
 
+    /// Wraps a transparently decrypting reader over the given `raw_reader`
     pub(crate) fn decrypt_reader(
         &self,
         raw_reader: Box<dyn FileRead>,
