@@ -74,15 +74,15 @@ impl EncryptedInputFile {
 
     /// Creates a reader that transparently decrypts on each read.
     pub async fn reader(&self) -> Result<Box<dyn FileRead>> {
-        self.reader_with_wrapper(std::convert::identity).await
+        let raw_reader = self.inner.reader().await?;
+        self.decrypt_reader(raw_reader)
     }
 
-    pub(crate) async fn reader_with_wrapper(
+    pub(crate) fn decrypt_reader(
         &self,
-        wrap: impl FnOnce(Box<dyn FileRead>) -> Box<dyn FileRead>,
+        raw_reader: Box<dyn FileRead>,
     ) -> Result<Box<dyn FileRead>> {
         let encrypted_length = self.encrypted_length()?;
-        let raw_reader = wrap(self.inner.reader().await?);
         let cipher = build_cipher(&self.key_metadata)?;
         let aad_prefix: Box<[u8]> = self.key_metadata.aad_prefix().unwrap_or_default().into();
         let decrypting = AesGcmFileRead::new(raw_reader, cipher, aad_prefix, encrypted_length)?;
@@ -280,25 +280,30 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_file_length_is_rejected() {
         let fileio = FileIO::new_with_memory();
+        let path = "memory:///test/invalid_length.bin";
+        let output = EncryptedOutputFile::new(fileio.new_output(path).unwrap(), key_metadata());
+        output.write(Bytes::from_static(b"data")).await.unwrap();
+
         for length in [
             0,
             u64::from(GCM_STREAM_HEADER_LENGTH),
             u64::from(MIN_STREAM_LENGTH - 1),
         ] {
             let input = EncryptedInputFile::new(
-                fileio
-                    .new_input("memory:///test/invalid_length.bin")
-                    .unwrap(),
+                fileio.new_input(path).unwrap(),
                 key_metadata().with_file_length(length),
             );
-            assert_eq!(
-                input.metadata().err().unwrap().kind(),
-                ErrorKind::DataInvalid
-            );
-            assert_eq!(
-                input.reader().await.err().unwrap().kind(),
-                ErrorKind::DataInvalid
-            );
+            let expected_message =
+                format!("Invalid encrypted file length: {length} is less than {MIN_STREAM_LENGTH}");
+            for err in [
+                input.metadata().err().unwrap(),
+                input.reader().await.err().unwrap(),
+            ] {
+                assert_eq!(
+                    (err.kind(), err.message()),
+                    (ErrorKind::DataInvalid, expected_message.as_str())
+                );
+            }
         }
     }
 

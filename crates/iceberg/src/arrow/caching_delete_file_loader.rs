@@ -423,22 +423,20 @@ impl CachingDeleteFileLoader {
         let input_file = basic_delete_file_loader
             .file_io()
             .new_input(task.file_path())?;
-        let count_reads = |reader| -> Box<dyn FileRead> {
-            Box::new(CountingFileRead::new(
-                reader,
-                basic_delete_file_loader.scan_metrics().clone(),
-                task.file_type(),
-            ))
-        };
-        let reader = match task.key_metadata() {
+        let key_metadata = task
+            .key_metadata()
+            .map(StandardKeyMetadata::decode)
+            .transpose()?;
+        let counted_reader: Box<dyn FileRead> = Box::new(CountingFileRead::new(
+            input_file.reader().await?,
+            basic_delete_file_loader.scan_metrics().clone(),
+            task.file_type(),
+        ));
+        let reader = match key_metadata {
             Some(key_metadata) => {
-                let key_metadata = StandardKeyMetadata::decode(key_metadata)?;
-
-                EncryptedInputFile::new(input_file, key_metadata)
-                    .reader_with_wrapper(count_reads)
-                    .await?
+                EncryptedInputFile::new(input_file, key_metadata).decrypt_reader(counted_reader)?
             }
-            None => count_reads(input_file.reader().await?),
+            None => counted_reader,
         };
 
         basic_delete_file_loader
