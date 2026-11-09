@@ -1118,6 +1118,9 @@ pub const iceberg::io::S3_ENDPOINT: &str
 pub const iceberg::io::S3_MULTIPART_PART_SIZE_BYTES: &str
 pub const iceberg::io::S3_PATH_STYLE_ACCESS: &str
 pub const iceberg::io::S3_REGION: &str
+pub const iceberg::io::S3_RETRY_MAX_WAIT_MS: &str
+pub const iceberg::io::S3_RETRY_MIN_WAIT_MS: &str
+pub const iceberg::io::S3_RETRY_NUM_RETRIES: &str
 pub const iceberg::io::S3_SECRET_ACCESS_KEY: &str
 pub const iceberg::io::S3_SESSION_TOKEN: &str
 pub const iceberg::io::S3_SSE_KEY: &str
