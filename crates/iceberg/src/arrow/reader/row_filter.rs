@@ -34,7 +34,7 @@ use crate::expr::BoundPredicate;
 use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
-use crate::spec::Schema;
+use crate::spec::{PartitionSpec, Schema, Struct};
 use crate::{Error, ErrorKind};
 
 impl ArrowReader {
@@ -43,6 +43,7 @@ impl ArrowReader {
         parquet_schema: &SchemaDescriptor,
         iceberg_field_ids: &HashSet<i32>,
         field_id_map: &HashMap<i32, usize>,
+        partition: Option<(&PartitionSpec, &Struct)>,
     ) -> Result<RowFilter> {
         // Collect Parquet column indices from field ids.
         // If the field id is not found in Parquet schema, it will be ignored due to schema evolution.
@@ -57,6 +58,7 @@ impl ArrowReader {
             parquet_schema,
             column_map: field_id_map,
             column_indices: &column_indices,
+            partition,
         };
 
         // After collecting required leaf column indices used in the predicate,
@@ -247,7 +249,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+        DataContentType, DataFileFormat, Datum, Literal, NestedField, PartitionSpec, PrimitiveType,
+        Schema, SchemaRef, Struct, Transform, Type,
     };
 
     async fn test_perform_read(
@@ -1607,6 +1610,116 @@ mod tests {
         let batches: Vec<RecordBatch> = result.stream().try_collect().await.unwrap();
 
         (batches, metrics.bytes_read())
+    }
+
+    #[tokio::test]
+    async fn test_predicates_on_missing_nullable_column() {
+        use arrow_array::{Int64Array, StringArray};
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "b", Type::Primitive(PrimitiveType::String)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "a",
+            DataType::Int64,
+            1,
+        )]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int64Array::from(
+            vec![1, 2, 3],
+        ))])
+        .unwrap();
+        let tmp_dir = TempDir::new().unwrap();
+        let missing_path = tmp_dir.path().join("missing-b.parquet");
+        let null_path = tmp_dir.path().join("null-b.parquet");
+        let null_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("a", DataType::Int64, 1),
+            field_with_id("b", DataType::Utf8, 2).with_nullable(true),
+        ]));
+        let null_batch = RecordBatch::try_new(null_schema.clone(), vec![
+            batch.column(0).clone(),
+            Arc::new(StringArray::new_null(3)),
+        ])
+        .unwrap();
+        write_row_groups(
+            missing_path.to_str().unwrap(),
+            arrow_schema,
+            vec![batch],
+            false,
+        );
+        write_row_groups(
+            null_path.to_str().unwrap(),
+            null_schema,
+            vec![null_batch],
+            false,
+        );
+        let spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(7)
+            .add_partition_field("b", "b", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let identity_value = Struct::from_iter([Some(Literal::string("m"))]);
+
+        for (predicate, project_field_ids) in [
+            (Reference::new("b").less_than(Datum::string("z")), vec![1]),
+            (
+                Reference::new("b").less_than_or_equal_to(Datum::string("z")),
+                vec![1, 2],
+            ),
+            (
+                Reference::new("b").is_not_in([Datum::string("x"), Datum::string("y")]),
+                vec![1],
+            ),
+            (
+                Reference::new("b").not_starts_with(Datum::string("x")),
+                vec![1, 2],
+            ),
+        ] {
+            for (path, has_identity_partition, expected_rows) in [
+                (&null_path, false, 0),
+                (&missing_path, false, 0),
+                (&missing_path, true, 3),
+            ] {
+                let task = FileScanTask::builder()
+                    .with_file_size_in_bytes(std::fs::metadata(path).unwrap().len())
+                    .with_start(0)
+                    .with_length(0)
+                    .with_data_file_path(path.to_string_lossy().into_owned())
+                    .with_data_file_format(DataFileFormat::Parquet)
+                    .with_schema(schema.clone())
+                    .with_project_field_ids(project_field_ids.clone())
+                    .with_predicate(Some(predicate.clone().bind(schema.clone(), true).unwrap()))
+                    .with_partition_spec(has_identity_partition.then(|| Arc::new(spec.clone())))
+                    .with_partition(has_identity_partition.then(|| identity_value.clone()))
+                    .with_case_sensitive(false)
+                    .build()
+                    .unwrap();
+                let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                    .with_row_group_filtering_enabled(false)
+                    .build();
+                let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+                let batches: Vec<RecordBatch> = reader
+                    .read(tasks)
+                    .unwrap()
+                    .stream()
+                    .try_collect()
+                    .await
+                    .unwrap();
+
+                assert_eq!(
+                    batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+                    expected_rows,
+                    "{predicate} on {}",
+                    path.display()
+                );
+            }
+        }
     }
 
     /// Batch boundaries differ when fewer row groups are read, so collapse to a
