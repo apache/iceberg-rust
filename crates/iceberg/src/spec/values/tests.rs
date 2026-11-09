@@ -490,7 +490,7 @@ fn json_map_rejects_mismatched_key_value_lengths() {
 fn nullable_nested_json_types() -> [Type; 4] {
     [
         Type::Struct(StructType::new(vec![
-            NestedField::optional(2, "id", Primitive(PrimitiveType::Int)).into(),
+            NestedField::optional(2, "id", PrimitiveType::Int).into(),
         ])),
         Type::List(ListType::new(
             NestedField::list_element(2, Primitive(PrimitiveType::Int), false).into(),
