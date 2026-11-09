@@ -155,6 +155,10 @@ impl ManifestFilterManager {
         let mut out = Vec::with_capacity(manifests.len());
         let mut removed_files: Vec<DataFile> = Vec::new();
 
+        // TODO: every manifest of this content type is read, one at a time.
+        // Skip manifests with no live files and prune by partition summary
+        // before reading, as Java's ManifestFilterManager does, and read the
+        // rest concurrently as `validate_files_not_live` does.
         for source in manifests {
             if source.content != self.content {
                 out.push(source);
