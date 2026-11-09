@@ -175,10 +175,41 @@ pub fn serialize_data_file_to_json(
     partition_type: &super::StructType,
     format_version: FormatVersion,
 ) -> Result<String> {
+    ensure_finite_partition_values(data_file.partition(), partition_type)?;
     let partition_struct_type = Type::Struct(partition_type.clone());
     let serde = _serde::DataFileSerde::try_from(data_file, &partition_struct_type, format_version)?;
     serde_json::to_string(&serde)
         .map_err(|e| invalid_data!("Failed to serialize DataFile to JSON!").with_source(e))
+}
+
+/// JSON has no representation for NaN or infinity, and `serde_json` writes
+/// them as `null`. A float or double partition value that is not finite would
+/// therefore read back as a null partition value, so reject it instead.
+fn ensure_finite_partition_values(
+    partition: &Struct,
+    partition_type: &super::StructType,
+) -> Result<()> {
+    for (field, value) in partition_type.fields().iter().zip(partition.iter()) {
+        let non_finite = match value {
+            Some(super::Literal::Primitive(super::PrimitiveLiteral::Float(v))) => {
+                (!v.0.is_finite()).then(|| v.0.to_string())
+            }
+            Some(super::Literal::Primitive(super::PrimitiveLiteral::Double(v))) => {
+                (!v.0.is_finite()).then(|| v.0.to_string())
+            }
+            _ => None,
+        };
+        if let Some(value) = non_finite {
+            return Err(Error::new(
+                crate::ErrorKind::DataInvalid,
+                format!(
+                    "Cannot serialize DataFile to JSON: partition field '{}' has non-finite value {value}, which JSON cannot represent",
+                    field.name
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Deserialize a DataFile from a JSON string.
@@ -1407,6 +1438,66 @@ mod tests {
 
         assert_eq!(deserialized_data_file1, original_data_file1);
         assert_eq!(deserialized_data_file2, original_data_file2);
+    }
+
+    #[test]
+    fn test_data_file_to_json_rejects_non_finite_partition_values() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "f", Type::Primitive(PrimitiveType::Float)).into(),
+                NestedField::optional(2, "d", Type::Primitive(PrimitiveType::Double)).into(),
+            ])
+            .build()
+            .unwrap();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(1)
+            .add_partition_field("f", "f", Transform::Identity)
+            .unwrap()
+            .add_partition_field("d", "d", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let partition_type = partition_spec.partition_type(&schema).unwrap();
+
+        let data_file = |f: f32, d: f64| {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_format(DataFileFormat::Parquet)
+                .file_path("path/to/file.parquet".to_string())
+                .file_size_in_bytes(1024)
+                .record_count(1)
+                .partition_spec_id(1)
+                .partition(Struct::from_iter([
+                    Some(Literal::float(f)),
+                    Some(Literal::double(d)),
+                ]))
+                .build()
+                .unwrap()
+        };
+
+        let json =
+            serialize_data_file_to_json(data_file(1.5, -2.25), &partition_type, FormatVersion::V2)
+                .unwrap();
+        let round_trip =
+            deserialize_data_file_from_json(&json, 1, &partition_type, &schema).unwrap();
+        assert_eq!(round_trip, data_file(1.5, -2.25));
+
+        for (f, d, field) in [
+            (f32::NAN, 1.0, "f"),
+            (f32::INFINITY, 1.0, "f"),
+            (1.0, f64::NAN, "d"),
+            (1.0, f64::NEG_INFINITY, "d"),
+        ] {
+            let err =
+                serialize_data_file_to_json(data_file(f, d), &partition_type, FormatVersion::V2)
+                    .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(
+                err.message()
+                    .contains(&format!("partition field '{field}' has non-finite value")),
+                "{err}"
+            );
+        }
     }
 
     /// Metadata for the writer schema tests: a V2 data manifest whose spec has
