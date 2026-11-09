@@ -26,7 +26,7 @@ use super::{
     ONE_MINUTE_MS, PartitionField, PartitionSpec, PartitionSpecBuilder, PartitionStatisticsFile,
     Schema, SchemaRef, Snapshot, SnapshotLog, SnapshotReference, SnapshotRetention, SortOrder,
     SortOrderRef, StatisticsFile, StructType, TableMetadata, TableProperties, Transform,
-    UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionSpec,
+    UNPARTITIONED_LAST_ASSIGNED_ID, UnboundPartitionField, UnboundPartitionSpec,
 };
 use crate::error::{Error, ErrorKind, Result, invalid_data};
 use crate::spec::{EncryptedKey, INITIAL_ROW_ID, MIN_FORMAT_VERSION_ROW_LINEAGE};
@@ -249,7 +249,7 @@ impl TableMetadataBuilder {
 
         let (fresh_spec, fresh_sort_order) =
             Self::rebind_to_schema(&previous_id_to_name, &fresh_schema, spec, sort_order)?;
-        let fresh_spec = self.reassign_partition_field_ids(fresh_spec)?;
+        let fresh_spec = self.reassign_partition_field_ids(fresh_spec, &fresh_schema)?;
 
         let mut builder = self.upgrade_format_version(format_version)?;
         if builder.metadata.refs.contains_key(MAIN_BRANCH) {
@@ -1322,28 +1322,34 @@ impl TableMetadataBuilder {
 
     /// Gives each field of `spec` the highest id an equivalent field has in the table's specs, or
     /// the next id above `last_partition_id`.
-    fn reassign_partition_field_ids(&self, spec: PartitionSpec) -> Result<UnboundPartitionSpec> {
-        let mut field_ids = Self::highest_equivalent_field_ids(
-            self.metadata
-                .partition_specs
-                .values()
-                .flat_map(|spec| spec.fields()),
-        );
-        let mut last_partition_id = self.metadata.last_partition_id;
+    fn reassign_partition_field_ids(
+        &self,
+        spec: PartitionSpec,
+        schema: &Schema,
+    ) -> Result<UnboundPartitionSpec> {
+        let fields = spec
+            .fields()
+            .iter()
+            .map(|field| {
+                UnboundPartitionField::builder()
+                    .source_ids(vec![field.source_id])
+                    .name(field.name.clone())
+                    .transform(field.transform)
+                    .build()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let spec = self.reuse_partition_field_ids(
+            UnboundPartitionSpec::builder()
+                .add_partition_fields(fields)?
+                .build(),
+        )?;
 
-        let fields = spec.fields().iter().map(|field| {
-            let field_id = *field_ids
-                .entry((vec![field.source_id], field.transform))
-                .or_insert_with(|| {
-                    last_partition_id += 1;
-                    last_partition_id
-                });
-            field.clone().into_unbound().with_field_id(field_id)
-        });
-
-        UnboundPartitionSpec::builder()
-            .add_partition_fields(fields)
-            .map(|builder| builder.build())
+        Ok(
+            PartitionSpecBuilder::new_from_unbound(spec, schema.clone())?
+                .with_last_assigned_field_id(self.metadata.last_partition_id)
+                .build()?
+                .into_unbound(),
+        )
     }
 
     fn reassign_ids(
@@ -4583,6 +4589,42 @@ mod tests {
         assert!(result.changes.contains(&TableUpdate::AddSpec {
             spec: expected_spec.into_unbound()
         }));
+    }
+
+    #[test]
+    fn test_build_replacement_rejects_a_new_partition_field_when_no_partition_id_is_left() {
+        let mut builder = partition_replacement_builder(FormatVersion::V2);
+        builder.metadata.last_partition_id = i32::MAX;
+        let updated_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::required(2, "z", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap();
+        let updated_spec = UnboundPartitionSpec::builder()
+            .add_partition_field(unbound_field(2, "z_bucket", Transform::Bucket(8)))
+            .unwrap()
+            .build();
+
+        let err = builder
+            .build_replacement(
+                updated_schema,
+                updated_spec,
+                SortOrder::unsorted_order(),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .unwrap_err();
+
+        assert_eq!(
+            (err.kind(), err.message()),
+            (
+                ErrorKind::DataInvalid,
+                "Cannot assign more partition ids. Overflow."
+            )
+        );
     }
 
     #[test]
