@@ -600,24 +600,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn table_builder_skips_encryption_on_pre_v3_table() {
-        // Encryption is a v3 spec feature; pre-v3 tables silently skip
-        // encryption even if encryption.key-id is set.
-        let mut metadata: TableMetadata = load_test_metadata("TableMetadataV2ValidMinimal.json");
-        metadata.properties.insert(
-            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
-            "master-1".to_string(),
-        );
+    async fn table_builder_rejects_encryption_key_id_on_pre_v3_table() {
+        for (fixture, version) in [
+            ("TableMetadataV1Valid.json", "v1"),
+            ("TableMetadataV2ValidMinimal.json", "v2"),
+        ] {
+            let mut metadata: TableMetadata = load_test_metadata(fixture);
+            metadata.properties.insert(
+                TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+                "master-1".to_string(),
+            );
 
-        let table = Table::builder()
-            .file_io(FileIO::new_with_memory())
-            .metadata(metadata)
-            .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
-            .kms_client(make_kms())
-            .runtime(Runtime::try_current().unwrap())
-            .build()
-            .unwrap();
-        assert!(table.encryption_manager().is_none());
+            let err = Table::builder()
+                .file_io(FileIO::new_with_memory())
+                .metadata(metadata)
+                .identifier(TableIdent::from_strs(["ns", "enc"]).unwrap())
+                .kms_client(make_kms())
+                .runtime(Runtime::try_current().unwrap())
+                .build()
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert_eq!(
+                err.message(),
+                format!("Invalid properties for {version}: encryption.key-id")
+            );
+        }
     }
 
     #[tokio::test]
