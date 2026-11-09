@@ -96,6 +96,12 @@ async fn test_catalog_unregister_table_roundtrip(#[case] kind: CatalogKind) -> R
     assert!(unregistered.readonly());
     assert!(!catalog.table_exists(&source_ident).await?);
     assert!(unregistered.file_io().exists(&data_file_path).await?);
+    assert!(
+        unregistered
+            .file_io()
+            .exists(unregistered.metadata_location().unwrap())
+            .await?
+    );
 
     let destination_ident =
         TableIdent::new(namespace, format!("{}_registered", source_ident.name()));
