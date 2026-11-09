@@ -81,13 +81,15 @@ impl ArrowReaderBuilder {
 
     /// Build the ArrowReader.
     pub fn build(self) -> ArrowReader {
-        let concurrency_limit_data_files = self
+        let options = self
             .options
+            .with_data_file_concurrency_limit_if_unset(available_parallelism().get());
+        let concurrency_limit_data_files = options
             .data_file_concurrency_limit()
-            .unwrap_or_else(|| available_parallelism().get())
+            .expect("reader concurrency was set above")
             .max(1);
         ArrowReader {
-            options: self.options,
+            options,
             file_io: self.file_io.clone(),
             delete_file_loader: CachingDeleteFileLoader::new(
                 self.file_io.clone(),
@@ -165,7 +167,12 @@ mod tests {
             )
             .with_options(ArrowReaderOptions::default())
             .build();
-        assert_eq!(reader.options, ArrowReaderOptions::default());
+        assert_eq!(
+            reader.options,
+            ArrowReaderOptions::builder()
+                .with_data_file_concurrency_limit(available_parallelism().get())
+                .build()
+        );
         assert_eq!(
             reader.concurrency_limit_data_files,
             available_parallelism().get()

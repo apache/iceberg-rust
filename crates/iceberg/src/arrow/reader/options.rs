@@ -72,8 +72,8 @@ impl Default for ArrowReaderOptions {
 }
 
 impl ArrowReaderOptions {
-    /// Supplies the scan's fallback limit without replacing an explicit reader limit.
-    pub(crate) fn with_data_file_concurrency_limit_if_unset(mut self, limit: usize) -> Self {
+    /// Supplies a fallback limit without replacing an explicit reader limit.
+    pub(super) fn with_data_file_concurrency_limit_if_unset(mut self, limit: usize) -> Self {
         self.data_file_concurrency_limit.get_or_insert(limit);
         self
     }
@@ -85,8 +85,8 @@ impl ArrowReaderOptions {
 
     /// Returns the configured data file concurrency limit.
     ///
-    /// When unset, `TableScan::to_arrow` inherits the scan's data-file limit, while
-    /// direct reader construction uses execution-host parallelism. Zero is treated as one.
+    /// When unset, reader construction uses execution-host parallelism.
+    /// Zero is treated as one.
     pub fn data_file_concurrency_limit(&self) -> Option<usize> {
         self.data_file_concurrency_limit
     }
@@ -224,7 +224,7 @@ mod tests {
             "row_selection_enabled": true,
         }))
         .unwrap();
-        // Resolve the scan fallback; explicit zero is normalized later by the reader.
+        // Resolve the reader fallback; explicit zero is normalized later by the reader.
         let options = options.with_data_file_concurrency_limit_if_unset(7);
         let expected = ArrowReaderOptions::builder()
             .with_batch_size(17)
