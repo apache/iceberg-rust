@@ -1237,10 +1237,11 @@ impl Catalog for SqlCatalog {
             .try_get::<String, _>(CATALOG_FIELD_METADATA_LOCATION_PROP)
             .map_err(from_sqlx_error)?;
 
+        // read before (re-)moving, this way a failed read keeps the table registered
+        let metadata = TableMetadata::read_from(&self.fileio, &metadata_location).await?;
         self.remove_table_at_location(table_ident, &metadata_location)
             .await?;
 
-        let metadata = TableMetadata::read_from(&self.fileio, &metadata_location).await?;
         let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata(metadata)

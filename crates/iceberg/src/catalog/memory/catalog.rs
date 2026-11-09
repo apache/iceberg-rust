@@ -400,12 +400,14 @@ impl Catalog for MemoryCatalog {
     }
 
     async fn unregister_table(&self, table_ident: &TableIdent) -> Result<Table> {
-        let metadata_location = {
+        let (metadata_location, metadata) = {
             let mut root_namespace_state = self.root_namespace_state.lock().await;
-            root_namespace_state.remove_existing_table(table_ident)?
+            // read before removing, this way a failed read keeps the table registered
+            let location = root_namespace_state.get_existing_table_location(table_ident)?;
+            let metadata = TableMetadata::read_from(&self.file_io, location).await?;
+            let metadata_location = root_namespace_state.remove_existing_table(table_ident)?;
+            (metadata_location, metadata)
         };
-
-        let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
         let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata(metadata)
