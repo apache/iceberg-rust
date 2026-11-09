@@ -32,7 +32,7 @@ use super::decimal_utils::{
 use super::primitive::PrimitiveLiteral;
 use super::struct_value::Struct;
 use super::temporal::{date, time, timestamp, timestamptz};
-use crate::error::{Result, invalid_data};
+use crate::error::{Error, ErrorKind, Result, invalid_data};
 use crate::spec::datatypes::{PrimitiveType, Type};
 
 /// Values present in iceberg type
@@ -513,6 +513,13 @@ impl Literal {
                     PrimitiveLiteral::Binary(decode_hex_bytes(&s)?),
                 ))),
                 (
+                    PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+                    JsonValue::String(_),
+                ) => Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "WKT deserialization for geospatial types is not yet supported",
+                )),
+                (
                     PrimitiveType::Decimal {
                         precision: _,
                         scale,
@@ -679,6 +686,13 @@ impl Literal {
                 (PrimitiveType::Binary, PrimitiveLiteral::Binary(val)) => {
                     Ok(JsonValue::String(encode_hex_bytes(&val)))
                 }
+                (
+                    PrimitiveType::Geometry(_) | PrimitiveType::Geography(_),
+                    PrimitiveLiteral::Binary(_),
+                ) => Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "WKT serialization for geospatial types is not yet supported",
+                )),
                 (_, PrimitiveLiteral::Int128(val)) => match r#type {
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: _precision,

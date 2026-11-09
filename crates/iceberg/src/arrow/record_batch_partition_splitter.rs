@@ -209,7 +209,7 @@ impl RecordBatchPartitionSplitter {
 mod tests {
     use std::sync::Arc;
 
-    use arrow_array::{Int32Array, RecordBatch, StringArray};
+    use arrow_array::{Float64Array, Int32Array, RecordBatch, StringArray};
     use arrow_schema::DataType;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
@@ -473,5 +473,78 @@ mod tests {
         let (ids, names) = extract_values(batch);
         assert_eq!(ids, vec![3, 3]);
         assert_eq!(names, vec!["d", "f"]);
+    }
+
+    #[test]
+    fn test_record_batch_partition_split_signed_zero() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "id",
+                        Type::Primitive(crate::spec::PrimitiveType::Int),
+                    )
+                    .into(),
+                    NestedField::required(
+                        2,
+                        "d",
+                        Type::Primitive(crate::spec::PrimitiveType::Double),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = Arc::new(
+            PartitionSpecBuilder::new(schema.clone())
+                .with_spec_id(1)
+                .add_unbound_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![2])
+                        .name("d".to_string())
+                        .transform(Transform::Identity)
+                        .build()
+                        .unwrap(),
+                )
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let partition_splitter = RecordBatchPartitionSplitter::try_new_with_computed_values(
+            schema.clone(),
+            partition_spec,
+        )
+        .expect("Failed to create splitter");
+
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let batch = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            Arc::new(Float64Array::from(vec![-0.0, 0.0, -0.0])),
+        ])
+        .expect("Failed to create RecordBatch");
+
+        let mut partitions: Vec<(Struct, Vec<i32>)> = partition_splitter
+            .split(&batch)
+            .expect("Failed to split RecordBatch")
+            .into_iter()
+            .map(|(key, batch)| {
+                let ids = batch
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .values()
+                    .to_vec();
+                (key.data().clone(), ids)
+            })
+            .collect();
+        partitions.sort_by_key(|(_, ids)| ids[0]);
+
+        // -0.0 and 0.0 are different partition values, as in iceberg-java.
+        assert_eq!(partitions, vec![
+            (Struct::from_iter([Some(Literal::double(-0.0))]), vec![1, 3]),
+            (Struct::from_iter([Some(Literal::double(0.0))]), vec![2]),
+        ]);
     }
 }

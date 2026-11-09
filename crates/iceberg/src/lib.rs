@@ -104,7 +104,7 @@ pub mod encryption;
 mod test_utils;
 pub mod writer;
 
-mod delete_vector;
+pub mod delete_vector;
 pub mod metadata_columns;
 pub mod partitioning;
 pub mod puffin;

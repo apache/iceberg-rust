@@ -23,6 +23,10 @@
 # See https://github.com/apache/infrastructure-actions/issues/574
 name: "ASF Allowlist Check"
 
+concurrency:
+  group: ${{github.workflow}}-${{github.ref}}-${{github.event_name}}
+  cancel-in-progress: true
+
 on:
   pull_request:
   merge_group:
@@ -32,7 +36,7 @@ permissions:
 
 jobs:
   asf-allowlist-check:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:

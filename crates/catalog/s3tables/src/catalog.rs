@@ -724,25 +724,23 @@ impl Catalog for S3TablesCatalog {
             .version_token(version_token)
             .metadata_location(staged_metadata_location_str);
 
-        let _ = builder.send().await.map_err(|e| {
-            let error = e.into_service_error();
-            match error {
-                UpdateTableMetadataLocationError::ConflictException(_) => Error::new(
+        let _ = builder
+            .send()
+            .await
+            .map_err(|e| match e.as_service_error() {
+                Some(UpdateTableMetadataLocationError::ConflictException(_)) => Error::new(
                     ErrorKind::CatalogCommitConflicts,
                     format!("Commit conflicted for table: {table_ident}"),
                 )
-                .with_retryable(true),
-                UpdateTableMetadataLocationError::NotFoundException(_) => Error::new(
+                .with_retryable(true)
+                .with_source(e),
+                Some(UpdateTableMetadataLocationError::NotFoundException(_)) => Error::new(
                     ErrorKind::TableNotFound,
                     format!("Table {table_ident} is not found"),
-                ),
-                _ => Error::new(
-                    ErrorKind::Unexpected,
-                    "Operation failed for hitting aws sdk error",
-                ),
-            }
-            .with_source(anyhow::Error::msg(format!("aws sdk error: {error:?}")))
-        })?;
+                )
+                .with_source(e),
+                _ => from_aws_sdk_error(e),
+            })?;
 
         Ok(staged_table)
     }
@@ -750,20 +748,38 @@ impl Catalog for S3TablesCatalog {
 
 /// Format AWS SDK error into iceberg error
 pub(crate) fn from_aws_sdk_error<T>(error: aws_sdk_s3tables::error::SdkError<T>) -> Error
-where T: std::fmt::Debug {
+where T: std::error::Error + Send + Sync + 'static {
     Error::new(
         ErrorKind::Unexpected,
         format!("Operation failed for hitting aws sdk error: {error:?}"),
     )
+    .with_source(error)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use futures::TryStreamExt;
     use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
 
     use super::*;
+
+    #[test]
+    fn test_from_aws_sdk_error_keeps_sdk_error_as_source() {
+        let err = from_aws_sdk_error(
+            aws_sdk_s3tables::error::SdkError::<GetTableError>::construction_failure("boom"),
+        );
+
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(
+            err.source()
+                .and_then(|source| source
+                    .downcast_ref::<aws_sdk_s3tables::error::SdkError<GetTableError>>())
+                .is_some()
+        );
+    }
 
     async fn load_s3tables_catalog_from_env() -> Result<Option<S3TablesCatalog>> {
         let table_bucket_arn = match std::env::var("TABLE_BUCKET_ARN").ok() {

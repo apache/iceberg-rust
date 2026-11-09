@@ -51,7 +51,8 @@ impl ManifestReader {
             None => input_file.read().await?,
         };
 
-        let (metadata, mut entries) = Manifest::try_from_avro_bytes(&bytes)?;
+        let (metadata, mut entries) =
+            Manifest::try_from_avro_bytes(&bytes, Some(&manifest_file.manifest_path))?;
 
         for entry in &mut entries {
             entry.inherit_data(manifest_file);
@@ -175,6 +176,35 @@ mod tests {
             manifest.entries()[0].snapshot_id(),
             Some(manifest_file.added_snapshot_id)
         );
+    }
+
+    /// Per spec, inheritance does not apply to v1: a v1 manifest's entries read
+    /// with sequence number 0 even when the manifest list entry referencing them
+    /// carries a nonzero one.
+    #[tokio::test]
+    async fn test_read_v1_manifest_defaults_sequence_number_to_zero() {
+        let schema = test_schema();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        let io = FileIO::new_with_memory();
+        let path = "memory:///table/metadata/v1.avro";
+        let mut writer = ManifestWriterBuilder::new(
+            io.new_output(path).unwrap(),
+            Some(1),
+            schema.clone(),
+            partition_spec,
+        )
+        .build_v1();
+        writer.add_entry(test_entry()).unwrap();
+        let mut manifest_file = writer.write_manifest_file().await.unwrap();
+        manifest_file.sequence_number = 36;
+
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        assert_eq!(manifest.entries()[0].sequence_number(), Some(0));
+        assert_eq!(manifest.entries()[0].file_sequence_number, Some(0));
     }
 
     #[tokio::test]

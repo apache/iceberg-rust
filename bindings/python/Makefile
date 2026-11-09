@@ -15,7 +15,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
-.PHONY: build install test
+.PHONY: build install test install-cargo-about cargo-about
 
 build:
 	uv run maturin develop
@@ -27,3 +27,10 @@ install:
 
 test:
 	uv run --no-sync pytest
+
+# Keep version in sync with .github/actions/generate-python-license/action.yml.
+install-cargo-about:
+	cargo install --locked --features cli cargo-about@0.9.2
+
+cargo-about: install-cargo-about
+	cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml about.hbs
