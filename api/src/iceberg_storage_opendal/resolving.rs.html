@@ -97,7 +97,7 @@
 <a href=#97 id=97 data-nosnippet>97</a>                config: Arc::new(config),
 <a href=#98 id=98 data-nosnippet>98</a>                multipart_part_size: <span class="kw">crate</span>::s3::s3_multipart_part_size_parse(props)<span class="question-mark">?</span>,
 <a href=#99 id=99 data-nosnippet>99</a>                customized_credential_load: customized_credential_load.clone(),
-<a href=#100 id=100 data-nosnippet>100</a>                client_config,
+<a href=#100 id=100 data-nosnippet>100</a>                client_config: <span class="kw">crate</span>::s3::s3_client_config(props, client_config)<span class="question-mark">?</span>,
 <a href=#101 id=101 data-nosnippet>101</a>            })
 <a href=#102 id=102 data-nosnippet>102</a>        }
 <a href=#103 id=103 data-nosnippet>103</a>        <span class="attr">#[cfg(feature = <span class="string">"opendal-gcs"</span>)]
