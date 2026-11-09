@@ -714,23 +714,32 @@ impl TableMetadataBuilder {
     fn validate_schema_field_names(&self, schema: &Schema) -> Result<()> {
         for (spec_id, spec) in &self.metadata.partition_specs {
             for partition_field in spec.fields() {
-                if schema.field_by_id(partition_field.source_id).is_none() {
+                if partition_field
+                    .source_ids()
+                    .iter()
+                    .any(|&source_id| schema.field_by_id(source_id).is_none())
+                {
                     continue;
                 }
 
-                let Some(schema_field) = schema.field_by_name(&partition_field.name) else {
+                let Some(schema_field) = schema.field_by_name(partition_field.name()) else {
                     continue;
                 };
 
-                if schema_field.id != partition_field.source_id {
+                if partition_field.source_ids() != [schema_field.id] {
                     return Err(invalid_data!(
                         "Cannot set current schema {}: field '{}' with id {} conflicts with a \
                          partition field of that name in spec {} sourced from field id {}",
                         schema.schema_id(),
-                        partition_field.name,
+                        partition_field.name(),
                         schema_field.id,
                         spec_id,
-                        partition_field.source_id
+                        partition_field
+                            .source_ids()
+                            .iter()
+                            .map(i32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ));
                 }
             }
@@ -898,9 +907,9 @@ impl TableMetadataBuilder {
         let mut equivalent_field_ids = HashMap::new();
         for field in fields {
             equivalent_field_ids
-                .entry((vec![field.source_id], field.transform))
-                .and_modify(|id: &mut i32| *id = (*id).max(field.field_id))
-                .or_insert(field.field_id);
+                .entry((field.source_ids().to_vec(), field.transform()))
+                .and_modify(|id: &mut i32| *id = (*id).max(field.field_id()))
+                .or_insert(field.field_id());
         }
         equivalent_field_ids
     }
@@ -3091,7 +3100,7 @@ mod tests {
             .default_partition_spec()
             .fields()
             .iter()
-            .map(|f| f.name.clone())
+            .map(|f| f.name().to_string())
             .collect();
         assert!(partition_field_names.contains(&"bucket_data".to_string()));
 
@@ -3475,7 +3484,7 @@ mod tests {
         assert!(metadata.current_schema().field_by_name("data").is_none());
         // Spec 0 is kept so the snapshots written under it stay interpretable.
         assert_eq!(
-            metadata.partition_spec_by_id(0).unwrap().fields()[0].name,
+            metadata.partition_spec_by_id(0).unwrap().fields()[0].name(),
             "bucket_data"
         );
     }
@@ -4209,17 +4218,20 @@ mod tests {
 
         // Verify field ID reuse: spec 2 should reuse IDs from specs 0 and 1, assign new ID for new field
         let spec2 = result.metadata.partition_spec_by_id(2).unwrap();
-        let field_ids: Vec<i32> = spec2.fields().iter().map(|f| f.field_id).collect();
+        let field_ids: Vec<i32> = spec2.fields().iter().map(|f| f.field_id()).collect();
         assert_eq!(field_ids, vec![1000, 1001, 1002]); // Reused 1000, 1001; new 1002
     }
 
     #[test]
     fn test_highest_equivalent_field_ids_is_independent_of_field_order() {
-        let field = |source_id, field_id, transform| PartitionField {
-            source_id,
-            field_id,
-            name: format!("f{field_id}"),
-            transform,
+        let field = |source_id, field_id, transform| {
+            PartitionField::builder()
+                .source_ids(vec![source_id])
+                .field_id(field_id)
+                .name(format!("f{field_id}"))
+                .transform(transform)
+                .build()
+                .unwrap()
         };
         let fields = [
             field(1, 1000, Transform::Identity),
@@ -4324,7 +4336,7 @@ mod tests {
         let fields: Vec<(i32, i32)> = spec
             .fields()
             .iter()
-            .map(|f| (f.source_id, f.field_id))
+            .map(|f| (f.source_id().unwrap(), f.field_id()))
             .collect();
         assert_eq!(fields, vec![(1, 1006), (2, 1007)]);
         assert_eq!(result.metadata.last_partition_id, 1007);
