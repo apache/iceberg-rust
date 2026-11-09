@@ -48,21 +48,23 @@ pub(crate) fn coerce_int96_timestamps(
     arrow_schema: &ArrowSchemaRef,
     iceberg_schema: &Schema,
     parquet_schema: &SchemaDescriptor,
-) -> Option<Arc<ArrowSchema>> {
+) -> Result<Option<Arc<ArrowSchema>>> {
     if !parquet_schema
         .columns()
         .iter()
         .any(|column| column.physical_type() == PhysicalType::INT96)
     {
-        return None;
+        return Ok(None);
     }
     let mut visitor = Int96CoercionVisitor::new(iceberg_schema, parquet_schema);
-    let coerced = visit_schema(arrow_schema, &mut visitor).ok()?;
-    if visitor.changed && visitor.columns.len() == 0 {
-        Some(Arc::new(coerced))
-    } else {
-        None
+    let coerced = visit_schema(arrow_schema, &mut visitor)?;
+    if visitor.columns.len() != 0 {
+        return Err(Error::new(
+            ErrorKind::Unexpected,
+            "Arrow schema has fewer primitive leaves than the Parquet schema has columns",
+        ));
     }
+    Ok(visitor.changed.then(|| Arc::new(coerced)))
 }
 
 /// Visitor that coerces INT96 Arrow fields to the Iceberg timestamp type.
@@ -283,7 +285,9 @@ mod tests {
         ]));
         let iceberg = iceberg_schema_with_timestamp();
 
-        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap();
+        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             coerced.field(0).data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, None)
@@ -308,7 +312,9 @@ mod tests {
                 .with_metadata(field_id_meta(1)),
         ]));
 
-        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap();
+        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             coerced.field(0).data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, Some(UTC_TIME_ZONE.into()))
@@ -331,7 +337,11 @@ mod tests {
                 .with_metadata(field_id_meta(1)),
         ]));
 
-        assert!(coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).is_none());
+        assert!(
+            coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -355,7 +365,11 @@ mod tests {
             .with_metadata(field_id_meta(1)),
         ]));
 
-        assert!(coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).is_none());
+        assert!(
+            coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -368,7 +382,11 @@ mod tests {
         ]));
         let iceberg = iceberg_schema_with_timestamp();
 
-        assert!(coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).is_none());
+        assert!(
+            coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -380,9 +398,71 @@ mod tests {
         let iceberg = iceberg_schema_with_timestamp();
 
         assert_eq!(
-            coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet),
+            coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn test_coercion_rejects_list_view() {
+        let parquet = parquet_schema(
+            "message schema {
+                optional group items (LIST) {
+                    repeated group list { optional int32 element; }
+                }
+                optional int96 ts = 1;
+            }",
+        );
+        let iceberg = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamptz)).into(),
+            ])
+            .build()
+            .unwrap();
+        let list_type = DataType::ListView(Arc::new(Field::new("element", DataType::Int32, true)));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("items", list_type.clone(), true),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true)
+                .with_metadata(field_id_meta(1)),
+        ]));
+
+        let error = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap_err();
+        assert_eq!(
+            (error.kind(), error.message()),
+            (
+                crate::ErrorKind::DataInvalid,
+                format!("Cannot visit Arrow data type: {list_type}").as_str(),
+            )
+        );
+    }
+
+    #[test]
+    fn test_coercion_rejects_mismatched_leaf_counts() {
+        let iceberg = iceberg_schema_with_timestamp();
+        for (message, expected_message) in [
+            (
+                "message schema { optional int96 ts; required int32 id; }",
+                "Arrow schema has fewer primitive leaves than the Parquet schema has columns",
+            ),
+            (
+                "message schema { optional int96 ts; }",
+                "Missing Parquet column for Arrow primitive",
+            ),
+        ] {
+            let parquet = parquet_schema(message);
+            let fields = [
+                Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true)
+                    .with_metadata(field_id_meta(1)),
+                Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(2)),
+            ];
+            let leaf_count = if parquet.num_columns() == 2 { 1 } else { 2 };
+            let arrow_schema = Arc::new(ArrowSchema::new(fields[..leaf_count].to_vec()));
+            let error = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap_err();
+            assert_eq!(
+                (error.kind(), error.message()),
+                (crate::ErrorKind::Unexpected, expected_message)
+            );
+        }
     }
 
     #[test]
@@ -426,7 +506,7 @@ mod tests {
             ));
 
             assert_eq!(
-                coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet),
+                coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap(),
                 Some(expected)
             );
         }
@@ -444,7 +524,9 @@ mod tests {
         )]));
         let iceberg = iceberg_schema_with_timestamp();
 
-        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap();
+        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             coerced.field(0).data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, None)
@@ -470,7 +552,9 @@ mod tests {
                 .with_metadata(field_id_meta(1)),
         ]));
 
-        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap();
+        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+            .unwrap()
+            .unwrap();
         assert_eq!(
             coerced.field(0).data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, None)
@@ -489,7 +573,9 @@ mod tests {
         ]));
         let iceberg = iceberg_schema_with_timestamp();
 
-        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap();
+        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+            .unwrap()
+            .unwrap();
         assert_eq!(coerced.field(0).metadata(), &meta);
     }
 
@@ -528,7 +614,9 @@ mod tests {
             .with_metadata(field_id_meta(1)),
         ]));
 
-        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap();
+        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+            .unwrap()
+            .unwrap();
         let inner = match coerced.field(0).data_type() {
             DataType::Struct(fields) => fields,
             other => panic!("Expected Struct, got {other}"),
@@ -577,7 +665,9 @@ mod tests {
                 .with_metadata(field_id_meta(1)),
         ]));
 
-        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap();
+        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+            .unwrap()
+            .unwrap();
         let element_dt = match coerced.field(0).data_type() {
             DataType::List(f) => f.data_type(),
             other => panic!("Expected List, got {other}"),
@@ -646,7 +736,9 @@ mod tests {
             .with_metadata(field_id_meta(1)),
         ]));
 
-        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap();
+        let coerced = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet)
+            .unwrap()
+            .unwrap();
         let expected_entries = Field::new(
             "key_value",
             DataType::Struct(
