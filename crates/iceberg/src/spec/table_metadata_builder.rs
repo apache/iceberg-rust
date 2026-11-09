@@ -210,79 +210,7 @@ impl TableMetadataBuilder {
     /// `None` keeps its version. `properties` are applied on top of the existing ones, so an
     /// existing `write.parquet.compression-codec` is kept.
     ///
-    /// The caller adds the snapshot holding the new contents, if any, before building:
-    ///
-    /// ```
-    /// # use std::collections::HashMap;
-    /// # use iceberg::spec::{
-    /// #     FormatVersion, MAIN_BRANCH, NestedField, Operation, PartitionSpec, PrimitiveType, Schema,
-    /// #     Snapshot, SnapshotReference, SnapshotRetention, SortOrder, Summary, TableMetadataBuilder,
-    /// #     Transform, Type, UnboundPartitionSpec,
-    /// # };
-    /// # fn main() -> iceberg::Result<()> {
-    /// # let schema = Schema::builder()
-    /// #     .with_fields(vec![
-    /// #         NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-    /// #     ])
-    /// #     .build()?;
-    /// # let metadata = TableMetadataBuilder::new(
-    /// #     schema,
-    /// #     UnboundPartitionSpec::builder().build(),
-    /// #     SortOrder::unsorted_order(),
-    /// #     "s3://bucket/table".to_string(),
-    /// #     FormatVersion::V2,
-    /// #     HashMap::new(),
-    /// # )?
-    /// # .build()?
-    /// # .metadata;
-    /// let schema = Schema::builder()
-    ///     .with_fields(vec![
-    ///         NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-    ///         NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
-    ///     ])
-    ///     .build()?;
-    /// let spec = PartitionSpec::builder(schema.clone())
-    ///     .add_partition_field("id", "id_bucket", Transform::Bucket(16))?
-    ///     .build()?;
-    ///
-    /// let builder = metadata
-    ///     .clone()
-    ///     .into_builder(Some("s3://bucket/table/metadata/v2.metadata.json".to_string()))
-    ///     .build_replacement(
-    ///         schema,
-    ///         spec,
-    ///         SortOrder::unsorted_order(),
-    ///         None,
-    ///         None,
-    ///         HashMap::new(),
-    ///     )?;
-    ///
-    /// let snapshot = Snapshot::builder()
-    ///     .with_snapshot_id(1)
-    ///     .with_timestamp_ms(metadata.last_updated_ms() + 1)
-    ///     .with_sequence_number(metadata.next_sequence_number())
-    ///     .with_schema_id(1)
-    ///     .with_manifest_list("s3://bucket/table/metadata/snap-1.avro")
-    ///     .with_summary(Summary {
-    ///         operation: Operation::Overwrite,
-    ///         additional_properties: HashMap::new(),
-    ///     })
-    ///     .build();
-    /// let replaced = builder
-    ///     .add_snapshot(snapshot)?
-    ///     .set_ref(MAIN_BRANCH, SnapshotReference {
-    ///         snapshot_id: 1,
-    ///         retention: SnapshotRetention::branch(None, None, None),
-    ///     })?
-    ///     .build()?
-    ///     .metadata;
-    ///
-    /// assert_eq!(replaced.uuid(), metadata.uuid());
-    /// assert_eq!(replaced.current_schema().highest_field_id(), 2);
-    /// assert_eq!(replaced.current_snapshot_id(), Some(1));
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// The caller adds the snapshot holding the new contents, if any, before building.
     ///
     /// # Errors
     /// - The table is format version 1, which is not supported.
@@ -291,7 +219,9 @@ impl TableMetadataBuilder {
     /// - `schema` takes the name of a partition field in one of the table's specs without being
     ///   that field's source column.
     /// - `properties` contains a reserved property.
-    pub fn build_replacement(
+    // TODO: Use for table replacement in https://github.com/apache/iceberg-rust/issues/3056.
+    #[allow(dead_code)]
+    pub(crate) fn build_replacement(
         self,
         schema: Schema,
         spec: impl Into<UnboundPartitionSpec>,
@@ -4680,6 +4610,50 @@ mod tests {
         assert_eq!(metadata.snapshots, previous.snapshots);
         assert_eq!(metadata.snapshot_log, previous.snapshot_log);
         assert_eq!(metadata.schema_by_id(0), previous.schema_by_id(0));
+    }
+
+    #[test]
+    fn test_build_replacement_then_adding_a_snapshot_makes_it_current_on_main() {
+        let builder = populated_builder()
+            .build_replacement(
+                replacement_schema(),
+                UnboundPartitionSpec::builder().build(),
+                SortOrder::unsorted_order(),
+                None,
+                None,
+                HashMap::new(),
+            )
+            .unwrap();
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(2)
+            .with_timestamp_ms(builder.metadata.last_updated_ms + 1)
+            .with_sequence_number(builder.metadata.next_sequence_number())
+            .with_schema_id(builder.metadata.current_schema_id)
+            .with_manifest_list("/snap-2.avro")
+            .with_summary(Summary {
+                operation: Operation::Overwrite,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+        let main = SnapshotReference {
+            snapshot_id: 2,
+            retention: SnapshotRetention::branch(None, None, None),
+        };
+
+        let metadata = builder
+            .add_snapshot(snapshot.clone())
+            .unwrap()
+            .set_ref(MAIN_BRANCH, main.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata.current_snapshot(), Some(&Arc::new(snapshot)));
+        assert_eq!(
+            metadata.refs,
+            HashMap::from([(MAIN_BRANCH.to_string(), main)])
+        );
     }
 
     #[test]
