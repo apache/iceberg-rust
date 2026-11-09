@@ -234,11 +234,11 @@ pub struct LoadTableResult {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 /// Result returned when a table is successfully unregistered from a catalog.
-pub struct UnregisterTableResult {
+pub(crate) struct UnregisterTableResult {
     /// The last committed metadata location for the table.
-    pub metadata_location: String,
+    pub(crate) metadata_location: String,
     /// The table's metadata at that location.
-    pub metadata: TableMetadata,
+    pub(crate) metadata: TableMetadata,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
