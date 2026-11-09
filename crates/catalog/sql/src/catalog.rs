@@ -1227,12 +1227,9 @@ impl Catalog for SqlCatalog {
                 ],
             )
             .await?;
-        let row = rows.first().ok_or_else(|| {
-            Error::new(
-                ErrorKind::TableNotFound,
-                format!("No such table: {table_ident}"),
-            )
-        })?;
+        let Some(row) = rows.first() else {
+            return no_such_table_err(table_ident);
+        };
         let metadata_location = row
             .try_get::<String, _>(CATALOG_FIELD_METADATA_LOCATION_PROP)
             .map_err(from_sqlx_error)?;
