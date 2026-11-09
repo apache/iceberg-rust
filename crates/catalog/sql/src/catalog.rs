@@ -55,7 +55,8 @@ const SQL_CATALOG_PROP_BIND_STYLE_LEGACY: &str = "sql_bind_style";
 ///
 /// `V0` is a compatibility mode for catalog tables created before the `iceberg_type` column
 /// existed; it cannot be requested for a new catalog table, since table creation and
-/// registration are unsupported on `V0`.
+/// registration are unsupported on `V0`. Unregistration is unsupported too on `V0`, since
+/// the table cannot be registered again.
 pub const SQL_CATALOG_PROP_SCHEMA_VERSION: &str = "sql.schema-version";
 
 static CATALOG_TABLE_NAME: &str = "iceberg_tables";
@@ -1209,6 +1210,16 @@ impl Catalog for SqlCatalog {
     }
 
     async fn unregister_table(&self, table_ident: &TableIdent) -> Result<Table> {
+        if self.schema_version != SchemaVersion::V1 {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "Table unregistration is not supported for SQL catalog schema version {}",
+                    self.schema_version
+                ),
+            ));
+        }
+
         let rows = self
             .fetch_rows(
                 &format!(
@@ -3054,6 +3065,35 @@ mod tests {
             1,
             "only the pre-existing row should be present, got: {tables:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table_unsupported_on_v0_schema() {
+        install_default_drivers();
+
+        let (uri, temp_dir) = create_v0_sqlite_db().await;
+
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load("iceberg", catalog_props(&uri, &temp_dir, None))
+            .await
+            .expect("should open V0 catalog without migrating");
+        assert_eq!(catalog.schema_version, SchemaVersion::V0);
+
+        let namespace = NamespaceIdent::from_strs(["test_namespace"]).unwrap();
+        let table_ident = TableIdent::new(namespace, "existing_test_table".to_string());
+        let err = catalog
+            .unregister_table(&table_ident)
+            .await
+            .expect_err("table unregistration should be rejected on a V0 catalog table");
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.to_string()
+                .contains("Table unregistration is not supported"),
+            "error should explain that table unregistration is unsupported, got: {err}"
+        );
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
     }
 
     #[tokio::test]
