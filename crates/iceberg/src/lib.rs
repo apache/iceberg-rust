@@ -75,7 +75,7 @@ pub mod sensitive;
 
 mod catalog;
 
-pub use catalog::utils::drop_table_data;
+pub use catalog::utils::{delete_removed_metadata_files, drop_table_data};
 pub use catalog::*;
 
 pub mod table;
@@ -104,7 +104,7 @@ pub mod encryption;
 mod test_utils;
 pub mod writer;
 
-mod delete_vector;
+pub mod delete_vector;
 pub mod metadata_columns;
 pub mod partitioning;
 pub mod puffin;

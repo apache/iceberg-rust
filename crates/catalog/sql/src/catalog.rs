@@ -27,7 +27,7 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    Runtime, TableCommit, TableCreation, TableIdent,
+    Runtime, TableCommit, TableCreation, TableIdent, delete_removed_metadata_files,
 };
 use iceberg_property_macro::Properties;
 use sqlx::any::{AnyPoolOptions, AnyQueryResult, AnyRow, install_default_drivers};
@@ -1173,6 +1173,7 @@ impl Catalog for SqlCatalog {
         let table_ident = commit.identifier().clone();
         let current_table = self.load_table(&table_ident).await?;
         let current_metadata_location = current_table.metadata_location_result()?.to_string();
+        let base_metadata = current_table.metadata_ref();
 
         let staged_table = commit.apply(current_table)?;
         let staged_metadata_location_str = staged_table.metadata_location_result()?;
@@ -1215,6 +1216,13 @@ impl Catalog for SqlCatalog {
             )
             .with_retryable(true));
         }
+
+        delete_removed_metadata_files(
+            staged_table.file_io(),
+            &base_metadata,
+            staged_table.metadata(),
+        )
+        .await;
 
         Ok(staged_table)
     }

@@ -278,7 +278,15 @@ impl Transform {
     pub fn result_type(&self, input_type: &Type) -> Result<Type> {
         match self {
             Transform::Identity => {
-                if matches!(input_type, Type::Primitive(_)) {
+                if matches!(
+                    input_type,
+                    Type::Primitive(PrimitiveType::Geometry(_) | PrimitiveType::Geography(_))
+                ) {
+                    Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("{input_type} is not a valid input type of identity transform",),
+                    ))
+                } else if matches!(input_type, Type::Primitive(_)) {
                     Ok(input_type.clone())
                 } else {
                     Err(invalid_data!(
@@ -394,6 +402,14 @@ impl Transform {
             self,
             Transform::Void | Transform::Bucket(_) | Transform::Unknown
         )
+    }
+
+    /// Whether a partition field with this transform may be named after its source column.
+    ///
+    /// Void is allowed because removing an identity field from a format version 1 spec leaves
+    /// a void field that keeps the identity field's name.
+    pub(crate) fn may_share_name_with_source(&self) -> bool {
+        matches!(self, Transform::Identity | Transform::Void)
     }
 
     /// Return the unique transform name to check if similar transforms for the same source field

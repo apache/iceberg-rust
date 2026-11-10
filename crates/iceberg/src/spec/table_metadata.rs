@@ -153,14 +153,6 @@ impl TableMetadata {
         TableMetadataBuilder::new_from_metadata(self, current_file_location)
     }
 
-    /// Check if a partition field name exists in any partition spec.
-    #[inline]
-    pub(crate) fn partition_name_exists(&self, name: &str) -> bool {
-        self.partition_specs
-            .values()
-            .any(|spec| spec.fields().iter().any(|pf| pf.name == name))
-    }
-
     /// Check if a field name exists in any schema.
     #[inline]
     pub(crate) fn name_exists_in_any_schema(&self, name: &str) -> bool {
@@ -785,7 +777,7 @@ pub(super) mod _serde {
     use crate::spec::{
         EncryptedKey, INITIAL_ROW_ID, PartitionField, PartitionSpec, PartitionSpecRef,
         PartitionStatisticsFile, Schema, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
-        SortOrder, StatisticsFile,
+        SortOrder, StatisticsFile, UnboundPartitionSpec,
     };
     use crate::{Error, ErrorKind};
 
@@ -1220,10 +1212,14 @@ pub(super) mod _serde {
                     .collect::<HashMap<_, _>>()
             } else if let Some(partition_spec) = value.partition_spec {
                 // Option 2: Fall back to 'partition_spec'
-                let spec = PartitionSpec::builder(current_schema.clone())
-                    .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
-                    .add_unbound_fields(partition_spec.into_iter().map(|f| f.into_unbound()))?
-                    .build()?;
+                let spec = UnboundPartitionSpec {
+                    spec_id: Some(DEFAULT_PARTITION_SPEC_ID),
+                    fields: partition_spec
+                        .into_iter()
+                        .map(|f| f.into_unbound())
+                        .collect(),
+                }
+                .bind(current_schema.clone())?;
 
                 HashMap::from_iter(vec![(DEFAULT_PARTITION_SPEC_ID, Arc::new(spec))])
             } else {
@@ -3318,6 +3314,33 @@ mod tests {
     }
 
     #[test]
+    fn test_table_metadata_v1_legacy_partition_spec_with_void_fields() {
+        let mut metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap(),
+        )
+        .unwrap();
+        // What a format version 1 spec keeps after identity(x) was removed twice.
+        metadata["partition-spec"] = serde_json::json!([
+            {"name": "x", "transform": "void", "source-id": 1, "field-id": 1000},
+            {"name": "x_null", "transform": "void", "source-id": 1, "field-id": 1001},
+        ]);
+
+        let metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
+
+        let fields = metadata.default_partition_spec().fields();
+        assert_eq!(
+            fields
+                .iter()
+                .map(|f| (f.field_id, f.name.as_str(), f.transform))
+                .collect::<Vec<_>>(),
+            vec![
+                (1000, "x", Transform::Void),
+                (1001, "x_null", Transform::Void)
+            ]
+        );
+    }
+
+    #[test]
     fn test_empty_snapshot_id_is_normalized_to_none() {
         let metadata =
             fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap();
@@ -3800,82 +3823,6 @@ mod tests {
     }
 
     #[test]
-    fn test_partition_name_exists() {
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(2, "partition_col", Type::Primitive(PrimitiveType::Int))
-                    .into(),
-            ])
-            .build()
-            .unwrap();
-
-        let spec1 = PartitionSpec::builder(schema.clone())
-            .with_spec_id(1)
-            .add_partition_field("data", "data_partition", Transform::Identity)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let spec2 = PartitionSpec::builder(schema.clone())
-            .with_spec_id(2)
-            .add_partition_field("partition_col", "partition_bucket", Transform::Bucket(16))
-            .unwrap()
-            .build()
-            .unwrap();
-
-        // Build metadata with these specs
-        let metadata = TableMetadataBuilder::new(
-            schema,
-            spec1.clone().into_unbound(),
-            SortOrder::unsorted_order(),
-            "s3://test/location".to_string(),
-            FormatVersion::V2,
-            HashMap::new(),
-        )
-        .unwrap()
-        .add_partition_spec(spec2.into_unbound())
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-
-        assert!(metadata.partition_name_exists("data_partition"));
-        assert!(metadata.partition_name_exists("partition_bucket"));
-
-        assert!(!metadata.partition_name_exists("nonexistent_field"));
-        assert!(!metadata.partition_name_exists("data")); // schema field name, not partition field name
-        assert!(!metadata.partition_name_exists(""));
-    }
-
-    #[test]
-    fn test_partition_name_exists_empty_specs() {
-        // Create metadata with no partition specs (unpartitioned table)
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()
-            .unwrap();
-
-        let metadata = TableMetadataBuilder::new(
-            schema,
-            PartitionSpec::unpartition_spec().into_unbound(),
-            SortOrder::unsorted_order(),
-            "s3://test/location".to_string(),
-            FormatVersion::V2,
-            HashMap::new(),
-        )
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-
-        assert!(!metadata.partition_name_exists("any_field"));
-        assert!(!metadata.partition_name_exists("data"));
-    }
-
-    #[test]
     fn test_name_exists_in_any_schema() {
         // Create multiple schemas with different fields
         let schema1 = Schema::builder()
@@ -4002,8 +3949,6 @@ mod tests {
             .build()
             .unwrap()
             .metadata;
-
-        assert!(!final_metadata.partition_name_exists("nonexistent_partition")); // unpartitioned table
 
         assert!(final_metadata.name_exists_in_any_schema("id")); // exists in both schemas
         assert!(final_metadata.name_exists_in_any_schema("name")); // exists in both schemas

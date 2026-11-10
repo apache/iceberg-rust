@@ -16,15 +16,18 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use iceberg::io::{
     CLIENT_REGION, S3_ACCESS_KEY_ID, S3_ALLOW_ANONYMOUS, S3_ASSUME_ROLE_ARN,
     S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME, S3_DISABLE_CONFIG_LOAD,
-    S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_PATH_STYLE_ACCESS, S3_REGION, S3_SECRET_ACCESS_KEY,
-    S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
+    S3_DISABLE_EC2_METADATA, S3_ENDPOINT, S3_MULTIPART_PART_SIZE_BYTES, S3_PATH_STYLE_ACCESS,
+    S3_REGION, S3_RETRY_MAX_WAIT_MS, S3_RETRY_MIN_WAIT_MS, S3_RETRY_NUM_RETRIES,
+    S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN, S3_SSE_KEY, S3_SSE_MD5, S3_SSE_TYPE,
 };
 use iceberg::{Error, ErrorKind, Result};
+use iceberg_property_macro::Properties;
 use opendal::services::S3Config;
 use opendal::{Configurator, Operator};
 /// AWS credentials: access key ID, secret access key, and optional session token.
@@ -35,6 +38,73 @@ use reqsign_core::{ProvideCredentialChain, ProvideCredentialDyn};
 use url::Url;
 
 use crate::utils::{from_opendal_error, is_truthy};
+use crate::{OpenDalClientConfig, parse_positive_ms};
+
+#[derive(Properties)]
+struct S3RetryConfig {
+    #[property(key = S3_RETRY_NUM_RETRIES, default = None)]
+    num_retries: Option<usize>,
+    #[property(key = S3_RETRY_MIN_WAIT_MS, default = None, parse_with = parse_positive_ms)]
+    min_wait_ms: Option<NonZeroU64>,
+    #[property(key = S3_RETRY_MAX_WAIT_MS, default = None, parse_with = parse_positive_ms)]
+    max_wait_ms: Option<NonZeroU64>,
+}
+
+/// Overlays the `s3.retry.*` properties onto the `opendal.retry.*` settings of `client_config`, per key.
+pub(crate) fn s3_client_config(
+    props: &HashMap<String, String>,
+    mut client_config: OpenDalClientConfig,
+) -> Result<OpenDalClientConfig> {
+    let retry = S3RetryConfig::from_properties(props)?;
+    client_config.retry_num_retries = retry.num_retries.or(client_config.retry_num_retries);
+    client_config.retry_min_wait_ms = retry.min_wait_ms.or(client_config.retry_min_wait_ms);
+    client_config.retry_max_wait_ms = retry.max_wait_ms.or(client_config.retry_max_wait_ms);
+    Ok(client_config)
+}
+
+/// S3 rejects a non-final part smaller than this.
+const MULTIPART_PART_SIZE_MIN: u64 = 5 * 1024 * 1024;
+
+/// Java reads this property as an `int`, so a larger value fails there.
+const MULTIPART_PART_SIZE_MAX: u64 = i32::MAX as u64;
+
+/// Matches Java `S3FileIOProperties.MULTIPART_SIZE_DEFAULT`.
+const MULTIPART_PART_SIZE_DEFAULT: u64 = 32 * 1024 * 1024;
+
+pub(crate) fn default_multipart_part_size() -> u64 {
+    MULTIPART_PART_SIZE_DEFAULT
+}
+
+/// Parse iceberg props to s3 multipart upload part size.
+pub(crate) fn s3_multipart_part_size_parse(m: &HashMap<String, String>) -> Result<u64> {
+    let Some(value) = m.get(S3_MULTIPART_PART_SIZE_BYTES) else {
+        return Ok(default_multipart_part_size());
+    };
+    let part_size = value.parse::<u64>().map_err(|e| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {value}: {e}"),
+        )
+    })?;
+    if part_size < MULTIPART_PART_SIZE_MIN {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {part_size} bytes is below the S3 minimum part size of {} MiB",
+                MULTIPART_PART_SIZE_MIN / (1024 * 1024)
+            ),
+        ));
+    }
+    if part_size > MULTIPART_PART_SIZE_MAX {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {part_size} bytes is above {MULTIPART_PART_SIZE_MAX} bytes, the largest value Java accepts"
+            ),
+        ));
+    }
+    Ok(part_size)
+}
 
 /// Parse iceberg props to s3 config.
 pub(crate) fn s3_config_parse(mut m: HashMap<String, String>) -> Result<S3Config> {
@@ -183,10 +253,23 @@ impl CustomAwsCredentialLoader {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::time::Duration;
 
-    use iceberg::io::S3_PATH_STYLE_ACCESS;
+    use iceberg::Result;
+    use iceberg::io::{
+        S3_MULTIPART_PART_SIZE_BYTES, S3_PATH_STYLE_ACCESS, S3_RETRY_MAX_WAIT_MS,
+        S3_RETRY_MIN_WAIT_MS, S3_RETRY_NUM_RETRIES,
+    };
+    use opendal::layers::RetryLayer;
 
-    use super::s3_config_parse;
+    use super::{
+        MULTIPART_PART_SIZE_DEFAULT, MULTIPART_PART_SIZE_MAX, MULTIPART_PART_SIZE_MIN,
+        s3_client_config, s3_config_parse, s3_multipart_part_size_parse,
+    };
+    use crate::{
+        OPENDAL_RETRY_MAX_WAIT_MS, OPENDAL_RETRY_MIN_WAIT_MS, OPENDAL_RETRY_NUM_RETRIES,
+        OpenDalClientConfig,
+    };
 
     fn parse_with(prop: Option<&str>) -> bool {
         let mut props = HashMap::new();
@@ -202,5 +285,138 @@ mod tests {
         assert!(parse_with(None));
         assert!(parse_with(Some("false")));
         assert!(!parse_with(Some("true")));
+    }
+
+    fn parse_part_size(prop: Option<&str>) -> Result<u64> {
+        let mut props = HashMap::new();
+        if let Some(v) = prop {
+            props.insert(S3_MULTIPART_PART_SIZE_BYTES.to_string(), v.to_string());
+        }
+        s3_multipart_part_size_parse(&props)
+    }
+
+    #[test]
+    fn s3_multipart_part_size_parse_defaults_and_overrides() {
+        // Match Iceberg S3FileIOProperties.MULTIPART_SIZE_DEFAULT = 32 MiB.
+        assert_eq!(MULTIPART_PART_SIZE_DEFAULT, 32 * 1024 * 1024);
+        assert_eq!(parse_part_size(None).unwrap(), MULTIPART_PART_SIZE_DEFAULT);
+        assert_eq!(parse_part_size(Some("8388608")).unwrap(), 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn s3_multipart_part_size_parse_rejects_invalid() {
+        // Match Iceberg S3FileIOProperties.MULTIPART_SIZE_MIN = 5 MiB.
+        assert_eq!(MULTIPART_PART_SIZE_MIN, 5 * 1024 * 1024);
+        assert!(parse_part_size(Some(&MULTIPART_PART_SIZE_MIN.to_string())).is_ok());
+        assert!(parse_part_size(Some(&(MULTIPART_PART_SIZE_MIN - 1).to_string())).is_err());
+        assert!(parse_part_size(Some(&MULTIPART_PART_SIZE_MAX.to_string())).is_ok());
+        assert!(parse_part_size(Some(&(MULTIPART_PART_SIZE_MAX + 1).to_string())).is_err());
+        assert!(parse_part_size(Some("not-a-number")).is_err());
+    }
+
+    fn s3_retry_layer(props: &[(&str, &str)]) -> Result<String> {
+        let props = props
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect::<HashMap<_, _>>();
+        let client_config =
+            s3_client_config(&props, OpenDalClientConfig::from_properties(&props)?)?;
+        Ok(format!("{:?}", client_config.retry_layer()))
+    }
+
+    #[test]
+    fn test_s3_retry_properties_reach_retry_layer() {
+        let expected = RetryLayer::new()
+            .with_max_times(10)
+            .with_min_delay(Duration::from_secs(2))
+            .with_max_delay(Duration::from_secs(20))
+            .with_jitter();
+        assert_eq!(
+            s3_retry_layer(&[
+                (S3_RETRY_NUM_RETRIES, "10"),
+                (S3_RETRY_MIN_WAIT_MS, "2000"),
+                (S3_RETRY_MAX_WAIT_MS, "20000"),
+            ])
+            .unwrap(),
+            format!("{expected:?}")
+        );
+        assert_eq!(
+            s3_retry_layer(&[(S3_RETRY_NUM_RETRIES, "0")]).unwrap(),
+            format!("{:?}", RetryLayer::new().with_max_times(0).with_jitter())
+        );
+        assert_eq!(
+            s3_retry_layer(&[]).unwrap(),
+            format!("{:?}", RetryLayer::new())
+        );
+    }
+
+    #[test]
+    fn test_s3_retry_properties_win_over_the_generic_ones_per_key() {
+        let expected = RetryLayer::new()
+            .with_max_times(10)
+            .with_min_delay(Duration::from_secs(2))
+            .with_max_delay(Duration::from_secs(20))
+            .with_jitter();
+        assert_eq!(
+            s3_retry_layer(&[
+                (OPENDAL_RETRY_NUM_RETRIES, "5"),
+                (OPENDAL_RETRY_MIN_WAIT_MS, "100"),
+                (OPENDAL_RETRY_MAX_WAIT_MS, "200"),
+                (S3_RETRY_NUM_RETRIES, "10"),
+                (S3_RETRY_MIN_WAIT_MS, "2000"),
+                (S3_RETRY_MAX_WAIT_MS, "20000"),
+            ])
+            .unwrap(),
+            format!("{expected:?}")
+        );
+
+        // a key set at one layer only is taken from that layer
+        let mixed = RetryLayer::new()
+            .with_max_times(10)
+            .with_min_delay(Duration::from_millis(100))
+            .with_max_delay(Duration::from_secs(20))
+            .with_jitter();
+        assert_eq!(
+            s3_retry_layer(&[
+                (S3_RETRY_NUM_RETRIES, "10"),
+                (OPENDAL_RETRY_MIN_WAIT_MS, "100"),
+                (OPENDAL_RETRY_MAX_WAIT_MS, "200"),
+                (S3_RETRY_MAX_WAIT_MS, "20000"),
+            ])
+            .unwrap(),
+            format!("{mixed:?}")
+        );
+    }
+
+    #[test]
+    fn test_s3_retry_property_parsing_rejects_invalid_values() {
+        for (key, invalid) in [
+            (S3_RETRY_NUM_RETRIES, "-1"),
+            (S3_RETRY_NUM_RETRIES, "abc"),
+            (S3_RETRY_NUM_RETRIES, ""),
+            (S3_RETRY_MIN_WAIT_MS, "0"),
+            (S3_RETRY_MIN_WAIT_MS, "abc"),
+            (S3_RETRY_MAX_WAIT_MS, "0"),
+            (S3_RETRY_MAX_WAIT_MS, "12.5"),
+        ] {
+            let err = s3_retry_layer(&[(key, invalid)]).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={invalid}: {err}");
+        }
+    }
+
+    #[cfg(feature = "opendal-memory")]
+    #[test]
+    fn test_other_backends_ignore_the_s3_retry_properties() {
+        use iceberg::io::{StorageConfig, StorageFactory};
+
+        use crate::OpenDalStorageFactory;
+
+        let config = StorageConfig::new().with_props([
+            (S3_RETRY_NUM_RETRIES.to_string(), "abc".to_string()),
+            (OPENDAL_RETRY_NUM_RETRIES.to_string(), "5".to_string()),
+        ]);
+        let storage = OpenDalStorageFactory::Memory.build(&config).unwrap();
+        let json = serde_json::to_string(&storage).unwrap();
+        assert!(json.contains(r#""retry_num_retries":5"#), "{json}");
     }
 }
