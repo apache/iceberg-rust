@@ -100,6 +100,7 @@ mockall = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
+rstest = { workspace = true }
 serde_arrow = { version = "0.14", features = ["arrow-59"] }
 tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
