@@ -246,7 +246,6 @@ impl TableMetadataBuilder {
     ///
     /// # Errors
     /// - If properties contains a reserved property
-    /// - If properties contains an encryption property and the format version is below v3
     pub fn set_properties(mut self, properties: HashMap<String, String>) -> Result<Self> {
         // List of specified properties that are RESERVED and should not be persisted.
         let reserved_properties = properties
@@ -265,8 +264,6 @@ impl TableMetadataBuilder {
         if properties.is_empty() {
             return Ok(self);
         }
-
-        Self::check_properties_format_compatibility(&properties, self.metadata.format_version)?;
 
         self.metadata.properties.extend(properties.clone());
         self.changes.push(TableUpdate::SetProperties {
@@ -1109,6 +1106,11 @@ impl TableMetadataBuilder {
         self.metadata.last_updated_ms = self
             .last_updated_ms
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+
+        Self::check_properties_format_compatibility(
+            &self.metadata.properties,
+            self.metadata.format_version,
+        )?;
 
         // Check compatibility of the current schema to the default partition spec and sort order.
         // We use the `get_xxx` methods from the builder to avoid using the panicking
@@ -2141,7 +2143,8 @@ mod tests {
                 };
                 for result in [created, updated] {
                     let result = result
-                        .map(|builder| builder.build().unwrap().metadata.properties)
+                        .and_then(TableMetadataBuilder::build)
+                        .map(|result| result.metadata.properties)
                         .map_err(|err| (err.kind(), err.message().to_string()));
                     assert_eq!(result, expected);
                 }
@@ -2150,30 +2153,39 @@ mod tests {
     }
 
     #[test]
-    fn test_set_properties_on_pre_v3_table_with_existing_encryption_property() {
-        let mut builder = builder_without_changes(FormatVersion::V2);
-        builder.metadata.properties.insert(
-            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
-            "master-1".to_string(),
-        );
+    fn test_pre_v3_encryption_property_must_be_removed_or_upgraded() {
+        let key_id = TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string();
+        let encryption_properties = HashMap::from([(key_id.clone(), "master-1".to_string())]);
+        let legacy = || {
+            let mut builder = builder_without_changes(FormatVersion::V2);
+            builder.metadata.properties = encryption_properties.clone();
+            builder
+        };
 
-        let metadata = builder
-            .set_properties(HashMap::from([("key".to_string(), "value".to_string())]))
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
+        let results = [
+            legacy().set_properties(HashMap::from([("key".to_string(), "value".to_string())])),
+            legacy().remove_properties(std::slice::from_ref(&key_id)),
+            legacy().upgrade_format_version(FormatVersion::V3),
+            builder_without_changes(FormatVersion::V2)
+                .set_properties(encryption_properties.clone())
+                .and_then(|builder| builder.upgrade_format_version(FormatVersion::V3)),
+        ]
+        .map(|result| {
+            result
+                .and_then(TableMetadataBuilder::build)
+                .map(|result| (result.metadata.format_version, result.metadata.properties))
+                .map_err(|err| (err.kind(), err.message().to_string()))
+        });
 
-        assert_eq!(
-            metadata.properties(),
-            &HashMap::from([
-                (
-                    TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
-                    "master-1".to_string(),
-                ),
-                ("key".to_string(), "value".to_string()),
-            ])
-        );
+        assert_eq!(results, [
+            Err((
+                ErrorKind::DataInvalid,
+                "Invalid properties for v2: [encryption.key-id]".to_string(),
+            )),
+            Ok((FormatVersion::V2, HashMap::new())),
+            Ok((FormatVersion::V3, encryption_properties.clone())),
+            Ok((FormatVersion::V3, encryption_properties.clone())),
+        ]);
     }
 
     #[test]
