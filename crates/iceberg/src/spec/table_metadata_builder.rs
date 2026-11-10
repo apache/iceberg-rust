@@ -266,7 +266,7 @@ impl TableMetadataBuilder {
             return Ok(self);
         }
 
-        Self::check_encryption_compatibility(&properties, self.metadata.format_version)?;
+        Self::check_properties_format_compatibility(&properties, self.metadata.format_version)?;
 
         self.metadata.properties.extend(properties.clone());
         self.changes.push(TableUpdate::SetProperties {
@@ -1305,7 +1305,7 @@ impl TableMetadataBuilder {
         Ok((fresh_schema, fresh_spec, fresh_sort_order))
     }
 
-    fn check_encryption_compatibility(
+    fn check_properties_format_compatibility(
         properties: &HashMap<String, String>,
         format_version: FormatVersion,
     ) -> Result<()> {
