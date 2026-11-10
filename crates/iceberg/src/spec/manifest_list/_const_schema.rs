@@ -24,6 +24,13 @@ use once_cell::sync::Lazy;
 use crate::avro::schema_to_avro_schema;
 use crate::spec::{ListType, NestedField, NestedFieldRef, PrimitiveType, Schema, StructType, Type};
 
+/// Field ID of `manifest_file.sequence_number`.
+pub(crate) const MANIFEST_SEQUENCE_NUMBER_FIELD_ID: i32 = 515;
+/// Field ID of `manifest_file.min_sequence_number`.
+pub(crate) const MIN_SEQUENCE_NUMBER_FIELD_ID: i32 = 516;
+/// Field ID of `manifest_file.content`.
+pub(crate) const MANIFEST_CONTENT_FIELD_ID: i32 = 517;
+
 static MANIFEST_PATH: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::required(
@@ -54,7 +61,7 @@ static PARTITION_SPEC_ID: Lazy<NestedFieldRef> = {
 static CONTENT: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::required(
-            517,
+            MANIFEST_CONTENT_FIELD_ID,
             "content",
             Type::Primitive(PrimitiveType::Int),
         ))
@@ -63,7 +70,7 @@ static CONTENT: Lazy<NestedFieldRef> = {
 static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::required(
-            515,
+            MANIFEST_SEQUENCE_NUMBER_FIELD_ID,
             "sequence_number",
             Type::Primitive(PrimitiveType::Long),
         ))
@@ -72,7 +79,7 @@ static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
 static MIN_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::required(
-            516,
+            MIN_SEQUENCE_NUMBER_FIELD_ID,
             "min_sequence_number",
             Type::Primitive(PrimitiveType::Long),
         ))
@@ -317,6 +324,36 @@ static V3_SCHEMA: Lazy<Schema> = {
         Schema::builder().with_fields(fields).build().unwrap()
     })
 };
+
+/// Fields of the `manifest_file` struct in the latest format version, with the
+/// file and row counts optional as in v1, so a manifest list of any version
+/// fits them.
+pub(crate) fn manifest_file_fields() -> Vec<NestedFieldRef> {
+    let optional = |field: &NestedFieldRef| {
+        Arc::new(NestedField {
+            required: false,
+            ..field.as_ref().clone()
+        })
+    };
+    vec![
+        MANIFEST_PATH.clone(),
+        MANIFEST_LENGTH.clone(),
+        PARTITION_SPEC_ID.clone(),
+        CONTENT.clone(),
+        SEQUENCE_NUMBER.clone(),
+        MIN_SEQUENCE_NUMBER.clone(),
+        ADDED_SNAPSHOT_ID.clone(),
+        optional(&ADDED_FILES_COUNT_V2),
+        optional(&EXISTING_FILES_COUNT_V2),
+        optional(&DELETED_FILES_COUNT_V2),
+        optional(&ADDED_ROWS_COUNT_V2),
+        optional(&EXISTING_ROWS_COUNT_V2),
+        optional(&DELETED_ROWS_COUNT_V2),
+        PARTITIONS.clone(),
+        KEY_METADATA.clone(),
+        FIRST_ROW_ID.clone(),
+    ]
+}
 
 pub(super) static MANIFEST_LIST_AVRO_SCHEMA_V1: Lazy<AvroSchema> =
     Lazy::new(|| schema_to_avro_schema("manifest_file", &V1_SCHEMA).unwrap());
