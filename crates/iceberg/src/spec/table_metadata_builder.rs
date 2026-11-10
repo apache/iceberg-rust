@@ -2113,77 +2113,104 @@ mod tests {
         assert_eq!(build_result.metadata.metadata_log.len(), 0);
     }
 
+    const KEY_ID: (&str, &str) = (TableProperties::PROPERTY_ENCRYPTION_KEY_ID, "master-1");
+    const KEY_LENGTH: (&str, &str) = (TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH, "16");
+
+    fn string_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn build_error(builder: TableMetadataBuilder) -> (ErrorKind, String) {
+        let err = builder.build().unwrap_err();
+        (err.kind(), err.message().to_string())
+    }
+
     #[test]
-    fn test_encryption_requires_v3() {
-        let key_id = (TableProperties::PROPERTY_ENCRYPTION_KEY_ID, "master-1");
-        let key_length = (TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH, "32");
-        let key = EncryptedKey::builder()
-            .key_id("key-1")
-            .encrypted_key_metadata(vec![1, 2, 3, 4])
-            .build();
-
-        for version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
-            let mut cases = [vec![key_id], vec![key_length], vec![key_id, key_length]]
-                .into_iter()
-                .map(|properties| {
-                    let names = properties.iter().map(|(key, _)| *key).collect::<Vec<_>>();
-                    let properties = properties
-                        .into_iter()
-                        .map(|(key, value)| (key.to_string(), value.to_string()))
-                        .collect();
+    fn test_build_rejects_encryption_properties_before_v3() {
+        for version in [FormatVersion::V1, FormatVersion::V2] {
+            for (properties, names) in [
+                (vec![KEY_ID], "encryption.key-id"),
+                (vec![KEY_LENGTH], "encryption.data-key-length"),
+                (
+                    vec![KEY_ID, KEY_LENGTH],
+                    "encryption.key-id, encryption.data-key-length",
+                ),
+            ] {
+                let builder = builder_without_changes(version)
+                    .set_properties(string_map(&properties))
+                    .unwrap();
+                assert_eq!(
+                    build_error(builder),
                     (
-                        builder_without_changes(version).set_properties(properties),
-                        format!("Invalid properties for {version}: [{}]", names.join(", ")),
+                        ErrorKind::DataInvalid,
+                        format!("Invalid properties for {version}: [{names}]")
                     )
-                })
-                .collect::<Vec<_>>();
-            cases.push((
-                Ok(builder_without_changes(version).add_encryption_key(key.clone())),
-                format!("Encryption keys are not supported for {version} tables"),
-            ));
-
-            for (builder, message) in cases {
-                let result = builder
-                    .and_then(TableMetadataBuilder::build)
-                    .map(|_| ())
-                    .map_err(|err| (err.kind(), err.message().to_string()));
-                let expected = if version < FormatVersion::V3 {
-                    Err((ErrorKind::DataInvalid, message))
-                } else {
-                    Ok(())
-                };
-                assert_eq!(result, expected);
+                );
             }
         }
     }
 
     #[test]
+    fn test_build_rejects_encryption_keys_before_v3() {
+        let key = EncryptedKey::builder()
+            .key_id("key-1")
+            .encrypted_key_metadata(vec![1, 2, 3, 4])
+            .build();
+
+        for version in [FormatVersion::V1, FormatVersion::V2] {
+            let builder = builder_without_changes(version).add_encryption_key(key.clone());
+            assert_eq!(
+                build_error(builder),
+                (
+                    ErrorKind::DataInvalid,
+                    format!("Encryption keys are not supported for {version} tables")
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_accepts_encryption_properties_on_v3() {
+        let properties = string_map(&[KEY_ID, KEY_LENGTH]);
+
+        let metadata = builder_without_changes(FormatVersion::V3)
+            .set_properties(properties.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata.properties, properties);
+    }
+
+    #[test]
     fn test_pre_v3_encryption_property_blocks_updates_until_removed() {
-        let key_id = TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string();
         let legacy = || {
             let mut builder = builder_without_changes(FormatVersion::V2);
-            builder.metadata.properties = HashMap::from([(key_id.clone(), "master-1".to_string())]);
+            builder.metadata.properties = string_map(&[KEY_ID]);
             builder
         };
 
-        let results = [
-            legacy().set_properties(HashMap::from([("key".to_string(), "value".to_string())])),
-            legacy().remove_properties(std::slice::from_ref(&key_id)),
-        ]
-        .map(|result| {
-            result
-                .and_then(TableMetadataBuilder::build)
-                .map(|result| result.metadata.properties)
-                .map_err(|err| (err.kind(), err.message().to_string()))
-        });
-
-        assert_eq!(results, [
-            Err((
+        let other_update = legacy()
+            .set_properties(string_map(&[("key", "value")]))
+            .unwrap();
+        assert_eq!(
+            build_error(other_update),
+            (
                 ErrorKind::DataInvalid,
-                "Invalid properties for v2: [encryption.key-id]".to_string(),
-            )),
-            Ok(HashMap::new()),
-        ]);
+                "Invalid properties for v2: [encryption.key-id]".to_string()
+            )
+        );
+
+        let repaired = legacy()
+            .remove_properties(&[KEY_ID.0.to_string()])
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(repaired.metadata.properties, HashMap::new());
     }
 
     #[test]
