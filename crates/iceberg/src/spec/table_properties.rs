@@ -22,7 +22,7 @@ use iceberg_property_macro::properties_view;
 use crate::compression::CompressionCodec;
 use crate::encryption::AesKeySize;
 use crate::error::{Result, invalid_data};
-use crate::spec::{FormatVersion, NameMapping};
+use crate::spec::NameMapping;
 use crate::util::location::strip_trailing_slash;
 
 fn parse_location_property(path: &str) -> Result<String> {
@@ -350,28 +350,6 @@ pub struct TableProperties {
 }
 
 impl TableProperties<'_> {
-    pub(super) fn check_format_compatibility(&self, format_version: FormatVersion) -> Result<()> {
-        if format_version >= FormatVersion::V3 {
-            return Ok(());
-        }
-
-        let invalid_properties = [
-            Self::PROPERTY_ENCRYPTION_KEY_ID,
-            Self::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
-        ]
-        .into_iter()
-        .filter(|key| self.properties.contains_key(*key))
-        .collect::<Vec<_>>();
-        if !invalid_properties.is_empty() {
-            return Err(invalid_data!(
-                "Invalid properties for {format_version}: [{}]",
-                invalid_properties.join(", ")
-            ));
-        }
-
-        Ok(())
-    }
-
     /// Reserved table property for table format version.
     ///
     /// Iceberg will default a new table's format version to the latest stable and recommended

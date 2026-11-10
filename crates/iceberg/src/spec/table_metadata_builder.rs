@@ -84,7 +84,21 @@ impl TableMetadataBuilder {
         format_version: FormatVersion,
         properties: HashMap<String, String>,
     ) -> Result<Self> {
-        TableProperties::new(&properties).check_format_compatibility(format_version)?;
+        if format_version < FormatVersion::V3 {
+            let encryption_properties = [
+                TableProperties::PROPERTY_ENCRYPTION_KEY_ID,
+                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
+            ]
+            .into_iter()
+            .filter(|key| properties.contains_key(*key))
+            .collect::<Vec<_>>();
+            if !encryption_properties.is_empty() {
+                return Err(invalid_data!(
+                    "Invalid properties for {format_version}: [{}]",
+                    encryption_properties.join(", ")
+                ));
+            }
+        }
 
         // Re-assign field_ids, schema.id, sort_order.id and spec.id for a new table.
         let (fresh_schema, fresh_spec, fresh_sort_order) =
