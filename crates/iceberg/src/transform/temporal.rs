@@ -17,17 +17,13 @@
 
 use std::sync::Arc;
 
-use arrow_arith::arity::binary;
-use arrow_arith::temporal::{DatePart, date_part};
-use arrow_array::types::Date32Type;
 use arrow_array::{
-    Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray, TimestampNanosecondArray,
+    Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray,
 };
 use arrow_schema::{DataType, TimeUnit};
-use chrono::{DateTime, Datelike};
 
 use super::TransformFunction;
-use crate::error::invalid_data;
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 use crate::{Error, ErrorKind, Result};
 
@@ -41,6 +37,46 @@ const UNIX_EPOCH_YEAR: i32 = 1970;
 const MICROSECONDS_PER_DAY: i64 = 86_400_000_000;
 /// Nanoseconds in one day.
 const NANOSECONDS_PER_DAY: i64 = 86_400_000_000_000;
+/// Milliseconds in one day.
+const MILLISECONDS_PER_DAY: i64 = 86_400_000;
+/// Seconds in one day.
+const SECONDS_PER_DAY: i64 = 86_400;
+
+/// Returns the `(year, month0)` of the civil date `days` days after 1970-01-01
+/// in the proleptic Gregorian calendar.
+///
+/// This is defined for every `i32` day offset, unlike `chrono`, which stops
+/// around ±262,000 years. `date` values span ±5.9 million years and
+/// microsecond timestamps ±292,000 years, so `chrono` cannot represent all
+/// inputs of the `year` and `month` transforms.
+fn civil_year_month(days: i64) -> (i64, i64) {
+    // Howard Hinnant's `civil_from_days`
+    // <https://howardhinnant.github.io/date_algorithms.html#civil_from_days>
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let month = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if month <= 2 { year + 1 } else { year };
+    // `month0` is zero based, matching `chrono`'s `month0()`.
+    (year, month - 1)
+}
+
+/// Years since 1970 of the day `days` days after 1970-01-01.
+#[inline]
+fn year_from_days(days: i64) -> i32 {
+    (civil_year_month(days).0 - i64::from(UNIX_EPOCH_YEAR)) as i32
+}
+
+/// Months since 1970-01 of the day `days` days after 1970-01-01.
+#[inline]
+fn month_from_days(days: i64) -> i32 {
+    let (year, month0) = civil_year_month(days);
+    ((year - i64::from(UNIX_EPOCH_YEAR)) * 12 + month0) as i32
+}
 
 /// Extract a date or timestamp year, as years from 1970
 #[derive(Debug)]
@@ -48,48 +84,71 @@ pub struct Year;
 
 impl Year {
     #[inline]
-    fn timestamp_to_year_micros(timestamp: i64) -> Result<i32> {
-        Ok(DateTime::from_timestamp_micros(timestamp)
-            .ok_or_else(|| invalid_data!("Fail to convert timestamp to date in year transform"))?
-            .year()
-            - UNIX_EPOCH_YEAR)
+    fn timestamp_to_year_micros(timestamp: i64) -> i32 {
+        year_from_days(timestamp.div_euclid(MICROSECONDS_PER_DAY))
     }
 
     #[inline]
-    fn timestamp_to_year_nanos(timestamp: i64) -> Result<i32> {
-        Ok(DateTime::from_timestamp_nanos(timestamp).year() - UNIX_EPOCH_YEAR)
+    fn timestamp_to_year_nanos(timestamp: i64) -> i32 {
+        year_from_days(timestamp.div_euclid(NANOSECONDS_PER_DAY))
     }
 }
 
 impl TransformFunction for Year {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        let array = date_part(&input, DatePart::Year)
-            .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
-        Ok(Arc::<Int32Array>::new(
-            array
+        let res: Int32Array = match input.data_type() {
+            DataType::Date32 => input
                 .as_any()
-                .downcast_ref::<Int32Array>()
+                .downcast_ref::<Date32Array>()
                 .unwrap()
-                .unary(|v| v - UNIX_EPOCH_YEAR),
-        ))
+                .unary(|v| -> i32 { year_from_days(i64::from(v)) }),
+            DataType::Timestamp(TimeUnit::Second, _) => input
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .unwrap()
+                .unary(|v| -> i32 { year_from_days(v.div_euclid(SECONDS_PER_DAY)) }),
+            DataType::Timestamp(TimeUnit::Millisecond, _) => input
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap()
+                .unary(|v| -> i32 { year_from_days(v.div_euclid(MILLISECONDS_PER_DAY)) }),
+            DataType::Timestamp(TimeUnit::Microsecond, _) => input
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap()
+                .unary(|v| -> i32 { Self::timestamp_to_year_micros(v) }),
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => input
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .unwrap()
+                .unary(|v| -> i32 { Self::timestamp_to_year_nanos(v) }),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Should not call internally for unsupported data type {:?}",
+                        input.data_type()
+                    ),
+                ));
+            }
+        };
+        Ok(Arc::new(res))
     }
 
     fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>> {
         let val = match (input.data_type(), input.literal()) {
-            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
-                Date32Type::to_naive_date_opt(*v).unwrap().year() - UNIX_EPOCH_YEAR
-            }
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => year_from_days(i64::from(*v)),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
-                Self::timestamp_to_year_micros(*v)?
+                Self::timestamp_to_year_micros(*v)
             }
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
-                Self::timestamp_to_year_micros(*v)?
+                Self::timestamp_to_year_micros(*v)
             }
             (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
-                Self::timestamp_to_year_nanos(*v)?
+                Self::timestamp_to_year_nanos(*v)
             }
             (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
-                Self::timestamp_to_year_nanos(*v)?
+                Self::timestamp_to_year_nanos(*v)
             }
             _ => {
                 return Err(Error::new(
@@ -111,79 +170,71 @@ pub struct Month;
 
 impl Month {
     #[inline]
-    fn timestamp_to_month_micros(timestamp: i64) -> Result<i32> {
-        // date: aaaa-aa-aa
-        // unix epoch date: 1970-01-01
-        // if date > unix epoch date, delta month = (aa - 1) + 12 * (aaaa-1970)
-        // if date < unix epoch date, delta month = (12 - (aa - 1)) + 12 * (1970-aaaa-1)
-        let date = DateTime::from_timestamp_micros(timestamp)
-            .ok_or_else(|| invalid_data!("Fail to convert timestamp to date in month transform"))?;
-        let unix_epoch_date = DateTime::from_timestamp_micros(0)
-            .expect("0 timestamp from unix epoch should be valid");
-        if date > unix_epoch_date {
-            Ok((date.month0() as i32) + 12 * (date.year() - UNIX_EPOCH_YEAR))
-        } else {
-            let delta = (12 - date.month0() as i32) + 12 * (UNIX_EPOCH_YEAR - date.year() - 1);
-            Ok(-delta)
-        }
+    fn timestamp_to_month_micros(timestamp: i64) -> i32 {
+        month_from_days(timestamp.div_euclid(MICROSECONDS_PER_DAY))
     }
 
     #[inline]
-    fn timestamp_to_month_nanos(timestamp: i64) -> Result<i32> {
-        // date: aaaa-aa-aa
-        // unix epoch date: 1970-01-01
-        // if date > unix epoch date, delta month = (aa - 1) + 12 * (aaaa-1970)
-        // if date < unix epoch date, delta month = (12 - (aa - 1)) + 12 * (1970-aaaa-1)
-        let date = DateTime::from_timestamp_nanos(timestamp);
-        let unix_epoch_date = DateTime::from_timestamp_nanos(0);
-        if date > unix_epoch_date {
-            Ok((date.month0() as i32) + 12 * (date.year() - UNIX_EPOCH_YEAR))
-        } else {
-            let delta = (12 - date.month0() as i32) + 12 * (UNIX_EPOCH_YEAR - date.year() - 1);
-            Ok(-delta)
-        }
+    fn timestamp_to_month_nanos(timestamp: i64) -> i32 {
+        month_from_days(timestamp.div_euclid(NANOSECONDS_PER_DAY))
     }
 }
 
 impl TransformFunction for Month {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        let year_array = date_part(&input, DatePart::Year)
-            .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
-        let year_array: Int32Array = year_array
-            .as_any()
-            .downcast_ref::<Int32Array>()
-            .unwrap()
-            .unary(|v| 12 * (v - UNIX_EPOCH_YEAR));
-        let month_array = date_part(&input, DatePart::Month)
-            .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
-        Ok(Arc::<Int32Array>::new(
-            binary(
-                month_array.as_any().downcast_ref::<Int32Array>().unwrap(),
-                year_array.as_any().downcast_ref::<Int32Array>().unwrap(),
-                // Compute month from 1970-01-01, so minus 1 here.
-                |a, b| a + b - 1,
-            )
-            .unwrap(),
-        ))
+        let res: Int32Array = match input.data_type() {
+            DataType::Date32 => input
+                .as_any()
+                .downcast_ref::<Date32Array>()
+                .unwrap()
+                .unary(|v| -> i32 { month_from_days(i64::from(v)) }),
+            DataType::Timestamp(TimeUnit::Second, _) => input
+                .as_any()
+                .downcast_ref::<TimestampSecondArray>()
+                .unwrap()
+                .unary(|v| -> i32 { month_from_days(v.div_euclid(SECONDS_PER_DAY)) }),
+            DataType::Timestamp(TimeUnit::Millisecond, _) => input
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .unwrap()
+                .unary(|v| -> i32 { month_from_days(v.div_euclid(MILLISECONDS_PER_DAY)) }),
+            DataType::Timestamp(TimeUnit::Microsecond, _) => input
+                .as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap()
+                .unary(|v| -> i32 { Self::timestamp_to_month_micros(v) }),
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => input
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .unwrap()
+                .unary(|v| -> i32 { Self::timestamp_to_month_nanos(v) }),
+            _ => {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    format!(
+                        "Should not call internally for unsupported data type {:?}",
+                        input.data_type()
+                    ),
+                ));
+            }
+        };
+        Ok(Arc::new(res))
     }
 
     fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>> {
         let val = match (input.data_type(), input.literal()) {
-            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
-                (Date32Type::to_naive_date_opt(*v).unwrap().year() - UNIX_EPOCH_YEAR) * 12
-                    + Date32Type::to_naive_date_opt(*v).unwrap().month0() as i32
-            }
+            (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => month_from_days(i64::from(*v)),
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
-                Self::timestamp_to_month_micros(*v)?
+                Self::timestamp_to_month_micros(*v)
             }
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
-                Self::timestamp_to_month_micros(*v)?
+                Self::timestamp_to_month_micros(*v)
             }
             (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
-                Self::timestamp_to_month_nanos(*v)?
+                Self::timestamp_to_month_nanos(*v)
             }
             (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
-                Self::timestamp_to_month_nanos(*v)?
+                Self::timestamp_to_month_nanos(*v)
             }
             _ => {
                 return Err(Error::new(
@@ -2786,6 +2837,76 @@ mod test {
             "1900-05-01T22:01:01.0000000000",
             &hour,
             Datum::int(-610706),
+        );
+    }
+}
+
+#[cfg(test)]
+mod out_of_range_tests {
+    use std::sync::Arc;
+
+    use arrow_array::{
+        ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray, TimestampNanosecondArray,
+    };
+
+    use super::*;
+
+    fn years(transform: &dyn TransformFunction, array: ArrayRef) -> Vec<i32> {
+        let res = transform.transform(array).unwrap();
+        let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
+        (0..res.len()).map(|i| res.value(i)).collect()
+    }
+
+    #[test]
+    fn year_and_month_of_date_type_extremes() {
+        // `Date32` covers roughly ±5.9 million years, well past the range of
+        // `chrono`; the transforms must not return null for these inputs.
+        let dates: ArrayRef = Arc::new(Date32Array::from(vec![i32::MAX, i32::MIN, 0]));
+
+        assert_eq!(years(&Year, Arc::clone(&dates)), vec![
+            5_879_610, -5_879_611, 0
+        ]);
+        assert_eq!(years(&Month, dates), vec![70_555_326, -70_555_327, 0]);
+    }
+
+    #[test]
+    fn year_and_month_of_timestamp_type_extremes() {
+        // `i64::MAX` microseconds is 294247-01-10, and `i64::MIN` is
+        // -290308-12-22; both are outside the range of `chrono`.
+        let timestamps: ArrayRef =
+            Arc::new(TimestampMicrosecondArray::from(vec![i64::MAX, i64::MIN, 0]));
+
+        assert_eq!(years(&Year, Arc::clone(&timestamps)), vec![
+            292_277, -292_278, 0
+        ]);
+        assert_eq!(years(&Month, timestamps), vec![3_507_324, -3_507_325, 0]);
+
+        // i64 nanoseconds only spans ±292 years, but the same code path is used.
+        let nanos: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![i64::MAX, i64::MIN, 0]));
+        assert_eq!(years(&Year, Arc::clone(&nanos)), vec![292, -293, 0]);
+        assert_eq!(years(&Month, nanos), vec![3_507, -3_508, 0]);
+    }
+
+    #[test]
+    fn year_and_month_literals_at_type_extremes_do_not_panic() {
+        assert_eq!(
+            Year.transform_literal(&Datum::date(i32::MAX)).unwrap(),
+            Some(Datum::int(5_879_610))
+        );
+        assert_eq!(
+            Month.transform_literal(&Datum::date(i32::MIN)).unwrap(),
+            Some(Datum::int(-70_555_327))
+        );
+        assert_eq!(
+            Year.transform_literal(&Datum::timestamp_micros(i64::MAX))
+                .unwrap(),
+            Some(Datum::int(292_277))
+        );
+        assert_eq!(
+            Month
+                .transform_literal(&Datum::timestamptz_micros(i64::MIN))
+                .unwrap(),
+            Some(Datum::int(-3_507_325))
         );
     }
 }
