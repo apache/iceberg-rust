@@ -40,8 +40,9 @@ use crate::transaction::ActionCommit;
 ///
 /// Fixed for one logical execution; the producer derives everything else from
 /// it and the table of the current attempt. The action validates the
-/// table-independent parts (content types, disjoint add/remove sets) before
-/// each attempt.
+/// table-independent parts, such as content types, before each attempt. A path
+/// may be both removed and added: the producer marks the old entry `Deleted`
+/// and writes a new `Added` one, so whether to allow it is the action's call.
 pub(crate) struct MergingIntent {
     /// Overrides the generated commit UUID.
     pub commit_uuid: Option<Uuid>,
@@ -137,6 +138,9 @@ impl MergingSnapshotProducer {
                 &mut self.owned_artifacts,
             )
             .await?;
+        // TODO: also drop delete files whose data sequence number is below the
+        // smallest `min_sequence_number` left in `data.manifests`, as Java's
+        // `dropDeleteFilesOlderThan` does; they can no longer match any row.
         let deletes = self
             .delete_filter
             .filter(
