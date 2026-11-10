@@ -177,6 +177,17 @@ impl TryFrom<i32> for ManifestStatus {
 
 use super::DataFileFormat;
 
+/// Field ID of `manifest_entry.data_file`.
+pub(crate) const DATA_FILE_FIELD_ID: i32 = 2;
+/// Field ID of `manifest_entry.sequence_number`.
+pub(crate) const SEQUENCE_NUMBER_FIELD_ID: i32 = 3;
+/// Field ID of `manifest_entry.file_sequence_number`.
+pub(crate) const FILE_SEQUENCE_NUMBER_FIELD_ID: i32 = 4;
+/// Field ID of `data_file.partition`.
+pub(crate) const DATA_FILE_PARTITION_FIELD_ID: i32 = 102;
+/// Field ID of `data_file.content`.
+pub(crate) const DATA_FILE_CONTENT_FIELD_ID: i32 = 134;
+
 static STATUS: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::required(
@@ -210,7 +221,7 @@ static SNAPSHOT_ID_V2: Lazy<NestedFieldRef> = {
 static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::optional(
-            3,
+            SEQUENCE_NUMBER_FIELD_ID,
             "sequence_number",
             Type::Primitive(PrimitiveType::Long),
         ))
@@ -220,7 +231,7 @@ static SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
 static FILE_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(NestedField::optional(
-            4,
+            FILE_SEQUENCE_NUMBER_FIELD_ID,
             "file_sequence_number",
             Type::Primitive(PrimitiveType::Long),
         ))
@@ -230,9 +241,13 @@ static FILE_SEQUENCE_NUMBER: Lazy<NestedFieldRef> = {
 static CONTENT: Lazy<NestedFieldRef> = {
     Lazy::new(|| {
         Arc::new(
-            NestedField::required(134, "content", Type::Primitive(PrimitiveType::Int))
-                // 0 refers to DataContentType::DATA
-                .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(0))),
+            NestedField::required(
+                DATA_FILE_CONTENT_FIELD_ID,
+                "content",
+                Type::Primitive(PrimitiveType::Int),
+            )
+            // 0 refers to DataContentType::DATA
+            .with_initial_default(Literal::Primitive(PrimitiveLiteral::Int(0))),
         )
     })
 };
@@ -512,7 +527,7 @@ fn data_file_fields_v3(partition_type: &StructType) -> Vec<NestedFieldRef> {
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
         Arc::new(NestedField::required(
-            102,
+            DATA_FILE_PARTITION_FIELD_ID,
             "partition",
             Type::Struct(partition_type.clone()),
         )),
@@ -546,7 +561,7 @@ pub(crate) fn manifest_entry_fields(partition_type: &StructType) -> Vec<NestedFi
         SEQUENCE_NUMBER.clone(),
         FILE_SEQUENCE_NUMBER.clone(),
         Arc::new(NestedField::required(
-            2,
+            DATA_FILE_FIELD_ID,
             "data_file",
             Type::Struct(StructType::new(data_file_fields_v3(partition_type))),
         )),
@@ -566,7 +581,7 @@ fn data_file_fields_v2(partition_type: &StructType) -> Vec<NestedFieldRef> {
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
         Arc::new(NestedField::required(
-            102,
+            DATA_FILE_PARTITION_FIELD_ID,
             "partition",
             Type::Struct(partition_type.clone()),
         )),
@@ -605,7 +620,7 @@ pub(super) fn manifest_schema_v2(partition_type: &StructType) -> Result<AvroSche
         SEQUENCE_NUMBER.clone(),
         FILE_SEQUENCE_NUMBER.clone(),
         Arc::new(NestedField::required(
-            2,
+            DATA_FILE_FIELD_ID,
             "data_file",
             Type::Struct(StructType::new(data_file_fields_v2(partition_type))),
         )),
@@ -619,7 +634,7 @@ fn data_file_fields_v1(partition_type: &StructType) -> Vec<NestedFieldRef> {
         FILE_PATH.clone(),
         FILE_FORMAT.clone(),
         Arc::new(NestedField::required(
-            102,
+            DATA_FILE_PARTITION_FIELD_ID,
             "partition",
             Type::Struct(partition_type.clone()),
         )),
@@ -650,7 +665,7 @@ pub(super) fn manifest_schema_v1(partition_type: &StructType) -> Result<AvroSche
         STATUS.clone(),
         SNAPSHOT_ID_V1.clone(),
         Arc::new(NestedField::required(
-            2,
+            DATA_FILE_FIELD_ID,
             "data_file",
             Type::Struct(StructType::new(data_file_fields_v1(partition_type))),
         )),
