@@ -25,6 +25,7 @@ use super::_const_schema::{
 };
 use super::_serde::{ManifestFileV1, ManifestFileV2, ManifestFileV3};
 use super::{FormatVersion, ManifestContentType, ManifestFile, UNASSIGNED_SEQUENCE_NUMBER};
+use crate::avro::new_writer;
 use crate::error::{Result, invalid_data};
 use crate::io::{FileMetadata, FileWrite};
 use crate::{Error, ErrorKind};
@@ -149,7 +150,7 @@ impl ManifestListWriter {
             FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
-        let mut avro_writer = Writer::new(avro_schema, Vec::new()).expect(
+        let mut avro_writer = new_writer(avro_schema, Vec::new()).expect(
             "Manifest list Avro schemas should resolve because they refer to no named types.",
         );
         for (key, value) in metadata {
@@ -306,6 +307,7 @@ mod test {
     use tempfile::TempDir;
 
     use super::ManifestListWriter;
+    use crate::avro::assert_deflate_codec;
     use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
     use crate::encryption::{EncryptedInputFile, EncryptionManager};
     use crate::io::{FileIO, FileWrite};
@@ -351,6 +353,7 @@ mod test {
         writer.close().await.unwrap();
 
         let bs = fs::read(path).unwrap();
+        assert_deflate_codec(&bs);
 
         let manifest_list =
             ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V1).unwrap();
@@ -398,6 +401,7 @@ mod test {
         writer.close().await.unwrap();
 
         let bs = fs::read(path).unwrap();
+        assert_deflate_codec(&bs);
         let manifest_list =
             ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
         expected_manifest_list.entries[0].sequence_number = seq_num;
@@ -447,6 +451,7 @@ mod test {
         writer.close().await.unwrap();
 
         let bs = fs::read(path).unwrap();
+        assert_deflate_codec(&bs);
         let manifest_list =
             ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V3).unwrap();
         expected_manifest_list.entries[0].sequence_number = seq_num;
