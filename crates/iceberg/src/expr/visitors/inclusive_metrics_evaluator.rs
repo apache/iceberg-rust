@@ -19,6 +19,7 @@ use std::borrow::Cow;
 
 use fnv::FnvHashSet;
 
+use super::scalar_bound;
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::{DataFile, Datum, PrimitiveLiteral};
@@ -67,11 +68,11 @@ impl<'a> InclusiveMetricsEvaluator<'a> {
     }
 
     fn lower_bound(&self, field_id: i32) -> Option<&Datum> {
-        self.data_file.lower_bounds.get(&field_id)
+        scalar_bound(self.data_file.lower_bounds.get(&field_id))
     }
 
     fn upper_bound(&self, field_id: i32) -> Option<&Datum> {
-        self.data_file.upper_bounds.get(&field_id)
+        scalar_bound(self.data_file.upper_bounds.get(&field_id))
     }
 
     fn contains_nans_only(&self, field_id: i32) -> bool {

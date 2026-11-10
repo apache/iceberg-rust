@@ -454,18 +454,17 @@ impl TableMetadataBuilder {
 
     /// Remove snapshots by its ids from the table metadata.
     /// Does nothing if a snapshot id is not present.
-    /// Keeps as changes only the snapshots that were actually removed.
+    /// Records removed snapshot IDs once each, in the order they first appear
+    /// in `snapshot_ids`.
+    /// Refs pointing to a removed snapshot are removed as well, see [`Self::remove_ref`].
     pub fn remove_snapshots(mut self, snapshot_ids: &[i64]) -> Self {
         let mut removed_snapshots = Vec::with_capacity(snapshot_ids.len());
 
-        self.metadata.snapshots.retain(|k, _| {
-            if snapshot_ids.contains(k) {
-                removed_snapshots.push(*k);
-                false
-            } else {
-                true
+        for &snapshot_id in snapshot_ids {
+            if self.metadata.snapshots.remove(&snapshot_id).is_some() {
+                removed_snapshots.push(snapshot_id);
             }
-        });
+        }
 
         if !removed_snapshots.is_empty() {
             self.changes.push(TableUpdate::RemoveSnapshots {
@@ -474,9 +473,18 @@ impl TableMetadataBuilder {
         }
 
         // Remove refs that are no longer valid
-        self.metadata
+        let mut dangling_refs: Vec<String> = self
+            .metadata
             .refs
-            .retain(|_, v| self.metadata.snapshots.contains_key(&v.snapshot_id));
+            .iter()
+            .filter(|(_, v)| !self.metadata.snapshots.contains_key(&v.snapshot_id))
+            .map(|(name, _)| name.clone())
+            .collect();
+        dangling_refs.sort();
+
+        for ref_name in dangling_refs {
+            self = self.remove_ref(&ref_name);
+        }
 
         self
     }
@@ -1426,6 +1434,7 @@ mod tests {
         Transform, Type, UnboundPartitionField,
     };
     use crate::table::Table;
+    use crate::test_utils::scan::TableTestFixture;
     use crate::test_utils::test_runtime;
 
     const TEST_LOCATION: &str = "s3://bucket/test/location";
@@ -2398,6 +2407,147 @@ mod tests {
         ]);
     }
 
+    /// Builds metadata with one snapshot per id and the given refs, as committed metadata
+    /// without pending changes.
+    fn metadata_with_snapshots_and_refs(
+        snapshot_ids: &[i64],
+        refs: &[(&str, SnapshotReference)],
+    ) -> TableMetadata {
+        let mut builder = builder_without_changes(FormatVersion::V2);
+        let timestamp_ms = builder.metadata.last_updated_ms + 1;
+        for (i, snapshot_id) in snapshot_ids.iter().enumerate() {
+            let snapshot = Snapshot::builder()
+                .with_snapshot_id(*snapshot_id)
+                .with_timestamp_ms(timestamp_ms + i as i64)
+                .with_sequence_number(i as i64 + 1)
+                .with_schema_id(0)
+                .with_manifest_list(format!("/snap-{snapshot_id}.avro"))
+                .with_summary(Summary {
+                    operation: Operation::Append,
+                    additional_properties: HashMap::new(),
+                })
+                .build();
+            builder = builder.add_snapshot(snapshot).unwrap();
+        }
+        for (ref_name, reference) in refs {
+            builder = builder.set_ref(ref_name, reference.clone()).unwrap();
+        }
+        builder.build().unwrap().metadata
+    }
+
+    fn branch_ref(snapshot_id: i64) -> SnapshotReference {
+        SnapshotReference {
+            snapshot_id,
+            retention: SnapshotRetention::Branch {
+                min_snapshots_to_keep: None,
+                max_snapshot_age_ms: None,
+                max_ref_age_ms: None,
+            },
+        }
+    }
+
+    fn tag_ref(snapshot_id: i64) -> SnapshotReference {
+        SnapshotReference {
+            snapshot_id,
+            retention: SnapshotRetention::Tag {
+                max_ref_age_ms: None,
+            },
+        }
+    }
+
+    #[test]
+    fn test_remove_snapshots_records_removal_of_refs_to_removed_snapshots() {
+        let metadata = metadata_with_snapshots_and_refs(&[1, 2], &[
+            (MAIN_BRANCH, branch_ref(2)),
+            ("branch-on-1", branch_ref(1)),
+            ("tag-on-1", tag_ref(1)),
+            ("branch-on-2", branch_ref(2)),
+        ]);
+
+        let result = metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+            .remove_snapshots(&[1])
+            .build()
+            .unwrap();
+
+        assert_eq!(result.changes, vec![
+            TableUpdate::RemoveSnapshots {
+                snapshot_ids: vec![1]
+            },
+            TableUpdate::RemoveSnapshotRef {
+                ref_name: "branch-on-1".to_string()
+            },
+            TableUpdate::RemoveSnapshotRef {
+                ref_name: "tag-on-1".to_string()
+            },
+        ]);
+        assert_eq!(
+            result.metadata.refs,
+            HashMap::from([
+                (MAIN_BRANCH.to_string(), branch_ref(2)),
+                ("branch-on-2".to_string(), branch_ref(2)),
+            ])
+        );
+        assert_eq!(result.metadata.current_snapshot_id, Some(2));
+    }
+
+    #[test]
+    fn test_remove_snapshots_clears_current_snapshot_when_main_snapshot_removed() {
+        let metadata = metadata_with_snapshots_and_refs(&[1, 2], &[
+            (MAIN_BRANCH, branch_ref(2)),
+            ("branch-on-1", branch_ref(1)),
+        ]);
+
+        let result = metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+            .remove_snapshots(&[2])
+            .build()
+            .unwrap();
+
+        assert_eq!(result.changes, vec![
+            TableUpdate::RemoveSnapshots {
+                snapshot_ids: vec![2]
+            },
+            TableUpdate::RemoveSnapshotRef {
+                ref_name: MAIN_BRANCH.to_string()
+            },
+        ]);
+        assert_eq!(result.metadata.current_snapshot_id, None);
+        assert_eq!(
+            result.metadata.refs,
+            HashMap::from([("branch-on-1".to_string(), branch_ref(1))])
+        );
+        assert!(result.metadata.snapshot_log.is_empty());
+    }
+
+    #[test]
+    fn test_remove_snapshots_keeps_refs_to_retained_snapshots() {
+        let metadata = metadata_with_snapshots_and_refs(&[1, 2, 3], &[
+            (MAIN_BRANCH, branch_ref(3)),
+            ("branch-on-2", branch_ref(2)),
+            ("tag-on-3", tag_ref(3)),
+        ]);
+        let refs_before = metadata.refs.clone();
+
+        let result = metadata
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+            .remove_snapshots(&[1])
+            .build()
+            .unwrap();
+
+        assert_eq!(result.changes, vec![TableUpdate::RemoveSnapshots {
+            snapshot_ids: vec![1]
+        }]);
+        assert_eq!(result.metadata.refs, refs_before);
+        assert_eq!(result.metadata.current_snapshot_id, Some(3));
+    }
+
     #[test]
     fn test_cannot_add_duplicate_snapshot_id() {
         let builder = builder_without_changes(FormatVersion::V2);
@@ -2424,6 +2574,40 @@ mod tests {
 
         let builder = builder.add_snapshot(snapshot.clone()).unwrap();
         builder.add_snapshot(snapshot).unwrap_err();
+    }
+
+    #[test]
+    fn test_remove_snapshots_records_existing_ids_once() {
+        let fixture = TableTestFixture::new_with_deep_history();
+        let metadata = fixture.table.metadata().clone();
+        let first_id = metadata.snapshot_log[0].snapshot_id;
+        let third_id = metadata.snapshot_log[2].snapshot_id;
+        let mut expected_metadata = metadata.clone();
+        expected_metadata.snapshots = [
+            3055729675574597004,
+            3057729675574597004,
+            3059729675574597004,
+        ]
+        .into_iter()
+        .map(|id| (id, metadata.snapshot_by_id(id).unwrap().clone()))
+        .collect();
+        expected_metadata.snapshot_log = metadata.snapshot_log[3..].to_vec();
+        let expected = TableMetadataBuildResult {
+            metadata: expected_metadata,
+            changes: vec![TableUpdate::RemoveSnapshots {
+                snapshot_ids: vec![third_id, first_id],
+            }],
+            expired_metadata_logs: vec![],
+        };
+        let mut builder = metadata.into_builder(None);
+        builder.last_updated_ms = Some(expected.metadata.last_updated_ms);
+
+        let result = builder
+            .remove_snapshots(&[third_id, 0, first_id, third_id, 0, first_id])
+            .build()
+            .unwrap();
+
+        assert_eq!(result, expected);
     }
 
     #[test]
