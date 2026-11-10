@@ -484,6 +484,7 @@ impl TableScan {
             return Ok(Box::pin(futures::stream::empty()));
         };
 
+        let mut workers = Vec::new();
         let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
         let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
 
@@ -496,7 +497,7 @@ impl TableScan {
         // used to stream the planned data file results back to the caller
         let (planned_file_tx, planned_file_rx) = channel(concurrency_limit_manifest_entries);
 
-        let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(self.runtime.clone());
+        let (delete_file_idx, delete_file_tx, index_completion) = DeleteFileIndex::new();
 
         let manifest_list = plan_context.get_manifest_list().await?;
 
@@ -509,32 +510,27 @@ impl TableScan {
             delete_file_idx.clone(),
             manifest_entry_delete_ctx_tx,
         )?;
-
-        let mut channel_for_manifest_error = planned_file_tx.clone();
-        let mut channel_for_data_manifest_entry_error = planned_file_tx.clone();
-        let mut channel_for_delete_manifest_entry_error = planned_file_tx.clone();
+        let worker = self.runtime.io().spawn(index_completion);
+        workers.push(worker.abort_on_drop());
 
         let rt = self.runtime.clone();
 
         // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
-        rt.io().spawn(async move {
-            let result = futures::stream::iter(manifest_file_contexts)
+        let worker = rt.io().spawn(async move {
+            futures::stream::iter(manifest_file_contexts)
                 .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| async move {
                     ctx.fetch_manifest_and_stream_manifest_entries().await
                 })
-                .await;
-
-            if let Err(error) = result {
-                let _ = channel_for_manifest_error.send(Err(error)).await;
-            }
+                .await
         });
+        workers.push(worker.abort_on_drop());
 
         // Process the delete file [`ManifestEntry`] stream in parallel
         {
             let rt = rt.clone();
             let rt_inner = rt.clone();
-            rt.cpu().spawn(async move {
-                let result = manifest_entry_delete_ctx_rx
+            let worker = rt.cpu().spawn(async move {
+                manifest_entry_delete_ctx_rx
                     .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
                     .try_for_each_concurrent(
                         concurrency_limit_manifest_entries,
@@ -550,25 +546,21 @@ impl TableScan {
                                         )
                                         .await
                                     })
+                                    .abort_on_drop()
                                     .await?
                             }
                         },
                     )
-                    .await;
-
-                if let Err(error) = result {
-                    let _ = channel_for_delete_manifest_entry_error
-                        .send(Err(error))
-                        .await;
-                }
+                    .await
             });
+            workers.push(worker.abort_on_drop());
         }
 
         // Process the data file [`ManifestEntry`] stream in parallel
         {
             let rt_inner = rt.clone();
-            rt.cpu().spawn(async move {
-                let result = manifest_entry_data_ctx_rx
+            let worker = rt.cpu().spawn(async move {
+                manifest_entry_data_ctx_rx
                     .map(|me_ctx| Ok((me_ctx, planned_file_tx.clone())))
                     .try_for_each_concurrent(
                         concurrency_limit_manifest_entries,
@@ -585,19 +577,32 @@ impl TableScan {
                                         )
                                         .await
                                     })
+                                    .abort_on_drop()
                                     .await?
                             }
                         },
                     )
-                    .await;
-
-                if let Err(error) = result {
-                    let _ = channel_for_data_manifest_entry_error.send(Err(error)).await;
-                }
+                    .await
             });
+            workers.push(worker.abort_on_drop());
         }
 
-        Ok(planned_file_rx.boxed())
+        let completion = futures::future::try_join_all(
+            workers
+                .into_iter()
+                .map(|worker| async move { worker.await? }),
+        );
+        let worker_errors = futures::stream::once(completion)
+            .filter_map(|result| std::future::ready(result.err().map(Err)));
+        // Bounded output channels must be drained while joining the workers.
+        let tasks = futures::stream::select(planned_file_rx.map(Ok), worker_errors).boxed();
+        Ok(futures::stream::try_unfold(tasks, |mut tasks| async move {
+            match tasks.next().await {
+                Some(task) => task.map(|task| Some((task, tasks))),
+                None => Ok(None),
+            }
+        })
+        .boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -631,7 +636,7 @@ impl TableScan {
 
     async fn process_data_manifest_entry<T, F, Fut>(
         manifest_entry_context: ManifestEntryContext,
-        mut planned_file_tx: Sender<Result<T>>,
+        mut planned_file_tx: Sender<T>,
         build_result: F,
     ) -> Result<()>
     where
@@ -679,9 +684,10 @@ impl TableScan {
         // congratulations! the manifest entry has made its way through the
         // entire plan without getting filtered out. Build the planned file before
         // sending so delete-file lookup preserves the original scan timing.
-        planned_file_tx
-            .send(Ok(build_result(manifest_entry_context).await?))
-            .await?;
+        // Closing the result stream cancels output delivery.
+        let _ = planned_file_tx
+            .send(build_result(manifest_entry_context).await?)
+            .await;
 
         Ok(())
     }
@@ -714,12 +720,13 @@ impl TableScan {
             }
         }
 
-        delete_file_ctx_tx
+        // The index worker's joined result carries any failure.
+        let _ = delete_file_ctx_tx
             .send(DeleteFileContext {
                 manifest_entry: manifest_entry_context.manifest_entry.clone(),
                 partition_spec_id: manifest_entry_context.partition_spec_id,
             })
-            .await?;
+            .await;
 
         Ok(())
     }
@@ -738,6 +745,7 @@ mod tests {
     use std::fs;
     use std::fs::File;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
@@ -745,11 +753,11 @@ mod tests {
         Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, RunArray,
         StringArray,
     };
-    use futures::{TryStreamExt, stream};
+    use futures::{StreamExt, TryStreamExt, stream};
     use parquet::arrow::ArrowWriter;
     use uuid::Uuid;
 
-    use super::resolve_field_id;
+    use super::{TableScan, resolve_field_id};
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::FileIO;
@@ -3122,7 +3130,7 @@ mod tests {
 
         // This should timeout/hang if deadlock exists
         // We can use tokio::time::timeout
-        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
             table_scan
                 .plan_files()
                 .await
@@ -3712,5 +3720,378 @@ mod tests {
             })
             .collect();
         assert_eq!(y, (1100..1200).collect::<Vec<i64>>());
+    }
+
+    #[tokio::test]
+    async fn test_dead_only_manifests_are_skipped() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let snapshot = fixture.table.metadata().current_snapshot().unwrap();
+        let scan = fixture.table.scan().build().unwrap();
+        let context = scan.plan_context.as_ref().unwrap();
+        let list = context.get_manifest_list().await.unwrap();
+        let manifest = context
+            .object_cache
+            .get_manifest(&list.entries()[0])
+            .await
+            .unwrap();
+        let mut writer = ManifestWriterBuilder::new(
+            fixture.next_manifest_file(),
+            Some(snapshot.snapshot_id()),
+            fixture.table.metadata().current_schema().clone(),
+            fixture
+                .table
+                .metadata()
+                .default_partition_spec()
+                .as_ref()
+                .clone(),
+        )
+        .build_v2_data();
+        for entry in manifest.entries().iter().filter(|entry| !entry.is_alive()) {
+            writer.add_delete_entry(entry.as_ref().clone()).unwrap();
+        }
+        let manifest = writer.write_manifest_file().await.unwrap();
+        fixture
+            .table
+            .file_io()
+            .delete(&manifest.manifest_path)
+            .await
+            .unwrap();
+        let output = fixture
+            .table
+            .file_io()
+            .new_output(snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut writer = ManifestListWriter::v2(
+            output,
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+        );
+        writer.add_manifests(std::iter::once(manifest)).unwrap();
+        writer.close().await.unwrap();
+        let table = Table::builder()
+            .metadata(fixture.table.metadata().clone())
+            .identifier(fixture.table.identifier().clone())
+            .file_io(fixture.table.file_io().clone())
+            .runtime(test_runtime())
+            .build()
+            .unwrap();
+        let scan = table.scan().build().unwrap();
+        assert!(
+            scan.plan_cow_rewrite_files()
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            scan.plan_files()
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    async fn gated_manifest_scan(
+        fail: bool,
+    ) -> (
+        TableScan,
+        Arc<crate::arrow::caching_delete_file_loader::tests::gated_storage::ReadGate>,
+    ) {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_deadlock_manifests().await;
+        let mut scan = fixture
+            .table
+            .scan()
+            .with_concurrency_limit(1)
+            .build()
+            .unwrap();
+        let context = scan.plan_context.as_mut().unwrap();
+        let manifests = context.get_manifest_list().await.unwrap();
+        let gate = Arc::new(
+            crate::arrow::caching_delete_file_loader::tests::gated_storage::ReadGate::default(),
+        );
+        let storage =
+            crate::arrow::caching_delete_file_loader::tests::gated_storage::GatedStorageFactory {
+                path: manifests
+                    .entries()
+                    .iter()
+                    .find(|m| m.content == crate::spec::ManifestContentType::Deletes)
+                    .unwrap()
+                    .manifest_path
+                    .clone(),
+                fail,
+                gate: gate.clone(),
+            };
+        context.object_cache = Arc::new(crate::io::object_cache::ObjectCache::new(
+            crate::io::FileIOBuilder::new(Arc::new(storage)).build(),
+            None,
+        ));
+        (scan, gate)
+    }
+
+    #[tokio::test]
+    async fn test_drop_plan_cancels_pending_manifest_read() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let (scan, gate) = gated_manifest_scan(false).await;
+            let mut stream = scan.plan_files().await.unwrap();
+            gate.started.notified().await;
+            assert!(futures::poll!(stream.next()).is_pending());
+            drop(stream);
+            gate.stopped.notified().await;
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_delayed_manifest_failure_reaches_consumer() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let (scan, gate) = gated_manifest_scan(true).await;
+            let mut stream = scan.plan_files().await.unwrap();
+            gate.started.notified().await;
+            assert!(futures::poll!(stream.next()).is_pending());
+            gate.release();
+            let error = stream.try_collect::<Vec<_>>().await.unwrap_err();
+            assert!(format!("{error:?}").contains("injected manifest read failure"));
+            gate.stopped.notified().await;
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn all_pruned_scan_with_duplicate_dvs() -> TableScan {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_dv().await;
+        let scan = fixture.table.scan().build().unwrap();
+        let context = scan.plan_context.as_ref().unwrap();
+        let list = context.get_manifest_list().await.unwrap();
+        let snapshot = &context.snapshot;
+        let mut manifests = Vec::new();
+        for file in list.entries() {
+            let manifest = context.object_cache.get_manifest(file).await.unwrap();
+            let builder = ManifestWriterBuilder::new(
+                fixture.next_manifest_file(),
+                Some(snapshot.snapshot_id()),
+                manifest.metadata().schema().clone(),
+                fixture
+                    .table
+                    .metadata()
+                    .default_partition_spec()
+                    .as_ref()
+                    .clone(),
+            );
+            let mut writer = if file.content == crate::spec::ManifestContentType::Data {
+                builder.build_v3_data()
+            } else {
+                builder.build_v3_deletes()
+            };
+            for entry in manifest.entries() {
+                let mut entry = entry.as_ref().clone();
+                if entry.content_type() == DataContentType::Data {
+                    entry.data_file.lower_bounds.insert(2, Datum::long(10));
+                    entry.data_file.upper_bounds.insert(2, Datum::long(10));
+                    writer.add_existing_entry(entry).unwrap();
+                } else {
+                    writer.add_entry(entry.clone()).unwrap();
+                    entry.data_file.file_path.push_str(".duplicate");
+                    writer.add_entry(entry).unwrap();
+                }
+            }
+            manifests.push(writer.write_manifest_file().await.unwrap());
+        }
+        let output = fixture
+            .table
+            .file_io()
+            .new_output(snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut list = ManifestListWriter::v3(
+            output,
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+            Some(42),
+        );
+        list.add_manifests(manifests.into_iter()).unwrap();
+        list.close().await.unwrap();
+        Table::builder()
+            .metadata(fixture.table.metadata().clone())
+            .identifier(fixture.table.identifier().clone())
+            .file_io(fixture.table.file_io().clone())
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+            .scan()
+            .with_filter(Reference::new("y").less_than(Datum::long(0)))
+            .with_concurrency_limit(1)
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_invalid_delete_index_fails_all_pruned_plan() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let scan = all_pruned_scan_with_duplicate_dvs().await;
+            let error = scan
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert!(
+                error.message().contains("multiple deletion vectors"),
+                "{error}"
+            );
+            let error = scan
+                .plan_cow_rewrite_files()
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+            assert!(
+                error.message().contains("multiple deletion vectors"),
+                "{error}"
+            );
+        })
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn test_data_worker_error_survives_manifest_channel_shutdown() {
+        let parked = Arc::new(tokio::sync::Notify::new());
+        let worker_parked = parked.clone();
+        let workers = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .on_thread_park(move || worker_parked.notify_one())
+            .build()
+            .unwrap();
+        let driver = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        driver.block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let mut fixture = TableTestFixture::new();
+                fixture.setup_deadlock_manifests().await;
+                let mut metadata = fixture.table.metadata().clone();
+                metadata.partition_specs.clear();
+                let table = fixture.table.with_metadata(Arc::new(metadata));
+                let mut scan = table.scan().with_concurrency_limit(1).build().unwrap();
+                scan.runtime = crate::runtime::Runtime::new(&workers);
+
+                for cow in [false, true] {
+                    let stream = if cow {
+                        scan.plan_cow_rewrite_files()
+                            .await
+                            .unwrap()
+                            .map_ok(|file| file.scan_task)
+                            .boxed()
+                    } else {
+                        scan.plan_files().await.unwrap()
+                    };
+                    // Both the originating failure and channel shutdown must be ready
+                    // before polling the consumer, regardless of worker scheduling.
+                    while workers.metrics().num_alive_tasks() != 0 {
+                        parked.notified().await;
+                    }
+                    let error = stream.try_collect::<Vec<_>>().await.unwrap_err();
+                    assert_eq!(
+                        (error.kind(), error.message()),
+                        (
+                            ErrorKind::DataInvalid,
+                            "Non-empty FileScanTask partition requires a partition spec",
+                        )
+                    );
+                }
+            })
+            .await
+            .unwrap();
+        });
+    }
+
+    #[tokio::test]
+    async fn test_plan_worker_failures_are_returned() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let scan = fixture.table.scan().build().unwrap();
+        for panic in [false, true] {
+            let stream = scan
+                .plan_data_files(move |_| async move {
+                    assert!(!panic, "injected worker panic");
+                    Err::<FileScanTask, _>(
+                        crate::Error::new(ErrorKind::DataInvalid, "injected error")
+                            .with_source(std::io::Error::other("injected source")),
+                    )
+                })
+                .await
+                .unwrap();
+            let error =
+                tokio::time::timeout(Duration::from_secs(10), stream.try_collect::<Vec<_>>())
+                    .await
+                    .unwrap()
+                    .unwrap_err();
+            let source = std::error::Error::source(&error).unwrap();
+            if panic {
+                assert!(
+                    source
+                        .downcast_ref::<tokio::task::JoinError>()
+                        .unwrap()
+                        .is_panic()
+                );
+            } else {
+                assert_eq!(
+                    (error.kind(), error.message(), source.to_string()),
+                    (
+                        ErrorKind::DataInvalid,
+                        "injected error",
+                        "injected source".to_owned()
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_plan_cancelled_workers_are_returned() {
+        let driver = tokio::runtime::Runtime::new().unwrap();
+        let cpu = tokio::runtime::Runtime::new().unwrap();
+        let runtime = crate::runtime::Runtime::new_with_split(&driver, &cpu);
+        let mut scan = driver.block_on(async {
+            let mut fixture = TableTestFixture::new();
+            fixture.setup_manifest_files().await;
+            fixture.table.scan().build().unwrap()
+        });
+        scan.runtime = runtime;
+        drop(cpu);
+        driver.block_on(async {
+            let result = tokio::time::timeout(Duration::from_secs(10), async {
+                scan.plan_files()
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>()
+                    .await
+            })
+            .await
+            .unwrap();
+            assert!(result.is_err());
+        });
     }
 }

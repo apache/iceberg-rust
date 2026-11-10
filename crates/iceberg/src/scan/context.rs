@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use futures::SinkExt;
 use futures::channel::mpsc::Sender;
-use futures::{SinkExt, TryFutureExt};
 
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -175,10 +175,11 @@ impl ManifestFileContext {
                 sort_order,
             };
 
-            sender
-                .send(manifest_entry_context)
-                .map_err(|_| Error::new(ErrorKind::Unexpected, "mpsc channel SendError"))
-                .await?;
+            // The receiving worker's joined result carries its failure. Channel
+            // closure only cancels production; it must not mask that failure.
+            if sender.send(manifest_entry_context).await.is_err() {
+                return Ok(());
+            }
         }
 
         Ok(())
@@ -325,6 +326,7 @@ impl PlanContext {
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in manifest_files {
+            let mut skipped = false;
             let tx = if manifest_file.content == ManifestContentType::Deletes {
                 delete_file_tx.clone()
             } else {
@@ -344,7 +346,7 @@ impl PlanContext {
                     )
                     .eval(manifest_file)?
                 {
-                    continue;
+                    skipped = true;
                 }
 
                 Some(partition_bound_predicate)
@@ -352,6 +354,10 @@ impl PlanContext {
                 None
             };
 
+            skipped |= !manifest_file.has_added_files() && !manifest_file.has_existing_files();
+            if skipped {
+                continue;
+            }
             let mfc = self.create_manifest_file_context(
                 manifest_file,
                 partition_bound_predicate,
