@@ -152,19 +152,9 @@ impl ArrowReader {
                 }
             }
 
-            let row_group_page_index = parquet_metadata.page_index_for_row_group(idx);
-            let column_count = row_group_metadata.columns().len();
-            let column_index = (0..column_count)
-                .map(|column_idx| row_group_page_index.column_index(column_idx).cloned())
-                .collect::<Vec<_>>();
-            let offset_index = (0..column_count)
-                .map(|column_idx| row_group_page_index.offset_index(column_idx).cloned())
-                .collect::<Vec<_>>();
-
             let selections_for_page = PageIndexEvaluator::eval(
                 predicate,
-                &column_index,
-                &offset_index,
+                &parquet_metadata.page_index_for_row_group(idx),
                 row_group_metadata,
                 field_id_map,
                 snapshot_schema,

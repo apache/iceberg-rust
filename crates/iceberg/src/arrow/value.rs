@@ -1408,8 +1408,8 @@ mod test {
 
                 let map_key_builder = Int32Builder::new();
                 let map_value_builder = Int32Builder::new();
-                // Arrow 60 defaults to `key` and `value`; this fixture's schema uses
-                // the Iceberg field names `keys` and `values`.
+                // Arrow 60 `MapBuilder` defaults to `key` and `value`, but this fixture's
+                // Arrow type names the map fields `keys` and `values`.
                 let map_builder = MapBuilder::new(
                     Some(MapFieldNames {
                         entry: "entries".to_string(),
