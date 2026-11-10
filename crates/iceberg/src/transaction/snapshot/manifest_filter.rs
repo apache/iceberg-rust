@@ -24,16 +24,16 @@ use uuid::Uuid;
 use super::{manifest_path, new_manifest_writer};
 use crate::error::{Result, invalid_data};
 use crate::io::object_cache::ManifestKey;
-use crate::spec::{DataFile, FormatVersion, ManifestContentType, ManifestFile};
+use crate::spec::{DataFile, DataFileFormat, FormatVersion, ManifestContentType, ManifestFile};
 use crate::table::Table;
 
-/// Identifies one entry to mark as deleted.
+/// Identifies one entry to mark as `Deleted`, a data file or a delete file.
 ///
 /// A path alone is not enough: a Puffin file may hold several deletion
 /// vectors, each its own entry at a distinct blob offset. Data files and
 /// non-DV delete files have no offset, so for them this is the path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct DeleteFileIdentity {
+struct RemovedFileIdentity {
     /// The absolute path, as stored in the manifest entry. Comparison is
     /// textual, so a relative path would not match the entry it names.
     path: String,
@@ -41,7 +41,7 @@ struct DeleteFileIdentity {
     content_size_in_bytes: Option<i64>,
 }
 
-impl DeleteFileIdentity {
+impl RemovedFileIdentity {
     fn of(file: &DataFile) -> Self {
         Self {
             path: file.file_path().to_string(),
@@ -51,7 +51,7 @@ impl DeleteFileIdentity {
     }
 }
 
-impl std::fmt::Display for DeleteFileIdentity {
+impl std::fmt::Display for RemovedFileIdentity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match (self.content_offset, self.content_size_in_bytes) {
             (Some(offset), Some(size)) => write!(f, "{}@{offset}+{size}", self.path),
@@ -77,11 +77,16 @@ pub(crate) struct ManifestFilterManager {
     content: ManifestContentType,
     /// The files to remove, by absolute path (and blob range for deletion
     /// vectors). Fixed for the execution.
-    files_to_remove: HashSet<DeleteFileIdentity>,
+    files_to_remove: HashSet<RemovedFileIdentity>,
     /// Whether a file to remove that is not live in any manifest fails the
     /// attempt. Off lets a retry succeed after a concurrent commit removed the
     /// same file; the action decides which it needs.
     fail_missing_delete_paths: bool,
+    /// Absolute paths of the data files the commit removes. A deletion vector
+    /// referencing one of them is dangling and is marked `Deleted` too. Not
+    /// required to be found, unlike `files_to_remove`. Only set on the delete
+    /// filter; see [`Self::with_dangling_dvs_for`].
+    removed_data_file_paths: HashSet<String>,
     /// Source manifest → rewritten result.
     filtered: HashMap<ManifestKey, FilteredManifest>,
     /// Format version the rewrites were written under. Per spec, v1 entries
@@ -113,11 +118,28 @@ impl ManifestFilterManager {
     ) -> Self {
         Self {
             content,
-            files_to_remove: files_to_remove.iter().map(DeleteFileIdentity::of).collect(),
+            files_to_remove: files_to_remove
+                .iter()
+                .map(RemovedFileIdentity::of)
+                .collect(),
             fail_missing_delete_paths,
+            removed_data_file_paths: HashSet::new(),
             filtered: HashMap::new(),
             format_version: None,
         }
+    }
+
+    /// Also marks `Deleted` any deletion vector whose referenced data file is
+    /// among `removed_data_files`, as Java's `removeDanglingDeletesFor` does.
+    /// Only deletion vectors qualify: a position delete file's
+    /// `referenced_data_file` is a hint, not a guarantee of its contents.
+    pub(crate) fn with_dangling_dvs_for(mut self, removed_data_files: &[DataFile]) -> Self {
+        debug_assert_eq!(self.content, ManifestContentType::Deletes);
+        self.removed_data_file_paths = removed_data_files
+            .iter()
+            .map(|f| f.file_path().to_string())
+            .collect();
+        self
     }
 
     /// Applies the removals to `manifests`, rewriting those of this manager's
@@ -139,14 +161,20 @@ impl ManifestFilterManager {
         next_manifest_number: &mut u64,
         owned_artifacts: &mut HashSet<String>,
     ) -> Result<Filtered> {
-        if self.files_to_remove.is_empty() {
+        let format_version = table.metadata().format_version();
+        // The delete filter must still scan when no delete file is named but a
+        // removed data file may leave a DV dangling. DVs exist from v3, so on
+        // older tables nothing can dangle.
+        let may_have_dangling_dvs =
+            !matches!(format_version, FormatVersion::V1 | FormatVersion::V2)
+                && !self.removed_data_file_paths.is_empty();
+        if self.files_to_remove.is_empty() && !may_have_dangling_dvs {
             return Ok(Filtered {
                 manifests,
                 removed_files: Vec::new(),
             });
         }
 
-        let format_version = table.metadata().format_version();
         if self.format_version != Some(format_version) {
             self.filtered.clear();
             self.format_version = Some(format_version);
@@ -189,8 +217,8 @@ impl ManifestFilterManager {
         }
 
         if self.fail_missing_delete_paths {
-            let found: HashSet<DeleteFileIdentity> =
-                removed_files.iter().map(DeleteFileIdentity::of).collect();
+            let found: HashSet<RemovedFileIdentity> =
+                removed_files.iter().map(RemovedFileIdentity::of).collect();
             let mut missing: Vec<String> = self
                 .files_to_remove
                 .iter()
@@ -274,6 +302,15 @@ impl ManifestFilterManager {
     }
 
     fn removes(&self, file: &DataFile) -> bool {
-        self.files_to_remove.contains(&DeleteFileIdentity::of(file))
+        self.files_to_remove
+            .contains(&RemovedFileIdentity::of(file))
+            || self.is_dangling_dv(file)
+    }
+
+    fn is_dangling_dv(&self, file: &DataFile) -> bool {
+        file.file_format() == DataFileFormat::Puffin
+            && file
+                .referenced_data_file()
+                .is_some_and(|data| self.removed_data_file_paths.contains(&data))
     }
 }

@@ -106,7 +106,8 @@ impl MergingSnapshotProducer {
                 ManifestContentType::Deletes,
                 &intent.removed_delete_files,
                 intent.fail_missing_delete_paths,
-            ),
+            )
+            .with_dangling_dvs_for(&intent.removed_data_files),
             intent,
             snapshot_id: None,
             attempt: 0,
@@ -965,8 +966,9 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
-    /// A deletion vector: one blob of a Puffin file, located by offset and size.
-    fn deletion_vector(table: &Table, path: &str, offset: i64, size: i64) -> DataFile {
+    /// A deletion vector for `data_path`: one blob of a Puffin file, located
+    /// by offset and size.
+    fn deletion_vector(table: &Table, path: &str, data_path: &str, offset: i64) -> DataFile {
         DataFileBuilder::default()
             .content(DataContentType::PositionDeletes)
             .file_path(path.to_string())
@@ -975,9 +977,9 @@ mod tests {
             .record_count(1)
             .partition_spec_id(table.metadata().default_partition_spec_id())
             .partition(Struct::from_iter([Some(Literal::long(300))]))
-            .referenced_data_file(Some(format!("test/{offset}.parquet")))
+            .referenced_data_file(Some(data_path.to_string()))
             .content_offset(Some(offset))
-            .content_size_in_bytes(Some(size))
+            .content_size_in_bytes(Some(10))
             .build()
             .unwrap()
     }
@@ -1000,7 +1002,12 @@ mod tests {
     async fn test_deletion_vector_rejected_on_v2_table() {
         let table = make_v2_minimal_table();
         let mut i = intent(Operation::Overwrite);
-        i.added_delete_files = vec![deletion_vector(&table, "test/dv.puffin", 4, 10)];
+        i.added_delete_files = vec![deletion_vector(
+            &table,
+            "test/dv.puffin",
+            "test/d.parquet",
+            4,
+        )];
         let err = MergingSnapshotProducer::new(i)
             .apply(&table)
             .await
@@ -1035,7 +1042,7 @@ mod tests {
         let mut i = intent(Operation::Overwrite);
         i.added_delete_files = vec![
             equality_delete_file(&table, "test/eq.parquet"),
-            deletion_vector(&table, "test/dv.puffin", 4, 10),
+            deletion_vector(&table, "test/dv.puffin", "test/d.parquet", 4),
         ];
         let mut commit = MergingSnapshotProducer::new(i).apply(&table).await.unwrap();
         let snapshot = added_snapshot(&mut commit);
@@ -1056,8 +1063,8 @@ mod tests {
         use crate::transaction::tests::make_v3_minimal_table;
 
         let base = make_v3_minimal_table();
-        let dv_a = deletion_vector(&base, "test/dvs.puffin", 4, 10);
-        let dv_b = deletion_vector(&base, "test/dvs.puffin", 14, 12);
+        let dv_a = deletion_vector(&base, "test/dvs.puffin", "test/a.parquet", 4);
+        let dv_b = deletion_vector(&base, "test/dvs.puffin", "test/b.parquet", 14);
 
         let mut add = intent(Operation::Overwrite);
         add.added_data_files = vec![data_file(&base, "test/a.parquet", 1)];
@@ -1098,6 +1105,75 @@ mod tests {
         ]);
         let summary = &snapshot.summary().additional_properties;
         assert_eq!(summary.get("removed-delete-files").unwrap(), "1");
+        assert_eq!(summary.get("total-delete-files").unwrap(), "1");
+    }
+
+    /// Removing a data file on v3 also marks its deletion vector `Deleted`,
+    /// even though the intent names no delete files. A DV for another data
+    /// file in the same Puffin file stays `Existing`, and a removed data file
+    /// without a DV is fine under `fail_missing_delete_paths`.
+    #[tokio::test]
+    async fn test_remove_data_file_also_removes_its_deletion_vector() {
+        use super::super::tests::with_snapshot;
+        use crate::transaction::tests::make_v3_minimal_table;
+
+        let base = make_v3_minimal_table();
+        let dv_a = deletion_vector(&base, "test/dvs.puffin", "test/a.parquet", 4);
+        let dv_b = deletion_vector(&base, "test/dvs.puffin", "test/b.parquet", 14);
+
+        let mut add = intent(Operation::Overwrite);
+        add.added_data_files = vec![
+            data_file(&base, "test/a.parquet", 1),
+            data_file(&base, "test/b.parquet", 1),
+            data_file(&base, "test/c.parquet", 1),
+        ];
+        add.added_delete_files = vec![dv_a.clone(), dv_b.clone()];
+        let mut commit = MergingSnapshotProducer::new(add)
+            .apply(&base)
+            .await
+            .unwrap();
+        let table = with_snapshot(&base, added_snapshot(&mut commit));
+
+        let mut remove = intent(Operation::Delete);
+        remove.removed_data_files = vec![
+            data_file(&base, "test/a.parquet", 1),
+            data_file(&base, "test/c.parquet", 1),
+        ];
+        let mut commit = MergingSnapshotProducer::new(remove)
+            .apply(&table)
+            .await
+            .unwrap();
+        let snapshot = added_snapshot(&mut commit);
+
+        let list = table.manifest_list_reader(&snapshot).load().await.unwrap();
+        let rewritten_deletes = list
+            .entries()
+            .iter()
+            .find(|m| {
+                m.added_snapshot_id == snapshot.snapshot_id()
+                    && m.content == ManifestContentType::Deletes
+            })
+            .expect("the delete manifest is rewritten for the dangling DV");
+        let manifest = table
+            .manifest_reader()
+            .read(rewritten_deletes)
+            .await
+            .unwrap();
+        let mut entries: Vec<_> = manifest
+            .entries()
+            .iter()
+            .map(|e| (e.status(), e.data_file().referenced_data_file()))
+            .collect();
+        entries.sort_by_key(|(_, data)| data.clone());
+        assert_eq!(entries, vec![
+            (ManifestStatus::Deleted, Some("test/a.parquet".to_string())),
+            (ManifestStatus::Existing, Some("test/b.parquet".to_string())),
+        ]);
+
+        let summary = &snapshot.summary().additional_properties;
+        assert_eq!(summary.get("deleted-data-files").unwrap(), "2");
+        assert_eq!(summary.get("removed-delete-files").unwrap(), "1");
+        assert_eq!(summary.get("total-data-files").unwrap(), "1");
         assert_eq!(summary.get("total-delete-files").unwrap(), "1");
     }
 
