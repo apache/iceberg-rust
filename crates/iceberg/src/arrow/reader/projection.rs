@@ -499,8 +499,7 @@ fn apply_name_mapping_to_field(
                 .with_data_type(DataType::Struct(entry_fields));
             DataType::Map(Arc::new(entries), *sorted)
         }
-        // `Fields::filter_leaves` treats `ListView` and `LargeListView` as leaves, so projection
-        // cannot select their elements even with IDs.
+        // List views were already rewritten to lists by `coerce_list_views`.
         other => other.clone(),
     };
 
@@ -531,6 +530,64 @@ fn try_map_fields(
         mapped.push(map_field(field)?);
     }
     Ok(Fields::from(mapped))
+}
+
+/// Rewrites every `ListView` and `LargeListView` in `arrow_schema` to `List` and `LargeList`,
+/// because `Fields::filter_leaves`, which the projection relies on, treats list views as leaves
+/// (#3393). Returns `None` if there are none.
+pub(super) fn coerce_list_views(arrow_schema: &ArrowSchemaRef) -> Option<ArrowSchemaRef> {
+    let fields = coerce_list_views_in_fields(arrow_schema.fields())?;
+    Some(Arc::new(ArrowSchema::new_with_metadata(
+        fields,
+        arrow_schema.metadata().clone(),
+    )))
+}
+
+/// Returns `fields` with their list views rewritten, or `None` if they have none. Unchanged
+/// fields are shared, and nothing is allocated before the first change.
+fn coerce_list_views_in_fields(fields: &Fields) -> Option<Fields> {
+    let (index, first) = fields
+        .iter()
+        .enumerate()
+        .find_map(|(index, field)| Some((index, coerce_list_views_in_field(field)?)))?;
+    let rest = fields
+        .iter()
+        .skip(index + 1)
+        .map(coerce_list_views_or_share);
+    Some(
+        fields
+            .iter()
+            .take(index)
+            .cloned()
+            .chain([first])
+            .chain(rest)
+            .collect(),
+    )
+}
+
+/// Returns `field` with its list views rewritten, or `None` if it has none.
+fn coerce_list_views_in_field(field: &FieldRef) -> Option<FieldRef> {
+    let data_type = match field.data_type() {
+        DataType::ListView(element) => DataType::List(coerce_list_views_or_share(element)),
+        DataType::LargeListView(element) => {
+            DataType::LargeList(coerce_list_views_or_share(element))
+        }
+        DataType::List(element) => DataType::List(coerce_list_views_in_field(element)?),
+        DataType::LargeList(element) => DataType::LargeList(coerce_list_views_in_field(element)?),
+        DataType::FixedSizeList(element, size) => {
+            DataType::FixedSizeList(coerce_list_views_in_field(element)?, *size)
+        }
+        DataType::Map(entries, sorted) => {
+            DataType::Map(coerce_list_views_in_field(entries)?, *sorted)
+        }
+        DataType::Struct(fields) => DataType::Struct(coerce_list_views_in_fields(fields)?),
+        _ => return None,
+    };
+    Some(Arc::new(field.as_ref().clone().with_data_type(data_type)))
+}
+
+fn coerce_list_views_or_share(field: &FieldRef) -> FieldRef {
+    coerce_list_views_in_field(field).unwrap_or_else(|| Arc::clone(field))
 }
 
 /// Add position-based fallback field IDs to Arrow schema for Parquet files lacking them.
@@ -1391,6 +1448,64 @@ message schema {
             build_field_id_map_from_arrow_schema(&mapped),
             HashMap::from([(2, 0)])
         );
+    }
+
+    /// List views become lists at any depth and keep their metadata, and a schema without one
+    /// is left as it is.
+    #[test]
+    fn test_coerce_list_views() {
+        use arrow_schema::{FieldRef, Fields};
+
+        use super::coerce_list_views;
+
+        // The same schema, built with list views or with lists.
+        let schema = |list: fn(FieldRef) -> DataType, large_list: fn(FieldRef) -> DataType| {
+            let id = HashMap::from([(PARQUET_FIELD_ID_META_KEY.to_string(), "9".to_string())]);
+            let int = |name: &str| Field::new(name, DataType::Int32, true);
+            let element = |data_type| Arc::new(Field::new("element", data_type, true));
+            let ints = element(DataType::Int32);
+            let entries = Field::new(
+                "key_value",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", list(ints.clone()), true),
+                ])),
+                false,
+            );
+            Arc::new(ArrowSchema::new(vec![
+                int("id"),
+                Field::new(
+                    "s",
+                    DataType::Struct(Fields::from(vec![
+                        int("a"),
+                        Field::new("lv", list(ints.clone()), true),
+                        int("b"),
+                    ])),
+                    true,
+                ),
+                Field::new("nested", list(element(large_list(ints.clone()))), true)
+                    .with_metadata(id),
+                Field::new("list", DataType::List(element(list(ints.clone()))), true),
+                Field::new(
+                    "large",
+                    DataType::LargeList(element(list(ints.clone()))),
+                    true,
+                ),
+                Field::new(
+                    "fixed",
+                    DataType::FixedSizeList(element(list(ints)), 2),
+                    true,
+                ),
+                Field::new("map", DataType::Map(Arc::new(entries), true), true),
+            ]))
+        };
+        let lists = schema(DataType::List, DataType::LargeList);
+
+        assert_eq!(
+            coerce_list_views(&schema(DataType::ListView, DataType::LargeListView)),
+            Some(Arc::clone(&lists))
+        );
+        assert_eq!(coerce_list_views(&lists), None);
     }
 
     /// Test reading Parquet files without field IDs with partial projection.
