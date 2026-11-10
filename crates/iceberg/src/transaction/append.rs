@@ -157,9 +157,9 @@ mod tests {
     use crate::encryption::{SensitiveBytes, StandardKeyMetadata};
     use crate::io::FileIO;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
-        ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef,
-        Struct, TableMetadata,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, Literal,
+        MAIN_BRANCH, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
+        SnapshotRef, Struct, TableMetadata, TableProperties,
     };
     use crate::table::Table;
     use crate::test_utils::{commit_with_fresh_state, make_encrypted_table, test_runtime};
@@ -472,6 +472,48 @@ mod tests {
             manifest.entries()[0].data_file().file_path(),
             "memory:///table/data/00000.parquet"
         );
+    }
+
+    #[tokio::test]
+    async fn test_fast_append_rejects_pre_v3_encryption_before_writing() {
+        for version in [FormatVersion::V1, FormatVersion::V2] {
+            let dir = TempDir::new().unwrap();
+            let base = make_v2_minimal_table();
+            let mut metadata = base.metadata().clone();
+            metadata.format_version = version;
+            metadata.location = dir.path().to_str().unwrap().to_string();
+            metadata.properties.extend([
+                (
+                    TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+                    "master-1".to_string(),
+                ),
+                (
+                    TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH.to_string(),
+                    "32".to_string(),
+                ),
+            ]);
+            let table = base.with_metadata(Arc::new(metadata));
+            let tx = Transaction::new(&table);
+            let action = tx.fast_append().set_snapshot_properties(HashMap::from([(
+                "test".to_string(),
+                "value".to_string(),
+            )]));
+            let err = commit_with_fresh_state(action, &table)
+                .await
+                .err()
+                .expect("pre-v3 encryption properties must be rejected");
+            let expected = (
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid properties for {version}: [encryption.data-key-length, encryption.key-id]"
+                ),
+            );
+            assert_eq!(
+                (err.kind(), err.message()),
+                (expected.0, expected.1.as_str())
+            );
+            assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
+        }
     }
 
     #[tokio::test]

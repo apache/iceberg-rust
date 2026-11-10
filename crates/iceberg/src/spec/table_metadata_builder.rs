@@ -246,6 +246,7 @@ impl TableMetadataBuilder {
     ///
     /// # Errors
     /// - If properties contains a reserved property
+    /// - If encryption properties are set on a table below v3
     pub fn set_properties(mut self, properties: HashMap<String, String>) -> Result<Self> {
         // List of specified properties that are RESERVED and should not be persisted.
         let reserved_properties = properties
@@ -264,6 +265,9 @@ impl TableMetadataBuilder {
         if properties.is_empty() {
             return Ok(self);
         }
+
+        TableProperties::new(&properties)
+            .check_format_compatibility(self.metadata.format_version)?;
 
         self.metadata.properties.extend(properties.clone());
         self.changes.push(TableUpdate::SetProperties {
@@ -2082,6 +2086,43 @@ mod tests {
         .unwrap();
 
         assert_eq!(build_result.metadata.metadata_log.len(), 0);
+    }
+
+    #[test]
+    fn test_repair_pre_v3_encryption_properties() {
+        let properties = HashMap::from([
+            (
+                TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+                "master-1".to_string(),
+            ),
+            (
+                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH.to_string(),
+                "32".to_string(),
+            ),
+        ]);
+        for version in [FormatVersion::V1, FormatVersion::V2] {
+            let mut builder = builder_without_changes(version);
+            builder.metadata.properties = properties.clone();
+            let removals = properties.keys().cloned().collect::<Vec<_>>();
+            let repaired = builder
+                .clone()
+                .remove_properties(&removals)
+                .unwrap()
+                .build()
+                .unwrap()
+                .metadata;
+            assert_eq!(repaired.properties(), &HashMap::new());
+
+            let metadata = builder
+                .upgrade_format_version(FormatVersion::V3)
+                .unwrap()
+                .set_properties(properties.clone())
+                .unwrap()
+                .build()
+                .unwrap()
+                .metadata;
+            assert_eq!(metadata.properties(), &properties);
+        }
     }
 
     #[test]

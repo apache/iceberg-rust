@@ -449,7 +449,8 @@ pub(crate) mod tests {
     use crate::encryption::kms::MemoryKmsClientFactory;
     use crate::io::{FileIO, LocalFsStorageFactory};
     use crate::spec::{
-        NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, TableProperties, Type,
+        FormatVersion, NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder,
+        TableProperties, Type,
     };
     use crate::test_utils::test_runtime;
     use crate::transaction::{ApplyTransactionAction, Transaction};
@@ -2047,6 +2048,68 @@ pub(crate) mod tests {
             }
         }
         existing
+    }
+
+    #[tokio::test]
+    async fn test_pre_v3_encryption_properties_do_not_change_catalog_state() {
+        let catalog = new_memory_catalog().await;
+        let namespace = NamespaceIdent::new("ns".into());
+        create_namespace(&catalog, &namespace).await;
+
+        for version in [FormatVersion::V1, FormatVersion::V2] {
+            for property in [
+                TableProperties::PROPERTY_ENCRYPTION_KEY_ID,
+                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
+            ] {
+                let creation = TableCreation::builder()
+                    .name(format!("{version}-{property}"))
+                    .schema(simple_table_schema())
+                    .format_version(version)
+                    .properties(HashMap::from([(property.to_string(), "value".to_string())]))
+                    .build();
+                let ident = TableIdent::new(namespace.clone(), creation.name.clone());
+                let create_err = catalog
+                    .create_table(&namespace, creation)
+                    .await
+                    .unwrap_err();
+                assert!(!catalog.table_exists(&ident).await.unwrap());
+
+                let table = catalog
+                    .create_table(
+                        &namespace,
+                        TableCreation::builder()
+                            .name(ident.name().to_string())
+                            .schema(simple_table_schema())
+                            .format_version(version)
+                            .build(),
+                    )
+                    .await
+                    .unwrap();
+                let tx = Transaction::new(&table);
+                let update_err = tx
+                    .update_table_properties()
+                    .set(property.to_string(), "value".to_string())
+                    .apply(tx)
+                    .unwrap()
+                    .commit(&catalog)
+                    .await
+                    .unwrap_err();
+                for err in [create_err, update_err] {
+                    assert_eq!(
+                        (err.kind(), err.message()),
+                        (
+                            ErrorKind::DataInvalid,
+                            format!("Invalid properties for {version}: [{property}]").as_str(),
+                        )
+                    );
+                }
+                let loaded = catalog.load_table(table.identifier()).await.unwrap();
+                assert_eq!(
+                    (loaded.metadata(), loaded.metadata_location()),
+                    (table.metadata(), table.metadata_location())
+                );
+            }
+        }
     }
 
     #[tokio::test]
