@@ -158,13 +158,13 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
-        ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef,
-        Struct, TableMetadata,
+        ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, PartitionSpec,
+        SnapshotRef, Struct, TableMetadata, TableProperties, Transform,
     };
     use crate::table::Table;
     use crate::test_utils::{commit_with_fresh_state, make_encrypted_table, test_runtime};
     use crate::transaction::tests::{
-        make_v2_minimal_table, make_v3_minimal_table, with_retry_properties,
+        make_v1_table, make_v2_minimal_table, make_v3_minimal_table, with_retry_properties,
     };
     use crate::transaction::{ApplyTransactionAction, FastAppendAction, Transaction};
     use crate::{ErrorKind, TableCommit, TableIdent, TableRequirement, TableUpdate};
@@ -999,6 +999,196 @@ mod tests {
             manifest.entries()[0].snapshot_id().unwrap()
         );
         assert_eq!(data_file, *manifest.entries()[0].data_file());
+    }
+
+    fn with_bucket_partition_spec(table: Table) -> Table {
+        let spec = PartitionSpec::builder(table.metadata().current_schema().clone())
+            .add_partition_field("x", "x", Transform::Identity)
+            .unwrap()
+            .add_partition_field("y", "y_bucket", Transform::Bucket(16))
+            .unwrap()
+            .build()
+            .unwrap()
+            .into_unbound();
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .add_default_partition_spec(spec)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        table.with_metadata(Arc::new(metadata))
+    }
+
+    #[tokio::test]
+    async fn test_fast_append_groups_files_by_partition_spec() {
+        for table in [
+            make_v1_table(),
+            make_v2_minimal_table(),
+            make_v3_minimal_table(),
+        ] {
+            let metadata = table
+                .metadata()
+                .clone()
+                .into_builder(None)
+                .set_properties(HashMap::from([(
+                    TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT.to_string(),
+                    "2".to_string(),
+                )]))
+                .unwrap()
+                .build()
+                .unwrap()
+                .metadata;
+            let table = table.with_metadata(Arc::new(metadata));
+            let table = with_bucket_partition_spec(table).with_metadata_location(
+                "s3://bucket/test/location/metadata/00000-9c12d441-03fe-4693-9a96-a0705ddf69c1.metadata.json".to_string(),
+            );
+            let old_file = DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path("test/old.parquet".to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(100)
+                .record_count(1)
+                .partition_spec_id(0)
+                .partition(Struct::from_iter([Some(Literal::long(300))]))
+                .build()
+                .unwrap();
+            let mut other_old_file = old_file.clone();
+            other_old_file.file_path = "test/other-old.parquet".to_string();
+            let mut new_file = old_file.clone();
+            new_file.file_path = "test/new.parquet".to_string();
+            new_file.partition_spec_id = table.metadata().default_partition_spec_id();
+            new_file.partition =
+                Struct::from_iter([Some(Literal::long(300)), Some(Literal::int(3))]);
+
+            let action = Transaction::new(&table).fast_append().add_data_files(vec![
+                new_file.clone(),
+                old_file.clone(),
+                other_old_file.clone(),
+                old_file.clone(),
+                new_file.clone(),
+            ]);
+            let mut commit = commit_with_fresh_state(action, &table).await.unwrap();
+            let table = TableCommit::builder()
+                .ident(table.identifier().clone())
+                .updates(commit.take_updates())
+                .requirements(commit.take_requirements())
+                .build()
+                .apply(table)
+                .unwrap();
+            let snapshot = table.metadata().current_snapshot().unwrap();
+            let list = table.manifest_list_reader(snapshot).load().await.unwrap();
+            let mut files_by_spec = Vec::new();
+            for manifest_file in list.entries() {
+                let manifest = table.manifest_reader().read(manifest_file).await.unwrap();
+                assert_eq!(
+                    manifest.metadata().partition_spec(),
+                    table
+                        .metadata()
+                        .partition_spec_by_id(manifest_file.partition_spec_id)
+                        .unwrap()
+                        .as_ref()
+                );
+                let files = manifest
+                    .entries()
+                    .iter()
+                    .map(|entry| entry.data_file().clone())
+                    .collect::<Vec<_>>();
+                files_by_spec.push((manifest_file.partition_spec_id, files));
+            }
+            let mut expected = vec![
+                (0, vec![old_file.clone(), other_old_file]),
+                (new_file.partition_spec_id, vec![new_file.clone()]),
+            ];
+            if let Some(mut row_id) = snapshot.first_row_id() {
+                for (_, files) in &mut expected {
+                    for file in files {
+                        file.first_row_id = Some(row_id.try_into().unwrap());
+                        row_id += file.record_count;
+                    }
+                }
+            }
+            assert_eq!(files_by_spec, expected);
+
+            let expected_summary = HashMap::from([
+                ("added-data-files".to_string(), "3".to_string()),
+                ("added-records".to_string(), "3".to_string()),
+                ("added-files-size".to_string(), "300".to_string()),
+                ("changed-partition-count".to_string(), "2".to_string()),
+                ("total-data-files".to_string(), "3".to_string()),
+                ("total-delete-files".to_string(), "0".to_string()),
+                ("total-records".to_string(), "3".to_string()),
+                ("total-files-size".to_string(), "300".to_string()),
+                ("total-position-deletes".to_string(), "0".to_string()),
+                ("total-equality-deletes".to_string(), "0".to_string()),
+                (
+                    "partitions.x=300".to_string(),
+                    "added-data-files=2,added-files-size=200,added-records=2".to_string(),
+                ),
+                (
+                    "partitions.x=300/y_bucket=3".to_string(),
+                    "added-data-files=1,added-files-size=100,added-records=1".to_string(),
+                ),
+                (
+                    "iceberg-version".to_string(),
+                    format!("Apache Iceberg Rust {}", env!("CARGO_PKG_VERSION")),
+                ),
+            ]);
+            let mut actual_summary = snapshot.summary().additional_properties.clone();
+            for (key, value) in &mut actual_summary {
+                if key.starts_with("partitions.") {
+                    let mut metrics = value.split(',').collect::<Vec<_>>();
+                    metrics.sort_unstable();
+                    *value = metrics.join(",");
+                }
+            }
+            assert_eq!(actual_summary, expected_summary);
+
+            let action = Transaction::new(&table)
+                .fast_append()
+                .add_data_files(vec![old_file, new_file]);
+            let err = commit_with_fresh_state(action, &table)
+                .await
+                .err()
+                .expect("files from both specs are already live");
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains("test/old.parquet"));
+            assert!(err.message().contains("test/new.parquet"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fast_append_validates_non_default_partition_type() {
+        let table = with_bucket_partition_spec(make_v2_minimal_table());
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/invalid.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(1)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([
+                Some(Literal::long(300)),
+                Some(Literal::int(3)),
+            ]))
+            .build()
+            .unwrap();
+        let action = Transaction::new(&table)
+            .fast_append()
+            .add_data_files(vec![data_file]);
+        let err = commit_with_fresh_state(action, &table)
+            .await
+            .err()
+            .expect("partition must match the file's spec");
+        assert_eq!(
+            (err.kind(), err.message()),
+            (
+                ErrorKind::DataInvalid,
+                "Partition value is not compatible with partition type"
+            )
+        );
     }
 
     /// Two writers append concurrently. Writer A starts from S0, but writer B
