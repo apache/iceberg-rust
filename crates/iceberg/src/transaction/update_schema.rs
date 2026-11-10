@@ -22,8 +22,9 @@ use async_trait::async_trait;
 use typed_builder::TypedBuilder;
 
 use crate::spec::{
-    ListType, Literal, MapType, NestedField, NestedFieldRef, SCHEMA_NAME_DELIMITER, Schema,
-    StructType, Type,
+    LIST_FIELD_NAME, ListType, Literal, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType,
+    MappedField, NameMapping, NestedField, NestedFieldRef, SCHEMA_NAME_DELIMITER, Schema,
+    StructType, TableProperties, Type,
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, StatelessAction};
@@ -329,6 +330,77 @@ fn rebuild_field(
 }
 
 // ---------------------------------------------------------------------------
+// Name mapping update
+// ---------------------------------------------------------------------------
+
+/// Add entries for added columns to a name mapping, as Java's `MappingUtil.update` does.
+///
+/// Each added field gets an entry, with entries for its nested fields, appended under its
+/// parent's entry. An existing entry in the same struct loses the added name, so a dropped
+/// column no longer claims it. Entries of deleted columns are kept.
+fn add_columns_to_name_mapping(
+    mapping: &NameMapping,
+    adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
+) -> NameMapping {
+    let root_adds = adds.get(&None).map_or(&[][..], Vec::as_slice);
+    NameMapping::new(add_columns_to_mapped_fields(
+        mapping.fields().iter(),
+        root_adds,
+        adds,
+    ))
+}
+
+fn add_columns_to_mapped_fields<'a>(
+    fields: impl Iterator<Item = &'a MappedField>,
+    added: &[NestedFieldRef],
+    adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
+) -> Vec<MappedField> {
+    fields
+        .map(|field| {
+            let nested_added = field
+                .field_id()
+                .and_then(|id| adds.get(&Some(id)))
+                .map_or(&[][..], Vec::as_slice);
+            let nested = add_columns_to_mapped_fields(
+                field.fields().iter().map(Arc::as_ref),
+                nested_added,
+                adds,
+            );
+            let names = field
+                .names()
+                .iter()
+                .filter(|name| {
+                    !added
+                        .iter()
+                        .any(|add| &add.name == *name && Some(add.id) != field.field_id())
+                })
+                .cloned()
+                .collect();
+            MappedField::new(field.field_id(), names, nested)
+        })
+        .chain(added.iter().map(|add| create_mapped_field(add, &add.name)))
+        .collect()
+}
+
+/// Create a mapping entry for a field and its nested fields, as Java's `MappingUtil.create`.
+fn create_mapped_field(field: &NestedField, name: &str) -> MappedField {
+    let nested = match field.field_type.as_ref() {
+        Type::Primitive(_) | Type::Variant(_) => vec![],
+        Type::Struct(s) => s
+            .fields()
+            .iter()
+            .map(|f| create_mapped_field(f, &f.name))
+            .collect(),
+        Type::List(l) => vec![create_mapped_field(&l.element_field, LIST_FIELD_NAME)],
+        Type::Map(m) => vec![
+            create_mapped_field(&m.key_field, MAP_KEY_FIELD_NAME),
+            create_mapped_field(&m.value_field, MAP_VALUE_FIELD_NAME),
+        ],
+    };
+    MappedField::new(Some(field.id), vec![name.to_string()], nested)
+}
+
+// ---------------------------------------------------------------------------
 // StatelessAction implementation
 // ---------------------------------------------------------------------------
 
@@ -458,10 +530,34 @@ impl StatelessAction for UpdateSchemaAction {
             .with_identifier_field_ids(base_schema.identifier_field_ids())
             .build()?;
 
-        let updates = vec![
+        let mut updates = vec![
             TableUpdate::AddSchema { schema },
             TableUpdate::SetCurrentSchema { schema_id: -1 },
         ];
+
+        // --- 6. Add the new columns to the name mapping, if the table has one ---
+        if !additions_by_parent.is_empty()
+            && let Some(mapping_json) = table
+                .metadata()
+                .properties()
+                .get(TableProperties::PROPERTY_DEFAULT_NAME_MAPPING)
+        {
+            // Like Java, a mapping that can't be updated is logged and does not fail the update.
+            match mapping_json.parse::<NameMapping>().and_then(|mapping| {
+                serde_json::to_string(&add_columns_to_name_mapping(&mapping, &additions_by_parent))
+                    .map_err(Error::from)
+            }) {
+                Ok(updated_json) => updates.push(TableUpdate::SetProperties {
+                    updates: HashMap::from([(
+                        TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+                        updated_json,
+                    )]),
+                }),
+                Err(error) => {
+                    tracing::warn!("Failed to update name mapping {mapping_json}: {error}")
+                }
+            }
+        }
 
         let requirements = vec![TableRequirement::CurrentSchemaIdMatch {
             current_schema_id: base_schema.schema_id(),
@@ -473,13 +569,15 @@ impl StatelessAction for UpdateSchemaAction {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::io::BufReader;
+    use std::sync::Arc;
 
     use as_any::Downcast;
 
     use crate::spec::{
-        DEFAULT_SCHEMA_ID, Literal, NestedField, PrimitiveType, StructType, TableMetadata, Type,
-        VariantType,
+        DEFAULT_SCHEMA_ID, ListType, Literal, MapType, MappedField, NameMapping, NestedField,
+        PrimitiveType, StructType, TableMetadata, TableProperties, Type, VariantType,
     };
     use crate::table::Table;
     use crate::test_utils::commit_with_fresh_state;
@@ -1161,5 +1259,247 @@ mod tests {
             .field_by_name("address.city")
             .expect("address.city should exist");
         assert_eq!(city.id, 6);
+    }
+
+    // -----------------------------------------------------------------------
+    // Name mapping tests
+    // -----------------------------------------------------------------------
+
+    fn with_name_mapping_property(table: Table, mapping_json: String) -> Table {
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .set_properties(HashMap::from([(
+                TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+                mapping_json,
+            )]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        table.with_metadata(Arc::new(metadata))
+    }
+
+    fn mapped(id: i32, name: &str, fields: Vec<MappedField>) -> MappedField {
+        MappedField::new(Some(id), vec![name.to_string()], fields)
+    }
+
+    fn name_mapping_property_update(mapping: &NameMapping) -> TableUpdate {
+        TableUpdate::SetProperties {
+            updates: HashMap::from([(
+                TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
+                serde_json::to_string(mapping).unwrap(),
+            )]),
+        }
+    }
+
+    fn v2_table_name_mapping() -> NameMapping {
+        NameMapping::new(vec![
+            mapped(1, "x", vec![]),
+            mapped(2, "y", vec![]),
+            mapped(3, "z", vec![]),
+        ])
+    }
+
+    #[tokio::test]
+    async fn test_add_root_column_adds_name_mapping_entry() {
+        let table = with_name_mapping_property(
+            make_v2_table(),
+            serde_json::to_string(&v2_table_name_mapping()).unwrap(),
+        );
+        let action = Transaction::new(&table)
+            .update_schema()
+            .add_column(AddColumn::optional(
+                "new_col",
+                Type::Primitive(PrimitiveType::Int),
+            ));
+
+        let updates = commit_with_fresh_state(action, &table)
+            .await
+            .unwrap()
+            .take_updates();
+
+        let expected = NameMapping::new(vec![
+            mapped(1, "x", vec![]),
+            mapped(2, "y", vec![]),
+            mapped(3, "z", vec![]),
+            mapped(4, "new_col", vec![]),
+        ]);
+        assert_eq!(updates[2..], [name_mapping_property_update(&expected)]);
+    }
+
+    #[tokio::test]
+    async fn test_add_nested_columns_adds_name_mapping_entries_under_parents() {
+        let mapping = NameMapping::new(vec![
+            mapped(1, "x", vec![]),
+            mapped(2, "y", vec![]),
+            mapped(3, "z", vec![]),
+            mapped(4, "person", vec![
+                mapped(5, "name", vec![]),
+                mapped(6, "age", vec![]),
+            ]),
+            mapped(7, "tags", vec![mapped(8, "element", vec![
+                mapped(9, "key", vec![]),
+                mapped(10, "value", vec![]),
+            ])]),
+            mapped(11, "props", vec![
+                mapped(12, "key", vec![]),
+                mapped(13, "value", vec![mapped(14, "data", vec![])]),
+            ]),
+        ]);
+        let table = with_name_mapping_property(
+            make_v2_table_with_nested(),
+            serde_json::to_string(&mapping).unwrap(),
+        );
+        let action = Transaction::new(&table)
+            .update_schema()
+            .add_column(
+                AddColumn::builder()
+                    .name("email")
+                    .field_type(Type::Primitive(PrimitiveType::String))
+                    .parent("person")
+                    .build(),
+            )
+            .add_column(
+                AddColumn::builder()
+                    .name("version")
+                    .field_type(Type::Primitive(PrimitiveType::Int))
+                    .parent("props")
+                    .build(),
+            )
+            .add_column(AddColumn::optional(
+                "attrs",
+                Type::Map(MapType::new(
+                    NestedField::map_key_element(
+                        DEFAULT_FIELD_ID,
+                        Type::Primitive(PrimitiveType::String),
+                    )
+                    .into(),
+                    NestedField::map_value_element(
+                        DEFAULT_FIELD_ID,
+                        Type::Primitive(PrimitiveType::Long),
+                        false,
+                    )
+                    .into(),
+                )),
+            ))
+            .add_column(AddColumn::optional(
+                "points",
+                Type::List(ListType::new(
+                    NestedField::list_element(
+                        DEFAULT_FIELD_ID,
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(
+                                DEFAULT_FIELD_ID,
+                                "px",
+                                Type::Primitive(PrimitiveType::Double),
+                            )
+                            .into(),
+                        ])),
+                        true,
+                    )
+                    .into(),
+                )),
+            ));
+
+        let updates = commit_with_fresh_state(action, &table)
+            .await
+            .unwrap()
+            .take_updates();
+
+        let expected = NameMapping::new(vec![
+            mapped(1, "x", vec![]),
+            mapped(2, "y", vec![]),
+            mapped(3, "z", vec![]),
+            mapped(4, "person", vec![
+                mapped(5, "name", vec![]),
+                mapped(6, "age", vec![]),
+                mapped(15, "email", vec![]),
+            ]),
+            mapped(7, "tags", vec![mapped(8, "element", vec![
+                mapped(9, "key", vec![]),
+                mapped(10, "value", vec![]),
+            ])]),
+            mapped(11, "props", vec![
+                mapped(12, "key", vec![]),
+                mapped(13, "value", vec![
+                    mapped(14, "data", vec![]),
+                    mapped(16, "version", vec![]),
+                ]),
+            ]),
+            mapped(17, "attrs", vec![
+                mapped(18, "key", vec![]),
+                mapped(19, "value", vec![]),
+            ]),
+            mapped(20, "points", vec![mapped(21, "element", vec![mapped(
+                22,
+                "px",
+                vec![],
+            )])]),
+        ]);
+        assert_eq!(updates[2..], [name_mapping_property_update(&expected)]);
+    }
+
+    #[tokio::test]
+    async fn test_readd_deleted_column_moves_name_to_new_name_mapping_entry() {
+        let table = with_name_mapping_property(
+            make_v2_table(),
+            serde_json::to_string(&v2_table_name_mapping()).unwrap(),
+        );
+        let action = Transaction::new(&table)
+            .update_schema()
+            .delete_column("z")
+            .add_column(AddColumn::optional(
+                "z",
+                Type::Primitive(PrimitiveType::Boolean),
+            ));
+
+        let updates = commit_with_fresh_state(action, &table)
+            .await
+            .unwrap()
+            .take_updates();
+
+        let expected = NameMapping::new(vec![
+            mapped(1, "x", vec![]),
+            mapped(2, "y", vec![]),
+            MappedField::new(Some(3), vec![], vec![]),
+            mapped(4, "z", vec![]),
+        ]);
+        assert_eq!(updates[2..], [name_mapping_property_update(&expected)]);
+    }
+
+    #[tokio::test]
+    async fn test_delete_column_leaves_name_mapping_unchanged() {
+        let table = with_name_mapping_property(
+            make_v2_table(),
+            serde_json::to_string(&v2_table_name_mapping()).unwrap(),
+        );
+        let action = Transaction::new(&table).update_schema().delete_column("z");
+
+        let updates = commit_with_fresh_state(action, &table)
+            .await
+            .unwrap()
+            .take_updates();
+
+        assert_eq!(updates.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_add_column_with_invalid_name_mapping_leaves_it_unchanged() {
+        let table = with_name_mapping_property(make_v2_table(), "not json".to_string());
+        let action = Transaction::new(&table)
+            .update_schema()
+            .add_column(AddColumn::optional(
+                "new_col",
+                Type::Primitive(PrimitiveType::Int),
+            ));
+
+        let updates = commit_with_fresh_state(action, &table)
+            .await
+            .unwrap()
+            .take_updates();
+
+        assert_eq!(updates.len(), 2);
     }
 }
