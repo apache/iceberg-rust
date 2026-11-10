@@ -624,7 +624,8 @@ impl CachingDeleteFileLoader {
                 }
             };
 
-            let root_array: ArrayRef = Arc::new(StructArray::from(record_batch));
+            let root_array: ArrayRef =
+                push_struct_nulls_down(&(Arc::new(StructArray::from(record_batch)) as ArrayRef))?;
 
             let mut processor = EqDelColumnProcessor::new(&equality_ids, schema);
             visit_schema_with_partner(schema, &root_array, &mut processor, &accessor)?;
@@ -679,6 +680,38 @@ impl CachingDeleteFileLoader {
             None => Ok(AlwaysTrue),
         }
     }
+}
+
+/// Copies the nulls of every struct in `array` down to its fields, so a field under a null struct
+/// reads as null. The children of a struct array keep whatever was stored under a null parent: a
+/// required `s.g` under a null `s` comes back as 0, not null.
+fn push_struct_nulls_down(array: &ArrayRef) -> Result<ArrayRef> {
+    let Some(struct_array) = array.as_any().downcast_ref::<StructArray>() else {
+        return Ok(array.clone());
+    };
+    let nulls = struct_array.nulls();
+    let columns = struct_array
+        .columns()
+        .iter()
+        .map(|column| {
+            let column = match nulls {
+                None => column.clone(),
+                Some(_) => arrow_array::make_array(
+                    column
+                        .to_data()
+                        .into_builder()
+                        .nulls(arrow_buffer::NullBuffer::union(nulls, column.nulls()))
+                        .build()?,
+                ),
+            };
+            push_struct_nulls_down(&column)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(StructArray::try_new(
+        struct_array.fields().clone(),
+        columns,
+        nulls.cloned(),
+    )?) as ArrayRef)
 }
 
 struct EqDelColumnProcessor<'a> {
@@ -2420,6 +2453,27 @@ mod tests {
             .await
             .unwrap();
         assert_keeps_rows_unless_nested_f_is_7(predicate, schema);
+    }
+
+    /// A delete row with a null `s` on the required `s.g`. The file stores 0 for `g` under the
+    /// null `s`, which loads as `s.g IS NOT NULL`, not as `s.g != 0`.
+    #[tokio::test]
+    async fn test_required_nested_field_under_null_struct_loads_as_null() {
+        use crate::expr::Bind;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let schema = nested_eq_delete_table_schema();
+        let path = format!("{}/eq-delete.parquet", tmp_dir.path().to_str().unwrap());
+        write_struct_layout_eq_delete(&path, "g", "4", false, vec![0], Some(vec![false]));
+
+        let predicate = load_eq_delete_predicate(&path, vec![4], schema.clone())
+            .await
+            .unwrap();
+        let expected = Reference::new("s.g")
+            .is_not_null()
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(predicate, Some(expected));
     }
 
     /// The nesting worked out for the first batch of a file is reused for the next ones.
