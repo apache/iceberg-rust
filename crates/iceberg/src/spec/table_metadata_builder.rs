@@ -1107,10 +1107,7 @@ impl TableMetadataBuilder {
             .last_updated_ms
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
-        Self::check_properties_format_compatibility(
-            &self.metadata.properties,
-            self.metadata.format_version,
-        )?;
+        Self::check_format_compatibility(&self.metadata.properties, self.metadata.format_version)?;
 
         // Check compatibility of the current schema to the default partition spec and sort order.
         // We use the `get_xxx` methods from the builder to avoid using the panicking
@@ -1307,7 +1304,7 @@ impl TableMetadataBuilder {
         Ok((fresh_schema, fresh_spec, fresh_sort_order))
     }
 
-    fn check_properties_format_compatibility(
+    fn check_format_compatibility(
         properties: &HashMap<String, String>,
         format_version: FormatVersion,
     ) -> Result<()> {
