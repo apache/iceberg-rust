@@ -1107,7 +1107,7 @@ impl TableMetadataBuilder {
             .last_updated_ms
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
-        Self::check_format_compatibility(&self.metadata.properties, self.metadata.format_version)?;
+        self.check_format_compatibility()?;
 
         // Check compatibility of the current schema to the default partition spec and sort order.
         // We use the `get_xxx` methods from the builder to avoid using the panicking
@@ -1304,22 +1304,26 @@ impl TableMetadataBuilder {
         Ok((fresh_schema, fresh_spec, fresh_sort_order))
     }
 
-    fn check_format_compatibility(
-        properties: &HashMap<String, String>,
-        format_version: FormatVersion,
-    ) -> Result<()> {
+    fn check_format_compatibility(&self) -> Result<()> {
+        let format_version = self.metadata.format_version;
         if format_version < FormatVersion::V3 {
             let encryption_properties = [
                 TableProperties::PROPERTY_ENCRYPTION_KEY_ID,
                 TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
             ]
             .into_iter()
-            .filter(|key| properties.contains_key(*key))
+            .filter(|key| self.metadata.properties.contains_key(*key))
             .collect::<Vec<_>>();
             if !encryption_properties.is_empty() {
                 return Err(invalid_data!(
                     "Invalid properties for {format_version}: [{}]",
                     encryption_properties.join(", ")
+                ));
+            }
+
+            if !self.metadata.encryption_keys.is_empty() {
+                return Err(invalid_data!(
+                    "Encryption keys are not supported for {format_version} tables"
                 ));
             }
         }
@@ -2183,6 +2187,31 @@ mod tests {
             Ok((FormatVersion::V3, encryption_properties.clone())),
             Ok((FormatVersion::V3, encryption_properties.clone())),
         ]);
+    }
+
+    #[test]
+    fn test_encryption_keys_require_v3() {
+        let key = EncryptedKey::builder()
+            .key_id("key-1")
+            .encrypted_key_metadata(vec![1, 2, 3, 4])
+            .build();
+        for version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
+            let result = builder_without_changes(version)
+                .add_encryption_key(key.clone())
+                .build()
+                .map(|result| result.metadata.encryption_keys)
+                .map_err(|err| (err.kind(), err.message().to_string()));
+
+            let expected = if version < FormatVersion::V3 {
+                Err((
+                    ErrorKind::DataInvalid,
+                    format!("Encryption keys are not supported for {version} tables"),
+                ))
+            } else {
+                Ok(HashMap::from([("key-1".to_string(), key.clone())]))
+            };
+            assert_eq!(result, expected);
+        }
     }
 
     #[test]
@@ -4083,7 +4112,7 @@ mod tests {
 
     #[test]
     fn test_encryption_keys() {
-        let builder = builder_without_changes(FormatVersion::V2);
+        let builder = builder_without_changes(FormatVersion::V3);
 
         // Create test encryption keys
         let encryption_key_1 = EncryptedKey::builder()
