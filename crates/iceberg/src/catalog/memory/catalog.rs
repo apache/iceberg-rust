@@ -449,8 +449,7 @@ pub(crate) mod tests {
     use crate::encryption::kms::MemoryKmsClientFactory;
     use crate::io::{FileIO, LocalFsStorageFactory};
     use crate::spec::{
-        FormatVersion, NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder,
-        TableProperties, Type,
+        NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, TableProperties, Type,
     };
     use crate::test_utils::test_runtime;
     use crate::transaction::{ApplyTransactionAction, Transaction};
@@ -2048,40 +2047,6 @@ pub(crate) mod tests {
             }
         }
         existing
-    }
-
-    #[tokio::test]
-    async fn test_create_pre_v3_table_rejects_encryption_properties() {
-        let catalog = new_memory_catalog().await;
-        let namespace = NamespaceIdent::new("ns".into());
-        create_namespace(&catalog, &namespace).await;
-
-        for version in [FormatVersion::V1, FormatVersion::V2] {
-            for property in [
-                TableProperties::PROPERTY_ENCRYPTION_KEY_ID,
-                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
-            ] {
-                let creation = TableCreation::builder()
-                    .name(format!("{version}-{property}"))
-                    .schema(simple_table_schema())
-                    .format_version(version)
-                    .properties(HashMap::from([(property.to_string(), "value".to_string())]))
-                    .build();
-                let ident = TableIdent::new(namespace.clone(), creation.name.clone());
-                let err = catalog
-                    .create_table(&namespace, creation)
-                    .await
-                    .unwrap_err();
-                assert_eq!(
-                    (err.kind(), err.message()),
-                    (
-                        ErrorKind::DataInvalid,
-                        format!("Invalid properties for {version}: [{property}]").as_str(),
-                    )
-                );
-                assert!(!catalog.table_exists(&ident).await.unwrap());
-            }
-        }
     }
 
     #[tokio::test]

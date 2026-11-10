@@ -2110,6 +2110,41 @@ mod tests {
     }
 
     #[test]
+    fn test_encryption_properties_require_v3() {
+        let key_id = (TableProperties::PROPERTY_ENCRYPTION_KEY_ID, "master-1");
+        let key_length = (TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH, "32");
+        for properties in [vec![key_id], vec![key_length], vec![key_id, key_length]] {
+            let names = properties.iter().map(|(key, _)| *key).collect::<Vec<_>>();
+            let properties = properties
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect::<HashMap<_, _>>();
+            for version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
+                let result = TableMetadataBuilder::new(
+                    schema(),
+                    partition_spec(),
+                    sort_order(),
+                    TEST_LOCATION.to_string(),
+                    version,
+                    properties.clone(),
+                )
+                .map(|builder| builder.build().unwrap().metadata.properties)
+                .map_err(|err| (err.kind(), err.message().to_string()));
+
+                let expected = if version < FormatVersion::V3 {
+                    Err((
+                        ErrorKind::DataInvalid,
+                        format!("Invalid properties for {version}: [{}]", names.join(", ")),
+                    ))
+                } else {
+                    Ok(properties.clone())
+                };
+                assert_eq!(result, expected);
+            }
+        }
+    }
+
+    #[test]
     fn test_table_properties_view_reflects_metadata_updates() {
         let property = TableProperties::PROPERTY_COMMIT_NUM_RETRIES.to_string();
         let metadata = builder_without_changes(FormatVersion::V2)
