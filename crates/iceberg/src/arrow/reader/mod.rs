@@ -96,7 +96,6 @@ impl ArrowReaderBuilder {
                 concurrency_limit_data_files,
                 self.runtime.clone(),
             ),
-            concurrency_limit_data_files,
             runtime: self.runtime.clone(),
         }
     }
@@ -108,9 +107,6 @@ pub struct ArrowReader {
     options: ArrowReaderOptions,
     file_io: FileIO,
     delete_file_loader: CachingDeleteFileLoader,
-
-    /// Effective concurrency after resolving the host default and normalizing zero.
-    concurrency_limit_data_files: usize,
 
     runtime: Runtime,
 }
@@ -133,7 +129,6 @@ mod tests {
         let reader = ArrowReaderBuilder::new(FileIO::new_with_memory(), test_runtime())
             .with_options(options)
             .build();
-        assert_eq!(reader.concurrency_limit_data_files, 1);
         let batches = tokio::time::timeout(
             Duration::from_secs(1),
             reader
@@ -173,10 +168,6 @@ mod tests {
                 .with_data_file_concurrency_limit(available_parallelism().get())
                 .build()
         );
-        assert_eq!(
-            reader.concurrency_limit_data_files,
-            available_parallelism().get()
-        );
     }
 
     #[test]
@@ -198,6 +189,5 @@ mod tests {
             .with_options(options.clone())
             .build();
         assert_eq!(reader.options, options);
-        assert_eq!(reader.concurrency_limit_data_files, 3);
     }
 }

@@ -65,7 +65,11 @@ impl ArrowReader {
     /// Take a stream of FileScanTasks and reads all the files.
     /// Returns a [`ScanResult`] containing the record batch stream and scan metrics.
     pub fn read(self, tasks: FileScanTaskStream) -> Result<ScanResult> {
-        let concurrency_limit_data_files = self.concurrency_limit_data_files;
+        let concurrency_limit_data_files = self
+            .options
+            .data_file_concurrency_limit()
+            .expect("reader construction sets concurrency")
+            .max(1);
         let scan_metrics = ScanMetrics::new();
 
         let task_reader = FileScanTaskReader {
