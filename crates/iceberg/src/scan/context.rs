@@ -18,8 +18,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use futures::SinkExt;
 use futures::channel::mpsc::Sender;
-use futures::{SinkExt, TryFutureExt};
 
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
@@ -179,10 +179,11 @@ impl ManifestFileContext {
                 column_stats_columns: column_stats_columns.clone(),
             };
 
-            sender
-                .send(manifest_entry_context)
-                .map_err(|_| Error::new(ErrorKind::Unexpected, "mpsc channel SendError"))
-                .await?;
+            // The receiving worker's joined result carries its failure. Channel
+            // closure only cancels production; it must not mask that failure.
+            if sender.send(manifest_entry_context).await.is_err() {
+                return Ok(());
+            }
         }
 
         Ok(())

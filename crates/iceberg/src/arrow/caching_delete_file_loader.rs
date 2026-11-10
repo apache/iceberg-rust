@@ -836,7 +836,7 @@ impl PartnerAccessor<ArrayRef> for EqDelRecordBatchPartnerAccessor {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::HashMap;
     use std::fs::File;
     use std::sync::Arc;
@@ -1970,7 +1970,7 @@ mod tests {
     /// `gated.parquet` until the gate is opened, so one of them is still in flight when
     /// another fails. `LocalFsStorage` never yields, so on the current-thread test
     /// runtime each load would otherwise finish before the next one starts.
-    mod gated_storage {
+    pub(crate) mod gated_storage {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -1988,15 +1988,54 @@ mod tests {
             #[serde(skip)]
             inner: LocalFsStorage,
             #[serde(skip)]
-            open: Arc<AtomicBool>,
+            gate: Arc<ReadGate>,
+            path: String,
+            fail: bool,
+        }
+
+        #[derive(Debug, Default)]
+        pub(crate) struct ReadGate {
+            open: AtomicBool,
+            released: tokio::sync::Notify,
+            pub(crate) started: tokio::sync::Notify,
+            pub(crate) stopped: tokio::sync::Notify,
+        }
+
+        impl ReadGate {
+            pub(crate) fn release(&self) {
+                self.open.store(true, Ordering::Release);
+                self.released.notify_waiters();
+            }
         }
 
         impl GatedStorage {
-            async fn wait_for_gate(&self, path: &str) {
+            async fn wait_for_gate(&self, path: &str) -> Result<()> {
                 tokio::task::yield_now().await;
-                while path.ends_with("gated.parquet") && !self.open.load(Ordering::SeqCst) {
-                    tokio::task::yield_now().await;
+                if !path.ends_with(&self.path) {
+                    return Ok(());
                 }
+                struct Stopped<'a>(&'a tokio::sync::Notify);
+                impl Drop for Stopped<'_> {
+                    fn drop(&mut self) {
+                        self.0.notify_one();
+                    }
+                }
+                let _stopped = Stopped(&self.gate.stopped);
+                self.gate.started.notify_one();
+                loop {
+                    let released = self.gate.released.notified();
+                    if self.gate.open.load(Ordering::Acquire) {
+                        break;
+                    }
+                    released.await;
+                }
+                if self.fail {
+                    return Err(crate::Error::new(
+                        crate::ErrorKind::Unexpected,
+                        "injected manifest read failure",
+                    ));
+                }
+                Ok(())
             }
         }
 
@@ -2020,12 +2059,12 @@ mod tests {
             }
 
             async fn read(&self, path: &str) -> Result<Bytes> {
-                self.wait_for_gate(path).await;
+                self.wait_for_gate(path).await?;
                 self.inner.read(path).await
             }
 
             async fn reader(&self, path: &str) -> Result<Box<dyn FileRead>> {
-                self.wait_for_gate(path).await;
+                self.wait_for_gate(path).await?;
                 self.inner.reader(path).await
             }
 
@@ -2050,10 +2089,12 @@ mod tests {
             }
         }
 
-        #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-        pub(super) struct GatedStorageFactory {
+        #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+        pub(crate) struct GatedStorageFactory {
             #[serde(skip)]
-            pub(super) open: Arc<AtomicBool>,
+            pub(crate) gate: Arc<ReadGate>,
+            pub(crate) path: String,
+            pub(crate) fail: bool,
         }
 
         #[typetag::serde(name = "test_gated_storage_factory")]
@@ -2061,8 +2102,20 @@ mod tests {
             fn build(&self, _config: &StorageConfig) -> Result<Arc<dyn Storage>> {
                 Ok(Arc::new(GatedStorage {
                     inner: LocalFsStorage,
-                    open: Arc::clone(&self.open),
+                    gate: Arc::clone(&self.gate),
+                    path: self.path.clone(),
+                    fail: self.fail,
                 }))
+            }
+        }
+
+        impl Default for GatedStorageFactory {
+            fn default() -> Self {
+                Self {
+                    gate: Arc::new(ReadGate::default()),
+                    path: "gated.parquet".into(),
+                    fail: false,
+                }
             }
         }
     }
@@ -2111,7 +2164,7 @@ mod tests {
             vec![1, 3],
         );
         let factory = Arc::new(gated_storage::GatedStorageFactory::default());
-        let gate = Arc::clone(&factory.open);
+        let gate = Arc::clone(&factory.gate);
         let file_io = crate::io::FileIOBuilder::new(factory).build();
         let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current());
 
@@ -2123,7 +2176,7 @@ mod tests {
             .unwrap();
         assert!(err.message().contains("negative position"), "{err}");
 
-        gate.store(true, std::sync::atomic::Ordering::SeqCst);
+        gate.release();
         let filter = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             loader.load_deletes(&[valid], schema),
