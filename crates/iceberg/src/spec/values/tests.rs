@@ -21,6 +21,7 @@ use std::collections::HashSet;
 
 use apache_avro::to_value;
 use apache_avro::types::Value;
+use chrono::DateTime;
 use ordered_float::OrderedFloat;
 use serde_bytes::ByteBuf;
 use serde_json::Value as JsonValue;
@@ -1511,213 +1512,195 @@ fn test_datum_ser_deser() {
     test_fn(datum);
 }
 
-#[test]
-fn test_datum_date_convert_to_int() {
-    let datum_date = Datum::date(12345);
+macro_rules! datum_convert_tests {
+        ($($name:ident: ($source:expr => $target_type:ident, $expected:expr),)*) => {
+        $(
+            #[test]
+            fn $name() {
+                let source = $source;
+                let target_type = PrimitiveType::$target_type;
+                let expected = $expected;
 
-    let result = datum_date.to(&Primitive(PrimitiveType::Int)).unwrap();
+                let result = source.to(&Primitive(target_type)).unwrap();
+                assert_eq!(result, expected);
+            }
+        )*
+        }
+    }
 
-    let expected = Datum::int(12345);
-
-    assert_eq!(result, expected);
+datum_convert_tests! {
+    // Date conversions
+    convert_date_to_int: (
+        Datum::date(12345) => Int,
+        Datum::int(12345)
+    ),
+    convert_int_to_date: (
+        Datum::int(12345) => Date,
+        Datum::date(12345)
+    ),
+    convert_date_to_timestamp: (
+        Datum::date(1) => Timestamp,
+        Datum::timestamp_from_datetime(
+            DateTime::parse_from_rfc3339("1970-01-02T00:00:00Z")
+                .unwrap()
+                .naive_utc()
+        )
+    ),
+    convert_date_to_timestamp_nanos: (
+        Datum::date(1) => TimestampNs,
+        Datum::timestamp_from_datetime(
+            DateTime::parse_from_rfc3339("1970-01-02T00:00:00Z")
+                .unwrap()
+                .naive_utc()
+        )
+        .to(&Primitive(PrimitiveType::TimestampNs))
+        .unwrap()
+    ),
+    convert_date_negative_to_timestamp: (
+        Datum::date(-1) => Timestamp,
+        Datum::timestamp_from_datetime(
+            DateTime::parse_from_rfc3339("1969-12-31T00:00:00Z")
+                .unwrap()
+                .naive_utc()
+        )
+    ),
+    convert_date_to_timestamp_year_9999: (
+        Datum::date(2932896) => Timestamp,
+        Datum::timestamp_from_datetime(
+            DateTime::parse_from_rfc3339("9999-12-31T00:00:00Z")
+                .unwrap()
+                .naive_utc()
+        )
+    ),
+    // Long conversions
+    convert_long_to_int: (
+        Datum::long(12345) => Int,
+        Datum::int(12345)
+    ),
+    convert_long_to_int_above_max: (
+        Datum::long(INT_MAX as i64 + 1) => Int,
+        Datum::new(PrimitiveType::Int, PrimitiveLiteral::AboveMax)
+    ),
+    convert_long_to_int_below_min: (
+        Datum::long(INT_MIN as i64 - 1) => Int,
+        Datum::new(PrimitiveType::Int, PrimitiveLiteral::BelowMin)
+    ),
+    // Decimal conversions
+    convert_decimal_to_long: (
+        Datum::decimal(decimal_new(12345, 0)).unwrap() => Long,
+        Datum::long(12345)
+    ),
+    convert_decimal_to_long_above_max: (
+        Datum::decimal(decimal_from_i128_with_scale(LONG_MAX as i128 + 1, 0)).unwrap() => Long,
+        Datum::new(PrimitiveType::Long, PrimitiveLiteral::AboveMax)
+    ),
+    convert_decimal_to_long_below_min: (
+        Datum::decimal(decimal_from_i128_with_scale(LONG_MIN as i128 - 1, 0)).unwrap() => Long,
+        Datum::new(PrimitiveType::Long, PrimitiveLiteral::BelowMin)
+    ),
+    // Float conversions
+    convert_double_to_float: (
+        Datum::double(2.5) => Float,
+        Datum::float(2.5_f32)
+    ),
+    convert_double_to_float_above_max: (
+        Datum::double(1e39) => Float,
+        Datum::new(PrimitiveType::Float, PrimitiveLiteral::AboveMax)
+    ),
+    convert_double_to_float_below_min: (
+        Datum::double(-1e39) => Float,
+        Datum::new(PrimitiveType::Float, PrimitiveLiteral::BelowMin)
+    ),
+    convert_float_to_double: (
+        Datum::float(2.5_f32) => Double,
+        Datum::double(2.5)
+    ),
+    // String conversions
+    convert_string_to_boolean: (
+        Datum::string("true") => Boolean,
+        Datum::bool(true)
+    ),
+    convert_string_to_int: (
+        Datum::string("12345") => Int,
+        Datum::int(12345)
+    ),
+    convert_string_to_long: (
+        Datum::string("12345") => Long,
+        Datum::long(12345)
+    ),
+    convert_string_to_timestamp: (
+        Datum::string("1925-05-20T19:25:00.000") => Timestamp,
+        Datum::timestamp_micros(-1407990900000000)
+    ),
+    convert_string_to_timestamptz: (
+        Datum::string("1925-05-20T19:25:00.000 UTC") => Timestamptz,
+        Datum::timestamptz_micros(-1407990900000000)
+    ),
+    // Timestamp conversions (micros to nanos)
+    convert_timestamp_micros_to_timestamp_nanos: (
+        Datum::timestamp_micros(12345) => TimestampNs,
+        Datum::timestamp_nanos(12345000)
+    ),
+    convert_timestamp_micros_to_timestamptz_nanos: (
+        Datum::timestamp_micros(12345) => TimestamptzNs,
+        Datum::timestamptz_nanos(12345000)
+    ),
+    convert_timestamptz_micros_to_timestamp_nanos: (
+        Datum::timestamptz_micros(12345) => TimestampNs,
+        Datum::timestamp_nanos(12345000)
+    ),
+    convert_timestamptz_micros_to_timestamptz_nanos: (
+        Datum::timestamptz_micros(12345) => TimestamptzNs,
+        Datum::timestamptz_nanos(12345000)
+    ),
+    // Timestamp conversions (nanos to nanos)
+    convert_timestamp_nanos_to_timestamp_nanos: (
+        Datum::timestamp_nanos(12345) => TimestampNs,
+        Datum::timestamp_nanos(12345)
+    ),
+    convert_timestamp_nanos_to_timestamptz_nanos: (
+        Datum::timestamp_nanos(12345) => TimestamptzNs,
+        Datum::timestamptz_nanos(12345)
+    ),
+    convert_timestamptz_nanos_to_timestamp_nanos: (
+        Datum::timestamptz_nanos(12345) => TimestampNs,
+        Datum::timestamp_nanos(12345)
+    ),
+    convert_timestamptz_nanos_to_timestamptz_nanos: (
+        Datum::timestamptz_nanos(12345) => TimestamptzNs,
+        Datum::timestamptz_nanos(12345)
+    ),
+    // Same-type conversions
+    convert_time_to_time: (
+        Datum::time_micros(1_000_000).unwrap() => Time,
+        Datum::time_micros(1_000_000).unwrap()
+    ),
 }
 
 #[test]
-fn test_datum_int_convert_to_date() {
-    let datum_int = Datum::int(12345);
+fn test_convert_date_to_timestamp_overflow() {
+    let date = Datum::date(i32::MAX / 2);
 
-    let result = datum_int.to(&Primitive(PrimitiveType::Date)).unwrap();
+    let result = date.clone().to(&Primitive(PrimitiveType::Timestamp));
+    let result = result.expect_err("should overflow");
+    assert!(result.to_string().contains("integer overflow"));
 
-    let expected = Datum::date(12345);
-
-    assert_eq!(result, expected);
+    let result = date.clone().to(&Primitive(PrimitiveType::TimestampNs));
+    let result = result.expect_err("should overflow");
+    assert!(result.to_string().contains("integer overflow"));
 }
 
 #[test]
-fn test_datum_long_convert_to_int() {
-    let datum = Datum::long(12345);
-
-    let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
-
-    let expected = Datum::int(12345);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_long_convert_to_int_above_max() {
-    let datum = Datum::long(INT_MAX as i64 + 1);
-
-    let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
-
-    let expected = Datum::new(PrimitiveType::Int, PrimitiveLiteral::AboveMax);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_long_convert_to_int_below_min() {
-    let datum = Datum::long(INT_MIN as i64 - 1);
-
-    let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
-
-    let expected = Datum::new(PrimitiveType::Int, PrimitiveLiteral::BelowMin);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_double_convert_to_float() {
-    let datum = Datum::double(2.5);
-
-    let result = datum.to(&Primitive(PrimitiveType::Float)).unwrap();
-
-    let expected = Datum::float(2.5_f32);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_double_convert_to_float_above_max() {
-    let datum = Datum::double(1e39);
-
-    let result = datum.to(&Primitive(PrimitiveType::Float)).unwrap();
-
-    let expected = Datum::new(PrimitiveType::Float, PrimitiveLiteral::AboveMax);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_double_convert_to_float_below_min() {
-    let datum = Datum::double(-1e39);
-
-    let result = datum.to(&Primitive(PrimitiveType::Float)).unwrap();
-
-    let expected = Datum::new(PrimitiveType::Float, PrimitiveLiteral::BelowMin);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_float_convert_to_double() {
-    let datum = Datum::float(2.5_f32);
-
-    let result = datum.to(&Primitive(PrimitiveType::Double)).unwrap();
-
-    let expected = Datum::double(2.5);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_long_convert_to_timestamp() {
-    let datum = Datum::long(12345);
-
-    let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
-
-    let expected = Datum::timestamp_micros(12345);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_long_convert_to_timestamptz() {
-    let datum = Datum::long(12345);
-
-    let result = datum.to(&Primitive(PrimitiveType::Timestamptz)).unwrap();
-
-    let expected = Datum::timestamptz_micros(12345);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_decimal_convert_to_long() {
-    let datum = Datum::decimal(decimal_new(12345, 0)).unwrap();
-
-    let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
-
-    let expected = Datum::long(12345);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_decimal_convert_to_long_above_max() {
-    let datum = Datum::decimal(decimal_from_i128_with_scale(LONG_MAX as i128 + 1, 0)).unwrap();
-
-    let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
-
-    let expected = Datum::new(PrimitiveType::Long, PrimitiveLiteral::AboveMax);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_decimal_convert_to_long_below_min() {
-    let datum = Datum::decimal(decimal_from_i128_with_scale(LONG_MIN as i128 - 1, 0)).unwrap();
-
-    let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
-
-    let expected = Datum::new(PrimitiveType::Long, PrimitiveLiteral::BelowMin);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_string_convert_to_boolean() {
-    let datum = Datum::string("true");
-
-    let result = datum.to(&Primitive(PrimitiveType::Boolean)).unwrap();
-
-    let expected = Datum::bool(true);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_string_convert_to_int() {
-    let datum = Datum::string("12345");
-
-    let result = datum.to(&Primitive(PrimitiveType::Int)).unwrap();
-
-    let expected = Datum::int(12345);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_string_convert_to_long() {
-    let datum = Datum::string("12345");
-
-    let result = datum.to(&Primitive(PrimitiveType::Long)).unwrap();
-
-    let expected = Datum::long(12345);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_string_convert_to_timestamp() {
-    let datum = Datum::string("1925-05-20T19:25:00.000");
-
-    let result = datum.to(&Primitive(PrimitiveType::Timestamp)).unwrap();
-
-    let expected = Datum::timestamp_micros(-1407990900000000);
-
-    assert_eq!(result, expected);
-}
-
-#[test]
-fn test_datum_string_convert_to_timestamptz() {
-    let datum = Datum::string("1925-05-20T19:25:00.000 UTC");
-
-    let result = datum.to(&Primitive(PrimitiveType::Timestamptz)).unwrap();
-
-    let expected = Datum::timestamptz_micros(-1407990900000000);
-
-    assert_eq!(result, expected);
+fn test_convert_timestamp_to_timestamp_overflow() {
+    let ts = Datum::timestamp_micros(i64::MAX / 10);
+    let result = ts.clone().to(&Primitive(PrimitiveType::TimestampNs));
+    let result = result.expect_err("should overflow");
+    assert!(result.to_string().contains("integer overflow"));
+
+    let tstz = Datum::timestamptz_micros(i64::MAX / 10);
+    let result = tstz.clone().to(&Primitive(PrimitiveType::TimestamptzNs));
+    let result = result.expect_err("should overflow");
+    assert!(result.to_string().contains("integer overflow"));
 }
 
 #[test]
