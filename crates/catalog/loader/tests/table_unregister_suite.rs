@@ -33,6 +33,7 @@ use iceberg_test_utils::normalize_test_name_with_parts;
 use rstest::rstest;
 
 #[rstest]
+#[case::glue_catalog(CatalogKind::Glue)]
 #[case::sql_catalog(CatalogKind::Sql)]
 #[case::memory_catalog(CatalogKind::Memory)]
 #[tokio::test]
@@ -144,7 +145,6 @@ async fn test_catalog_unregister_missing_table(#[case] kind: CatalogKind) -> Res
 #[rstest]
 #[case::hms_catalog(CatalogKind::Hms)]
 #[case::s3tables_catalog(CatalogKind::S3Tables)]
-#[case::glue_catalog(CatalogKind::Glue)]
 #[tokio::test]
 async fn test_catalog_unregister_unsupported(#[case] kind: CatalogKind) -> Result<()> {
     let Some(harness) = load_catalog(kind).await else {
