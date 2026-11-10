@@ -1,0 +1,42 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: Generate wheel third-party licenses
+description: 'Regenerates bindings/python/LICENSE and NOTICE with the root files plus the licenses and notices of the Rust dependencies bundled in the wheels. The sdist keeps the root files.'
+runs:
+  using: "composite"
+  steps:
+    - name: Install cargo-about
+      # Keep version in sync with the install-cargo-about target in bindings/python/Makefile.
+      uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+      with:
+        tool: cargo-about@0.9.2
+
+    - name: Generate LICENSE and NOTICE
+      shell: bash
+      working-directory: bindings/python
+      run: |
+        # --fail misses warnings and license template fallbacks.
+        cargo about generate -c about.toml --locked --fail --manifest-path Cargo.toml -o cargo-about-output.txt about.hbs 2>&1 | tee "$RUNNER_TEMP/cargo-about.log"
+        if [[ -s "$RUNNER_TEMP/cargo-about.log" ]] || grep -n '<year>' cargo-about-output.txt; then
+          echo "::error::bindings/python/about.toml needs an update, see bindings/python/LICENSING.md"
+          exit 1
+        fi
+        # Both are symlinks to the root files, remove them so the redirects don't write through.
+        rm LICENSE NOTICE
+        cat ../../LICENSE cargo-about-output.txt third-party-licenses.txt > LICENSE
+        { cat ../../NOTICE; echo; cat third-party-notices.txt; } > NOTICE

@@ -26,8 +26,10 @@ mod encryption;
 mod record_batch;
 mod runtime;
 pub(crate) mod scan;
+mod transaction;
 
 pub(crate) use delete_vector::encode_dv_blob;
 pub(crate) use encryption::{make_encrypted_table, make_encryption_manager};
 pub(crate) use record_batch::check_record_batches;
 pub(crate) use runtime::test_runtime;
+pub(crate) use transaction::commit_with_fresh_state;

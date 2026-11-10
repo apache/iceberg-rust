@@ -428,7 +428,10 @@ pub(crate) mod _serde {
             };
             match self {
                 RawLiteralEnum::Null => Ok(None),
-                RawLiteralEnum::Boolean(v) => Ok(Some(Literal::bool(v))),
+                RawLiteralEnum::Boolean(v) => match ty {
+                    Type::Primitive(PrimitiveType::Boolean) => Ok(Some(Literal::bool(v))),
+                    _ => Err(invalid_err("boolean")),
+                },
                 RawLiteralEnum::Int(v) => match ty {
                     Type::Primitive(PrimitiveType::Int) => Ok(Some(Literal::int(v))),
                     Type::Primitive(PrimitiveType::Long) => Ok(Some(Literal::long(i64::from(v)))),
@@ -464,17 +467,7 @@ pub(crate) mod _serde {
                     _ => Err(invalid_err("float")),
                 },
                 RawLiteralEnum::Double(v) => match ty {
-                    Type::Primitive(PrimitiveType::Float) => {
-                        let v_32 = v as f32;
-                        if v_32.is_finite() {
-                            let v_64 = f64::from(v_32);
-                            if (v_64 - v).abs() > f32::EPSILON as f64 {
-                                // there is a precision loss
-                                return Err(invalid_err("double"));
-                            }
-                        }
-                        Ok(Some(Literal::float(v_32)))
-                    }
+                    Type::Primitive(PrimitiveType::Float) => Ok(Some(Literal::float(v as f32))),
                     Type::Primitive(PrimitiveType::Double) => Ok(Some(Literal::double(v))),
                     _ => Err(invalid_err("double")),
                 },

@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+* Support timestamp-based time travel through `TableScanBuilder::as_of_time` and `snapshot_id_as_of_time`.
+
 ### Breaking Changes
 
 * `FileWrite::close`, `EncryptedOutputFile::write`, `ManifestListWriter::close`, and `PuffinWriter::close` now return `Result<io::FileMetadata>` instead of `Result<()>`. The returned size is the on-disk size, including encryption overhead. Custom `FileWrite` implementations must return the number of bytes stored.
@@ -33,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * `EncryptedInputFile::metadata()` is now synchronous and derives the plaintext size from key metadata without a storage stat. Remove `.await` from calls to this method.
 * AGS1 readers now require `StandardKeyMetadata::file_length` and reject missing or invalid lengths without falling back to a storage stat. AGS1-encrypted manifests, manifest lists, and Puffin files written by earlier development builds without this field must be rewritten using a build that can still read them before upgrading. This matches the Java client's read contract.
 * `iceberg_catalog_loader::BoxedCatalogBuilder` has a new required method, `with_runtime`. Types implementing `CatalogBuilder` get it through the blanket impl; types implementing `BoxedCatalogBuilder` directly (for example, a wrapper around another `Box<dyn BoxedCatalogBuilder>`) must implement it, typically by forwarding the runtime to the builder they wrap.
+* `Transaction::commit` now returns `ErrorKind::PreconditionFailed` for read-only tables (`Table::readonly()`, e.g. from `StaticTable::into_table` or `TableBuilder::readonly(true)`), including empty transactions, which previously returned the table unchanged. Java treats an empty transaction on a static table as a no-op.
+* `ArrowReader` reads nested struct fields as null for Parquet files that have neither field ids nor a name mapping, as iceberg-java does. Earlier versions returned their stored values by position. Tables migrated without field ids need a name mapping (`schema.name-mapping.default`) that covers nested fields to read them.
 
 ## [v0.10.1] - 2026-07-28
 
