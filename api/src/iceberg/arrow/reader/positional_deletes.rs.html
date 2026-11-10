@@ -151,7 +151,7 @@
 <a href=#151 id=151 data-nosnippet>151</a>        schema_descr: SchemaDescPtr,
 <a href=#152 id=152 data-nosnippet>152</a>        columns: Vec&lt;ColumnChunkMetaData&gt;,
 <a href=#153 id=153 data-nosnippet>153</a>        num_rows: i64,
-<a href=#154 id=154 data-nosnippet>154</a>        ordinal: i16,
+<a href=#154 id=154 data-nosnippet>154</a>        ordinal: i32,
 <a href=#155 id=155 data-nosnippet>155</a>    ) -&gt; RowGroupMetaData {
 <a href=#156 id=156 data-nosnippet>156</a>        RowGroupMetaData::builder(schema_descr.clone())
 <a href=#157 id=157 data-nosnippet>157</a>            .set_num_rows(num_rows)
@@ -199,7 +199,7 @@
 <a href=#199 id=199 data-nosnippet>199</a>                .iter()
 <a href=#200 id=200 data-nosnippet>200</a>                .enumerate()
 <a href=#201 id=201 data-nosnippet>201</a>                .map(|(i, <span class="kw-2">&amp;</span>n)| {
-<a href=#202 id=202 data-nosnippet>202</a>                    build_test_row_group_meta(schema_descr.clone(), columns.clone(), n, i <span class="kw">as </span>i16)
+<a href=#202 id=202 data-nosnippet>202</a>                    build_test_row_group_meta(schema_descr.clone(), columns.clone(), n, i <span class="kw">as </span>i32)
 <a href=#203 id=203 data-nosnippet>203</a>                })
 <a href=#204 id=204 data-nosnippet>204</a>                .collect()
 <a href=#205 id=205 data-nosnippet>205</a>        };
@@ -292,7 +292,7 @@
 <a href=#292 id=292 data-nosnippet>292</a>            .iter()
 <a href=#293 id=293 data-nosnippet>293</a>            .enumerate()
 <a href=#294 id=294 data-nosnippet>294</a>            .map(|(i, <span class="kw-2">&amp;</span>n)| {
-<a href=#295 id=295 data-nosnippet>295</a>                build_test_row_group_meta(schema_descr.clone(), columns.clone(), n, i <span class="kw">as </span>i16)
+<a href=#295 id=295 data-nosnippet>295</a>                build_test_row_group_meta(schema_descr.clone(), columns.clone(), n, i <span class="kw">as </span>i32)
 <a href=#296 id=296 data-nosnippet>296</a>            })
 <a href=#297 id=297 data-nosnippet>297</a>            .collect();
 <a href=#298 id=298 data-nosnippet>298</a>        <span class="comment">// Rows 1..5 are deleted: two in row group 0 and two in row group 2.
@@ -362,7 +362,7 @@
 <a href=#362 id=362 data-nosnippet>362</a>                            schema_descr.clone(),
 <a href=#363 id=363 data-nosnippet>363</a>                            columns.clone(),
 <a href=#364 id=364 data-nosnippet>364</a>                            n <span class="kw">as </span>i64,
-<a href=#365 id=365 data-nosnippet>365</a>                            i <span class="kw">as </span>i16,
+<a href=#365 id=365 data-nosnippet>365</a>                            i <span class="kw">as </span>i32,
 <a href=#366 id=366 data-nosnippet>366</a>                        )
 <a href=#367 id=367 data-nosnippet>367</a>                    })
 <a href=#368 id=368 data-nosnippet>368</a>                    .collect();
