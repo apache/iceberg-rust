@@ -84,8 +84,6 @@ impl TableMetadataBuilder {
         format_version: FormatVersion,
         properties: HashMap<String, String>,
     ) -> Result<Self> {
-        Self::check_encryption_compatibility(&properties, format_version)?;
-
         // Re-assign field_ids, schema.id, sort_order.id and spec.id for a new table.
         let (fresh_schema, fresh_spec, fresh_sort_order) =
             Self::reassign_ids(schema, spec.into(), sort_order)?;
@@ -248,6 +246,7 @@ impl TableMetadataBuilder {
     ///
     /// # Errors
     /// - If properties contains a reserved property
+    /// - If properties contains an encryption property and the format version is below v3
     pub fn set_properties(mut self, properties: HashMap<String, String>) -> Result<Self> {
         // List of specified properties that are RESERVED and should not be persisted.
         let reserved_properties = properties
@@ -266,6 +265,8 @@ impl TableMetadataBuilder {
         if properties.is_empty() {
             return Ok(self);
         }
+
+        Self::check_encryption_compatibility(&properties, self.metadata.format_version)?;
 
         self.metadata.properties.extend(properties.clone());
         self.changes.push(TableUpdate::SetProperties {
@@ -2120,16 +2121,15 @@ mod tests {
                 .map(|(key, value)| (key.to_string(), value.to_string()))
                 .collect::<HashMap<_, _>>();
             for version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
-                let result = TableMetadataBuilder::new(
+                let created = TableMetadataBuilder::new(
                     schema(),
                     partition_spec(),
                     sort_order(),
                     TEST_LOCATION.to_string(),
                     version,
                     properties.clone(),
-                )
-                .map(|builder| builder.build().unwrap().metadata.properties)
-                .map_err(|err| (err.kind(), err.message().to_string()));
+                );
+                let updated = builder_without_changes(version).set_properties(properties.clone());
 
                 let expected = if version < FormatVersion::V3 {
                     Err((
@@ -2139,9 +2139,41 @@ mod tests {
                 } else {
                     Ok(properties.clone())
                 };
-                assert_eq!(result, expected);
+                for result in [created, updated] {
+                    let result = result
+                        .map(|builder| builder.build().unwrap().metadata.properties)
+                        .map_err(|err| (err.kind(), err.message().to_string()));
+                    assert_eq!(result, expected);
+                }
             }
         }
+    }
+
+    #[test]
+    fn test_set_properties_on_pre_v3_table_with_existing_encryption_property() {
+        let mut builder = builder_without_changes(FormatVersion::V2);
+        builder.metadata.properties.insert(
+            TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+            "master-1".to_string(),
+        );
+
+        let metadata = builder
+            .set_properties(HashMap::from([("key".to_string(), "value".to_string())]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(
+            metadata.properties(),
+            &HashMap::from([
+                (
+                    TableProperties::PROPERTY_ENCRYPTION_KEY_ID.to_string(),
+                    "master-1".to_string(),
+                ),
+                ("key".to_string(), "value".to_string()),
+            ])
+        );
     }
 
     #[test]
