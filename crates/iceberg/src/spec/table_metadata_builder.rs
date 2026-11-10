@@ -84,21 +84,7 @@ impl TableMetadataBuilder {
         format_version: FormatVersion,
         properties: HashMap<String, String>,
     ) -> Result<Self> {
-        if format_version < FormatVersion::V3 {
-            let encryption_properties = [
-                TableProperties::PROPERTY_ENCRYPTION_KEY_ID,
-                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
-            ]
-            .into_iter()
-            .filter(|key| properties.contains_key(*key))
-            .collect::<Vec<_>>();
-            if !encryption_properties.is_empty() {
-                return Err(invalid_data!(
-                    "Invalid properties for {format_version}: [{}]",
-                    encryption_properties.join(", ")
-                ));
-            }
-        }
+        Self::check_encryption_compatibility(&properties, format_version)?;
 
         // Re-assign field_ids, schema.id, sort_order.id and spec.id for a new table.
         let (fresh_schema, fresh_spec, fresh_sort_order) =
@@ -1316,6 +1302,29 @@ impl TableMetadataBuilder {
         let fresh_sort_order = fresh_order.build(&fresh_schema)?;
 
         Ok((fresh_schema, fresh_spec, fresh_sort_order))
+    }
+
+    fn check_encryption_compatibility(
+        properties: &HashMap<String, String>,
+        format_version: FormatVersion,
+    ) -> Result<()> {
+        if format_version < FormatVersion::V3 {
+            let encryption_properties = [
+                TableProperties::PROPERTY_ENCRYPTION_KEY_ID,
+                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
+            ]
+            .into_iter()
+            .filter(|key| properties.contains_key(*key))
+            .collect::<Vec<_>>();
+            if !encryption_properties.is_empty() {
+                return Err(invalid_data!(
+                    "Invalid properties for {format_version}: [{}]",
+                    encryption_properties.join(", ")
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     fn reuse_or_create_new_schema_id(&self, new_schema: &Schema) -> i32 {
