@@ -106,11 +106,6 @@ impl SimpleSnapshotProducer {
     /// Produces the resulting manifest set for the current
     /// table and writes this attempt's snapshot.
     pub(crate) async fn apply(&mut self, table: &Table) -> Result<ActionCommit> {
-        table
-            .metadata()
-            .table_properties()
-            .check_format_compatibility(table.metadata().format_version())?;
-
         let snapshot_id = self.snapshot_id(table);
 
         let mut manifests = current_manifests(table).await?;

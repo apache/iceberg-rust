@@ -350,14 +350,14 @@ pub struct TableProperties {
 }
 
 impl TableProperties<'_> {
-    pub(crate) fn check_format_compatibility(&self, format_version: FormatVersion) -> Result<()> {
+    pub(super) fn check_format_compatibility(&self, format_version: FormatVersion) -> Result<()> {
         if format_version >= FormatVersion::V3 {
             return Ok(());
         }
 
         let invalid_properties = [
-            Self::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
             Self::PROPERTY_ENCRYPTION_KEY_ID,
+            Self::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
         ]
         .into_iter()
         .filter(|key| self.properties.contains_key(*key))

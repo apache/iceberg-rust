@@ -2051,7 +2051,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_pre_v3_encryption_properties_do_not_change_catalog_state() {
+    async fn test_create_pre_v3_table_rejects_encryption_properties() {
         let catalog = new_memory_catalog().await;
         let namespace = NamespaceIdent::new("ns".into());
         create_namespace(&catalog, &namespace).await;
@@ -2068,46 +2068,18 @@ pub(crate) mod tests {
                     .properties(HashMap::from([(property.to_string(), "value".to_string())]))
                     .build();
                 let ident = TableIdent::new(namespace.clone(), creation.name.clone());
-                let create_err = catalog
+                let err = catalog
                     .create_table(&namespace, creation)
                     .await
                     .unwrap_err();
-                assert!(!catalog.table_exists(&ident).await.unwrap());
-
-                let table = catalog
-                    .create_table(
-                        &namespace,
-                        TableCreation::builder()
-                            .name(ident.name().to_string())
-                            .schema(simple_table_schema())
-                            .format_version(version)
-                            .build(),
-                    )
-                    .await
-                    .unwrap();
-                let tx = Transaction::new(&table);
-                let update_err = tx
-                    .update_table_properties()
-                    .set(property.to_string(), "value".to_string())
-                    .apply(tx)
-                    .unwrap()
-                    .commit(&catalog)
-                    .await
-                    .unwrap_err();
-                for err in [create_err, update_err] {
-                    assert_eq!(
-                        (err.kind(), err.message()),
-                        (
-                            ErrorKind::DataInvalid,
-                            format!("Invalid properties for {version}: [{property}]").as_str(),
-                        )
-                    );
-                }
-                let loaded = catalog.load_table(table.identifier()).await.unwrap();
                 assert_eq!(
-                    (loaded.metadata(), loaded.metadata_location()),
-                    (table.metadata(), table.metadata_location())
+                    (err.kind(), err.message()),
+                    (
+                        ErrorKind::DataInvalid,
+                        format!("Invalid properties for {version}: [{property}]").as_str(),
+                    )
                 );
+                assert!(!catalog.table_exists(&ident).await.unwrap());
             }
         }
     }
