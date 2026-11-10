@@ -24,7 +24,9 @@ use futures::{StreamExt, TryStreamExt};
 use tokio::sync::oneshot::{Receiver, channel};
 
 use super::delete_filter::{DeleteFilter, PosDelLoadAction, PosDelLoadGuard};
-use crate::arrow::delete_file_loader::{BasicDeleteFileLoader, evolve_equality_delete_stream};
+use crate::arrow::delete_file_loader::{
+    BasicDeleteFileLoader, evolve_equality_delete_stream, validate_equality_ids,
+};
 use crate::arrow::scan_metrics::ScanMetrics;
 use crate::arrow::{arrow_primitive_to_literal, arrow_schema_to_schema};
 use crate::delete_vector::DeleteVector;
@@ -306,6 +308,11 @@ impl CachingDeleteFileLoader {
             }
 
             DataContentType::EqualityDeletes => {
+                let equality_ids_vec = task.equality_ids().unwrap().to_vec();
+                // Check the ids before claiming the load, so this error does not leave the file
+                // `Loading` for later reads of it.
+                validate_equality_ids(&schema, &equality_ids_vec)?;
+
                 let Some(notify) = del_filter.try_start_eq_del_load(task.file_path()) else {
                     return Ok(DeleteFileContext::ExistingEqDel);
                 };
@@ -315,7 +322,6 @@ impl CachingDeleteFileLoader {
 
                 // Per the Iceberg spec, evolve schema for equality deletes but only for the
                 // columns holding the equality_ids, not all table columns.
-                let equality_ids_vec = task.equality_ids().unwrap().to_vec();
                 let evolved_stream = evolve_equality_delete_stream(
                     basic_delete_file_loader
                         .parquet_to_batch_stream(
@@ -2222,15 +2228,7 @@ mod tests {
     ) -> Result<Option<crate::expr::BoundPredicate>> {
         use crate::scan::FileScanTask;
 
-        let eq_del = FileScanTaskDeleteFile::builder()
-            .with_file_path(path.to_string())
-            .with_file_size_in_bytes(std::fs::metadata(path).unwrap().len())
-            .with_file_type(DataContentType::EqualityDeletes)
-            .with_file_format(DataFileFormat::Parquet)
-            .with_partition_spec_id(0)
-            .with_equality_ids(Some(equality_ids))
-            .build()
-            .unwrap();
+        let eq_del = eq_delete_task(path, equality_ids);
         let task = FileScanTask::builder()
             .with_file_size_in_bytes(0)
             .with_start(0)
@@ -2289,44 +2287,86 @@ mod tests {
         assert_eq!(ids, vec![3, 3]);
     }
 
-    /// A delete file in Java's layout: `s.f` under its parent struct `s`.
-    #[tokio::test]
-    async fn test_nested_field_equality_delete_in_struct_layout() {
-        let tmp_dir = TempDir::new().unwrap();
-        let schema = nested_eq_delete_table_schema();
-
-        let f_field = Arc::new(simple_field("f", DataType::Int64, true, "3"));
-        let s_field = simple_field(
-            "s",
-            DataType::Struct(Fields::from(vec![f_field.clone()])),
-            true,
-            "2",
-        );
-        let delete_schema = Arc::new(arrow_schema::Schema::new(vec![s_field]));
-        let s = StructArray::from(vec![(
-            f_field,
-            Arc::new(Int64Array::from(vec![7])) as ArrayRef,
-        )]);
-        let batch = RecordBatch::try_new(delete_schema.clone(), vec![Arc::new(s)]).unwrap();
-        let path = format!(
-            "{}/nested-eq-delete.parquet",
-            tmp_dir.path().to_str().unwrap()
-        );
-        let mut writer =
-            ArrowWriter::try_new(File::create(&path).unwrap(), delete_schema, None).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let predicate = load_eq_delete_predicate(&path, vec![3], schema.clone())
-            .await
-            .unwrap();
-        assert_keeps_rows_unless_nested_f_is_7(predicate, schema);
+    /// An equality delete task for the file at `path` on `equality_ids`.
+    fn eq_delete_task(path: &str, equality_ids: Vec<i32>) -> FileScanTaskDeleteFile {
+        FileScanTaskDeleteFile::builder()
+            .with_file_path(path.to_string())
+            .with_file_size_in_bytes(std::fs::metadata(path).unwrap().len())
+            .with_file_type(DataContentType::EqualityDeletes)
+            .with_file_format(DataFileFormat::Parquet)
+            .with_partition_spec_id(0)
+            .with_equality_ids(Some(equality_ids))
+            .build()
+            .unwrap()
     }
 
-    /// A delete file from `EqualityDeleteWriter`, which writes `s.f` as a top-level column.
-    #[tokio::test]
-    async fn test_nested_field_equality_delete_from_equality_delete_writer() {
-        use crate::arrow::schema_to_arrow_schema;
+    /// Writes an equality delete file with `s.<name>` (field `id`) under its parent struct `s`,
+    /// the way Java writes a nested equality field. `s_valid` marks the rows whose `s` is not
+    /// null.
+    fn write_struct_layout_eq_delete(
+        path: &str,
+        name: &str,
+        id: &str,
+        nullable: bool,
+        values: Vec<i64>,
+        s_valid: Option<Vec<bool>>,
+    ) {
+        let child = Arc::new(simple_field(name, DataType::Int64, nullable, id));
+        let fields = Fields::from(vec![child]);
+        let s_field = simple_field("s", DataType::Struct(fields.clone()), true, "2");
+        let delete_schema = Arc::new(arrow_schema::Schema::new(vec![s_field]));
+        let s = StructArray::new(
+            fields,
+            vec![Arc::new(Int64Array::from(values)) as ArrayRef],
+            s_valid.map(Into::into),
+        );
+        let batch = RecordBatch::try_new(delete_schema.clone(), vec![Arc::new(s)]).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(File::create(path).unwrap(), delete_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+    }
+
+    /// A row of `nested_eq_delete_table_schema`: `f`, then `s.f` and `s.g`, or a null `s`.
+    type NestedRow = (Option<i64>, Option<(Option<i64>, i64)>);
+
+    fn nested_rows_batch(schema: &Schema, rows: &[NestedRow]) -> RecordBatch {
+        let arrow_schema = Arc::new(crate::arrow::schema_to_arrow_schema(schema).unwrap());
+        let DataType::Struct(s_fields) = arrow_schema.field(1).data_type().clone() else {
+            unreachable!()
+        };
+        let s = StructArray::new(
+            s_fields,
+            vec![
+                Arc::new(Int64Array::from_iter(
+                    rows.iter().map(|(_, s)| s.and_then(|s| s.0)),
+                )) as ArrayRef,
+                Arc::new(Int64Array::from_iter_values(
+                    rows.iter().map(|(_, s)| s.map_or(0, |s| s.1)),
+                )) as ArrayRef,
+            ],
+            Some(
+                rows.iter()
+                    .map(|(_, s)| s.is_some())
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        );
+        RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int64Array::from_iter(rows.iter().map(|(f, _)| *f))) as ArrayRef,
+            Arc::new(s) as ArrayRef,
+        ])
+        .unwrap()
+    }
+
+    /// Writes `rows` as an equality delete file on `equality_ids` with `EqualityDeleteWriter`,
+    /// which writes a nested field as a top-level column, and returns its path.
+    async fn write_eq_delete_with_writer(
+        dir: &TempDir,
+        schema: SchemaRef,
+        equality_ids: Vec<i32>,
+        rows: RecordBatch,
+    ) -> String {
         use crate::writer::base_writer::equality_delete_writer::{
             EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
         };
@@ -2337,65 +2377,211 @@ mod tests {
         use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
         use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 
-        let tmp_dir = TempDir::new().unwrap();
-        let file_io = FileIO::new_with_fs();
-        let schema = nested_eq_delete_table_schema();
-
-        let config = EqualityDeleteWriterConfig::new(vec![3], schema.clone()).unwrap();
+        let config = EqualityDeleteWriterConfig::new(equality_ids, schema).unwrap();
         let delete_schema = arrow_schema_to_schema(config.projected_arrow_schema_ref()).unwrap();
         let rolling = RollingFileWriterBuilder::new_with_default_file_size(
             ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(delete_schema)),
-            file_io.clone(),
-            DefaultLocationGenerator::with_data_location(
-                tmp_dir.path().to_str().unwrap().to_string(),
-            ),
+            FileIO::new_with_fs(),
+            DefaultLocationGenerator::with_data_location(dir.path().to_str().unwrap().to_string()),
             DefaultFileNameGenerator::new("eq-del".to_string(), None, DataFileFormat::Parquet),
         );
         let mut writer = EqualityDeleteFileWriterBuilder::new(rolling, config)
             .build(None)
             .await
             .unwrap();
-
-        // Rows of the table: f = 1, s = {f: 7, g: 0}.
-        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
-        let DataType::Struct(s_fields) = arrow_schema.field(1).data_type().clone() else {
-            unreachable!()
-        };
-        let s = StructArray::new(
-            s_fields,
-            vec![
-                Arc::new(Int64Array::from(vec![7])) as ArrayRef,
-                Arc::new(Int64Array::from(vec![0])) as ArrayRef,
-            ],
-            None,
-        );
-        let rows = RecordBatch::try_new(arrow_schema, vec![
-            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
-            Arc::new(s) as ArrayRef,
-        ])
-        .unwrap();
         writer.write(rows).await.unwrap();
         let data_file = writer.close().await.unwrap().pop().unwrap();
+        data_file.file_path().to_string()
+    }
 
-        let predicate = load_eq_delete_predicate(data_file.file_path(), vec![3], schema.clone())
+    /// A delete file in Java's layout: `s.f` under its parent struct `s`.
+    #[tokio::test]
+    async fn test_nested_field_equality_delete_in_struct_layout() {
+        let tmp_dir = TempDir::new().unwrap();
+        let schema = nested_eq_delete_table_schema();
+        let path = format!("{}/eq-delete.parquet", tmp_dir.path().to_str().unwrap());
+        write_struct_layout_eq_delete(&path, "f", "3", true, vec![7], None);
+
+        let predicate = load_eq_delete_predicate(&path, vec![3], schema.clone())
             .await
             .unwrap();
         assert_keeps_rows_unless_nested_f_is_7(predicate, schema);
     }
 
-    /// An equality id the scan schema does not have is an error, not a column to skip.
+    /// A delete file from `EqualityDeleteWriter`, which writes `s.f` as a top-level column.
+    #[tokio::test]
+    async fn test_nested_field_equality_delete_from_equality_delete_writer() {
+        let tmp_dir = TempDir::new().unwrap();
+        let schema = nested_eq_delete_table_schema();
+        let rows = nested_rows_batch(&schema, &[(Some(1), Some((Some(7), 0)))]);
+        let path = write_eq_delete_with_writer(&tmp_dir, schema.clone(), vec![3], rows).await;
+
+        let predicate = load_eq_delete_predicate(&path, vec![3], schema.clone())
+            .await
+            .unwrap();
+        assert_keeps_rows_unless_nested_f_is_7(predicate, schema);
+    }
+
+    /// The nesting worked out for the first batch of a file is reused for the next ones.
+    #[tokio::test]
+    async fn test_equality_delete_stream_nests_every_batch() {
+        let schema = nested_eq_delete_table_schema();
+        let flat_schema = Arc::new(arrow_schema::Schema::new(vec![simple_field(
+            "f",
+            DataType::Int64,
+            true,
+            "3",
+        )]));
+        let batch = |value: i64| {
+            RecordBatch::try_new(flat_schema.clone(), vec![
+                Arc::new(Int64Array::from(vec![value])) as ArrayRef,
+            ])
+            .unwrap()
+        };
+        let input = Box::pin(futures::stream::iter(vec![Ok(batch(7)), Ok(batch(8))]))
+            as ArrowRecordBatchStream;
+
+        let batches: Vec<RecordBatch> = evolve_equality_delete_stream(input, &schema, &[3])
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let values: Vec<i64> = batches
+            .iter()
+            .map(|batch| {
+                batch
+                    .column(0)
+                    .as_struct()
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int64Type>()
+                    .value(0)
+            })
+            .collect();
+        assert_eq!(values, vec![7, 8]);
+    }
+
+    /// An equality id the scan schema does not have is an error, not a column to skip. The check
+    /// runs before the load of the file is claimed, so loading it again through the same loader
+    /// fails the same way instead of waiting on the first load.
     #[tokio::test]
     async fn test_equality_delete_with_id_missing_from_schema_fails() {
         let tmp_dir = TempDir::new().unwrap();
-        let table_location = tmp_dir.path().to_str().unwrap();
         // Columns y (id 2) and z (id 3).
-        let path = setup_write_equality_delete_file_1(table_location);
+        let path = setup_write_equality_delete_file_1(tmp_dir.path().to_str().unwrap());
         let schema = nested_eq_delete_table_schema();
+        let eq_del = eq_delete_task(&path, vec![1, 9]);
+        let loader = CachingDeleteFileLoader::new(FileIO::new_with_fs(), 10, Runtime::current());
 
-        let err = load_eq_delete_predicate(&path, vec![1, 9], schema)
+        for _ in 0..2 {
+            let loaded = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                loader.load_deletes(std::slice::from_ref(&eq_del), schema.clone()),
+            )
             .await
-            .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        assert!(err.message().contains("field id 9"), "{err}");
+            .expect("the load waited on an earlier failed load")
+            .unwrap();
+            let Err(err) = loaded else {
+                panic!("expected an error for field id 9");
+            };
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains("field id 9"), "{err}");
+        }
+    }
+
+    /// `s.f = 7` matches only the first row: the second has a top-level `f` of 7 and the third
+    /// a null `s`.
+    const NESTED_ROWS: &[NestedRow] = &[
+        (Some(1), Some((Some(7), 0))),
+        (Some(7), Some((Some(1), 1))),
+        (Some(2), None),
+        (Some(3), Some((Some(8), 2))),
+    ];
+
+    /// Scans a data file of `nested_eq_delete_table_schema` holding `NESTED_ROWS` with `deletes`
+    /// applied, and returns the top-level `f` of the rows left.
+    async fn scan_nested_rows(
+        dir: &TempDir,
+        deletes: Vec<FileScanTaskDeleteFile>,
+    ) -> Vec<Option<i64>> {
+        use crate::arrow::ArrowReaderBuilder;
+        use crate::scan::{FileScanTask, FileScanTaskStream};
+
+        let schema = nested_eq_delete_table_schema();
+        let batch = nested_rows_batch(&schema, NESTED_ROWS);
+        let path = format!("{}/data.parquet", dir.path().to_str().unwrap());
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(std::fs::metadata(&path).unwrap().len())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1, 2])
+            .with_deletes(deletes)
+            .with_case_sensitive(true)
+            .build()
+            .unwrap();
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let batches: Vec<RecordBatch> =
+            ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                .build()
+                .read(tasks)
+                .unwrap()
+                .stream()
+                .try_collect()
+                .await
+                .unwrap();
+        batches
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int64Type>()
+                    .iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    #[ignore = "applying a nested equality delete on scan needs #2906"]
+    async fn test_scan_applies_nested_equality_delete_in_struct_layout() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = format!("{}/eq-delete.parquet", tmp_dir.path().to_str().unwrap());
+        write_struct_layout_eq_delete(&path, "f", "3", true, vec![7], None);
+
+        let left = scan_nested_rows(&tmp_dir, vec![eq_delete_task(&path, vec![3])]).await;
+        assert_eq!(left, vec![Some(7), Some(2), Some(3)]);
+    }
+
+    #[tokio::test]
+    #[ignore = "applying a nested equality delete on scan needs #2906"]
+    async fn test_scan_applies_nested_equality_delete_from_equality_delete_writer() {
+        let tmp_dir = TempDir::new().unwrap();
+        let schema = nested_eq_delete_table_schema();
+        let rows = nested_rows_batch(&schema, &NESTED_ROWS[..1]);
+        let path = write_eq_delete_with_writer(&tmp_dir, schema, vec![3], rows).await;
+
+        let left = scan_nested_rows(&tmp_dir, vec![eq_delete_task(&path, vec![3])]).await;
+        assert_eq!(left, vec![Some(7), Some(2), Some(3)]);
+    }
+
+    /// A delete row with a null `s` on `s.g`, which is required inside the optional `s`, deletes
+    /// the data rows whose `s` is null. Until #3306, the `s.g IS NOT NULL` it loads as binds to
+    /// `AlwaysTrue` (#3292) and the scan keeps those rows.
+    #[tokio::test]
+    #[ignore = "needs #2906 to apply nested equality deletes and #3306 to bind IS NULL on s.g"]
+    async fn test_scan_applies_null_parent_equality_delete_on_required_nested_field() {
+        let tmp_dir = TempDir::new().unwrap();
+        let path = format!("{}/eq-delete.parquet", tmp_dir.path().to_str().unwrap());
+        write_struct_layout_eq_delete(&path, "g", "4", false, vec![0], Some(vec![false]));
+
+        let left = scan_nested_rows(&tmp_dir, vec![eq_delete_task(&path, vec![4])]).await;
+        assert_eq!(left, vec![Some(1), Some(7), Some(3)]);
     }
 }

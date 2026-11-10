@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_array::{ArrayRef, RecordBatch, RecordBatchOptions, StructArray};
-use arrow_schema::{FieldRef, Fields, Schema as ArrowSchema};
+use arrow_schema::{FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use futures::{StreamExt, TryStreamExt};
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ParquetRecordBatchStreamBuilder};
 
@@ -119,6 +119,21 @@ impl BasicDeleteFileLoader {
     }
 }
 
+/// Checks that every equality id is a field of the scan schema. Java's `DeleteFilter` fails the
+/// same way rather than matching rows on fewer columns.
+pub(crate) fn validate_equality_ids(schema: &Schema, equality_ids: &[i32]) -> Result<()> {
+    match equality_ids
+        .iter()
+        .find(|&&id| schema.field_by_id(id).is_none())
+    {
+        Some(id) => Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Equality delete field id {id} is not in the scan schema"),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// Reads an equality delete file as `schema` pruned to its equality fields, the way Java's
 /// `DeleteFilter` selects them, so a field nested in a struct keeps its parent struct.
 ///
@@ -130,15 +145,7 @@ pub(crate) fn evolve_equality_delete_stream(
     schema: &Schema,
     equality_ids: &[i32],
 ) -> Result<ArrowRecordBatchStream> {
-    if let Some(id) = equality_ids
-        .iter()
-        .find(|&&id| schema.field_by_id(id).is_none())
-    {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Equality delete field id {id} is not in the scan schema"),
-        ));
-    }
+    validate_equality_ids(schema, equality_ids)?;
     let crate::spec::Type::Struct(pruned) =
         prune_columns(schema, equality_ids.iter().copied(), false)?
     else {
@@ -155,98 +162,150 @@ pub(crate) fn evolve_equality_delete_stream(
             .build()?,
     );
     let mut transformer = RecordBatchTransformerBuilder::new(pruned.clone(), &projection).build();
+    // The batches of a file share its schema, so the nesting is worked out once and only
+    // rebuilt if a batch comes with a different schema.
+    let mut nesting: Option<EqualityColumnNesting> = None;
     Ok(Box::pin(record_batch_stream.map(move |batch| {
-        batch
-            .and_then(|batch| nest_top_level_equality_columns(batch, &pruned))
-            .and_then(|batch| transformer.process_record_batch(batch))
+        let batch = batch?;
+        let nesting = match &mut nesting {
+            Some(nesting) if nesting.input_schema == batch.schema() => nesting,
+            slot => slot.insert(EqualityColumnNesting::try_new(batch.schema(), &pruned)?),
+        };
+        transformer.process_record_batch(nesting.apply(batch)?)
     })) as ArrowRecordBatchStream)
 }
 
-/// Moves top-level columns whose field ids belong to fields nested in `schema` back under their
-/// parent structs. A batch with no such column is returned as is.
-fn nest_top_level_equality_columns(batch: RecordBatch, schema: &Schema) -> Result<RecordBatch> {
-    let top_level_ids: HashSet<i32> = schema
-        .as_struct()
-        .fields()
-        .iter()
-        .map(|field| field.id)
-        .collect();
-    let mut flat = HashMap::new();
-    for (index, field) in batch.schema().fields().iter().enumerate() {
-        if let Some(id) = try_get_field_id_from_metadata(field)?
-            && !top_level_ids.contains(&id)
-            && schema.field_by_id(id).is_some()
-        {
-            flat.insert(id, index);
-        }
-    }
-    if flat.is_empty() {
-        return Ok(batch);
-    }
+/// How to build the columns of an equality delete batch once the top-level columns of fields
+/// nested in the pruned schema are moved back under their parent structs.
+struct EqualityColumnNesting {
+    input_schema: ArrowSchemaRef,
+    /// The output schema and columns, or `None` when no column has to move.
+    output: Option<(ArrowSchemaRef, Vec<NestedColumn>)>,
+}
 
-    fn nest(
-        field: &crate::spec::NestedField,
-        batch: &RecordBatch,
-        flat: &HashMap<i32, usize>,
-    ) -> Option<(FieldRef, ArrayRef)> {
-        if let Some(&index) = flat.get(&field.id) {
-            return Some((
-                batch.schema().field(index).clone().into(),
-                batch.column(index).clone(),
-            ));
+/// An output column: a column of the input batch, or a struct built from such columns.
+enum NestedColumn {
+    Input(usize),
+    Struct(Fields, Vec<NestedColumn>),
+}
+
+impl NestedColumn {
+    fn build(&self, batch: &RecordBatch) -> ArrayRef {
+        match self {
+            NestedColumn::Input(index) => batch.column(*index).clone(),
+            NestedColumn::Struct(fields, children) => Arc::new(StructArray::new(
+                fields.clone(),
+                children.iter().map(|child| child.build(batch)).collect(),
+                None,
+            )),
         }
-        let crate::spec::Type::Struct(struct_type) = field.field_type.as_ref() else {
-            return None;
-        };
-        let (fields, columns): (Vec<FieldRef>, Vec<ArrayRef>) = struct_type
+    }
+}
+
+impl EqualityColumnNesting {
+    fn try_new(input_schema: ArrowSchemaRef, schema: &Schema) -> Result<Self> {
+        let top_level_ids: HashSet<i32> = schema
+            .as_struct()
             .fields()
             .iter()
-            .filter_map(|child| nest(child, batch, flat))
-            .unzip();
-        if fields.is_empty() {
-            return None;
+            .map(|field| field.id)
+            .collect();
+        let mut flat = HashMap::new();
+        for (index, field) in input_schema.fields().iter().enumerate() {
+            if let Some(id) = try_get_field_id_from_metadata(field)?
+                && !top_level_ids.contains(&id)
+                && schema.field_by_id(id).is_some()
+            {
+                flat.insert(id, index);
+            }
         }
-        let fields = Fields::from(fields);
-        let array = StructArray::new(fields.clone(), columns, None);
-        let arrow_field =
-            arrow_schema::Field::new(&field.name, arrow_schema::DataType::Struct(fields), true)
-                .with_metadata(HashMap::from([(
-                    PARQUET_FIELD_ID_META_KEY.to_string(),
-                    field.id.to_string(),
-                )]));
-        Some((Arc::new(arrow_field), Arc::new(array)))
+        if flat.is_empty() {
+            return Ok(Self {
+                input_schema,
+                output: None,
+            });
+        }
+
+        fn nest(
+            field: &crate::spec::NestedField,
+            input_schema: &ArrowSchema,
+            flat: &HashMap<i32, usize>,
+        ) -> Option<(FieldRef, NestedColumn)> {
+            if let Some(&index) = flat.get(&field.id) {
+                return Some((
+                    input_schema.fields()[index].clone(),
+                    NestedColumn::Input(index),
+                ));
+            }
+            let crate::spec::Type::Struct(struct_type) = field.field_type.as_ref() else {
+                return None;
+            };
+            let (fields, children): (Vec<FieldRef>, Vec<NestedColumn>) = struct_type
+                .fields()
+                .iter()
+                .filter_map(|child| nest(child, input_schema, flat))
+                .unzip();
+            if fields.is_empty() {
+                return None;
+            }
+            let fields = Fields::from(fields);
+            let arrow_field = arrow_schema::Field::new(
+                &field.name,
+                arrow_schema::DataType::Struct(fields.clone()),
+                true,
+            )
+            .with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                field.id.to_string(),
+            )]));
+            Some((
+                Arc::new(arrow_field),
+                NestedColumn::Struct(fields, children),
+            ))
+        }
+
+        let moved: HashSet<usize> = flat.values().copied().collect();
+        let mut fields: Vec<FieldRef> = Vec::new();
+        let mut columns: Vec<NestedColumn> = Vec::new();
+        for (index, field) in input_schema.fields().iter().enumerate() {
+            if !moved.contains(&index) {
+                fields.push(field.clone());
+                columns.push(NestedColumn::Input(index));
+            }
+        }
+        let present: HashSet<i32> = fields
+            .iter()
+            .map(|field| try_get_field_id_from_metadata(field))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect();
+        for field in schema.as_struct().fields() {
+            if present.contains(&field.id) {
+                continue;
+            }
+            if let Some((arrow_field, column)) = nest(field, &input_schema, &flat) {
+                fields.push(arrow_field);
+                columns.push(column);
+            }
+        }
+        Ok(Self {
+            input_schema,
+            output: Some((Arc::new(ArrowSchema::new(fields)), columns)),
+        })
     }
 
-    let mut fields: Vec<FieldRef> = Vec::new();
-    let mut columns: Vec<ArrayRef> = Vec::new();
-    for (index, field) in batch.schema().fields().iter().enumerate() {
-        if !flat.values().any(|&flat_index| flat_index == index) {
-            fields.push(field.clone());
-            columns.push(batch.column(index).clone());
-        }
+    fn apply(&self, batch: RecordBatch) -> Result<RecordBatch> {
+        let Some((schema, columns)) = &self.output else {
+            return Ok(batch);
+        };
+        let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+        Ok(RecordBatch::try_new_with_options(
+            schema.clone(),
+            columns.iter().map(|column| column.build(&batch)).collect(),
+            &options,
+        )?)
     }
-    let present: HashSet<i32> = fields
-        .iter()
-        .map(|field| try_get_field_id_from_metadata(field))
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .flatten()
-        .collect();
-    for field in schema.as_struct().fields() {
-        if present.contains(&field.id) {
-            continue;
-        }
-        if let Some((arrow_field, column)) = nest(field, &batch, &flat) {
-            fields.push(arrow_field);
-            columns.push(column);
-        }
-    }
-    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
-    Ok(RecordBatch::try_new_with_options(
-        Arc::new(ArrowSchema::new(fields)),
-        columns,
-        &options,
-    )?)
 }
 
 #[async_trait::async_trait]
