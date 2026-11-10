@@ -21,11 +21,13 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod report;
 mod task;
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
@@ -461,18 +463,20 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
-        self.plan_data_files(|ctx| ctx.into_file_scan_task()).await
+        self.plan_data_files(Arc::default(), |ctx| ctx.into_file_scan_task())
+            .await
     }
 
     pub(crate) async fn plan_cow_rewrite_files(
         &self,
     ) -> Result<BoxStream<'static, Result<crate::cow_rewrite::CowRewriteFile>>> {
-        self.plan_data_files(|ctx| ctx.into_cow_rewrite_file())
+        self.plan_data_files(Arc::default(), |ctx| ctx.into_cow_rewrite_file())
             .await
     }
 
     async fn plan_data_files<T, F, Fut>(
         &self,
+        counters: Arc<report::Counters>,
         build_result: F,
     ) -> Result<BoxStream<'static, Result<T>>>
     where
@@ -484,6 +488,7 @@ impl TableScan {
             return Ok(Box::pin(futures::stream::empty()));
         };
 
+        let mut metrics = report::Metrics::default();
         let mut workers = Vec::new();
         let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
         let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
@@ -509,6 +514,8 @@ impl TableScan {
             manifest_entry_data_ctx_tx,
             delete_file_idx.clone(),
             manifest_entry_delete_ctx_tx,
+            counters.clone(),
+            &mut metrics,
         )?;
         let worker = self.runtime.io().spawn(index_completion);
         workers.push(worker.abort_on_drop());
@@ -596,12 +603,18 @@ impl TableScan {
             .filter_map(|result| std::future::ready(result.err().map(Err)));
         // Bounded output channels must be drained while joining the workers.
         let tasks = futures::stream::select(planned_file_rx.map(Ok), worker_errors).boxed();
-        Ok(futures::stream::try_unfold(tasks, |mut tasks| async move {
-            match tasks.next().await {
-                Some(task) => task.map(|task| Some((task, tasks))),
-                None => Ok(None),
-            }
-        })
+        Ok(futures::stream::try_unfold(
+            (tasks, metrics, counters),
+            |(mut tasks, metrics, counters)| async move {
+                match tasks.next().await {
+                    Some(task) => task.map(|task| Some((task, (tasks, metrics, counters)))),
+                    None => {
+                        let _metrics = metrics.finish(&counters);
+                        Ok(None)
+                    }
+                }
+            },
+        )
         .boxed())
     }
 
@@ -668,6 +681,8 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+                let counters = &manifest_entry_context.counters;
+                counters.skipped_data_files.fetch_add(1, Ordering::Relaxed);
                 return Ok(());
             }
 
@@ -677,6 +692,8 @@ impl TableScan {
                 manifest_entry_context.manifest_entry.data_file(),
                 false,
             )? {
+                let counters = &manifest_entry_context.counters;
+                counters.skipped_data_files.fetch_add(1, Ordering::Relaxed);
                 return Ok(());
             }
         }
@@ -716,10 +733,28 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+                let counters = &manifest_entry_context.counters;
+                counters
+                    .skipped_delete_files
+                    .fetch_add(1, Ordering::Relaxed);
                 return Ok(());
             }
         }
 
+        let counters = &manifest_entry_context.counters;
+        counters
+            .indexed_delete_files
+            .fetch_add(1, Ordering::Relaxed);
+        let counter = match manifest_entry_context.manifest_entry.content_type() {
+            DataContentType::EqualityDeletes => &counters.equality_delete_files,
+            _ if manifest_entry_context.manifest_entry.file_format()
+                == crate::spec::DataFileFormat::Puffin =>
+            {
+                &counters.dvs
+            }
+            _ => &counters.positional_delete_files,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
         // The index worker's joined result carries any failure.
         let _ = delete_file_ctx_tx
             .send(DeleteFileContext {
@@ -757,6 +792,7 @@ mod tests {
     use parquet::arrow::ArrowWriter;
     use uuid::Uuid;
 
+    use super::report::{Counters, Metrics};
     use super::{TableScan, resolve_field_id};
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
@@ -4034,7 +4070,7 @@ mod tests {
         let scan = fixture.table.scan().build().unwrap();
         for panic in [false, true] {
             let stream = scan
-                .plan_data_files(move |_| async move {
+                .plan_data_files(Arc::default(), move |_| async move {
                     assert!(!panic, "injected worker panic");
                     Err::<FileScanTask, _>(
                         crate::Error::new(ErrorKind::DataInvalid, "injected error")
@@ -4093,5 +4129,96 @@ mod tests {
             .unwrap();
             assert!(result.is_err());
         });
+    }
+
+    #[tokio::test]
+    async fn test_planning_counts_live_files_and_predicate_rejections() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let scan = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").less_than(Datum::long(200)))
+            .build()
+            .unwrap();
+        let counters = Arc::new(Counters::default());
+        let tasks = scan
+            .plan_data_files(counters.clone(), |ctx| ctx.into_file_scan_task())
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(Metrics::default().finish(&counters), Metrics {
+            scanned_data_manifests: 1,
+            result_data_files: 1,
+            skipped_data_files: 1,
+            total_file_size_in_bytes: tasks[0].file_size_in_bytes(),
+            ..Default::default()
+        });
+    }
+
+    #[tokio::test]
+    async fn test_planning_counts_delete_attachments_separately_from_indexed_files() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_deadlock_manifests().await;
+        let scan = fixture.table.scan().build().unwrap();
+        let counters = Arc::new(Counters::default());
+        scan.plan_data_files(counters.clone(), |ctx| ctx.into_file_scan_task())
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(Metrics::default().finish(&counters), Metrics {
+            scanned_data_manifests: 1,
+            scanned_delete_manifests: 1,
+            result_data_files: 10,
+            result_delete_files: 10,
+            indexed_delete_files: 1,
+            positional_delete_files: 1,
+            total_file_size_in_bytes: 1000,
+            total_delete_file_size_in_bytes: 1000,
+            ..Default::default()
+        });
+    }
+
+    #[tokio::test]
+    async fn test_manifest_selection_counts_pruning() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        for (limit, selected, skipped) in [(50, 0, 1), (200, 1, 0)] {
+            let scan = fixture
+                .table
+                .scan()
+                .with_filter(Reference::new("x").less_than(Datum::long(limit)))
+                .build()
+                .unwrap();
+            let context = scan.plan_context.as_ref().unwrap();
+            let list = context.get_manifest_list().await.unwrap();
+            let (data_tx, _data_rx) = futures::channel::mpsc::channel(1);
+            let (delete_tx, _delete_rx) = futures::channel::mpsc::channel(1);
+            let (index, index_tx, completion) = crate::delete_file_index::DeleteFileIndex::new();
+            let completion = test_runtime().io().spawn(completion).abort_on_drop();
+            let mut metrics = Metrics::default();
+            let contexts = context
+                .build_manifest_file_contexts(
+                    list,
+                    data_tx,
+                    index,
+                    delete_tx,
+                    Arc::default(),
+                    &mut metrics,
+                )
+                .unwrap();
+            assert_eq!(contexts.count(), selected);
+            drop(index_tx);
+            completion.await.unwrap().unwrap();
+            assert_eq!(metrics, Metrics {
+                total_data_manifests: 1,
+                skipped_data_manifests: skipped,
+                ..Default::default()
+            });
+        }
     }
 }
