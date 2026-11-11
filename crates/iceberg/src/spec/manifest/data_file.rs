@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::str::FromStr;
 
-use apache_avro::{Reader as AvroReader, Writer as AvroWriter, from_value, to_value};
+use apache_avro::{Reader as AvroReader, from_value, to_value};
 use serde_derive::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
@@ -28,6 +28,7 @@ use super::{
     Datum, FormatVersion, Schema, data_file_schema_v1, data_file_schema_v2, data_file_schema_v3,
 };
 use crate::Error;
+use crate::avro::new_writer;
 use crate::error::{Result, invalid_data};
 use crate::spec::{
     DEFAULT_PARTITION_SPEC_ID, Literal, NestedFieldRef, PrimitiveType, Struct, StructType, Type,
@@ -367,7 +368,7 @@ pub fn write_data_files_to_avro<W: Write>(
         FormatVersion::V2 => data_file_schema_v2(partition_type).unwrap(),
         FormatVersion::V3 => data_file_schema_v3(partition_type).unwrap(),
     };
-    let mut writer = AvroWriter::new(&avro_schema, writer)?;
+    let mut writer = new_writer(&avro_schema, writer)?;
 
     // Wrap once and reuse across files so the field-name lookup is not rebuilt
     // for each data file.
