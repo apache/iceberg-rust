@@ -427,8 +427,13 @@ impl CachingDeleteFileLoader {
             .key_metadata()
             .map(StandardKeyMetadata::decode)
             .transpose()?;
-        let metrics = basic_delete_file_loader.scan_metrics().clone();
-        let count_reads = |reader| CountingFileRead::new(reader, metrics, task.file_type());
+        let count_reads = |reader| {
+            CountingFileRead::new(
+                reader,
+                basic_delete_file_loader.scan_metrics().clone(),
+                task.file_type(),
+            )
+        };
 
         let reader = match key_metadata {
             Some(key_metadata) => {
