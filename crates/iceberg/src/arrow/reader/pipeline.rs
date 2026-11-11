@@ -687,6 +687,7 @@ impl FileScanTaskReader {
         // otherwise, use applyNameMapping() followed by pruneColumns() when configured, or
         // addFallbackIds() followed by pruneColumnsFallback() for position-based fallback.
         // The fast path returns early without materializing an owned schema.
+        let parquet_schema = arrow_metadata.metadata().file_metadata().schema_descr();
         let arrow_schema = if missing_field_ids {
             let schema = if let Some(name_mapping) = task.name_mapping() {
                 apply_name_mapping_to_arrow_schema(
@@ -699,9 +700,9 @@ impl FileScanTaskReader {
             // Coerce INT96 timestamp columns before building the stream reader to avoid
             // i64 overflow in arrow-rs. Apply this after assigning any missing field IDs
             // so the final schema contains both changes.
-            coerce_int96_timestamps(&schema, task.schema()).unwrap_or(schema)
+            coerce_int96_timestamps(&schema, parquet_schema, task.schema()).unwrap_or(schema)
         } else if let Some(coerced) =
-            coerce_int96_timestamps(arrow_metadata.schema(), task.schema())
+            coerce_int96_timestamps(arrow_metadata.schema(), parquet_schema, task.schema())
         {
             coerced
         } else if install_row_number {
@@ -2847,6 +2848,65 @@ mod tests {
             write_int96_parquet_file(&table_location, "with_ids.parquet", true);
 
         assert_int96_read_matches(&file_path, schema, vec![1, 2], &expected_micros).await;
+    }
+
+    #[tokio::test]
+    async fn test_read_int64_nanosecond_timestamps_as_microseconds() {
+        use arrow_array::{TimestampMicrosecondArray, TimestampNanosecondArray};
+        use arrow_schema::TimeUnit;
+
+        const NANOS: [i64; 3] = [1_000_000_000, 2_000_000_000, 1_704_067_200_123_456_000];
+
+        for (iceberg_type, tz) in [
+            (PrimitiveType::Timestamp, None),
+            (PrimitiveType::Timestamptz, Some("UTC".into())),
+        ] {
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_schema_id(1)
+                    .with_fields(vec![
+                        NestedField::optional(1, "ts", Type::Primitive(iceberg_type)).into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let arrow_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new(
+                    "ts",
+                    DataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
+                    true,
+                )
+                .with_metadata(HashMap::from([(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    "1".to_string(),
+                )])),
+            ]));
+            let column =
+                TimestampNanosecondArray::from(NANOS.to_vec()).with_timezone_opt(tz.clone());
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(column)]).unwrap();
+
+            let tmp_dir = TempDir::new().unwrap();
+            let file_path = format!("{}/nanos.parquet", tmp_dir.path().to_str().unwrap());
+            let mut writer =
+                ArrowWriter::try_new(File::create(&file_path).unwrap(), arrow_schema, None)
+                    .unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+
+            let batches = read_int96_batches(&file_path, schema, vec![1]).await;
+
+            let expected = TimestampMicrosecondArray::from(NANOS.map(|ns| ns / 1_000).to_vec())
+                .with_timezone_opt(tz.map(|_| "+00:00"));
+            assert_eq!(batches.len(), 1);
+            assert_eq!(
+                batches[0]
+                    .column(0)
+                    .as_any()
+                    .downcast_ref::<TimestampMicrosecondArray>()
+                    .unwrap(),
+                &expected
+            );
+        }
     }
 
     #[tokio::test]
