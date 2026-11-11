@@ -427,21 +427,21 @@ impl CachingDeleteFileLoader {
             .key_metadata()
             .map(StandardKeyMetadata::decode)
             .transpose()?;
-        let counted_reader: Box<dyn FileRead> = Box::new(CountingFileRead::new(
-            input_file.reader().await?,
-            basic_delete_file_loader.scan_metrics().clone(),
-            task.file_type(),
-        ));
+        let count_reads = |reader| -> Box<dyn FileRead> {
+            Box::new(CountingFileRead::new(
+                reader,
+                basic_delete_file_loader.scan_metrics().clone(),
+                task.file_type(),
+            ))
+        };
         let reader = match key_metadata {
             Some(key_metadata) => {
-                /*
-                 * EncryptedInputFile reads bytes from the `input_file`, decrypts them and then reads the provided byte range
-                 * Passing a counted_reader using the decrypt_reader helper manually
-                 * allows us to count the number of bytes read from storage *before* decryption
-                 */
-                EncryptedInputFile::new(input_file, key_metadata).decrypt_reader(counted_reader)?
+                // Count storage bytes beneath decryption, which reads whole encrypted blocks.
+                EncryptedInputFile::new(input_file, key_metadata)
+                    .reader_with_wrapper(count_reads)
+                    .await?
             }
-            None => counted_reader,
+            None => count_reads(input_file.reader().await?),
         };
 
         basic_delete_file_loader
