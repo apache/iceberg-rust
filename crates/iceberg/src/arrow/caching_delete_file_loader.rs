@@ -427,13 +427,9 @@ impl CachingDeleteFileLoader {
             .key_metadata()
             .map(StandardKeyMetadata::decode)
             .transpose()?;
-        let count_reads = |reader| -> Box<dyn FileRead> {
-            Box::new(CountingFileRead::new(
-                reader,
-                basic_delete_file_loader.scan_metrics().clone(),
-                task.file_type(),
-            ))
-        };
+        let metrics = basic_delete_file_loader.scan_metrics().clone();
+        let count_reads = |reader| CountingFileRead::new(reader, metrics, task.file_type());
+
         let reader = match key_metadata {
             Some(key_metadata) => {
                 // Decryption can read more bytes from the file than the blob we asked for.
@@ -442,7 +438,7 @@ impl CachingDeleteFileLoader {
                     .reader_with_wrapper(count_reads)
                     .await?
             }
-            None => count_reads(input_file.reader().await?),
+            None => Box::new(count_reads(input_file.reader().await?)),
         };
 
         basic_delete_file_loader

@@ -83,12 +83,13 @@ impl EncryptedInputFile {
     /// Calls `wrap` once with the file reader and uses the result for decryption.
     /// This lets callers add behavior such as logging reads or counting bytes
     /// without changing the decryption code.
-    pub(crate) async fn reader_with_wrapper(
-        &self,
-        wrap: impl FnOnce(Box<dyn FileRead>) -> Box<dyn FileRead>,
-    ) -> Result<Box<dyn FileRead>> {
+    pub(crate) async fn reader_with_wrapper<F, R>(&self, wrap: F) -> Result<Box<dyn FileRead>>
+    where
+        F: FnOnce(Box<dyn FileRead>) -> R,
+        R: FileRead,
+    {
         let encrypted_length = self.encrypted_length()?;
-        let raw_reader = wrap(self.inner.reader().await?);
+        let raw_reader = Box::new(wrap(self.inner.reader().await?));
         let cipher = build_cipher(&self.key_metadata)?;
         let aad_prefix: Box<[u8]> = self.key_metadata.aad_prefix().unwrap_or_default().into();
         let decrypting = AesGcmFileRead::new(raw_reader, cipher, aad_prefix, encrypted_length)?;
@@ -286,17 +287,15 @@ mod tests {
     #[tokio::test]
     async fn test_invalid_file_length_is_rejected() {
         let fileio = FileIO::new_with_memory();
-        let path = "memory:///test/invalid_length.bin";
-        let output = EncryptedOutputFile::new(fileio.new_output(path).unwrap(), key_metadata());
-        output.write(Bytes::from_static(b"data")).await.unwrap();
-
         for length in [
             0,
             u64::from(GCM_STREAM_HEADER_LENGTH),
             u64::from(MIN_STREAM_LENGTH - 1),
         ] {
             let input = EncryptedInputFile::new(
-                fileio.new_input(path).unwrap(),
+                fileio
+                    .new_input("memory:///test/invalid_length.bin")
+                    .unwrap(),
                 key_metadata().with_file_length(length),
             );
             let expected_message =
