@@ -2435,7 +2435,7 @@ mod tests {
         );
         let factory = Arc::new(gated_storage::GatedStorageFactory::default());
         let gate = Arc::clone(&factory.open);
-        let file_io = crate::io::FileIOBuilder::new(factory).build();
+        let file_io = FileIOBuilder::new(factory).build();
         let loader = CachingDeleteFileLoader::new(file_io, 10, Runtime::current());
 
         let err = loader
@@ -2446,7 +2446,7 @@ mod tests {
             .unwrap();
         assert!(err.message().contains("negative position"), "{err}");
 
-        gate.store(true, std::sync::atomic::Ordering::SeqCst);
+        gate.store(true, Ordering::SeqCst);
         let filter = tokio::time::timeout(
             std::time::Duration::from_secs(5),
             loader.load_deletes(&[valid], schema),
