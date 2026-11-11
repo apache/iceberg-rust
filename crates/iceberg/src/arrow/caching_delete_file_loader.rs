@@ -2514,6 +2514,275 @@ mod tests {
         assert_eq!(values, vec![7, 8]);
     }
 
+    /// A batch with a different schema gets its own nesting: a flat `s.f`, then `s.f` under `s`,
+    /// then a flat one again.
+    #[tokio::test]
+    async fn test_equality_delete_stream_renests_on_schema_change() {
+        let schema = nested_eq_delete_table_schema();
+        let flat_schema = Arc::new(arrow_schema::Schema::new(vec![simple_field(
+            "f",
+            DataType::Int64,
+            true,
+            "3",
+        )]));
+        let flat = |value: i64| {
+            RecordBatch::try_new(flat_schema.clone(), vec![
+                Arc::new(Int64Array::from(vec![value])) as ArrayRef,
+            ])
+            .unwrap()
+        };
+        let s_fields = Fields::from(vec![simple_field("f", DataType::Int64, true, "3")]);
+        let struct_schema = Arc::new(arrow_schema::Schema::new(vec![simple_field(
+            "s",
+            DataType::Struct(s_fields.clone()),
+            true,
+            "2",
+        )]));
+        let nested = |value: i64| {
+            let s = StructArray::new(
+                s_fields.clone(),
+                vec![Arc::new(Int64Array::from(vec![value])) as ArrayRef],
+                None,
+            );
+            RecordBatch::try_new(struct_schema.clone(), vec![Arc::new(s) as ArrayRef]).unwrap()
+        };
+        let input = Box::pin(futures::stream::iter(vec![
+            Ok(flat(7)),
+            Ok(nested(8)),
+            Ok(flat(9)),
+        ])) as ArrowRecordBatchStream;
+
+        let batches: Vec<RecordBatch> = evolve_equality_delete_stream(input, &schema, &[3])
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let values: Vec<i64> = batches
+            .iter()
+            .map(|batch| {
+                batch
+                    .column(0)
+                    .as_struct()
+                    .column(0)
+                    .as_primitive::<arrow_array::types::Int64Type>()
+                    .value(0)
+            })
+            .collect();
+        assert_eq!(values, vec![7, 8, 9]);
+    }
+
+    /// `s.f` and `s.g` from `EqualityDeleteWriter` are two top-level columns that go back under
+    /// one `s`.
+    #[tokio::test]
+    async fn test_two_equality_fields_under_one_parent_from_equality_delete_writer() {
+        use crate::expr::Bind;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let schema = nested_eq_delete_table_schema();
+        let rows = nested_rows_batch(&schema, &[(Some(1), Some((Some(7), 5)))]);
+        let path = write_eq_delete_with_writer(&tmp_dir, schema.clone(), vec![3, 4], rows).await;
+
+        let predicate = load_eq_delete_predicate(&path, vec![3, 4], schema.clone())
+            .await
+            .unwrap();
+        let s_f = Reference::new("s.f");
+        let s_g = Reference::new("s.g");
+        let expected = s_f
+            .clone()
+            .is_null()
+            .or(s_f.not_equal_to(Datum::long(7)))
+            .or(s_g.clone().is_null().or(s_g.not_equal_to(Datum::long(5))))
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(predicate, Some(expected));
+    }
+
+    /// `f` (id 1) and the required `a.b.c` (id 4, in `b` with id 3, in `a` with id 2).
+    fn two_level_eq_delete_table_schema() -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "f", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(
+                        2,
+                        "a",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(
+                                3,
+                                "b",
+                                Type::Struct(StructType::new(vec![
+                                    NestedField::required(
+                                        4,
+                                        "c",
+                                        Type::Primitive(PrimitiveType::Long),
+                                    )
+                                    .into(),
+                                ])),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// A batch of `two_level_eq_delete_table_schema` holding `c`, with `a` and `b` valid where
+    /// `a_valid` and `b_valid` say so.
+    fn two_level_rows_batch(c: Vec<i64>, a_valid: Vec<bool>, b_valid: Vec<bool>) -> RecordBatch {
+        let schema = two_level_eq_delete_table_schema();
+        let arrow_schema = Arc::new(crate::arrow::schema_to_arrow_schema(&schema).unwrap());
+        let DataType::Struct(a_fields) = arrow_schema.field(1).data_type().clone() else {
+            unreachable!()
+        };
+        let DataType::Struct(b_fields) = a_fields[0].data_type().clone() else {
+            unreachable!()
+        };
+        let rows = c.len();
+        let b = StructArray::new(
+            b_fields,
+            vec![Arc::new(Int64Array::from(c)) as ArrayRef],
+            Some(b_valid.into()),
+        );
+        let a = StructArray::new(
+            a_fields,
+            vec![Arc::new(b) as ArrayRef],
+            Some(a_valid.into()),
+        );
+        RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int64Array::from(vec![0; rows])) as ArrayRef,
+            Arc::new(a) as ArrayRef,
+        ])
+        .unwrap()
+    }
+
+    fn keep_unless_a_b_c_is(value: i64) -> Predicate {
+        let c = Reference::new("a.b.c");
+        c.clone().is_null().or(c.not_equal_to(Datum::long(value)))
+    }
+
+    /// `a.b.c` from `EqualityDeleteWriter`, a top-level column that goes back under `b` and `a`.
+    #[tokio::test]
+    async fn test_two_level_nested_equality_delete_from_equality_delete_writer() {
+        use crate::expr::Bind;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let schema = two_level_eq_delete_table_schema();
+        let rows = two_level_rows_batch(vec![7], vec![true], vec![true]);
+        let path = write_eq_delete_with_writer(&tmp_dir, schema.clone(), vec![4], rows).await;
+
+        let predicate = load_eq_delete_predicate(&path, vec![4], schema.clone())
+            .await
+            .unwrap();
+        let expected = keep_unless_a_b_c_is(7).bind(schema, true).unwrap();
+        assert_eq!(predicate, Some(expected));
+    }
+
+    /// `a.b.c` under its parents, the way Java writes it. The required `c` reads back as a
+    /// value under a null `a` and under a null `b`, and loads as null there, so those rows give
+    /// `a.b.c IS NOT NULL`.
+    #[tokio::test]
+    async fn test_two_level_nested_equality_delete_in_struct_layout_with_null_parents() {
+        use crate::expr::Bind;
+
+        let tmp_dir = TempDir::new().unwrap();
+        let schema = two_level_eq_delete_table_schema();
+        let path = format!("{}/eq-delete.parquet", tmp_dir.path().to_str().unwrap());
+        let rows = two_level_rows_batch(vec![5, 6, 7], vec![false, true, true], vec![
+            true, false, true,
+        ]);
+        let batch = rows.project(&[1]).unwrap();
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let predicate = load_eq_delete_predicate(&path, vec![4], schema.clone())
+            .await
+            .unwrap();
+        let c_is_not_null = Reference::new("a.b.c").is_not_null();
+        let expected = c_is_not_null
+            .clone()
+            .and(c_is_not_null)
+            .and(keep_unless_a_b_c_is(7))
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(predicate, Some(expected));
+    }
+
+    /// `s.f` under a required `s`: the `s` put back over a flat `s.f` is required too, and the
+    /// delete loads the same as under an optional `s`.
+    #[tokio::test]
+    async fn test_nested_equality_delete_under_required_parent() {
+        use crate::expr::Bind;
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "f", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(
+                        2,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(3, "f", Type::Primitive(PrimitiveType::Long))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let flat_schema = Arc::new(arrow_schema::Schema::new(vec![simple_field(
+            "f",
+            DataType::Int64,
+            true,
+            "3",
+        )]));
+        let flat = RecordBatch::try_new(flat_schema, vec![
+            Arc::new(Int64Array::from(vec![7])) as ArrayRef
+        ])
+        .unwrap();
+        let input = Box::pin(futures::stream::iter(vec![Ok(flat)])) as ArrowRecordBatchStream;
+        let batches: Vec<RecordBatch> = evolve_equality_delete_stream(input, &schema, &[3])
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(!batches[0].schema().field(0).is_nullable());
+
+        let tmp_dir = TempDir::new().unwrap();
+        let s_fields = Fields::from(vec![simple_field("f", DataType::Int64, true, "3")]);
+        let s = StructArray::new(
+            s_fields.clone(),
+            vec![Arc::new(Int64Array::from(vec![7])) as ArrayRef],
+            None,
+        );
+        let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
+            simple_field("f", DataType::Int64, true, "1"),
+            simple_field("s", DataType::Struct(s_fields), false, "2"),
+        ]));
+        let rows = RecordBatch::try_new(arrow_schema, vec![
+            Arc::new(Int64Array::from(vec![1])) as ArrayRef,
+            Arc::new(s) as ArrayRef,
+        ])
+        .unwrap();
+        let path = write_eq_delete_with_writer(&tmp_dir, schema.clone(), vec![3], rows).await;
+        let predicate = load_eq_delete_predicate(&path, vec![3], schema.clone())
+            .await
+            .unwrap();
+        let s_f = Reference::new("s.f");
+        let expected = s_f
+            .clone()
+            .is_null()
+            .or(s_f.not_equal_to(Datum::long(7)))
+            .bind(schema, true)
+            .unwrap();
+        assert_eq!(predicate, Some(expected));
+    }
+
     /// An equality id the scan schema does not have is an error, not a column to skip. The check
     /// runs before the load of the file is claimed, so loading it again through the same loader
     /// fails the same way instead of waiting on the first load.

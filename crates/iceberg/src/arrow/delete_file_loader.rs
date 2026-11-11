@@ -252,7 +252,7 @@ impl EqualityColumnNesting {
             let arrow_field = arrow_schema::Field::new(
                 &field.name,
                 arrow_schema::DataType::Struct(fields.clone()),
-                true,
+                !field.required,
             )
             .with_metadata(HashMap::from([(
                 PARQUET_FIELD_ID_META_KEY.to_string(),
