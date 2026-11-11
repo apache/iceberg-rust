@@ -56,11 +56,13 @@ impl GlueSchemaBuilder {
 
         builder.is_current = false;
 
-        for schema in metadata.schemas_iter() {
-            if schema.schema_id() == current_schema.schema_id() {
-                continue;
-            }
+        let mut schemas: Vec<_> = metadata
+            .schemas_iter()
+            .filter(|schema| schema.schema_id() != current_schema.schema_id())
+            .collect();
+        schemas.sort_by_key(|schema| schema.schema_id());
 
+        for schema in schemas {
             visit_schema(schema, &mut builder)?;
         }
 
@@ -363,11 +365,11 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_evolution_keeps_removed_columns_once() -> Result<()> {
+    fn test_schema_evolution_keeps_oldest_removed_column() -> Result<()> {
         let initial_schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "removed", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(2, "removed", Type::Primitive(PrimitiveType::Int)).into(),
             ])
             .build()?;
         let metadata = create_metadata(initial_schema)?;
@@ -375,7 +377,7 @@ mod tests {
         let intermediate_schema = Schema::builder()
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                NestedField::optional(2, "removed", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(2, "removed", Type::Primitive(PrimitiveType::Long)).into(),
                 NestedField::optional(3, "added", Type::Primitive(PrimitiveType::Boolean)).into(),
             ])
             .build()?;
@@ -394,7 +396,7 @@ mod tests {
 
         let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
 
-        let mut removed_column = create_column("removed", "string", "2", true)?;
+        let mut removed_column = create_column("removed", "int", "2", true)?;
         removed_column
             .parameters
             .as_mut()
