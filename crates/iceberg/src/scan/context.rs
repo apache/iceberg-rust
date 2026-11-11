@@ -284,20 +284,13 @@ impl PlanContext {
     /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
         let partition_spec_id = manifest_file.partition_spec_id;
-        let partition_spec = self
-            .table_metadata
-            .partition_spec_by_id(partition_spec_id)
-            .ok_or(Error::new(
-                ErrorKind::Unexpected,
-                format!("Could not find partition spec for id {partition_spec_id}"),
-            ))?;
 
         let partition_filter = self.partition_filter_cache.get(
-            partition_spec,
+            partition_spec_id,
+            &self.table_metadata,
             &self.snapshot_schema,
             self.case_sensitive,
-            &self
-                .predicate
+            self.predicate
                 .as_ref()
                 .ok_or(Error::new(
                     ErrorKind::Unexpected,

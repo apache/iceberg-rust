@@ -22,7 +22,7 @@ use crate::expr::visitors::expression_evaluator::ExpressionEvaluator;
 use crate::expr::visitors::inclusive_projection::InclusiveProjection;
 use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
 use crate::expr::{Bind, BoundPredicate};
-use crate::spec::{PartitionSpecRef, Schema};
+use crate::spec::{Schema, TableMetadataRef};
 use crate::{Error, ErrorKind, Result};
 
 /// Manages the caching of [`BoundPredicate`] objects
@@ -41,12 +41,12 @@ impl PartitionFilterCache {
     /// or computes it if not present.
     pub(crate) fn get(
         &self,
-        partition_spec: &PartitionSpecRef,
+        spec_id: i32,
+        table_metadata: &TableMetadataRef,
         schema: &Schema,
         case_sensitive: bool,
-        filter: &BoundPredicate,
+        filter: BoundPredicate,
     ) -> Result<Arc<BoundPredicate>> {
-        let spec_id = partition_spec.spec_id();
         // we need a block here to ensure that the `read()` gets dropped before we hit the `write()`
         // below, otherwise we hit deadlock
         {
@@ -61,6 +61,13 @@ impl PartitionFilterCache {
                 return Ok(read.get(&spec_id).unwrap().clone());
             }
         }
+
+        let partition_spec = table_metadata
+            .partition_spec_by_id(spec_id)
+            .ok_or(Error::new(
+                ErrorKind::Unexpected,
+                format!("Could not find partition spec for id {spec_id}"),
+            ))?;
 
         // A historical spec may reference a source column that was later dropped from the
         // schema, which is a legitimate v2+ state. Such a spec cannot be resolved to a
@@ -93,7 +100,7 @@ impl PartitionFilterCache {
             let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
 
             inclusive_projection
-                .project(filter)?
+                .project(&filter)?
                 .rewrite_not()
                 .bind(partition_schema.clone(), case_sensitive)?
         };
@@ -324,17 +331,16 @@ mod tests {
             .greater_than_or_equal_to(Datum::long(5))
             .bind(Arc::new(evolved_schema.clone()), true)
             .unwrap();
-        let partition_spec = table_metadata.partition_spec_by_id(0).unwrap();
 
         let cache = PartitionFilterCache::new();
         let partition_filter = cache
-            .get(partition_spec, &evolved_schema, true, &filter)
+            .get(0, &table_metadata, &evolved_schema, true, filter.clone())
             .unwrap();
         assert!(matches!(*partition_filter, BoundPredicate::AlwaysTrue));
 
         // The fallback is cached, so a second lookup returns the same instance.
         let cached = cache
-            .get(partition_spec, &evolved_schema, true, &filter)
+            .get(0, &table_metadata, &evolved_schema, true, filter)
             .unwrap();
         assert!(Arc::ptr_eq(&partition_filter, &cached));
     }

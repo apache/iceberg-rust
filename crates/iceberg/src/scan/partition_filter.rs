@@ -15,56 +15,68 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::cache::{ExpressionEvaluatorCache, PartitionFilterCache};
+use std::sync::Arc;
+
 use crate::Result;
+use crate::expr::visitors::expression_evaluator::ExpressionEvaluator;
+use crate::expr::visitors::inclusive_projection::InclusiveProjection;
 use crate::expr::{Bind, BoundPredicate, Predicate};
-use crate::spec::{PartitionSpecRef, SchemaRef, Struct};
+use crate::spec::{PartitionSpecRef, Schema, SchemaRef, Struct};
 
 /// Checks whether a data file's partition can hold rows that match a filter, as a table scan
 /// does when it plans files.
 #[derive(Debug)]
 pub struct PartitionFilter {
-    schema: SchemaRef,
-    case_sensitive: bool,
-    filter: BoundPredicate,
-    partition_filters: PartitionFilterCache,
-    evaluators: ExpressionEvaluatorCache,
+    evaluator: ExpressionEvaluator,
 }
 
 impl PartitionFilter {
-    /// Creates a partition filter for `filter` on a table with `schema`.
+    /// Creates a partition filter for `filter` on data files written with `partition_spec`.
+    ///
+    /// If `partition_spec` uses a column that `schema` no longer has, every partition matches.
     ///
     /// # Errors
     ///
-    /// Returns an error if `filter` doesn't bind to `schema`.
-    pub fn try_new(filter: Predicate, schema: SchemaRef, case_sensitive: bool) -> Result<Self> {
+    /// Returns an error if `filter` doesn't bind to `schema`, or if it can't be projected onto
+    /// `partition_spec`.
+    pub fn try_new(
+        filter: Predicate,
+        schema: SchemaRef,
+        partition_spec: &PartitionSpecRef,
+        case_sensitive: bool,
+    ) -> Result<Self> {
         let filter = filter.rewrite_not().bind(schema.clone(), case_sensitive)?;
+        let has_dropped_source_column = partition_spec
+            .fields()
+            .iter()
+            .any(|field| schema.field_by_id(field.source_id).is_none());
+        let partition_filter = if has_dropped_source_column {
+            BoundPredicate::AlwaysTrue
+        } else {
+            let partition_type = partition_spec.partition_type(&schema)?;
+            let partition_schema = Arc::new(
+                Schema::builder()
+                    .with_schema_id(partition_spec.spec_id())
+                    .with_fields(partition_type.fields().to_owned())
+                    .build()?,
+            );
+            InclusiveProjection::new(partition_spec.clone())
+                .project(&filter)?
+                .rewrite_not()
+                .bind(partition_schema, case_sensitive)?
+        };
         Ok(Self {
-            schema,
-            case_sensitive,
-            filter,
-            partition_filters: PartitionFilterCache::new(),
-            evaluators: ExpressionEvaluatorCache::new(),
+            evaluator: ExpressionEvaluator::new(partition_filter),
         })
     }
 
-    /// Returns whether a data file with `partition`, written with `partition_spec`, can hold rows
-    /// that match the filter.
+    /// Returns whether a data file with `partition` can hold rows that match the filter.
     ///
     /// # Errors
     ///
-    /// Returns an error if the filter can't be projected onto `partition_spec`, or if `partition`
-    /// doesn't match the spec's fields.
-    pub fn can_match(&self, partition_spec: &PartitionSpecRef, partition: &Struct) -> Result<bool> {
-        let partition_filter = self.partition_filters.get(
-            partition_spec,
-            &self.schema,
-            self.case_sensitive,
-            &self.filter,
-        )?;
-        self.evaluators
-            .get(partition_spec.spec_id(), &partition_filter)?
-            .eval_partition(partition)
+    /// Returns an error if `partition` doesn't match the partition spec's fields.
+    pub fn can_match(&self, partition: &Struct) -> Result<bool> {
+        self.evaluator.eval_partition(partition)
     }
 }
 
@@ -105,10 +117,10 @@ mod tests {
 
     fn can_match(filter: Predicate, partitions: &[Struct]) -> Result<Vec<bool>> {
         let (schema, spec) = table()?;
-        let filter = PartitionFilter::try_new(filter, schema, true)?;
+        let filter = PartitionFilter::try_new(filter, schema, &spec, true)?;
         partitions
             .iter()
-            .map(|partition| filter.can_match(&spec, partition))
+            .map(|partition| filter.can_match(partition))
             .collect()
     }
 
@@ -142,18 +154,34 @@ mod tests {
     #[test]
     fn matches_every_file_of_an_unpartitioned_spec() -> Result<()> {
         let (schema, _) = table()?;
-        let filter =
-            PartitionFilter::try_new(Reference::new("id").equal_to(Datum::int(1)), schema, true)?;
         let spec = Arc::new(PartitionSpec::unpartition_spec());
-        assert!(filter.can_match(&spec, &Struct::empty())?);
+        let filter = Reference::new("id").equal_to(Datum::int(1));
+        let filter = PartitionFilter::try_new(filter, schema, &spec, true)?;
+        assert!(filter.can_match(&Struct::empty())?);
+        Ok(())
+    }
+
+    #[test]
+    fn matches_every_file_of_a_spec_on_a_dropped_column() -> Result<()> {
+        let (_, spec) = table()?;
+        let schema_without_day = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()?,
+        );
+        let filter = Reference::new("id").equal_to(Datum::int(1));
+        let filter = PartitionFilter::try_new(filter, schema_without_day, &spec, true)?;
+        assert!(filter.can_match(&partition(Some(2), Some(648)))?);
         Ok(())
     }
 
     #[test]
     fn rejects_a_filter_on_a_missing_column() -> Result<()> {
-        let (schema, _) = table()?;
+        let (schema, spec) = table()?;
         let filter = Reference::new("missing").equal_to(Datum::int(1));
-        assert!(PartitionFilter::try_new(filter, schema, true).is_err());
+        assert!(PartitionFilter::try_new(filter, schema, &spec, true).is_err());
         Ok(())
     }
 }
