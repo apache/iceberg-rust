@@ -442,6 +442,7 @@ fn presence_leaves(
         leaf_field_ids,
         index: 0,
         chosen: Vec::new(),
+        pick: true,
     };
     for field in fields {
         walk.visit(field, 0, false);
@@ -454,6 +455,8 @@ struct PresenceWalk<'a> {
     leaf_field_ids: &'a HashSet<i32>,
     index: usize,
     chosen: Vec<PresenceCandidate>,
+    /// Whether a struct here may record a presence leaf.
+    pick: bool,
 }
 
 impl PresenceWalk<'_> {
@@ -489,7 +492,8 @@ impl PresenceWalk<'_> {
                         best = Some(c);
                     }
                 }
-                if !covered
+                if self.pick
+                    && !covered
                     && projected
                     && let Some(leaf) = best.take()
                 {
@@ -501,9 +505,13 @@ impl PresenceWalk<'_> {
             DataType::List(child)
             | DataType::LargeList(child)
             | DataType::FixedSizeList(child, _) => self.visit(child, repetition + 1, in_projected),
-            // Iceberg can't convert list views, so nothing under one can be presence.
+            // Iceberg can't convert a list view. Count its leaves, but don't record
+            // presence under it, including for a projected struct nested inside.
             DataType::ListView(child) | DataType::LargeListView(child) => {
+                let pick = self.pick;
+                self.pick = false;
                 let (covered, _) = self.visit(child, repetition + 1, false);
+                self.pick = pick;
                 (covered, None)
             }
             DataType::Map(entries, _) => {
@@ -2884,6 +2892,76 @@ message schema {
             )
             .unwrap(),
             ProjectionMask::leaves(&parquet_schema, vec![4, 6])
+        );
+
+        // `element` is still projected, and the file nests it under a list view.
+        // Recording `p` would keep the list view in the projected schema and fail
+        // conversion, so presence for `h` is `d` at leaf 2.
+        let parquet_schema = SchemaDescriptor::new(Arc::new(
+            parse_message_type(
+                "
+                message schema {
+                  optional group h = 20 {
+                    optional group lv (LIST) = 25 {
+                      repeated group list {
+                        optional group element = 26 {
+                          optional int32 p = 27;
+                          optional int32 q = 28;
+                        }
+                      }
+                    }
+                    optional binary d (STRING) = 29;
+                  }
+                }
+                ",
+            )
+            .unwrap(),
+        ));
+        let hint = ArrowSchema::new(vec![field(
+            "h",
+            DataType::Struct(Fields::from(vec![
+                field("lv", DataType::ListView(element(26)), 25),
+                field("d", DataType::Utf8, 29),
+            ])),
+            20,
+        )]);
+        let metadata = vec![parquet::file::metadata::KeyValue::new(
+            parquet::arrow::ARROW_SCHEMA_META_KEY.to_string(),
+            parquet::arrow::encode_arrow_schema(&hint),
+        )];
+        let file_arrow =
+            Arc::new(parquet_to_arrow_schema(&parquet_schema, Some(&metadata)).unwrap());
+        let table = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(
+                    20,
+                    "h",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(
+                            26,
+                            "element",
+                            Type::Struct(StructType::new(vec![
+                                NestedField::optional(30, "n", Type::Primitive(PrimitiveType::Int))
+                                    .into(),
+                            ])),
+                        )
+                        .into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        assert_eq!(
+            ArrowReader::get_arrow_projection_mask(
+                &[20],
+                &table,
+                &parquet_schema,
+                &file_arrow,
+                false
+            )
+            .unwrap(),
+            ProjectionMask::leaves(&parquet_schema, vec![2])
         );
     }
 
