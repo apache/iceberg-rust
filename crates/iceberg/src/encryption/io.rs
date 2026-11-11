@@ -74,10 +74,15 @@ impl EncryptedInputFile {
 
     /// Creates a reader that transparently decrypts on each read.
     pub async fn reader(&self) -> Result<Box<dyn FileRead>> {
+        // Identity just returns the file reader it was given.
         self.reader_with_wrapper(std::convert::identity).await
     }
 
-    /// Creates a decrypting reader over a wrapped storage reader.
+    /// Creates a decrypting reader, letting the caller wrap the file reader first.
+    ///
+    /// Calls `wrap` once with the file reader and uses the result for decryption.
+    /// This lets callers add behavior such as logging reads or counting bytes
+    /// without changing the decryption code.
     pub(crate) async fn reader_with_wrapper(
         &self,
         wrap: impl FnOnce(Box<dyn FileRead>) -> Box<dyn FileRead>,

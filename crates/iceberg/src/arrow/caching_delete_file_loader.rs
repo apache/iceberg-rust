@@ -436,7 +436,8 @@ impl CachingDeleteFileLoader {
         };
         let reader = match key_metadata {
             Some(key_metadata) => {
-                // Count storage bytes beneath decryption, which reads whole encrypted blocks.
+                // Decryption can read more bytes from the file than the blob we asked for.
+                // Count those file reads before decryption returns just the requested blob.
                 EncryptedInputFile::new(input_file, key_metadata)
                     .reader_with_wrapper(count_reads)
                     .await?
