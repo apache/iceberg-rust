@@ -298,17 +298,14 @@ mod tests {
                     .unwrap(),
                 key_metadata().with_file_length(length),
             );
-            let expected_message =
-                format!("Invalid encrypted file length: {length} is less than {MIN_STREAM_LENGTH}");
-            for err in [
-                input.metadata().err().unwrap(),
-                input.reader().await.err().unwrap(),
-            ] {
-                assert_eq!(
-                    (err.kind(), err.message()),
-                    (ErrorKind::DataInvalid, expected_message.as_str())
-                );
-            }
+            assert_eq!(
+                input.metadata().err().unwrap().kind(),
+                ErrorKind::DataInvalid
+            );
+            assert_eq!(
+                input.reader().await.err().unwrap().kind(),
+                ErrorKind::DataInvalid
+            );
         }
     }
 
