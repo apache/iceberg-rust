@@ -87,6 +87,10 @@ impl Map {
         self.index.get(key).map(|index| &self.pair[*index].1)
     }
 
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&Literal, &Option<Literal>)> {
+        self.pair.iter().map(|(key, value)| (key, value))
+    }
+
     /// The order of map is matter, so this method used to compare two maps has same key-value pairs without considering the order.
     pub fn has_same_content(&self, other: &Map) -> bool {
         if self.len() != other.len() {

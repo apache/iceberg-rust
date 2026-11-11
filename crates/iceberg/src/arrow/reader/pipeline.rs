@@ -349,7 +349,8 @@ impl FileScanTaskReader {
         // that come back from the file, such as type promotion, default column insertion,
         // column re-ordering, partition constants, and virtual field addition (like _file)
         let mut record_batch_transformer_builder =
-            RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids());
+            RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids())
+                .with_position_fallback(use_position_fallback);
 
         // Add the _file metadata column if it's in the projected fields
         if task.project_field_ids().contains(&RESERVED_FIELD_ID_FILE) {
@@ -550,6 +551,7 @@ impl FileScanTaskReader {
                 record_batch_stream_builder.parquet_schema(),
                 record_batch_stream_builder.schema(),
                 &predicate,
+                task.schema(),
                 use_position_fallback,
             )?;
 
@@ -694,7 +696,7 @@ impl FileScanTaskReader {
                     name_mapping,
                 )?
             } else {
-                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
+                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema(), task.schema())?
             };
             // Coerce INT96 timestamp columns before building the stream reader to avoid
             // i64 overflow in arrow-rs. Apply this after assigning any missing field IDs
