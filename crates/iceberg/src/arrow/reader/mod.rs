@@ -83,7 +83,7 @@ impl ArrowReaderBuilder {
     pub fn build(self) -> ArrowReader {
         let options = self
             .options
-            .with_data_file_concurrency_limit_if_unset(available_parallelism().get());
+            .with_data_file_concurrency_limit_if_unset(available_parallelism().get().max(1));
         let concurrency_limit_data_files = options
             .data_file_concurrency_limit()
             .expect("reader concurrency was set above")
