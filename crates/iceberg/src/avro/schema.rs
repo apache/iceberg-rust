@@ -272,7 +272,7 @@ impl SchemaVisitor for SchemaToAvroSchema {
             PrimitiveType::TimestampNs => AvroSchema::TimestampNanos,
             PrimitiveType::TimestamptzNs => AvroSchema::TimestampNanos,
             PrimitiveType::String => AvroSchema::String,
-            PrimitiveType::Uuid => self.define_once(avro_uuid_schema()?),
+            PrimitiveType::Uuid => self.define_once(avro_uuid_schema()),
             PrimitiveType::Fixed(len) => self.define_once(avro_fixed_schema((*len) as usize)?),
             PrimitiveType::Binary | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
                 AvroSchema::Bytes
@@ -333,14 +333,14 @@ pub(crate) fn avro_fixed_schema(len: usize) -> Result<AvroSchema> {
 ///
 /// The Iceberg spec maps `uuid` to `{"type": "fixed", "size": 16, "logicalType": "uuid"}`,
 /// i.e. 16 raw bytes, which is what iceberg-java writes.
-fn avro_uuid_schema() -> Result<AvroSchema> {
-    Ok(AvroSchema::Uuid(UuidSchema::Fixed(FixedSchema {
-        name: Name::new("uuid_fixed")?,
+fn avro_uuid_schema() -> AvroSchema {
+    AvroSchema::Uuid(UuidSchema::Fixed(FixedSchema {
+        name: Name::new("uuid_fixed").expect("The name 'uuid_fixed' should always be valid"),
         aliases: None,
         doc: None,
         size: 16,
         attributes: Default::default(),
-    })))
+    }))
 }
 
 pub(crate) fn avro_decimal_schema(precision: usize, scale: usize) -> Result<AvroSchema> {
