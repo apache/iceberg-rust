@@ -34,6 +34,10 @@ pub(super) struct CatalogConfig {
     /// Endpoints the server advertises support for; `None` when the field is
     /// absent.
     pub(super) endpoints: Option<Vec<Endpoint>>,
+    /// How long a client may reuse an `Idempotency-Key`, as an ISO-8601
+    /// duration; `None` when the server doesn't support idempotency keys.
+    #[serde(rename = "idempotency-key-lifetime")]
+    pub(super) idempotency_key_lifetime: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
