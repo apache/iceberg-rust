@@ -22,7 +22,7 @@ pub(crate) const ICEBERG_FIELD_OPTIONAL: &str = "iceberg.field.optional";
 /// Property `iceberg.field.current` for `Column`
 pub(crate) const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use aws_sdk_glue::types::Column;
 use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, visit_schema};
@@ -35,6 +35,7 @@ type GlueSchema = Vec<Column>;
 #[derive(Debug, Default)]
 pub(crate) struct GlueSchemaBuilder {
     schema: GlueSchema,
+    added_names: HashSet<String>,
     is_current: bool,
     depth: usize,
 }
@@ -46,14 +47,22 @@ impl GlueSchemaBuilder {
 
         let mut builder = Self {
             schema: Vec::new(),
+            added_names: HashSet::new(),
             is_current: true,
             depth: 0,
         };
 
         visit_schema(current_schema, &mut builder)?;
 
-        // Keeping the returned builder state unchanged for compatibility with callers that may inspect it before calling `build`.
         builder.is_current = false;
+
+        for schema in metadata.schemas_iter() {
+            if schema.schema_id() == current_schema.schema_id() {
+                continue;
+            }
+
+            visit_schema(schema, &mut builder)?;
+        }
 
         Ok(builder)
     }
@@ -105,6 +114,10 @@ impl SchemaVisitor for GlueSchemaBuilder {
     ) -> iceberg::Result<String> {
         if self.is_inside_struct() {
             return Ok(format!("{}:{}", field.name, &value));
+        }
+
+        if !self.added_names.insert(field.name.clone()) {
+            return Ok(value);
         }
 
         let parameters = HashMap::from([
@@ -180,7 +193,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
 #[cfg(test)]
 mod tests {
     use iceberg::TableCreation;
-    use iceberg::spec::{Schema, TableMetadataBuilder};
+    use iceberg::spec::{NestedField, Schema, StructType, TableMetadataBuilder, Type};
 
     use super::*;
 
@@ -332,70 +345,94 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_evolution_only_converts_current_schema_fields() -> Result<()> {
-        let initial_schema = serde_json::from_str::<Schema>(
-            r#"{
-                "type": "struct",
-                "schema-id": 1,
-                "fields": [
-                    {
-                        "id": 1,
-                        "name": "id",
-                        "required": true,
-                        "type": "long"
-                    },
-                    {
-                        "id": 2,
-                        "name": "name",
-                        "required": false,
-                        "type": "string"
-                    }
-                ]
-            }"#,
-        )?;
+    fn test_schema_evolution_keeps_removed_columns_once() -> Result<()> {
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "removed", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()?;
         let metadata = create_metadata(initial_schema)?;
 
-        let evolved_schema = serde_json::from_str::<Schema>(
-            r#"{
-                "type": "struct",
-                "schema-id": 2,
-                "fields": [
-                    {
-                        "id": 1,
-                        "name": "id",
-                        "required": true,
-                        "type": "long"
-                    },
-                    {
-                        "id": 2,
-                        "name": "name",
-                        "required": false,
-                        "type": "string"
-                    },
-                    {
-                        "id": 3,
-                        "name": "age",
-                        "required": false,
-                        "type": "int"
-                    }
-                ]
-            }"#,
-        )?;
-
+        let intermediate_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "removed", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(3, "added", Type::Primitive(PrimitiveType::Boolean)).into(),
+            ])
+            .build()?;
+        let current_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(3, "added", Type::Primitive(PrimitiveType::Boolean)).into(),
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()?;
         let metadata = TableMetadataBuilder::new_from_metadata(metadata, None)
-            .add_schema(evolved_schema)?
+            .add_schema(intermediate_schema)?
+            .add_schema(current_schema)?
             .set_current_schema(TableMetadataBuilder::LAST_ADDED)?
             .build()?
             .metadata;
 
-        assert_eq!(metadata.schemas_iter().len(), 2);
+        let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
+
+        let mut removed_column = create_column("removed", "string", "2", true)?;
+        removed_column
+            .parameters
+            .as_mut()
+            .unwrap()
+            .insert(ICEBERG_FIELD_CURRENT.to_string(), "false".to_string());
+        let expected = vec![
+            create_column("added", "boolean", "3", true)?,
+            create_column("id", "bigint", "1", false)?,
+            removed_column,
+        ];
+
+        assert_eq!(result, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_evolution_uses_current_column_for_reused_name() -> Result<()> {
+        let initial_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "value", Type::Primitive(PrimitiveType::Int))
+                    .with_doc("Old value")
+                    .into(),
+            ])
+            .build()?;
+        let metadata = create_metadata(initial_schema)?;
+
+        let current_schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(
+                    2,
+                    "container",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(3, "value", Type::Primitive(PrimitiveType::String))
+                            .into(),
+                    ])),
+                )
+                .into(),
+                NestedField::optional(4, "value", Type::Primitive(PrimitiveType::Long))
+                    .with_doc("Current value")
+                    .into(),
+            ])
+            .build()?;
+        let metadata = TableMetadataBuilder::new_from_metadata(metadata, None)
+            .add_schema(current_schema)?
+            .set_current_schema(TableMetadataBuilder::LAST_ADDED)?
+            .build()?
+            .metadata;
 
         let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
 
+        let mut current_column = create_column("value", "bigint", "4", true)?;
+        current_column.comment = Some("Current value".to_string());
         let expected = vec![
-            create_column("id", "bigint", "1", false)?,
-            create_column("name", "string", "2", true)?,
-            create_column("age", "int", "3", true)?,
+            create_column("container", "struct<value:string>", "2", false)?,
+            current_column,
         ];
 
         assert_eq!(result, expected);
