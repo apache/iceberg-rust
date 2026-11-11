@@ -23,6 +23,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
+use crate::error::to_py_err;
+
 #[pyclass()]
 pub struct PyPrimitiveLiteral {
     inner: PrimitiveLiteral,
@@ -120,20 +122,20 @@ impl PyDataFile {
     }
 
     #[getter]
-    fn upper_bounds(&self) -> HashMap<i32, Vec<u8>> {
+    fn upper_bounds(&self) -> PyResult<HashMap<i32, Vec<u8>>> {
         self.inner
             .upper_bounds()
             .iter()
-            .map(|(k, v)| (*k, v.to_bytes().unwrap().to_vec()))
+            .map(|(k, v)| Ok((*k, v.to_bytes().map_err(to_py_err)?.to_vec())))
             .collect()
     }
 
     #[getter]
-    fn lower_bounds(&self) -> HashMap<i32, Vec<u8>> {
+    fn lower_bounds(&self) -> PyResult<HashMap<i32, Vec<u8>>> {
         self.inner
             .lower_bounds()
             .iter()
-            .map(|(k, v)| (*k, v.to_bytes().unwrap().to_vec()))
+            .map(|(k, v)| Ok((*k, v.to_bytes().map_err(to_py_err)?.to_vec())))
             .collect()
     }
 

@@ -24,9 +24,10 @@ use arrow_array::{
     Array, ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray, TimestampNanosecondArray,
 };
 use arrow_schema::{DataType, TimeUnit};
-use chrono::{DateTime, Datelike, Duration};
+use chrono::{DateTime, Datelike};
 
 use super::TransformFunction;
+use crate::error::invalid_data;
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType};
 use crate::{Error, ErrorKind, Result};
 
@@ -36,10 +37,10 @@ const MICROSECONDS_PER_HOUR: i64 = 3_600_000_000;
 const NANOSECONDS_PER_HOUR: i64 = 3_600_000_000_000;
 /// Year of unix epoch.
 const UNIX_EPOCH_YEAR: i32 = 1970;
-/// One second in micros.
-const MICROS_PER_SECOND: i64 = 1_000_000;
-/// One second in nanos.
-const NANOS_PER_SECOND: i64 = 1_000_000_000;
+/// Microseconds in one day.
+const MICROSECONDS_PER_DAY: i64 = 86_400_000_000;
+/// Nanoseconds in one day.
+const NANOSECONDS_PER_DAY: i64 = 86_400_000_000_000;
 
 /// Extract a date or timestamp year, as years from 1970
 #[derive(Debug)]
@@ -49,12 +50,7 @@ impl Year {
     #[inline]
     fn timestamp_to_year_micros(timestamp: i64) -> Result<i32> {
         Ok(DateTime::from_timestamp_micros(timestamp)
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Fail to convert timestamp to date in year transform",
-                )
-            })?
+            .ok_or_else(|| invalid_data!("Fail to convert timestamp to date in year transform"))?
             .year()
             - UNIX_EPOCH_YEAR)
     }
@@ -78,7 +74,7 @@ impl TransformFunction for Year {
         ))
     }
 
-    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
+    fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>> {
         let val = match (input.data_type(), input.literal()) {
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
                 Date32Type::to_naive_date_opt(*v).unwrap().year() - UNIX_EPOCH_YEAR
@@ -96,8 +92,8 @@ impl TransformFunction for Year {
                 Self::timestamp_to_year_nanos(*v)?
             }
             _ => {
-                return Err(crate::Error::new(
-                    crate::ErrorKind::FeatureUnsupported,
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
                     format!(
                         "Unsupported data type for year transform: {:?}",
                         input.data_type()
@@ -120,12 +116,8 @@ impl Month {
         // unix epoch date: 1970-01-01
         // if date > unix epoch date, delta month = (aa - 1) + 12 * (aaaa-1970)
         // if date < unix epoch date, delta month = (12 - (aa - 1)) + 12 * (1970-aaaa-1)
-        let date = DateTime::from_timestamp_micros(timestamp).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "Fail to convert timestamp to date in month transform",
-            )
-        })?;
+        let date = DateTime::from_timestamp_micros(timestamp)
+            .ok_or_else(|| invalid_data!("Fail to convert timestamp to date in month transform"))?;
         let unix_epoch_date = DateTime::from_timestamp_micros(0)
             .expect("0 timestamp from unix epoch should be valid");
         if date > unix_epoch_date {
@@ -175,7 +167,7 @@ impl TransformFunction for Month {
         ))
     }
 
-    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
+    fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>> {
         let val = match (input.data_type(), input.literal()) {
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
                 (Date32Type::to_naive_date_opt(*v).unwrap().year() - UNIX_EPOCH_YEAR) * 12
@@ -194,8 +186,8 @@ impl TransformFunction for Month {
                 Self::timestamp_to_month_nanos(*v)?
             }
             _ => {
-                return Err(crate::Error::new(
-                    crate::ErrorKind::FeatureUnsupported,
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
                     format!(
                         "Unsupported data type for month transform: {:?}",
                         input.data_type()
@@ -213,56 +205,13 @@ pub struct Day;
 
 impl Day {
     #[inline]
-    fn day_timestamp_micro(v: i64) -> Result<i32> {
-        let secs = v / MICROS_PER_SECOND;
-
-        let (nanos, offset) = if v >= 0 {
-            let nanos = (v.rem_euclid(MICROS_PER_SECOND) * 1_000) as u32;
-            let offset = 0i64;
-            (nanos, offset)
-        } else {
-            let v = v + 1;
-            let nanos = (v.rem_euclid(MICROS_PER_SECOND) * 1_000) as u32;
-            let offset = 1i64;
-            (nanos, offset)
-        };
-
-        let delta = Duration::new(secs, nanos).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to create 'TimeDelta' from seconds {secs} and nanos {nanos}"),
-            )
-        })?;
-
-        let days = (delta.num_days() - offset) as i32;
-
-        Ok(days)
+    fn day_timestamp_micro(v: i64) -> i32 {
+        v.div_euclid(MICROSECONDS_PER_DAY) as i32
     }
 
-    fn day_timestamp_nano(v: i64) -> Result<i32> {
-        let secs = v / NANOS_PER_SECOND;
-
-        let (nanos, offset) = if v >= 0 {
-            let nanos = (v.rem_euclid(NANOS_PER_SECOND)) as u32;
-            let offset = 0i64;
-            (nanos, offset)
-        } else {
-            let v = v + 1;
-            let nanos = (v.rem_euclid(NANOS_PER_SECOND)) as u32;
-            let offset = 1i64;
-            (nanos, offset)
-        };
-
-        let delta = Duration::new(secs, nanos).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Failed to create 'TimeDelta' from seconds {secs} and nanos {nanos}"),
-            )
-        })?;
-
-        let days = (delta.num_days() - offset) as i32;
-
-        Ok(days)
+    #[inline]
+    fn day_timestamp_nano(v: i64) -> i32 {
+        v.div_euclid(NANOSECONDS_PER_DAY) as i32
     }
 }
 
@@ -273,12 +222,12 @@ impl TransformFunction for Day {
                 .as_any()
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .unwrap()
-                .try_unary(|v| -> Result<i32> { Self::day_timestamp_micro(v) })?,
+                .unary(|v| -> i32 { Self::day_timestamp_micro(v) }),
             DataType::Timestamp(TimeUnit::Nanosecond, _) => input
                 .as_any()
                 .downcast_ref::<TimestampNanosecondArray>()
                 .unwrap()
-                .try_unary(|v| -> Result<i32> { Self::day_timestamp_nano(v) })?,
+                .unary(|v| -> i32 { Self::day_timestamp_nano(v) }),
             DataType::Date32 => input
                 .as_any()
                 .downcast_ref::<Date32Array>()
@@ -297,22 +246,20 @@ impl TransformFunction for Day {
         Ok(Arc::new(res))
     }
 
-    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
+    fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>> {
         let val = match (input.data_type(), input.literal()) {
             (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => *v,
-            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => Self::day_timestamp_micro(*v)?,
+            (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => Self::day_timestamp_micro(*v),
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
-                Self::day_timestamp_micro(*v)?
+                Self::day_timestamp_micro(*v)
             }
-            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
-                Self::day_timestamp_nano(*v)?
-            }
+            (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => Self::day_timestamp_nano(*v),
             (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
-                Self::day_timestamp_nano(*v)?
+                Self::day_timestamp_nano(*v)
             }
             _ => {
-                return Err(crate::Error::new(
-                    crate::ErrorKind::FeatureUnsupported,
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
                     format!(
                         "Unsupported data type for day transform: {:?}",
                         input.data_type()
@@ -348,9 +295,14 @@ impl TransformFunction for Hour {
                 .downcast_ref::<TimestampMicrosecondArray>()
                 .unwrap()
                 .unary(|v| -> i32 { Self::hour_timestamp_micro(v) }),
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => input
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .unwrap()
+                .unary(|v| -> i32 { Self::hour_timestamp_nano(v) }),
             _ => {
-                return Err(crate::Error::new(
-                    crate::ErrorKind::FeatureUnsupported,
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
                     format!(
                         "Unsupported data type for hour transform: {:?}",
                         input.data_type()
@@ -361,7 +313,7 @@ impl TransformFunction for Hour {
         Ok(Arc::new(res))
     }
 
-    fn transform_literal(&self, input: &crate::spec::Datum) -> Result<Option<crate::spec::Datum>> {
+    fn transform_literal(&self, input: &Datum) -> Result<Option<Datum>> {
         let val = match (input.data_type(), input.literal()) {
             (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => Self::hour_timestamp_micro(*v),
             (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
@@ -374,8 +326,8 @@ impl TransformFunction for Hour {
                 Self::hour_timestamp_nano(*v)
             }
             _ => {
-                return Err(crate::Error::new(
-                    crate::ErrorKind::FeatureUnsupported,
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
                     format!(
                         "Unsupported data type for hour transform: {:?}",
                         input.data_type()
@@ -391,7 +343,9 @@ impl TransformFunction for Hour {
 mod test {
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray};
+    use arrow_array::{
+        ArrayRef, Date32Array, Int32Array, TimestampMicrosecondArray, TimestampNanosecondArray,
+    };
     use chrono::{NaiveDate, NaiveDateTime};
 
     use crate::Result;
@@ -401,7 +355,7 @@ mod test {
         TimestampNs, Timestamptz, TimestamptzNs, Uuid,
     };
     use crate::spec::Type::{Primitive, Struct};
-    use crate::spec::{Datum, NestedField, PrimitiveType, StructType, Transform, Type};
+    use crate::spec::{Datum, NestedField, StructType, Transform};
     use crate::transform::test::{TestProjectionFixture, TestTransformFixture};
     use crate::transform::{BoxedTransformFunction, TransformFunction};
 
@@ -611,7 +565,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Hour,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -685,7 +639,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Hour,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -757,7 +711,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Year,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -829,7 +783,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Year,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -901,7 +855,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Month,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -973,7 +927,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Month,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -1044,7 +998,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Month,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -1116,7 +1070,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Month,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -1190,7 +1144,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Day,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -1255,6 +1209,46 @@ mod test {
     }
 
     #[test]
+    fn test_projection_timestamp_types_day_negative() -> Result<()> {
+        // 1969-12-30T23:59:59.5
+        let micros = -86_400_500_000;
+        for (field_type, value) in [
+            (Timestamp, Datum::timestamp_micros(micros)),
+            (Timestamptz, Datum::timestamptz_micros(micros)),
+            (TimestampNs, Datum::timestamp_nanos(micros * 1_000)),
+            (TimestamptzNs, Datum::timestamptz_nanos(micros * 1_000)),
+        ] {
+            let fixture = TestProjectionFixture::new(
+                Transform::Day,
+                "name",
+                NestedField::required(1, "value", Primitive(field_type)),
+            );
+
+            fixture.assert_projection(
+                &fixture.binary_predicate(PredicateOperator::LessThan, value.clone()),
+                Some("name <= 1969-12-31"),
+            )?;
+
+            fixture.assert_projection(
+                &fixture.binary_predicate(PredicateOperator::LessThanOrEq, value.clone()),
+                Some("name <= 1969-12-31"),
+            )?;
+
+            fixture.assert_projection(
+                &fixture.binary_predicate(PredicateOperator::Eq, value.clone()),
+                Some("name IN (1969-12-31, 1969-12-30)"),
+            )?;
+
+            fixture.assert_projection(
+                &fixture.set_predicate(PredicateOperator::In, vec![value]),
+                Some("name IN (1969-12-31, 1969-12-30)"),
+            )?;
+        }
+
+        Ok(())
+    }
+
+    #[test]
     fn test_projection_timestamp_day_upper_bound() -> Result<()> {
         // 17501
         let value = "2017-12-01T23:59:59.999999";
@@ -1264,7 +1258,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Day,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -1338,7 +1332,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Day,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -1412,7 +1406,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Day,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -1486,7 +1480,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Day,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Timestamp)),
+            NestedField::required(1, "value", Primitive(Timestamp)),
         );
 
         fixture.assert_projection(
@@ -1560,7 +1554,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Day,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -1628,7 +1622,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Day,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -1696,7 +1690,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Month,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -1764,7 +1758,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Month,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -1832,7 +1826,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Month,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -1900,7 +1894,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Month,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -1968,7 +1962,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Month,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -2035,7 +2029,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Year,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -2103,7 +2097,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Year,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -2171,7 +2165,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Year,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -2239,7 +2233,7 @@ mod test {
         let fixture = TestProjectionFixture::new(
             Transform::Year,
             "name",
-            NestedField::required(1, "value", Type::Primitive(PrimitiveType::Date)),
+            NestedField::required(1, "value", Primitive(Date)),
         );
 
         fixture.assert_projection(
@@ -2658,6 +2652,48 @@ mod test {
     }
 
     #[test]
+    fn test_transform_days_pre_epoch() {
+        let day = Box::new(super::Day) as BoxedTransformFunction;
+        let expected = [-1, -2, -2, -2, -2, -366, -365];
+
+        let micros = vec![
+            -500_000,            // 1969-12-31T23:59:59.500000
+            -86_400_000_001,     // 1969-12-30T23:59:59.999999
+            -86_400_000_002,     // 1969-12-30T23:59:59.999998
+            -86_400_500_000,     // 1969-12-30T23:59:59.500000
+            -86_401_000_000,     // 1969-12-30T23:59:59.000000
+            -31_536_000_500_000, // 1968-12-31T23:59:59.500000
+            -31_535_999_000_001, // 1969-01-01T00:00:00.999999, Iceberg Java gives -366
+        ];
+        let res = day
+            .transform(Arc::new(TimestampMicrosecondArray::from(micros.clone())))
+            .unwrap();
+        let res = res.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(res.values(), &expected);
+        for (v, d) in micros.into_iter().zip(expected) {
+            test_timestamp_and_tz_transform_using_i64(v, &day, Datum::date(d));
+        }
+
+        let nanos = vec![
+            -500_000_000,            // 1969-12-31T23:59:59.500000000
+            -86_400_000_000_001,     // 1969-12-30T23:59:59.999999999
+            -86_400_000_000_002,     // 1969-12-30T23:59:59.999999998
+            -86_400_500_000_000,     // 1969-12-30T23:59:59.500000000
+            -86_401_000_000_000,     // 1969-12-30T23:59:59.000000000
+            -31_536_000_500_000_000, // 1968-12-31T23:59:59.500000000
+            -31_535_999_000_000_001, // 1969-01-01T00:00:00.999999999, Iceberg Java gives -366
+        ];
+        let res = day
+            .transform(Arc::new(TimestampNanosecondArray::from(nanos.clone())))
+            .unwrap();
+        let res = res.as_any().downcast_ref::<Date32Array>().unwrap();
+        assert_eq!(res.values(), &expected);
+        for (v, d) in nanos.into_iter().zip(expected) {
+            test_timestamp_ns_and_tz_transform_using_i64(v, &day, Datum::date(d));
+        }
+    }
+
+    #[test]
     fn test_transform_hours() {
         let hour = super::Hour;
         let ori_timestamp = vec![
@@ -2714,6 +2750,19 @@ mod test {
         assert_eq!(res.value(2), expect_hour[2]);
         assert_eq!(res.value(3), expect_hour[3]);
         assert_eq!(res.value(4), -1);
+
+        // Test TimestampNanosecond with and without timezone
+        let timestamp_nanos = vec![0, super::NANOSECONDS_PER_HOUR, -1];
+        let date_arrays = [
+            Arc::new(TimestampNanosecondArray::from(timestamp_nanos.clone())) as ArrayRef,
+            Arc::new(TimestampNanosecondArray::from(timestamp_nanos).with_timezone_utc())
+                as ArrayRef,
+        ];
+        for date_array in date_arrays {
+            let res = hour.transform(date_array).unwrap();
+            let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
+            assert_eq!(res.values(), &[0, 1, -1]);
+        }
     }
 
     #[test]

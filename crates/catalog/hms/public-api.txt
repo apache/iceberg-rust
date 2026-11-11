@@ -35,6 +35,7 @@ pub fn iceberg_catalog_hms::HmsCatalogBuilder::fmt(&self, f: &mut core::fmt::For
 impl iceberg::catalog::CatalogBuilder for iceberg_catalog_hms::HmsCatalogBuilder
 pub type iceberg_catalog_hms::HmsCatalogBuilder::C = iceberg_catalog_hms::HmsCatalog
 pub fn iceberg_catalog_hms::HmsCatalogBuilder::load(self, name: impl core::convert::Into<alloc::string::String>, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> impl core::future::future::Future<Output = iceberg::error::Result<Self::C>> + core::marker::Send
+pub fn iceberg_catalog_hms::HmsCatalogBuilder::with_kms_client_factory(self, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::factory::KmsClientFactory>) -> Self
 pub fn iceberg_catalog_hms::HmsCatalogBuilder::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
 pub fn iceberg_catalog_hms::HmsCatalogBuilder::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
 pub const iceberg_catalog_hms::HMS_CATALOG_PROP_THRIFT_TRANSPORT: &str

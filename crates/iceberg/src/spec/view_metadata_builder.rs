@@ -31,7 +31,7 @@ use super::{
 };
 use crate::ViewCreation;
 use crate::catalog::ViewUpdate;
-use crate::error::{Error, ErrorKind, Result};
+use crate::error::{Result, invalid_data};
 use crate::io::is_truthy;
 
 /// Manipulating view metadata.
@@ -142,12 +142,10 @@ impl ViewMetadataBuilder {
     /// - Cannot downgrade to older format versions.
     pub fn upgrade_format_version(self, format_version: ViewFormatVersion) -> Result<Self> {
         if format_version < self.metadata.format_version {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot downgrade ViewFormatVersion from {} to {}",
-                    self.metadata.format_version, format_version
-                ),
+            return Err(invalid_data!(
+                "Cannot downgrade ViewFormatVersion from {} to {}",
+                self.metadata.format_version,
+                format_version
             ));
         }
 
@@ -183,9 +181,8 @@ impl ViewMetadataBuilder {
     pub fn set_current_version_id(mut self, mut version_id: i32) -> Result<Self> {
         if version_id == Self::LAST_ADDED {
             let Some(last_added_id) = self.last_added_version_id else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot set current version id to last added version: no version has been added.",
+                return Err(invalid_data!(
+                    "Cannot set current version id to last added version: no version has been added."
                 ));
             };
             version_id = last_added_id;
@@ -198,10 +195,7 @@ impl ViewMetadataBuilder {
         }
 
         let version = self.metadata.versions.get(&version_id).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot set current version to unknown version with id: {version_id}"),
-            )
+            invalid_data!("Cannot set current version to unknown version with id: {version_id}")
         })?;
 
         self.metadata.current_version_id = version_id;
@@ -276,10 +270,7 @@ impl ViewMetadataBuilder {
 
         let view_version = if view_version.schema_id() == Self::LAST_ADDED {
             let last_added_schema_id = self.last_added_schema_id.ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Cannot set last added schema: no schema has been added",
-                )
+                invalid_data!("Cannot set last added schema: no schema has been added")
             })?;
             view_version.with_schema_id(last_added_schema_id)
         } else {
@@ -291,12 +282,9 @@ impl ViewMetadataBuilder {
             .schemas
             .contains_key(&view_version.schema_id())
         {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "Cannot add version with unknown schema: {}",
-                    view_version.schema_id()
-                ),
+            return Err(invalid_data!(
+                "Cannot add version with unknown schema: {}",
+                view_version.schema_id()
             ));
         }
 
@@ -308,13 +296,10 @@ impl ViewMetadataBuilder {
             // commits can happen concurrently from different machines.
             // A tolerance helps us avoid failure for small clock skew
             if view_version.timestamp_ms() - last.timestamp_ms() < -ONE_MINUTE_MS {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Invalid snapshot timestamp {}: before last snapshot timestamp {}",
-                        view_version.timestamp_ms(),
-                        last.timestamp_ms()
-                    ),
+                return Err(invalid_data!(
+                    "Invalid snapshot timestamp {}: before last snapshot timestamp {}",
+                    view_version.timestamp_ms(),
+                    last.timestamp_ms()
                 ));
             }
         }
@@ -427,11 +412,8 @@ impl ViewMetadataBuilder {
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(1);
         if num_versions_to_keep < 0 {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "{VIEW_PROPERTY_VERSION_HISTORY_SIZE} must be positive but was {num_versions_to_keep}"
-                ),
+            return Err(invalid_data!(
+                "{VIEW_PROPERTY_VERSION_HISTORY_SIZE} must be positive but was {num_versions_to_keep}"
             ));
         }
 
@@ -587,14 +569,11 @@ fn require_no_dialect_dropped(previous: &ViewVersion, current: &ViewVersion) -> 
     let updated_dialects = lowercase_sql_dialects_for(current);
 
     if !updated_dialects.is_superset(&base_dialects) {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Cannot replace view due to loss of view dialects: \nPrevious dialects: {:?}\nNew dialects: {:?}\nSet {} to true to allow dropping dialects.",
-                Vec::from_iter(base_dialects),
-                Vec::from_iter(updated_dialects),
-                VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED
-            ),
+        return Err(invalid_data!(
+            "Cannot replace view due to loss of view dialects: \nPrevious dialects: {:?}\nNew dialects: {:?}\nSet {} to true to allow dropping dialects.",
+            Vec::from_iter(base_dialects),
+            Vec::from_iter(updated_dialects),
+            VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED
         ));
     }
 
@@ -617,12 +596,9 @@ pub(super) fn require_unique_dialects(view_version: &ViewVersion) -> Result<()> 
         match repr {
             ViewRepresentation::Sql(sql_repr) => {
                 if !seen_dialects.insert(sql_repr.dialect.to_lowercase()) {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Invalid view version: Cannot add multiple queries for dialect {}",
-                            sql_repr.dialect
-                        ),
+                    return Err(invalid_data!(
+                        "Invalid view version: Cannot add multiple queries for dialect {}",
+                        sql_repr.dialect
                     ));
                 }
             }

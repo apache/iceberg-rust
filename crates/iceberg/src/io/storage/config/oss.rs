@@ -36,7 +36,6 @@ pub const OSS_ACCESS_KEY_SECRET: &str = "oss.access-key-secret";
 ///
 /// This struct contains all the configuration options for connecting to Alibaba Cloud OSS.
 /// Use the builder pattern via `OssConfig::builder()` to construct instances.
-/// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TypedBuilder)]
 pub struct OssConfig {
     /// OSS endpoint URL.

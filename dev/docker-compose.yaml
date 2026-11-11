@@ -25,53 +25,44 @@ networks:
 
 services:
   # =============================================================================
-  # MinIO - S3-compatible storage (shared by all tests)
+  # Object store - S3-compatible storage backed by RustFS (shared by all tests)
   # =============================================================================
-  minio:
-    image: minio/minio:RELEASE.2025-05-24T17-08-30Z
+  object-store:
+    image: rustfs/rustfs:1.0.3
     environment:
-      - MINIO_ROOT_USER=admin
-      - MINIO_ROOT_PASSWORD=password
-      - MINIO_DOMAIN=minio
-    hostname: minio
+      - RUSTFS_ACCESS_KEY=admin
+      - RUSTFS_SECRET_KEY=password
+      - RUSTFS_OBS_LOG_STDOUT_ENABLED=true
+      - RUSTFS_CONSOLE_ENABLE=false
+      - RUSTFS_SERVER_DOMAINS=object-store
+    hostname: object-store
     networks:
       iceberg_test:
         # Add aliases for virtual-hosted style bucket access
         aliases:
-          - icebergdata.minio
-          - warehouse.minio
-          - bucket1.minio
+          - icebergdata.object-store
+          - warehouse.object-store
+          - bucket1.object-store
     ports:
       - "9000:9000"
-      - "9001:9001"
-    command: ["server", "/data", "--console-address", ":9001"]
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health/ready"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # MinIO client - creates buckets for tests
-  mc:
+  # One-shot job that creates buckets for tests. Re-creating an existing bucket
+  # returns 200, so this is safe to re-run.
+  create-buckets:
     depends_on:
-      minio:
+      object-store:
         condition: service_healthy
-    image: minio/mc:RELEASE.2025-05-21T01-59-54Z
-    environment:
-      - AWS_ACCESS_KEY_ID=admin
-      - AWS_SECRET_ACCESS_KEY=password
-      - AWS_REGION=us-east-1
+    image: rustfs/rustfs:1.0.3
     entrypoint: >
       /bin/sh -c "
-        /usr/bin/mc alias set minio http://minio:9000 admin password;
-        /usr/bin/mc mb --ignore-existing minio/icebergdata;
-        /usr/bin/mc mb --ignore-existing minio/warehouse;
-        /usr/bin/mc mb --ignore-existing minio/bucket1;
-        /usr/bin/mc policy set public minio/icebergdata;
-        /usr/bin/mc policy set public minio/warehouse;
-        /usr/bin/mc policy set public minio/bucket1;
-        echo 'Buckets created successfully';
-        tail -f /dev/null
+        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/icebergdata &&
+        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/warehouse &&
+        curl -fsS --aws-sigv4 aws:amz:us-east-1:s3 -u admin:password -X PUT http://object-store:9000/bucket1
       "
     networks:
       iceberg_test:
@@ -86,12 +77,12 @@ services:
       - AWS_SECRET_ACCESS_KEY=password
       - AWS_REGION=us-east-1
       - CATALOG_CATALOG__IMPL=org.apache.iceberg.jdbc.JdbcCatalog
-      - CATALOG_URI=jdbc:sqlite:file:/tmp/iceberg_rest_mode=memory
+      - CATALOG_URI=jdbc:sqlite:file:/tmp/iceberg_rest.db?journal_mode=WAL
       - CATALOG_WAREHOUSE=s3://icebergdata/demo
       - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
-      - CATALOG_S3_ENDPOINT=http://minio:9000
+      - CATALOG_S3_ENDPOINT=http://object-store:9000
     depends_on:
-      minio:
+      object-store:
         condition: service_healthy
     networks:
       iceberg_test:
@@ -113,7 +104,7 @@ services:
       dockerfile: Dockerfile
     platform: ${DOCKER_DEFAULT_PLATFORM:-linux/amd64}
     depends_on:
-      minio:
+      object-store:
         condition: service_healthy
     networks:
       iceberg_test:
@@ -148,6 +139,51 @@ services:
       retries: 5
 
   # =============================================================================
+  # HDFS - single-node NameNode + DataNode for HDFS tests
+  # =============================================================================
+  # The DataNode advertises 127.0.0.1, so clients that set
+  # `dfs.client.use.datanode.hostname` reach it through its published port.
+  hdfs-namenode:
+    image: apache/hadoop:3.5.0
+    networks:
+      iceberg_test:
+    command: ["hdfs", "namenode"]
+    environment:
+      ENSURE_NAMENODE_DIR: "/tmp/hadoop-root/dfs/name"
+    ports:
+      - "8020:8020"
+    volumes:
+      - ./hdfs/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./hdfs/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "hdfs dfsadmin -safemode get | grep -q OFF"]
+      interval: 5s
+      timeout: 15s
+      retries: 30
+      start_period: 30s
+
+  hdfs-datanode:
+    image: apache/hadoop:3.5.0
+    networks:
+      iceberg_test:
+    command: ["hdfs", "datanode"]
+    depends_on:
+      hdfs-namenode:
+        condition: service_healthy
+    ports:
+      - "9866:9866"
+    volumes:
+      - ./hdfs/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml:ro
+      - ./hdfs/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml:ro
+    # Healthy only once registered with the NameNode — writes fail until then.
+    healthcheck:
+      test: ["CMD-SHELL", "hdfs dfsadmin -report | grep -q 'Live datanodes (1)'"]
+      interval: 5s
+      timeout: 15s
+      retries: 30
+      start_period: 10s
+
+  # =============================================================================
   # Fake GCS Server - GCS emulator for GCS tests
   # =============================================================================
   gcs-server:
@@ -170,8 +206,8 @@ services:
     depends_on:
       rest:
         condition: service_healthy
-      minio:
-        condition: service_healthy
+      create-buckets:
+        condition: service_completed_successfully
     environment:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password

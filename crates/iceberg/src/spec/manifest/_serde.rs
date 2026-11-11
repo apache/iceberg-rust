@@ -15,14 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Serde forms of manifest entries.
+//!
+//! `Manifest::parse_avro` deserializes these structs from the writer schema
+//! without a reader schema, so they decide which manifests read. A field that
+//! a writer may omit, per the spec's read rules for every format version the
+//! struct reads, must be an `Option` or have `#[serde(default)]`.
+//! `test_parse_manifest_without_each_field` and
+//! `test_parse_v1_manifest_without_each_field` check each field.
+
 use std::collections::HashMap;
 
 use serde_derive::{Deserialize, Serialize};
 use serde_with::serde_as;
 
 use super::{Datum, ManifestEntry, Schema, Struct};
-use crate::spec::{FormatVersion, Literal, RawLiteral, StructType, Type};
-use crate::{Error, ErrorKind, metadata_columns};
+use crate::error::invalid_data;
+use crate::spec::{FormatVersion, Literal, RawLiteral, Type};
+use crate::{Error, metadata_columns};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV2 {
@@ -34,7 +44,7 @@ pub(super) struct ManifestEntryV2 {
 }
 
 impl ManifestEntryV2 {
-    pub fn try_from(value: ManifestEntry, partition_type: &StructType) -> Result<Self, Error> {
+    pub fn try_from(value: ManifestEntry, partition_type: &Type) -> Result<Self, Error> {
         Ok(Self {
             status: value.status as i32,
             snapshot_id: value.snapshot_id,
@@ -47,7 +57,7 @@ impl ManifestEntryV2 {
     pub fn try_into(
         self,
         partition_spec_id: i32,
-        partition_type: &StructType,
+        partition_type: &Type,
         schema: &Schema,
     ) -> Result<ManifestEntry, Error> {
         Ok(ManifestEntry {
@@ -57,6 +67,7 @@ impl ManifestEntryV2 {
             file_sequence_number: self.file_sequence_number,
             data_file: self
                 .data_file
+                .project_partition_by_name(partition_type)?
                 .try_into(partition_spec_id, partition_type, schema)?,
         })
     }
@@ -65,12 +76,14 @@ impl ManifestEntryV2 {
 #[derive(Serialize, Deserialize)]
 pub(super) struct ManifestEntryV1 {
     status: i32,
+    // Required in v1 by the spec. Java declares it optional and writes null when
+    // snapshot ID inheritance is enabled, which #3371 tracks.
     pub snapshot_id: i64,
     data_file: DataFileSerde,
 }
 
 impl ManifestEntryV1 {
-    pub fn try_from(value: ManifestEntry, partition_type: &StructType) -> Result<Self, Error> {
+    pub fn try_from(value: ManifestEntry, partition_type: &Type) -> Result<Self, Error> {
         Ok(Self {
             status: value.status as i32,
             snapshot_id: value.snapshot_id.unwrap_or_default(),
@@ -81,7 +94,7 @@ impl ManifestEntryV1 {
     pub fn try_into(
         self,
         partition_spec_id: i32,
-        partition_type: &StructType,
+        partition_type: &Type,
         schema: &Schema,
     ) -> Result<ManifestEntry, Error> {
         Ok(ManifestEntry {
@@ -91,6 +104,7 @@ impl ManifestEntryV1 {
             file_sequence_number: Some(0),
             data_file: self
                 .data_file
+                .project_partition_by_name(partition_type)?
                 .try_into(partition_spec_id, partition_type, schema)?,
         })
     }
@@ -127,7 +141,7 @@ pub(super) struct DataFileSerde {
 impl DataFileSerde {
     pub fn try_from(
         value: super::DataFile,
-        partition_type: &StructType,
+        partition_type: &Type,
         format_version: FormatVersion,
     ) -> Result<Self, Error> {
         let block_size_in_bytes = if format_version == FormatVersion::V1 {
@@ -139,10 +153,7 @@ impl DataFileSerde {
             content: value.content as i32,
             file_path: value.file_path,
             file_format: value.file_format.to_string().to_ascii_uppercase(),
-            partition: RawLiteral::try_from(
-                Literal::Struct(value.partition),
-                &Type::Struct(partition_type.clone()),
-            )?,
+            partition: RawLiteral::try_from(Literal::Struct(value.partition), partition_type)?,
             record_count: value.record_count.try_into()?,
             file_size_in_bytes: value.file_size_in_bytes.try_into()?,
             block_size_in_bytes,
@@ -163,23 +174,30 @@ impl DataFileSerde {
         })
     }
 
+    /// Matches the partition value's fields to `partition_type` by name. Manifest
+    /// entries are deserialized with the writer's partition fields and order,
+    /// which can differ from the partition spec's.
+    fn project_partition_by_name(mut self, partition_type: &Type) -> Result<Self, Error> {
+        if let Type::Struct(struct_type) = partition_type {
+            self.partition = self.partition.project_by_name(struct_type)?;
+        }
+        Ok(self)
+    }
+
     pub fn try_into(
         self,
         partition_spec_id: i32,
-        partition_type: &StructType,
+        partition_type: &Type,
         schema: &Schema,
     ) -> Result<super::DataFile, Error> {
         let partition = self
             .partition
-            .try_into(&Type::Struct(partition_type.clone()))?
+            .try_into(partition_type)?
             .map(|v| {
                 if let Literal::Struct(v) = v {
                     Ok(v)
                 } else {
-                    Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        "partition value is not a struct",
-                    ))
+                    Err(invalid_data!("partition value is not a struct"))
                 }
             })
             .transpose()?
@@ -254,12 +272,7 @@ fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32,
             let data_type = field
                 .field_type
                 .as_primitive_type()
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("field {} is not a primitive type", field.name),
-                    )
-                })?
+                .ok_or_else(|| invalid_data!("field {} is not a primitive type", field.name))?
                 .clone();
             m.insert(entry.key, Datum::try_from_bytes(&entry.value, data_type)?);
         }
@@ -325,9 +338,10 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Arc;
 
+    use crate::avro::{assert_deflate_codec, define_named_types_repeatedly};
     use crate::spec::manifest::_serde::{I64Entry, parse_i64_entry};
     use crate::spec::{
-        DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, NestedField,
+        DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, Literal, NestedField,
         PrimitiveType, Schema, Struct, StructType, Type, read_data_files_from_avro,
         write_data_files_to_avro,
     };
@@ -409,6 +423,7 @@ mod tests {
             FormatVersion::V2,
         )
         .unwrap();
+        assert_deflate_codec(&buffer);
 
         let actual_data_file = read_data_files_from_avro(
             &mut Cursor::new(buffer),
@@ -420,6 +435,52 @@ mod tests {
         .unwrap();
 
         assert_eq!(data_files, actual_data_file);
+    }
+
+    /// apache-avro 0.22 checks the writer schema for repeated names only when
+    /// the reader has no reader schema, so this path reads 0.21 output without
+    /// the header rewrite that `Manifest::parse_avro` needs.
+    #[test]
+    fn test_read_data_files_with_repeated_named_type_definitions() {
+        let decimal = Type::Primitive(PrimitiveType::Decimal {
+            precision: 10,
+            scale: 2,
+        });
+        let schema = Schema::builder()
+            .with_fields(schema().as_struct().fields().to_vec())
+            .with_fields(vec![
+                NestedField::optional(4, "a", decimal.clone()).into(),
+                NestedField::optional(5, "b", decimal.clone()).into(),
+            ])
+            .build()
+            .unwrap();
+        let partition_type = StructType::new(vec![
+            NestedField::optional(1000, "a", decimal.clone()).into(),
+            NestedField::optional(1001, "b", decimal).into(),
+        ]);
+        let mut data_files = data_files();
+        data_files[0].partition =
+            Struct::from_iter([Some(Literal::decimal(12345)), Some(Literal::decimal(-678))]);
+        let mut buffer = Vec::new();
+        write_data_files_to_avro(
+            &mut buffer,
+            data_files.clone(),
+            &partition_type,
+            FormatVersion::V2,
+        )
+        .unwrap();
+        let legacy = define_named_types_repeatedly(&buffer);
+
+        let actual = read_data_files_from_avro(
+            &mut Cursor::new(legacy),
+            &schema,
+            0,
+            &partition_type,
+            FormatVersion::V2,
+        )
+        .unwrap();
+
+        assert_eq!(actual, data_files);
     }
 
     #[tokio::test]
@@ -435,6 +496,7 @@ mod tests {
             FormatVersion::V1,
         )
         .unwrap();
+        assert_deflate_codec(&buffer);
 
         let actual_data_file = read_data_files_from_avro(
             &mut Cursor::new(buffer),
@@ -492,7 +554,7 @@ mod tests {
         let v2_entry = v1_entry
             .try_into(
                 0, // partition_spec_id
-                &StructType::new(vec![]),
+                &Type::Struct(StructType::new(vec![])),
                 &schema(),
             )
             .unwrap();
@@ -572,7 +634,7 @@ mod tests {
         let data_file = v1_style_data_file
             .try_into(
                 0, // partition_spec_id
-                &StructType::new(vec![]),
+                &Type::Struct(StructType::new(vec![])),
                 &schema(),
             )
             .unwrap();

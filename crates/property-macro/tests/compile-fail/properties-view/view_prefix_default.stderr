@@ -1,0 +1,14 @@
+error: prefix fields collect matching properties and cannot declare default in #[property(...)]
+  --> tests/compile-fail/properties-view/view_prefix_default.rs:24:9
+   |
+24 | /         #[property(prefix = "values.", default = HashMap::new())]
+25 | |         values: HashMap<String, u64>,
+   | |____________________________________^
+
+warning: unused import: `std::collections::HashMap`
+  --> tests/compile-fail/properties-view/view_prefix_default.rs:18:5
+   |
+18 | use std::collections::HashMap;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

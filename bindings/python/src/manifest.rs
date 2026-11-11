@@ -23,6 +23,7 @@ use iceberg::spec::{
 use pyo3::prelude::*;
 
 use crate::data_file::PyDataFile;
+use crate::error::to_py_err;
 
 #[pyclass]
 pub struct PyManifest {
@@ -52,7 +53,7 @@ pub struct PyFieldSummary {
 }
 
 #[pymethods]
-impl crate::manifest::PyFieldSummary {
+impl PyFieldSummary {
     #[getter]
     fn contains_null(&self) -> bool {
         self.inner.contains_null
@@ -80,7 +81,7 @@ pub struct PyManifestFile {
 }
 
 #[pymethods]
-impl crate::manifest::PyManifestFile {
+impl PyManifestFile {
     #[getter]
     fn manifest_path(&self) -> &str {
         self.inner.manifest_path.as_str()
@@ -145,14 +146,13 @@ impl crate::manifest::PyManifestFile {
     }
 
     #[getter]
-    fn partitions(&self) -> Vec<PyFieldSummary> {
-        self.inner
-            .partitions
-            .clone()
-            .unwrap()
-            .iter()
-            .map(|s| PyFieldSummary { inner: s.clone() })
-            .collect()
+    fn partitions(&self) -> Option<Vec<PyFieldSummary>> {
+        self.inner.partitions.as_ref().map(|partitions| {
+            partitions
+                .iter()
+                .map(|s| PyFieldSummary { inner: s.clone() })
+                .collect()
+        })
     }
 
     #[getter]
@@ -195,11 +195,10 @@ impl PyManifestEntry {
 }
 
 #[pyfunction]
-pub fn read_manifest_entries(bs: &[u8]) -> PyManifest {
-    // TODO: Some error handling
-    PyManifest {
-        inner: Manifest::parse_avro(bs).unwrap(),
-    }
+pub fn read_manifest_entries(bs: &[u8]) -> PyResult<PyManifest> {
+    Ok(PyManifest {
+        inner: Manifest::parse_avro(bs).map_err(to_py_err)?,
+    })
 }
 
 #[pyclass]
@@ -208,7 +207,7 @@ pub struct PyManifestList {
 }
 
 #[pymethods]
-impl crate::manifest::PyManifestList {
+impl PyManifestList {
     fn entries(&self) -> Vec<PyManifestFile> {
         self.inner
             .entries()
@@ -221,10 +220,10 @@ impl crate::manifest::PyManifestList {
 }
 
 #[pyfunction]
-pub fn read_manifest_list(bs: &[u8]) -> PyManifestList {
-    PyManifestList {
-        inner: ManifestList::parse_with_version(bs, FormatVersion::V2).unwrap(),
-    }
+pub fn read_manifest_list(bs: &[u8]) -> PyResult<PyManifestList> {
+    Ok(PyManifestList {
+        inner: ManifestList::parse_with_version(bs, FormatVersion::V2).map_err(to_py_err)?,
+    })
 }
 
 pub fn register_module(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {

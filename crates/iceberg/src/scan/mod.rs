@@ -23,6 +23,8 @@ mod context;
 use context::*;
 mod task;
 
+use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 
 use arrow_array::RecordBatch;
@@ -34,25 +36,113 @@ pub use task::*;
 use crate::arrow::ArrowReaderBuilder;
 pub use crate::arrow::{ScanMetrics, ScanResult};
 use crate::delete_file_index::DeleteFileIndex;
+use crate::error::invalid_data;
 use crate::expr::visitors::inclusive_metrics_evaluator::InclusiveMetricsEvaluator;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::FileIO;
-use crate::metadata_columns::{get_metadata_field_id, is_metadata_column_name};
+use crate::metadata_columns::{
+    RESERVED_FIELD_ID_PARTITION, get_metadata_field_id, is_metadata_column_name,
+};
 use crate::runtime::Runtime;
-use crate::spec::{DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, NameMapping, SnapshotRef};
+use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, SortOrderRef, StructType};
 use crate::table::Table;
 use crate::util::available_parallelism;
+use crate::util::snapshot::snapshot_id_as_of_time;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
+
+/// Resolves a column name to its field ID, honouring the scan's case sensitivity.
+fn resolve_field_id(
+    schema: &Schema,
+    column_name: &str,
+    case_sensitive: bool,
+) -> Result<Option<i32>> {
+    if case_sensitive {
+        Ok(schema.field_id_by_name(column_name))
+    } else {
+        let field = schema.field_by_name_case_insensitive_checked(column_name)?;
+        Ok(field.map(|field| field.id))
+    }
+}
+
+fn collect_scan_field_ids(
+    schema: &Schema,
+    column_names: Option<&[String]>,
+    case_sensitive: bool,
+) -> Result<Vec<i32>> {
+    let Some(column_names) = column_names else {
+        return Ok(schema.as_struct().fields().iter().map(|f| f.id).collect());
+    };
+
+    column_names
+        .iter()
+        .map(|column_name| {
+            if is_metadata_column_name(column_name) {
+                return get_metadata_field_id(column_name);
+            }
+
+            let field_id = resolve_field_id(schema, column_name, case_sensitive)?.ok_or_else(|| {
+                invalid_data!("Column {column_name} not found in table. Schema: {schema}")
+            })?;
+
+            schema
+                .as_struct()
+                .field_by_id(field_id)
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::FeatureUnsupported,
+                        format!(
+                            "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
+                        ),
+                    )
+                })?;
+
+            Ok(field_id)
+        })
+        .collect()
+}
+
+fn bind_scan_predicate(
+    schema: &SchemaRef,
+    predicate: Option<&Predicate>,
+    case_sensitive: bool,
+) -> Result<Option<Arc<BoundPredicate>>> {
+    predicate
+        .map(|predicate| predicate.bind(schema.clone(), case_sensitive))
+        .transpose()
+        .map(|predicate| predicate.map(Arc::new))
+}
+
+fn projected_partition_type(
+    table: &Table,
+    schema: &Schema,
+    field_ids: &[i32],
+) -> Result<Option<Arc<StructType>>> {
+    if !field_ids.contains(&RESERVED_FIELD_ID_PARTITION) {
+        return Ok(None);
+    }
+
+    table
+        .metadata()
+        .unified_partition_type(schema)
+        .map(Arc::new)
+        .map(Some)
+}
+
+/// Selects a snapshot by ID or timestamp.
+enum SnapshotSelection {
+    SnapshotId(i64),
+    AsOfTime(i64),
+}
 
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
     table: &'a Table,
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
-    snapshot_id: Option<i64>,
+    snapshot_selection: Option<SnapshotSelection>,
     batch_size: Option<usize>,
     case_sensitive: bool,
     filter: Option<Predicate>,
@@ -61,6 +151,7 @@ pub struct TableScanBuilder<'a> {
     concurrency_limit_manifest_files: usize,
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    bloom_filter_enabled: bool,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -70,7 +161,7 @@ impl<'a> TableScanBuilder<'a> {
         Self {
             table,
             column_names: None,
-            snapshot_id: None,
+            snapshot_selection: None,
             batch_size: None,
             case_sensitive: true,
             filter: None,
@@ -79,6 +170,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: num_cpus,
             row_group_filtering_enabled: true,
             row_selection_enabled: false,
+            bloom_filter_enabled: false,
         }
     }
 
@@ -126,9 +218,39 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Set the snapshot to scan. When not set, it uses current snapshot.
+    /// Set the snapshot to scan. The scan projects the schema that snapshot was
+    /// written with.
+    ///
+    /// The last call to this or [`Self::as_of_time`] takes precedence.
+    /// If neither is set, the scan reads the current snapshot with the table's
+    /// current schema.
     pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
-        self.snapshot_id = Some(snapshot_id);
+        self.snapshot_selection = Some(SnapshotSelection::SnapshotId(snapshot_id));
+        self
+    }
+
+    /// Select a snapshot at or before a timestamp in milliseconds since the Unix epoch.
+    ///
+    /// Uses the table's main history, and projects the schema the selected snapshot
+    /// was written with. The last call to this or [`Self::snapshot_id`] takes precedence.
+    ///
+    /// ```
+    /// # use iceberg::TableIdent;
+    /// # use iceberg::io::FileIO;
+    /// # use iceberg::table::StaticTable;
+    /// # #[tokio::main]
+    /// # async fn main() -> iceberg::Result<()> {
+    /// # let location = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/example_table_metadata_v2.json");
+    /// # let ident = TableIdent::from_strs(["ns", "t"])?;
+    /// # let table = StaticTable::from_metadata_file(location, ident, FileIO::new_with_fs()).await?;
+    /// // The snapshot log has entries at 1515100955770 and 1555100955770.
+    /// let scan = table.scan().as_of_time(1_555_100_955_769).build()?;
+    /// assert_eq!(scan.snapshot().unwrap().snapshot_id(), 3051729675574597004);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn as_of_time(mut self, timestamp_ms: i64) -> Self {
+        self.snapshot_selection = Some(SnapshotSelection::AsOfTime(timestamp_ms));
         self
     }
 
@@ -185,19 +307,45 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Determines whether to enable bloom filter-based row group filtering.
+    ///
+    /// When enabled, if a read is performed with an equality or IN predicate,
+    /// the bloom filter for relevant columns in each row group is read and
+    /// checked. Row groups where the bloom filter proves the value is absent
+    /// are skipped entirely.
+    ///
+    /// Defaults to disabled, as reading bloom filters requires additional I/O
+    /// per column per row group.
+    pub fn with_bloom_filter_enabled(mut self, bloom_filter_enabled: bool) -> Self {
+        self.bloom_filter_enabled = bloom_filter_enabled;
+        self
+    }
+
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
-        let snapshot = match self.snapshot_id {
-            Some(snapshot_id) => self
+        let selected_snapshot = match self.snapshot_selection {
+            Some(SnapshotSelection::SnapshotId(id)) => {
+                Some((id, format!("Snapshot with id {id} not found")))
+            }
+            Some(SnapshotSelection::AsOfTime(timestamp_ms)) => {
+                let id = snapshot_id_as_of_time(&self.table.metadata_ref(), timestamp_ms)?;
+                // History outlives expired snapshots; name the timestamp that resolved to `id`.
+                Some((
+                    id,
+                    format!(
+                        "Snapshot with id {id} resolved from timestamp {timestamp_ms} ms not found; it may have expired"
+                    ),
+                ))
+            }
+            None => None,
+        };
+        let is_time_travel = selected_snapshot.is_some();
+        let snapshot = match selected_snapshot {
+            Some((snapshot_id, not_found_message)) => self
                 .table
                 .metadata()
                 .snapshot_by_id(snapshot_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Snapshot with id {snapshot_id} not found"),
-                    )
-                })?
+                .ok_or_else(|| invalid_data!(not_found_message))?
                 .clone(),
             None => {
                 let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
@@ -211,6 +359,7 @@ impl<'a> TableScanBuilder<'a> {
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
                         row_group_filtering_enabled: self.row_group_filtering_enabled,
                         row_selection_enabled: self.row_selection_enabled,
+                        bloom_filter_enabled: self.bloom_filter_enabled,
                         runtime: self.table.runtime().clone(),
                     });
                 };
@@ -218,87 +367,34 @@ impl<'a> TableScanBuilder<'a> {
             }
         };
 
-        let schema = snapshot.schema(self.table.metadata())?;
-
-        // Check that all column names exist in the schema (skip reserved columns).
-        if let Some(column_names) = self.column_names.as_ref() {
-            for column_name in column_names {
-                // Skip reserved columns that don't exist in the schema
-                if is_metadata_column_name(column_name) {
-                    continue;
-                }
-                if schema.field_by_name(column_name).is_none() {
-                    return Err(Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Column {column_name} not found in table. Schema: {schema}"),
-                    ));
-                }
-            }
-        }
-
-        let mut field_ids = vec![];
-        let column_names = self.column_names.clone().unwrap_or_else(|| {
-            schema
-                .as_struct()
-                .fields()
-                .iter()
-                .map(|f| f.name.clone())
-                .collect()
-        });
-
-        for column_name in column_names.iter() {
-            // Handle metadata columns (like "_file")
-            if is_metadata_column_name(column_name) {
-                field_ids.push(get_metadata_field_id(column_name)?);
-                continue;
-            }
-
-            let field_id = schema.field_id_by_name(column_name).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Column {column_name} not found in table. Schema: {schema}"),
-                )
-            })?;
-
-            schema
-                .as_struct()
-                .field_by_id(field_id)
-                .ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::FeatureUnsupported,
-                        format!(
-                        "Column {column_name} is not a direct child of schema but a nested field, which is not supported now. Schema: {schema}"
-                    ),
-                )
-            })?;
-
-            field_ids.push(field_id);
-        }
-
-        let snapshot_bound_predicate = if let Some(ref predicates) = self.filter {
-            Some(predicates.bind(schema.clone(), true)?)
+        // A scan of the current state uses the table's current schema; time travel uses the
+        // schema its snapshot was written with.
+        let schema = if is_time_travel {
+            snapshot.schema(self.table.metadata())?
         } else {
-            None
+            self.table.metadata().current_schema().clone()
         };
-
+        let field_ids =
+            collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
+        let snapshot_bound_predicate =
+            bind_scan_predicate(&schema, self.filter.as_ref(), self.case_sensitive)?;
         let name_mapping = self
             .table
             .metadata()
-            .properties()
-            .get(DEFAULT_SCHEMA_NAME_MAPPING)
-            .map(|raw| {
-                serde_json::from_str::<NameMapping>(raw).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!(
-                            "Failed to parse table property {DEFAULT_SCHEMA_NAME_MAPPING} as a NameMapping"
-                        ),
-                    )
-                    .with_source(e)
-                })
-            })
-            .transpose()?
+            .table_properties()
+            .default_name_mapping()?
             .map(Arc::new);
+        let unified_partition_type = projected_partition_type(self.table, &schema, &field_ids)?;
+
+        // Precompute the table's sort orders once, keyed by id, so each manifest-file
+        // context carries only this narrow map instead of the full table metadata.
+        let sort_orders = Arc::new(
+            self.table
+                .metadata()
+                .sort_orders_iter()
+                .map(|order| (order.order_id, order.clone()))
+                .collect::<HashMap<i64, SortOrderRef>>(),
+        );
 
         let plan_context = PlanContext {
             snapshot,
@@ -306,13 +402,15 @@ impl<'a> TableScanBuilder<'a> {
             snapshot_schema: schema,
             case_sensitive: self.case_sensitive,
             predicate: self.filter.map(Arc::new),
-            snapshot_bound_predicate: snapshot_bound_predicate.map(Arc::new),
+            snapshot_bound_predicate,
             object_cache: self.table.object_cache(),
             field_ids: Arc::new(field_ids),
             name_mapping,
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
             manifest_evaluator_cache: Arc::new(ManifestEvaluatorCache::new()),
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
+            unified_partition_type,
+            sort_orders,
         };
 
         Ok(TableScan {
@@ -325,6 +423,7 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
             row_group_filtering_enabled: self.row_group_filtering_enabled,
             row_selection_enabled: self.row_selection_enabled,
+            bloom_filter_enabled: self.bloom_filter_enabled,
             runtime: self.table.runtime().clone(),
         })
     }
@@ -354,6 +453,7 @@ pub struct TableScan {
 
     row_group_filtering_enabled: bool,
     row_selection_enabled: bool,
+    bloom_filter_enabled: bool,
 
     runtime: Runtime,
 }
@@ -361,6 +461,25 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
+        self.plan_data_files(|ctx| ctx.into_file_scan_task()).await
+    }
+
+    pub(crate) async fn plan_cow_rewrite_files(
+        &self,
+    ) -> Result<BoxStream<'static, Result<crate::cow_rewrite::CowRewriteFile>>> {
+        self.plan_data_files(|ctx| ctx.into_cow_rewrite_file())
+            .await
+    }
+
+    async fn plan_data_files<T, F, Fut>(
+        &self,
+        build_result: F,
+    ) -> Result<BoxStream<'static, Result<T>>>
+    where
+        T: Send + 'static,
+        F: Fn(ManifestEntryContext) -> Fut + Copy + Send + Sync + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
         let Some(plan_context) = self.plan_context.as_ref() else {
             return Ok(Box::pin(futures::stream::empty()));
         };
@@ -374,8 +493,8 @@ impl TableScan {
         let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
             channel(concurrency_limit_manifest_files);
 
-        // used to stream the results back to the caller
-        let (file_scan_task_tx, file_scan_task_rx) = channel(concurrency_limit_manifest_entries);
+        // used to stream the planned data file results back to the caller
+        let (planned_file_tx, planned_file_rx) = channel(concurrency_limit_manifest_entries);
 
         let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(self.runtime.clone());
 
@@ -391,9 +510,9 @@ impl TableScan {
             manifest_entry_delete_ctx_tx,
         )?;
 
-        let mut channel_for_manifest_error = file_scan_task_tx.clone();
-        let mut channel_for_data_manifest_entry_error = file_scan_task_tx.clone();
-        let mut channel_for_delete_manifest_entry_error = file_scan_task_tx.clone();
+        let mut channel_for_manifest_error = planned_file_tx.clone();
+        let mut channel_for_data_manifest_entry_error = planned_file_tx.clone();
+        let mut channel_for_delete_manifest_entry_error = planned_file_tx.clone();
 
         let rt = self.runtime.clone();
 
@@ -450,7 +569,7 @@ impl TableScan {
             let rt_inner = rt.clone();
             rt.cpu().spawn(async move {
                 let result = manifest_entry_data_ctx_rx
-                    .map(|me_ctx| Ok((me_ctx, file_scan_task_tx.clone())))
+                    .map(|me_ctx| Ok((me_ctx, planned_file_tx.clone())))
                     .try_for_each_concurrent(
                         concurrency_limit_manifest_entries,
                         |(manifest_entry_context, tx)| {
@@ -462,6 +581,7 @@ impl TableScan {
                                         Self::process_data_manifest_entry(
                                             manifest_entry_context,
                                             tx,
+                                            build_result,
                                         )
                                         .await
                                     })
@@ -477,7 +597,7 @@ impl TableScan {
             });
         }
 
-        Ok(file_scan_task_rx.boxed())
+        Ok(planned_file_rx.boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -486,7 +606,8 @@ impl TableScan {
             ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
                 .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
                 .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-                .with_row_selection_enabled(self.row_selection_enabled);
+                .with_row_selection_enabled(self.row_selection_enabled)
+                .with_bloom_filter_enabled(self.bloom_filter_enabled);
 
         if let Some(batch_size) = self.batch_size {
             arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
@@ -508,15 +629,15 @@ impl TableScan {
         self.plan_context.as_ref().map(|x| &x.snapshot)
     }
 
-    async fn process_data_manifest_entry(
+    async fn process_data_manifest_entry<T, F, Fut>(
         manifest_entry_context: ManifestEntryContext,
-        mut file_scan_task_tx: Sender<Result<FileScanTask>>,
-    ) -> Result<()> {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
-        }
-
+        mut planned_file_tx: Sender<Result<T>>,
+        build_result: F,
+    ) -> Result<()>
+    where
+        F: Fn(ManifestEntryContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
         // abort the plan if we encounter a manifest entry for a delete file
         if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
             return Err(Error::new(
@@ -556,10 +677,10 @@ impl TableScan {
         }
 
         // congratulations! the manifest entry has made its way through the
-        // entire plan without getting filtered out. Create a corresponding
-        // FileScanTask and push it to the result stream
-        file_scan_task_tx
-            .send(Ok(manifest_entry_context.into_file_scan_task().await?))
+        // entire plan without getting filtered out. Build the planned file before
+        // sending so delete-file lookup preserves the original scan timing.
+        planned_file_tx
+            .send(Ok(build_result(manifest_entry_context).await?))
             .await?;
 
         Ok(())
@@ -569,11 +690,6 @@ impl TableScan {
         manifest_entry_context: ManifestEntryContext,
         mut delete_file_ctx_tx: Sender<DeleteFileContext>,
     ) -> Result<()> {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
-        }
-
         // abort the plan if we encounter a manifest entry that is not for a delete file
         if manifest_entry_context.manifest_entry.content_type() == DataContentType::Data {
             return Err(Error::new(
@@ -615,9 +731,8 @@ pub(crate) struct BoundPredicates {
 }
 
 #[cfg(test)]
-pub mod tests {
+mod tests {
     //! shared tests for the table scan API
-    #![allow(missing_docs)]
 
     use std::collections::HashMap;
     use std::fs;
@@ -625,646 +740,38 @@ pub mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch,
+        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, RunArray,
         StringArray,
     };
     use futures::{TryStreamExt, stream};
-    use minijinja::value::Value;
-    use minijinja::{AutoEscape, Environment, context};
-    use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
-    use parquet::basic::Compression;
-    use parquet::file::properties::WriterProperties;
-    use tempfile::TempDir;
+    use parquet::arrow::ArrowWriter;
     use uuid::Uuid;
 
+    use super::resolve_field_id;
     use crate::arrow::ArrowReaderBuilder;
     use crate::expr::{BoundPredicate, Reference};
-    use crate::io::{FileIO, OutputFile};
-    use crate::metadata_columns::RESERVED_COL_NAME_FILE;
-    use crate::scan::FileScanTask;
+    use crate::io::FileIO;
+    use crate::metadata_columns::{
+        RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+        RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_POS,
+    };
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
     use crate::spec::{
-        DEFAULT_SCHEMA_NAME_MAPPING, DataContentType, DataFileBuilder, DataFileFormat, Datum,
-        Literal, ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder,
-        NestedField, PartitionSpec, PrimitiveType, Schema, Struct, StructType, TableMetadata, Type,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, MAIN_BRANCH,
+        ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, MappedField,
+        NameMapping, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
+        Snapshot, SortDirection, SortField, SortOrder, Struct, Summary, TableMetadataBuilder,
+        TableProperties, Transform, Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
+    use crate::test_utils::scan::{
+        ROWS_PER_FIXTURE_FILE, TableTestFixture, assert_last_updated_seq_all,
+    };
     use crate::test_utils::test_runtime;
+    use crate::util::snapshot::snapshot_id_as_of_time;
     use crate::{ErrorKind, TableIdent};
-
-    fn render_template(template: &str, ctx: Value) -> String {
-        let mut env = Environment::new();
-        env.set_auto_escape_callback(|_| AutoEscape::None);
-        env.render_str(template, ctx).unwrap()
-    }
-
-    pub struct TableTestFixture {
-        pub table_location: String,
-        pub table: Table,
-    }
-
-    impl TableTestFixture {
-        #[allow(clippy::new_without_default)]
-        pub fn new() -> Self {
-            let tmp_dir = TempDir::new().unwrap();
-            let table_location = tmp_dir.path().join("table1");
-            let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");
-            let manifest_list2_location = table_location.join("metadata/manifests_list_2.avro");
-            let table_metadata1_location = table_location.join("metadata/v1.json");
-
-            let file_io = FileIO::new_with_fs();
-
-            let table_metadata = {
-                let template_json_str = fs::read_to_string(format!(
-                    "{}/testdata/example_table_metadata_v2.json",
-                    env!("CARGO_MANIFEST_DIR")
-                ))
-                .unwrap();
-                let metadata_json = render_template(&template_json_str, context! {
-                    table_location => &table_location,
-                    manifest_list_1_location => &manifest_list1_location,
-                    manifest_list_2_location => &manifest_list2_location,
-                    table_metadata_1_location => &table_metadata1_location,
-                });
-                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
-            };
-
-            let table = Table::builder()
-                .metadata(table_metadata)
-                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
-                .file_io(file_io.clone())
-                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
-                .runtime(test_runtime())
-                .build()
-                .unwrap();
-
-            Self {
-                table_location: table_location.to_str().unwrap().to_string(),
-                table,
-            }
-        }
-
-        #[allow(clippy::new_without_default)]
-        pub fn new_empty() -> Self {
-            let tmp_dir = TempDir::new().unwrap();
-            let table_location = tmp_dir.path().join("table1");
-            let table_metadata1_location = table_location.join("metadata/v1.json");
-
-            let file_io = FileIO::new_with_fs();
-
-            let table_metadata = {
-                let template_json_str = fs::read_to_string(format!(
-                    "{}/testdata/example_empty_table_metadata_v2.json",
-                    env!("CARGO_MANIFEST_DIR")
-                ))
-                .unwrap();
-                let metadata_json = render_template(&template_json_str, context! {
-                    table_location => &table_location,
-                    table_metadata_1_location => &table_metadata1_location,
-                });
-                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
-            };
-
-            let table = Table::builder()
-                .metadata(table_metadata)
-                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
-                .file_io(file_io.clone())
-                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
-                .runtime(test_runtime())
-                .build()
-                .unwrap();
-
-            Self {
-                table_location: table_location.to_str().unwrap().to_string(),
-                table,
-            }
-        }
-
-        /// Creates a fixture with 5 snapshots chained as:
-        ///   S1 (root) -> S2 -> S3 -> S4 -> S5 (current)
-        /// Useful for testing snapshot history traversal.
-        pub fn new_with_deep_history() -> Self {
-            let tmp_dir = TempDir::new().unwrap();
-            let table_location = tmp_dir.path().join("table1");
-            let table_metadata1_location = table_location.join("metadata/v1.json");
-
-            let file_io = FileIO::new_with_fs();
-
-            let table_metadata = {
-                let json_str = fs::read_to_string(format!(
-                    "{}/testdata/example_table_metadata_v2_deep_history.json",
-                    env!("CARGO_MANIFEST_DIR")
-                ))
-                .unwrap();
-                serde_json::from_str::<TableMetadata>(&json_str).unwrap()
-            };
-
-            let table = Table::builder()
-                .metadata(table_metadata)
-                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
-                .file_io(file_io.clone())
-                .metadata_location(table_metadata1_location.as_os_str().to_str().unwrap())
-                .runtime(test_runtime())
-                .build()
-                .unwrap();
-
-            Self {
-                table_location: table_location.to_str().unwrap().to_string(),
-                table,
-            }
-        }
-
-        pub fn new_unpartitioned() -> Self {
-            let tmp_dir = TempDir::new().unwrap();
-            let table_location = tmp_dir.path().join("table1");
-            let manifest_list1_location = table_location.join("metadata/manifests_list_1.avro");
-            let manifest_list2_location = table_location.join("metadata/manifests_list_2.avro");
-            let table_metadata1_location = table_location.join("metadata/v1.json");
-
-            let file_io = FileIO::new_with_fs();
-
-            let mut table_metadata = {
-                let template_json_str = fs::read_to_string(format!(
-                    "{}/testdata/example_table_metadata_v2.json",
-                    env!("CARGO_MANIFEST_DIR")
-                ))
-                .unwrap();
-                let metadata_json = render_template(&template_json_str, context! {
-                    table_location => &table_location,
-                    manifest_list_1_location => &manifest_list1_location,
-                    manifest_list_2_location => &manifest_list2_location,
-                    table_metadata_1_location => &table_metadata1_location,
-                });
-                serde_json::from_str::<TableMetadata>(&metadata_json).unwrap()
-            };
-
-            table_metadata.default_spec = Arc::new(PartitionSpec::unpartition_spec());
-            table_metadata.partition_specs.clear();
-            table_metadata.default_partition_type = StructType::new(vec![]);
-            table_metadata
-                .partition_specs
-                .insert(0, table_metadata.default_spec.clone());
-
-            let table = Table::builder()
-                .metadata(table_metadata)
-                .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
-                .file_io(file_io.clone())
-                .metadata_location(table_metadata1_location.to_str().unwrap())
-                .runtime(test_runtime())
-                .build()
-                .unwrap();
-
-            Self {
-                table_location: table_location.to_str().unwrap().to_string(),
-                table,
-            }
-        }
-
-        fn next_manifest_file(&self) -> OutputFile {
-            self.table
-                .file_io()
-                .new_output(format!(
-                    "{}/metadata/manifest_{}.avro",
-                    self.table_location,
-                    Uuid::new_v4()
-                ))
-                .unwrap()
-        }
-
-        pub async fn setup_manifest_files(&mut self) {
-            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
-            let parent_snapshot = current_snapshot
-                .parent_snapshot(self.table.metadata())
-                .unwrap();
-            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
-            let current_partition_spec = self.table.metadata().default_partition_spec();
-
-            // Write the data files first, then use the file size in the manifest entries
-            let parquet_file_size = self.write_parquet_data_files();
-
-            let mut writer = ManifestWriterBuilder::new(
-                self.next_manifest_file(),
-                Some(current_snapshot.snapshot_id()),
-                current_schema.clone(),
-                current_partition_spec.as_ref().clone(),
-            )
-            .build_v2_data();
-            writer
-                .add_entry(
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Added)
-                        .data_file(
-                            DataFileBuilder::default()
-                                .partition_spec_id(0)
-                                .content(DataContentType::Data)
-                                .file_path(format!("{}/1.parquet", &self.table_location))
-                                .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(parquet_file_size)
-                                .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(100))]))
-                                .key_metadata(None)
-                                .build()
-                                .unwrap(),
-                        )
-                        .build(),
-                )
-                .unwrap();
-            writer
-                .add_delete_entry(
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Deleted)
-                        .snapshot_id(parent_snapshot.snapshot_id())
-                        .sequence_number(parent_snapshot.sequence_number())
-                        .file_sequence_number(parent_snapshot.sequence_number())
-                        .data_file(
-                            DataFileBuilder::default()
-                                .partition_spec_id(0)
-                                .content(DataContentType::Data)
-                                .file_path(format!("{}/2.parquet", &self.table_location))
-                                .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(parquet_file_size)
-                                .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(200))]))
-                                .build()
-                                .unwrap(),
-                        )
-                        .build(),
-                )
-                .unwrap();
-            writer
-                .add_existing_entry(
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Existing)
-                        .snapshot_id(parent_snapshot.snapshot_id())
-                        .sequence_number(parent_snapshot.sequence_number())
-                        .file_sequence_number(parent_snapshot.sequence_number())
-                        .data_file(
-                            DataFileBuilder::default()
-                                .partition_spec_id(0)
-                                .content(DataContentType::Data)
-                                .file_path(format!("{}/3.parquet", &self.table_location))
-                                .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(parquet_file_size)
-                                .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(300))]))
-                                .build()
-                                .unwrap(),
-                        )
-                        .build(),
-                )
-                .unwrap();
-            let data_file_manifest = writer.write_manifest_file().await.unwrap();
-
-            // Write to manifest list
-            let manifest_list_writer = self
-                .table
-                .file_io()
-                .new_output(current_snapshot.manifest_list())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap();
-            let mut manifest_list_write = ManifestListWriter::v2(
-                manifest_list_writer,
-                current_snapshot.snapshot_id(),
-                current_snapshot.parent_snapshot_id(),
-                current_snapshot.sequence_number(),
-            );
-            manifest_list_write
-                .add_manifests(vec![data_file_manifest].into_iter())
-                .unwrap();
-            manifest_list_write.close().await.unwrap();
-        }
-
-        /// Writes identical Parquet data files (1.parquet, 2.parquet, 3.parquet)
-        /// and returns the file size in bytes.
-        fn write_parquet_data_files(&self) -> u64 {
-            std::fs::create_dir_all(&self.table_location).unwrap();
-
-            let schema = {
-                let fields = vec![
-                    arrow_schema::Field::new("x", arrow_schema::DataType::Int64, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "1".to_string(),
-                        )])),
-                    arrow_schema::Field::new("y", arrow_schema::DataType::Int64, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "2".to_string(),
-                        )])),
-                    arrow_schema::Field::new("z", arrow_schema::DataType::Int64, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "3".to_string(),
-                        )])),
-                    arrow_schema::Field::new("a", arrow_schema::DataType::Utf8, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "4".to_string(),
-                        )])),
-                    arrow_schema::Field::new("dbl", arrow_schema::DataType::Float64, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "5".to_string(),
-                        )])),
-                    arrow_schema::Field::new("i32", arrow_schema::DataType::Int32, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "6".to_string(),
-                        )])),
-                    arrow_schema::Field::new("i64", arrow_schema::DataType::Int64, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "7".to_string(),
-                        )])),
-                    arrow_schema::Field::new("bool", arrow_schema::DataType::Boolean, false)
-                        .with_metadata(HashMap::from([(
-                            PARQUET_FIELD_ID_META_KEY.to_string(),
-                            "8".to_string(),
-                        )])),
-                ];
-                Arc::new(arrow_schema::Schema::new(fields))
-            };
-            // x: [1, 1, 1, 1, ...]
-            let col1 = Arc::new(Int64Array::from_iter_values(vec![1; 1024])) as ArrayRef;
-
-            let mut values = vec![2; 512];
-            values.append(vec![3; 200].as_mut());
-            values.append(vec![4; 300].as_mut());
-            values.append(vec![5; 12].as_mut());
-
-            // y: [2, 2, 2, 2, ..., 3, 3, 3, 3, ..., 4, 4, 4, 4, ..., 5, 5, 5, 5]
-            let col2 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
-
-            let mut values = vec![3; 512];
-            values.append(vec![4; 512].as_mut());
-
-            // z: [3, 3, 3, 3, ..., 4, 4, 4, 4]
-            let col3 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
-
-            // a: ["Apache", "Apache", "Apache", ..., "Iceberg", "Iceberg", "Iceberg"]
-            let mut values = vec!["Apache"; 512];
-            values.append(vec!["Iceberg"; 512].as_mut());
-            let col4 = Arc::new(StringArray::from_iter_values(values)) as ArrayRef;
-
-            // dbl:
-            let mut values = vec![100.0f64; 512];
-            values.append(vec![150.0f64; 12].as_mut());
-            values.append(vec![200.0f64; 500].as_mut());
-            let col5 = Arc::new(Float64Array::from_iter_values(values)) as ArrayRef;
-
-            // i32:
-            let mut values = vec![100i32; 512];
-            values.append(vec![150i32; 12].as_mut());
-            values.append(vec![200i32; 500].as_mut());
-            let col6 = Arc::new(Int32Array::from_iter_values(values)) as ArrayRef;
-
-            // i64:
-            let mut values = vec![100i64; 512];
-            values.append(vec![150i64; 12].as_mut());
-            values.append(vec![200i64; 500].as_mut());
-            let col7 = Arc::new(Int64Array::from_iter_values(values)) as ArrayRef;
-
-            // bool:
-            let mut values = vec![false; 512];
-            values.append(vec![true; 512].as_mut());
-            let values: BooleanArray = values.into();
-            let col8 = Arc::new(values) as ArrayRef;
-
-            let to_write = RecordBatch::try_new(schema.clone(), vec![
-                col1, col2, col3, col4, col5, col6, col7, col8,
-            ])
-            .unwrap();
-
-            // Write the Parquet files
-            let props = WriterProperties::builder()
-                .set_compression(Compression::SNAPPY)
-                .build();
-
-            for n in 1..=3 {
-                let file = File::create(format!("{}/{}.parquet", &self.table_location, n)).unwrap();
-                let mut writer =
-                    ArrowWriter::try_new(file, to_write.schema(), Some(props.clone())).unwrap();
-
-                writer.write(&to_write).expect("Writing batch");
-
-                // writer must be closed to write footer
-                writer.close().unwrap();
-            }
-
-            std::fs::metadata(format!("{}/1.parquet", &self.table_location))
-                .unwrap()
-                .len()
-        }
-
-        pub async fn setup_unpartitioned_manifest_files(&mut self) {
-            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
-            let parent_snapshot = current_snapshot
-                .parent_snapshot(self.table.metadata())
-                .unwrap();
-            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
-            let current_partition_spec = Arc::new(PartitionSpec::unpartition_spec());
-
-            // Write the data files first, then use the file size in the manifest entries
-            let parquet_file_size = self.write_parquet_data_files();
-
-            // Write data files using an empty partition for unpartitioned tables.
-            let mut writer = ManifestWriterBuilder::new(
-                self.next_manifest_file(),
-                Some(current_snapshot.snapshot_id()),
-                current_schema.clone(),
-                current_partition_spec.as_ref().clone(),
-            )
-            .build_v2_data();
-
-            // Create an empty partition value.
-            let empty_partition = Struct::empty();
-
-            writer
-                .add_entry(
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Added)
-                        .data_file(
-                            DataFileBuilder::default()
-                                .partition_spec_id(0)
-                                .content(DataContentType::Data)
-                                .file_path(format!("{}/1.parquet", &self.table_location))
-                                .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(parquet_file_size)
-                                .record_count(1)
-                                .partition(empty_partition.clone())
-                                .key_metadata(None)
-                                .build()
-                                .unwrap(),
-                        )
-                        .build(),
-                )
-                .unwrap();
-
-            writer
-                .add_delete_entry(
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Deleted)
-                        .snapshot_id(parent_snapshot.snapshot_id())
-                        .sequence_number(parent_snapshot.sequence_number())
-                        .file_sequence_number(parent_snapshot.sequence_number())
-                        .data_file(
-                            DataFileBuilder::default()
-                                .partition_spec_id(0)
-                                .content(DataContentType::Data)
-                                .file_path(format!("{}/2.parquet", &self.table_location))
-                                .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(parquet_file_size)
-                                .record_count(1)
-                                .partition(empty_partition.clone())
-                                .build()
-                                .unwrap(),
-                        )
-                        .build(),
-                )
-                .unwrap();
-
-            writer
-                .add_existing_entry(
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Existing)
-                        .snapshot_id(parent_snapshot.snapshot_id())
-                        .sequence_number(parent_snapshot.sequence_number())
-                        .file_sequence_number(parent_snapshot.sequence_number())
-                        .data_file(
-                            DataFileBuilder::default()
-                                .partition_spec_id(0)
-                                .content(DataContentType::Data)
-                                .file_path(format!("{}/3.parquet", &self.table_location))
-                                .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(parquet_file_size)
-                                .record_count(1)
-                                .partition(empty_partition.clone())
-                                .build()
-                                .unwrap(),
-                        )
-                        .build(),
-                )
-                .unwrap();
-
-            let data_file_manifest = writer.write_manifest_file().await.unwrap();
-
-            // Write to manifest list
-            let manifest_list_writer = self
-                .table
-                .file_io()
-                .new_output(current_snapshot.manifest_list())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap();
-            let mut manifest_list_write = ManifestListWriter::v2(
-                manifest_list_writer,
-                current_snapshot.snapshot_id(),
-                current_snapshot.parent_snapshot_id(),
-                current_snapshot.sequence_number(),
-            );
-            manifest_list_write
-                .add_manifests(vec![data_file_manifest].into_iter())
-                .unwrap();
-            manifest_list_write.close().await.unwrap();
-        }
-
-        pub async fn setup_deadlock_manifests(&mut self) {
-            let current_snapshot = self.table.metadata().current_snapshot().unwrap();
-            let _parent_snapshot = current_snapshot
-                .parent_snapshot(self.table.metadata())
-                .unwrap();
-            let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
-            let current_partition_spec = self.table.metadata().default_partition_spec();
-
-            // 1. Write DATA manifest with MULTIPLE entries to fill buffer
-            let mut writer = ManifestWriterBuilder::new(
-                self.next_manifest_file(),
-                Some(current_snapshot.snapshot_id()),
-                current_schema.clone(),
-                current_partition_spec.as_ref().clone(),
-            )
-            .build_v2_data();
-
-            // Add 10 data entries
-            for i in 0..10 {
-                writer
-                    .add_entry(
-                        ManifestEntry::builder()
-                            .status(ManifestStatus::Added)
-                            .data_file(
-                                DataFileBuilder::default()
-                                    .partition_spec_id(0)
-                                    .content(DataContentType::Data)
-                                    .file_path(format!("{}/{}.parquet", &self.table_location, i))
-                                    .file_format(DataFileFormat::Parquet)
-                                    .file_size_in_bytes(100)
-                                    .record_count(1)
-                                    .partition(Struct::from_iter([Some(Literal::long(100))]))
-                                    .key_metadata(None)
-                                    .build()
-                                    .unwrap(),
-                            )
-                            .build(),
-                    )
-                    .unwrap();
-            }
-            let data_manifest = writer.write_manifest_file().await.unwrap();
-
-            // 2. Write DELETE manifest
-            let mut writer = ManifestWriterBuilder::new(
-                self.next_manifest_file(),
-                Some(current_snapshot.snapshot_id()),
-                current_schema.clone(),
-                current_partition_spec.as_ref().clone(),
-            )
-            .build_v2_deletes();
-
-            writer
-                .add_entry(
-                    ManifestEntry::builder()
-                        .status(ManifestStatus::Added)
-                        .data_file(
-                            DataFileBuilder::default()
-                                .partition_spec_id(0)
-                                .content(DataContentType::PositionDeletes)
-                                .file_path(format!("{}/del.parquet", &self.table_location))
-                                .file_format(DataFileFormat::Parquet)
-                                .file_size_in_bytes(100)
-                                .record_count(1)
-                                .partition(Struct::from_iter([Some(Literal::long(100))]))
-                                .build()
-                                .unwrap(),
-                        )
-                        .build(),
-                )
-                .unwrap();
-            let delete_manifest = writer.write_manifest_file().await.unwrap();
-
-            // Write to manifest list - DATA FIRST then DELETE
-            // This order is crucial for reproduction
-            let manifest_list_writer = self
-                .table
-                .file_io()
-                .new_output(current_snapshot.manifest_list())
-                .unwrap()
-                .writer()
-                .await
-                .unwrap();
-            let mut manifest_list_write = ManifestListWriter::v2(
-                manifest_list_writer,
-                current_snapshot.snapshot_id(),
-                current_snapshot.parent_snapshot_id(),
-                current_snapshot.sequence_number(),
-            );
-            manifest_list_write
-                .add_manifests(vec![data_manifest, delete_manifest].into_iter())
-                .unwrap();
-            manifest_list_write.close().await.unwrap();
-        }
-    }
 
     #[tokio::test]
     async fn test_table_scan_columns() {
@@ -1299,6 +806,120 @@ pub mod tests {
 
         let table_scan = table.scan().select(["x", "y", "z", "a", "b"]).build();
         assert!(table_scan.is_err());
+    }
+
+    #[test]
+    fn test_case_sensitive_scan_rejects_mismatched_column_case() {
+        let table = TableTestFixture::new().table;
+
+        // Case sensitivity defaults to true, so "X" must not resolve to "x".
+        assert!(table.scan().select(["X"]).build().is_err());
+        assert!(
+            table
+                .scan()
+                .with_filter(Reference::new("X").greater_than(Datum::long(1)))
+                .build()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_resolve_field_id_case_insensitive_rejects_ambiguous_name() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int).into(),
+            ])
+            .build()
+            .unwrap();
+
+        assert_eq!(resolve_field_id(&schema, "id", true).unwrap(), Some(1));
+        assert_eq!(resolve_field_id(&schema, "DATA", false).unwrap(), Some(3));
+        let error = resolve_field_id(&schema, "Id", false).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.message().contains("case-insensitively"), "{error}");
+    }
+
+    #[test]
+    fn test_case_insensitive_scan_with_ambiguous_schema() {
+        let fixture = TableTestFixture::new();
+        let mut metadata = fixture.table.metadata().clone();
+        let schema = Schema::builder()
+            .with_schema_id(metadata.current_schema_id())
+            .with_fields(vec![
+                NestedField::optional(1, "id", PrimitiveType::Int).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int).into(),
+            ])
+            .build()
+            .unwrap();
+        metadata
+            .schemas
+            .insert(metadata.current_schema_id(), Arc::new(schema));
+        let table = fixture.table.with_metadata(Arc::new(metadata));
+
+        table
+            .scan()
+            .with_case_sensitive(false)
+            .select(["DATA"])
+            .build()
+            .unwrap();
+        let error = table
+            .scan()
+            .with_case_sensitive(false)
+            .select(["Id"])
+            .build()
+            .unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert!(error.message().contains("case-insensitively"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn test_case_insensitive_scan_resolves_mismatched_column_case() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // The schema declares lowercase "x" and "z"; a case-insensitive scan must
+        // resolve the upper-cased names in both the projection and the filter.
+        let table_scan = fixture
+            .table
+            .scan()
+            .with_case_sensitive(false)
+            .select(["X", "Z"])
+            .with_filter(Reference::new("Y").greater_than(Datum::long(1)))
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(batches[0].num_columns(), 2);
+        assert_eq!(
+            batches[0]
+                .column_by_name("x")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
+        assert_eq!(
+            batches[0]
+                .column_by_name("z")
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .value(0),
+            3
+        );
     }
 
     #[tokio::test]
@@ -1336,6 +957,402 @@ pub mod tests {
         );
     }
 
+    #[test]
+    fn test_table_scan_as_of_time_after_rollback() {
+        for elapsed_ms in [0, 1000] {
+            let table = TableTestFixture::new().table;
+            let mut metadata = table.metadata().clone();
+            let original = metadata.history()[0].snapshot_id;
+            let previous = metadata.history()[1].clone();
+            let rollback_time = previous.timestamp_ms + elapsed_ms;
+            metadata.snapshot_log.push(crate::spec::SnapshotLog {
+                timestamp_ms: rollback_time,
+                snapshot_id: original,
+            });
+            metadata.current_snapshot_id = Some(original);
+            metadata.refs.get_mut(MAIN_BRANCH).unwrap().snapshot_id = original;
+            let table = table.with_metadata(Arc::new(metadata));
+            let scan = table.scan().as_of_time(rollback_time).build().unwrap();
+            // A rollback at the same timestamp keeps the earlier history entry.
+            let expected = if elapsed_ms == 0 {
+                previous.snapshot_id
+            } else {
+                original
+            };
+            assert_eq!(scan.snapshot().unwrap().snapshot_id(), expected);
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_empty_history() {
+        let table = TableTestFixture::new_empty().table;
+        assert!(table.scan().build().unwrap().snapshot().is_none());
+        let err = table.scan().as_of_time(0).build().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("No snapshot history"));
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_before_history() {
+        let table = TableTestFixture::new().table;
+        let before = table.metadata().history()[0].timestamp_ms - 1;
+        let err = table.scan().as_of_time(before).build().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains(&before.to_string()));
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_all_qualifying_snapshots_expired() {
+        let table = TableTestFixture::new_with_deep_history().table;
+        let mut metadata = table.metadata().clone();
+        let entry = metadata.history()[3].clone();
+        let expired_ids: Vec<_> = metadata
+            .history()
+            .iter()
+            .filter(|log| log.timestamp_ms <= entry.timestamp_ms)
+            .map(|log| log.snapshot_id)
+            .collect();
+        assert_eq!(expired_ids.len(), 4);
+        for snapshot_id in expired_ids {
+            metadata.snapshots.remove(&snapshot_id);
+        }
+        let table = table.with_metadata(Arc::new(metadata));
+        // History resolution succeeds even though every qualifying snapshot expired.
+        assert_eq!(
+            snapshot_id_as_of_time(&table.metadata_ref(), entry.timestamp_ms).unwrap(),
+            entry.snapshot_id
+        );
+        assert!(table.scan().build().unwrap().snapshot().is_some());
+        let err = table
+            .scan()
+            .as_of_time(entry.timestamp_ms)
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            format!(
+                "Snapshot with id {} resolved from timestamp {} ms not found; it may have expired",
+                entry.snapshot_id, entry.timestamp_ms
+            )
+        );
+    }
+
+    #[test]
+    fn test_table_scan_last_snapshot_selection_wins() {
+        let table = TableTestFixture::new().table;
+        let first = &table.metadata().history()[0];
+        let last = &table.metadata().history()[1];
+        let cases = [
+            (
+                table
+                    .scan()
+                    .snapshot_id(last.snapshot_id)
+                    .as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(first.timestamp_ms)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            // An overwritten selector is not resolved or validated.
+            (
+                table.scan().snapshot_id(-1).as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(i64::MIN)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .snapshot_id(first.snapshot_id)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(i64::MAX)
+                    .as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+        ];
+        for (builder, expected) in cases {
+            let scan = builder.build().unwrap();
+            assert_eq!(scan.snapshot().unwrap().snapshot_id(), expected);
+        }
+    }
+
+    #[test]
+    fn test_table_scan_invalid_last_snapshot_selection() {
+        let table = TableTestFixture::new().table;
+        let first = &table.metadata().history()[0];
+        let cases = [
+            (
+                table
+                    .scan()
+                    .snapshot_id(first.snapshot_id)
+                    .as_of_time(first.timestamp_ms - 1),
+                "No snapshot history",
+            ),
+            (
+                table.scan().as_of_time(first.timestamp_ms).snapshot_id(-1),
+                "Snapshot with id -1 not found",
+            ),
+        ];
+        for (builder, expected) in cases {
+            let err = builder.build().unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains(expected));
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_uses_snapshot_schema() {
+        for select_current in [false, true] {
+            let table = TableTestFixture::new().table;
+            let mut metadata = table.metadata().clone();
+            let entry = metadata.history()[usize::from(select_current)].clone();
+            // Simulate a schema-only update after this snapshot: schema 0 has x only,
+            // while the current table schema also contains y and other columns.
+            Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id =
+                Some(0);
+            let table = table.with_metadata(Arc::new(metadata));
+            let scan = table
+                .scan()
+                .as_of_time(entry.timestamp_ms)
+                .select(["x"])
+                .with_filter(Reference::new("x").greater_than(Datum::long(0)))
+                .build()
+                .unwrap();
+            let context = scan.plan_context.as_ref().unwrap();
+            assert_eq!(context.snapshot_schema.schema_id(), 0);
+            assert!(context.snapshot_bound_predicate.is_some());
+            assert!(
+                table
+                    .scan()
+                    .as_of_time(entry.timestamp_ms)
+                    .select(["y"])
+                    .build()
+                    .is_err()
+            );
+            assert!(
+                table
+                    .scan()
+                    .as_of_time(entry.timestamp_ms)
+                    .with_filter(Reference::new("y").greater_than(Datum::long(0)))
+                    .build()
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_schema_compatibility() {
+        let table = TableTestFixture::new().table;
+        let entry = table.metadata().history()[0].clone();
+        // Older snapshots may omit schema-id and use the current-schema fallback.
+        assert!(
+            table
+                .metadata()
+                .snapshot_by_id(entry.snapshot_id)
+                .unwrap()
+                .schema_id()
+                .is_none()
+        );
+        let scan = table.scan().as_of_time(entry.timestamp_ms).build().unwrap();
+        assert_eq!(
+            scan.plan_context.as_ref().unwrap().snapshot_schema,
+            *table.metadata().current_schema()
+        );
+
+        let mut metadata = table.metadata().clone();
+        Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id =
+            Some(1234);
+        let table = table.with_metadata(Arc::new(metadata));
+        let err = table
+            .scan()
+            .as_of_time(entry.timestamp_ms)
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("Schema with id 1234 not found"));
+    }
+
+    #[tokio::test]
+    async fn test_table_scan_as_of_time_reads_historical_rows() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let entry = fixture.table.metadata().history()[0].clone();
+
+        // The older snapshot has only x, while the current snapshot has eight columns.
+        let mut metadata = fixture.table.metadata().clone();
+        Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id = Some(0);
+        fixture.table = fixture.table.with_metadata(Arc::new(metadata));
+        let snapshot = fixture
+            .table
+            .metadata()
+            .snapshot_by_id(entry.snapshot_id)
+            .unwrap();
+        let schema = snapshot.schema(fixture.table.metadata()).unwrap();
+        let arrow_schema = Arc::new(crate::arrow::schema_to_arrow_schema(&schema).unwrap());
+
+        // Write distinct historical data: x = 100, versus x = 1 in the current files.
+        let path = format!("{}/historical.parquet", fixture.table_location);
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int64Array::from(
+            vec![100],
+        ))])
+        .unwrap();
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), arrow_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut manifest_writer = ManifestWriterBuilder::new(
+            fixture.next_manifest_file(),
+            Some(snapshot.snapshot_id()),
+            schema,
+            fixture
+                .table
+                .metadata()
+                .default_partition_spec()
+                .as_ref()
+                .clone(),
+        )
+        .build_v2_data();
+        manifest_writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::Data)
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(fs::metadata(&path).unwrap().len())
+                            .file_path(path)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let manifest = manifest_writer.write_manifest_file().await.unwrap();
+        let output = fixture
+            .table
+            .file_io()
+            .new_output(snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut list_writer = ManifestListWriter::v2(
+            output,
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+        );
+        list_writer.add_manifests([manifest].into_iter()).unwrap();
+        list_writer.close().await.unwrap();
+
+        let table = fixture.table;
+        let [by_time, by_id] = [
+            table.scan().as_of_time(entry.timestamp_ms),
+            table.scan().snapshot_id(entry.snapshot_id),
+        ]
+        .map(|scan| {
+            scan.with_filter(Reference::new("x").greater_than_or_equal_to(Datum::long(100)))
+                .build()
+                .unwrap()
+        });
+        let current = table.scan().build().unwrap();
+        let mut planned_files = Vec::new();
+        let mut rows = Vec::new();
+        let mut schemas = Vec::new();
+        for scan in [by_time, by_id, current] {
+            let mut tasks: Vec<_> = scan
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            tasks.sort_by_key(|task| task.data_file_path().to_string());
+            planned_files.push(tasks);
+            let batches: Vec<_> = scan.to_arrow().await.unwrap().try_collect().await.unwrap();
+            assert!(!batches.is_empty());
+            schemas.push(batches[0].schema());
+            let mut values: Vec<i64> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column_by_name("x")
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            values.sort_unstable();
+            rows.push(values);
+        }
+        assert!(!planned_files[0].is_empty());
+        assert_eq!(planned_files[0], planned_files[1]);
+        assert_eq!(rows[0], vec![100]);
+        assert_eq!(rows[0], rows[1]);
+        // The current snapshot contains two live fixture files.
+        assert_eq!(rows[2], vec![1; 2 * ROWS_PER_FIXTURE_FILE]);
+        assert_eq!(schemas[0], schemas[1]);
+        assert_eq!(schemas[0].fields().len(), 1);
+        assert_eq!(schemas[2].fields().len(), 8);
+    }
+
+    /// A scan of the current state reads the current snapshot with the table's
+    /// current schema, not the older one that snapshot was written with.
+    #[test]
+    fn test_scan_of_current_state_uses_current_schema() {
+        let table = TableTestFixture::new_with_column_added_after_last_write().table;
+
+        let table_scan = table.scan().build().unwrap();
+        assert_eq!(table_scan.snapshot(), table.metadata().current_snapshot());
+        assert_eq!(
+            table_scan.plan_context.as_ref().unwrap().snapshot_schema,
+            *table.metadata().current_schema()
+        );
+    }
+
+    /// A scan pinned to a snapshot uses the schema that snapshot was written
+    /// with, even when it is the current snapshot.
+    #[test]
+    fn test_time_travel_scan_uses_snapshot_schema() {
+        let table = TableTestFixture::new_with_column_added_after_last_write().table;
+        let snapshot = table.metadata().current_snapshot().unwrap();
+
+        let table_scan = table
+            .scan()
+            .snapshot_id(snapshot.snapshot_id())
+            .build()
+            .unwrap();
+        assert_eq!(table_scan.snapshot(), Some(snapshot));
+        assert_eq!(
+            table_scan.plan_context.as_ref().unwrap().snapshot_schema,
+            snapshot.schema(table.metadata()).unwrap()
+        );
+    }
+
     fn table_with_property(key: &str, value: &str) -> Table {
         let fixture = TableTestFixture::new();
         let mut metadata = fixture.table.metadata().clone();
@@ -1370,7 +1387,8 @@ pub mod tests {
     #[test]
     fn test_table_scan_with_name_mapping_property() {
         let mapping_json = r#"[{"field-id":1,"names":["id","record_id"]}]"#;
-        let table = table_with_property(DEFAULT_SCHEMA_NAME_MAPPING, mapping_json);
+        let table =
+            table_with_property(TableProperties::PROPERTY_DEFAULT_NAME_MAPPING, mapping_json);
 
         let table_scan = table.scan().build().unwrap();
         let mapping = table_scan
@@ -1391,7 +1409,10 @@ pub mod tests {
 
     #[test]
     fn test_table_scan_with_malformed_name_mapping_property() {
-        let table = table_with_property(DEFAULT_SCHEMA_NAME_MAPPING, "{ not valid json");
+        let table = table_with_property(
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING,
+            "{ not valid json",
+        );
 
         let err = table
             .scan()
@@ -1408,7 +1429,7 @@ pub mod tests {
         let mapping_json = r#"[{"field-id":1,"names":["id","record_id"]}]"#;
         let mut metadata = fixture.table.metadata().clone();
         metadata.properties.insert(
-            DEFAULT_SCHEMA_NAME_MAPPING.to_string(),
+            TableProperties::PROPERTY_DEFAULT_NAME_MAPPING.to_string(),
             mapping_json.to_string(),
         );
         let table = Table::builder()
@@ -1434,12 +1455,109 @@ pub mod tests {
         assert!(!tasks.is_empty(), "expected at least one FileScanTask");
         for task in &tasks {
             let mapping = task
-                .name_mapping
-                .as_ref()
+                .name_mapping()
                 .expect("name_mapping should reach the FileScanTask");
             assert_eq!(mapping.fields().len(), 1);
             assert_eq!(mapping.fields()[0].field_id(), Some(1));
         }
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_carries_sort_order_into_file_scan_task() {
+        let mut fixture = TableTestFixture::new();
+
+        // Inject the reserved unsorted order (id 0) inline rather than editing the shared
+        // testdata fixture, so the id-0 file below exercises the `!is_unsorted()` filter
+        // branch instead of the `and_then` short-circuit an absent entry would take.
+        let mut metadata = fixture.table.metadata().clone();
+        metadata
+            .sort_orders
+            .insert(0, Arc::new(SortOrder::unsorted_order()));
+        fixture.table = fixture.table.with_metadata(Arc::new(metadata));
+
+        let expected_sort_order = fixture
+            .table
+            .metadata()
+            .sort_order_by_id(3)
+            .unwrap()
+            .clone();
+
+        // sort_order_ids: resolvable (3), absent, unresolvable (99), reserved unsorted (0).
+        fixture
+            .setup_manifest_files_with_sort_order_ids([Some(3), None, Some(99), Some(0)])
+            .await;
+
+        let tasks: Vec<_> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(tasks.len(), 4, "expected all four FileScanTasks");
+
+        // Aggregates catch a systemic regression (every entry resolving to id 3, or
+        // resolution dropping entirely) that the per-file checks below would each still pass.
+        assert_eq!(
+            tasks.iter().filter(|t| t.sort_order().is_some()).count(),
+            1,
+            "exactly one file resolves to a sort order"
+        );
+        assert_eq!(
+            tasks.iter().filter(|t| t.sort_order_id().is_some()).count(),
+            3,
+            "three files carry a raw sort_order_id"
+        );
+
+        let resolved = tasks
+            .iter()
+            .find(|t| t.data_file_path().ends_with("1.parquet"))
+            .unwrap();
+        assert_eq!(resolved.sort_order_id(), Some(3));
+        assert_eq!(
+            resolved.sort_order(),
+            Some(&expected_sort_order),
+            "sort_order_id 3 should resolve to the table's sort order at id 3"
+        );
+
+        let missing = tasks
+            .iter()
+            .find(|t| t.data_file_path().ends_with("2.parquet"))
+            .unwrap();
+        assert_eq!(missing.sort_order_id(), None);
+        assert!(
+            missing.sort_order().is_none(),
+            "a file with no sort_order_id carries no sort_order"
+        );
+
+        let unresolvable = tasks
+            .iter()
+            .find(|t| t.data_file_path().ends_with("3.parquet"))
+            .unwrap();
+        assert_eq!(
+            unresolvable.sort_order_id(),
+            Some(99),
+            "the raw id is preserved even when it does not resolve"
+        );
+        assert!(
+            unresolvable.sort_order().is_none(),
+            "an unresolvable sort_order_id resolves to no sort_order"
+        );
+
+        let unsorted = tasks
+            .iter()
+            .find(|t| t.data_file_path().ends_with("4.parquet"))
+            .unwrap();
+        assert_eq!(unsorted.sort_order_id(), Some(0));
+        assert!(
+            unsorted.sort_order().is_none(),
+            "the reserved unsorted order (id 0) resolves to no sort_order"
+        );
     }
 
     #[tokio::test]
@@ -1476,19 +1594,365 @@ pub mod tests {
 
         assert_eq!(tasks.len(), 2);
 
-        tasks.sort_by_key(|t| t.data_file_path.to_string());
+        tasks.sort_by_key(|t| t.data_file_path().to_string());
 
         // Check first task is added data file
         assert_eq!(
-            tasks[0].data_file_path,
+            tasks[0].data_file_path(),
             format!("{}/1.parquet", &fixture.table_location)
         );
 
         // Check second task is existing data file
         assert_eq!(
-            tasks[1].data_file_path,
+            tasks[1].data_file_path(),
             format!("{}/3.parquet", &fixture.table_location)
         );
+    }
+
+    #[tokio::test]
+    async fn test_scan_widens_old_partition_so_pruning_and_deletes_match() {
+        // Guards the reader-side normalization through a real scan: a data manifest
+        // written when the partition source `x` was `int` must have its `int(7)`
+        // partition widened to `long(7)` during planning, so (a) a `x = 7` (long)
+        // filter keeps the file and (b) the equality delete keyed by `long(7)`
+        // attaches. Without the normalization the int/long mismatch drops the delete
+        // (and prunes the file under the filter).
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete(false).await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].deletes().len(),
+            1,
+            "equality delete must attach after widening the old int partition to long"
+        );
+        assert_eq!(
+            tasks[0].partition(),
+            Some(&Struct::from_iter([Some(Literal::long(7))])),
+            "the widened long(7) tuple must reach FileScanTask::partition()"
+        );
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").equal_to(Datum::long(7)))
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            tasks.len(),
+            1,
+            "filter on the promoted type must not prune the file"
+        );
+        assert_eq!(tasks[0].deletes().len(), 1);
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").equal_to(Datum::long(8)))
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(
+            tasks.is_empty(),
+            "a file in partition x=7 must be pruned by an x=8 filter"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_scan_widens_old_partition_with_pre_promotion_delete() {
+        // Data file and equality delete both written before the promotion (int
+        // partition). They matched on main; after both sides widen to long they must
+        // still match, so the delete stays attached.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete(true).await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_widens_old_partition_so_deletion_vector_matches() {
+        // A v3 deletion vector written after the promotion (long partition) references
+        // an older data file (int partition). The widening must make the partitions
+        // agree so the DV attaches, instead of failing the DV partition check.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_dv().await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_eq_delete_after_dropping_promoted_source() {
+        // Partition source `x` promoted int -> long, then dropped. The data file (int)
+        // and its equality delete (long) must still normalize to the same long partition
+        // so the delete stays attached; otherwise it silently detaches.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete(false).await;
+        fixture.drop_partition_source(1);
+        let table = fixture.table;
+
+        let tasks: Vec<FileScanTask> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_deletion_vector_after_dropping_promoted_source() {
+        // Same as above for a deletion vector: without widening the dropped numeric
+        // source the DV partition check errors (long(7) vs int(7)).
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_dv().await;
+        fixture.drop_partition_source(1);
+        let table = fixture.table;
+
+        let tasks: Vec<FileScanTask> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_eq_delete_when_dropped_source_is_date() {
+        // A promoted numeric source `x` sits beside a dropped `date` source `d`. The gate
+        // fires on `x`'s int -> long widening, but `d` (stored as an int) must be copied
+        // through, not widened to long, or the data file's partition diverges from the
+        // equality delete's and detaches it.
+        let mut fixture = TableTestFixture::new();
+        fixture
+            .setup_promoted_partition_with_eq_delete_and_dropped_date()
+            .await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_carries_row_lineage_into_file_scan_task() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let mut tasks: Vec<_> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_eq!(tasks.len(), 2);
+        tasks.sort_by_key(|task| task.data_file_path().to_string());
+
+        // The added file inherits the current snapshot's data sequence number,
+        // the existing file keeps the one it was written with.
+        assert_eq!(
+            tasks[0].data_file_path(),
+            format!("{}/1.parquet", &fixture.table_location)
+        );
+        assert_eq!(tasks[0].data_sequence_number(), Some(1));
+        assert_eq!(
+            tasks[1].data_file_path(),
+            format!("{}/3.parquet", &fixture.table_location)
+        );
+        assert_eq!(tasks[1].data_sequence_number(), Some(0));
+
+        // first_row_id is a v3 concept; a v2 manifest carries none.
+        assert!(tasks.iter().all(|task| task.first_row_id().is_none()));
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_carries_row_lineage_from_v3_manifest() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_v3_manifest_files().await;
+
+        let task = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .into_iter()
+            .next()
+            .expect("expected one FileScanTask");
+
+        // The manifest-level first_row_id (42) is inherited onto the entry on
+        // read, then carried onto the task.
+        assert_eq!(task.first_row_id(), Some(42));
+        // The data sequence number is threaded through the same v3 read path.
+        assert_eq!(task.data_sequence_number(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_filtered_scan_with_dropped_partition_source_column() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Baseline: the same filtered scan against the table before evolution.
+        let baseline = scan_y_gte_5(&fixture.table).await;
+        assert!(!baseline.is_empty());
+        assert!(baseline.iter().all(|y| *y >= 5));
+
+        // Evolve the table so that the manifests reference a historical spec whose source
+        // column is no longer in the current schema: make an unpartitioned spec the
+        // default, then drop the original spec's source column from the schema.
+        let current_schema = fixture.table.metadata().current_schema();
+        let evolved_schema = Schema::builder()
+            .with_fields(
+                current_schema
+                    .as_struct()
+                    .fields()
+                    .iter()
+                    .filter(|field| field.id != 1)
+                    .cloned(),
+            )
+            .with_identifier_field_ids(vec![2])
+            .build()
+            .unwrap();
+        let evolved =
+            TableMetadataBuilder::new_from_metadata(fixture.table.metadata().clone(), None)
+                .add_default_partition_spec(UnboundPartitionSpec::builder().build())
+                .unwrap()
+                .add_current_schema(evolved_schema)
+                .unwrap()
+                .build()
+                .unwrap()
+                .metadata;
+
+        // a commit after the evolution carries the previous manifests forward: the new
+        // snapshot uses the evolved schema while its manifests still use historical spec 0
+        let parent = evolved.current_snapshot().unwrap().clone();
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(parent.snapshot_id() + 1)
+            .with_parent_snapshot_id(Some(parent.snapshot_id()))
+            .with_sequence_number(evolved.last_sequence_number() + 1)
+            .with_timestamp_ms(evolved.last_updated_ms + 1)
+            .with_schema_id(evolved.current_schema_id())
+            .with_manifest_list(parent.manifest_list())
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+        let metadata = TableMetadataBuilder::new_from_metadata(evolved, None)
+            .set_branch_snapshot(snapshot, MAIN_BRANCH)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let table = fixture.table.clone().with_metadata(Arc::new(metadata));
+
+        // Planning and reading must succeed, and the results must match the table before
+        // evolution: no rows wrongly pruned and none returned unfiltered.
+        let evolved = scan_y_gte_5(&table).await;
+        assert_eq!(evolved, baseline);
+    }
+
+    async fn scan_y_gte_5(table: &Table) -> Vec<i64> {
+        let table_scan = table
+            .scan()
+            .select(["y"])
+            .with_filter(Reference::new("y").greater_than_or_equal_to(Datum::long(5)))
+            .build()
+            .unwrap();
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let mut values: Vec<i64> = batches
+            .iter()
+            .flat_map(|batch| {
+                let col = batch.column_by_name("y").unwrap();
+                let arr = col.as_any().downcast_ref::<Int64Array>().unwrap();
+                (0..arr.len()).map(|i| arr.value(i)).collect::<Vec<_>>()
+            })
+            .collect();
+        values.sort_unstable();
+        values
     }
 
     #[tokio::test]
@@ -1966,45 +2430,76 @@ pub mod tests {
         assert_eq!(string_arr.value(0), "Apache");
     }
 
-    #[test]
-    fn test_file_scan_task_serialize_deserialize() {
-        let test_fn = |task: FileScanTask| {
-            let serialized = serde_json::to_string(&task).unwrap();
-            let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
-
-            assert_eq!(task.data_file_path, deserialized.data_file_path);
-            assert_eq!(task.start, deserialized.start);
-            assert_eq!(task.length, deserialized.length);
-            assert_eq!(task.project_field_ids, deserialized.project_field_ids);
-            assert_eq!(task.predicate, deserialized.predicate);
-            assert_eq!(task.schema, deserialized.schema);
-        };
-
-        // without predicate
-        let schema = Arc::new(
+    fn file_scan_task_test_schema(primitive_type: PrimitiveType) -> Arc<Schema> {
+        Arc::new(
             Schema::builder()
                 .with_fields(vec![Arc::new(NestedField::required(
                     1,
                     "x",
-                    Type::Primitive(PrimitiveType::Binary),
+                    Type::Primitive(primitive_type),
                 ))])
                 .build()
                 .unwrap(),
+        )
+    }
+
+    fn assert_file_scan_task_serde_round_trip(task: FileScanTask) {
+        // Regression test for https://github.com/apache/iceberg-rust/issues/3089.
+        let serialized = serde_json::to_string(&task).unwrap();
+        let deserialized: FileScanTask = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(task, deserialized);
+    }
+
+    fn file_scan_task_with_partition(
+        primitive_type: PrimitiveType,
+        transform: Transform,
+        partition_value: Literal,
+    ) -> FileScanTask {
+        let schema = file_scan_task_test_schema(primitive_type);
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("x", "x_partition", transform)
+                .unwrap()
+                .build()
+                .unwrap(),
         );
+        FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(123)
+            .with_start(10)
+            .with_length(100)
+            .with_project_field_ids(vec![1])
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::from_iter([Some(partition_value)])))
+            .with_partition_spec(Some(partition_spec))
+            .with_case_sensitive(true)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_without_predicate() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
             .with_start(0)
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
-            .with_schema(schema.clone())
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_record_count(Some(100))
+            .with_first_row_id(Some(1000))
+            .with_data_sequence_number(Some(5))
             .with_data_file_format(DataFileFormat::Parquet)
             .with_case_sensitive(false)
-            .build();
-        test_fn(task);
+            .build()
+            .unwrap();
+        assert_file_scan_task_serde_round_trip(task);
+    }
 
-        // with predicate
+    #[test]
+    fn test_file_scan_task_serde_with_predicate() {
         let task = FileScanTask::builder()
             .with_data_file_path("data_file_path".to_string())
             .with_file_size_in_bytes(0)
@@ -2012,17 +2507,175 @@ pub mod tests {
             .with_length(100)
             .with_project_field_ids(vec![1, 2, 3])
             .with_predicate(Some(BoundPredicate::AlwaysTrue))
-            .with_schema(schema)
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
             .with_data_file_format(DataFileFormat::Avro)
             .with_case_sensitive(false)
-            .build();
-        test_fn(task);
+            .build()
+            .unwrap();
+
+        let serialized = serde_json::to_value(&task).unwrap();
+        assert!(serialized.get("record_count").is_none());
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_unpartitioned_file_scan_task_serde() {
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(0)
+            .with_start(0)
+            .with_length(100)
+            .with_project_field_ids(vec![1, 2, 3])
+            .with_schema(file_scan_task_test_schema(PrimitiveType::Binary))
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_partition(Some(Struct::empty()))
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_all_optional_fields() {
+        let schema = file_scan_task_test_schema(PrimitiveType::Long);
+        let partition_spec = Arc::new(
+            PartitionSpec::builder(schema.clone())
+                .add_partition_field("x", "x", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let unified_partition_type = Arc::new(partition_spec.partition_type(&schema).unwrap());
+        let sort_order = Arc::new(
+            SortOrder::builder()
+                .with_order_id(1)
+                .with_sort_field(
+                    SortField::builder()
+                        .source_id(1)
+                        .transform(Transform::Identity)
+                        .direction(SortDirection::Ascending)
+                        .null_order(NullOrder::First)
+                        .build(),
+                )
+                .build(&schema)
+                .unwrap(),
+        );
+        let task = FileScanTask::builder()
+            .with_data_file_path("data_file_path".to_string())
+            .with_file_size_in_bytes(123)
+            .with_start(10)
+            .with_length(100)
+            .with_project_field_ids(vec![1])
+            .with_schema(schema)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_deletes(vec![
+                FileScanTaskDeleteFile::builder()
+                    .with_file_path("delete_file_path".to_string())
+                    .with_file_size_in_bytes(23)
+                    .with_file_type(DataContentType::EqualityDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
+                    .with_partition_spec_id(0)
+                    .with_equality_ids(Some(vec![1]))
+                    .with_referenced_data_file(Some("data_file_path".to_string()))
+                    .with_content_offset(Some(12))
+                    .with_content_size_in_bytes(Some(34))
+                    .with_record_count(Some(5))
+                    .with_key_metadata(Some(vec![4, 5, 6].into_boxed_slice()))
+                    .build()
+                    .unwrap(),
+            ])
+            .with_partition(Some(Struct::from_iter([Some(Literal::long(42))])))
+            .with_partition_spec(Some(partition_spec))
+            .with_name_mapping(Some(Arc::new(NameMapping::new(vec![MappedField::new(
+                Some(1),
+                vec!["x".to_string()],
+                vec![],
+            )]))))
+            .with_unified_partition_type(Some(unified_partition_type))
+            .with_sort_order_id(Some(1))
+            .with_sort_order(Some(sort_order))
+            .with_case_sensitive(true)
+            .with_key_metadata(Some(vec![1, 2, 3].into_boxed_slice()))
+            .build()
+            .unwrap();
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_date_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Date,
+            Transform::Identity,
+            Literal::date(19_000),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_timestamp_ns_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::TimestampNs,
+            Transform::Identity,
+            Literal::timestamp_nano(1_510_871_468_123_456_789),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_timestamptz_ns_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::TimestamptzNs,
+            Transform::Identity,
+            Literal::timestamptz_nano(1_510_871_468_123_456_789),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_decimal_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2,
+            },
+            Transform::Identity,
+            Literal::decimal(12_345),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_uuid_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Uuid,
+            Transform::Identity,
+            Literal::uuid(Uuid::from_u128(0x12345678_90ab_cdef_1234_567890abcdef)),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_fixed_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Fixed(4),
+            Transform::Identity,
+            Literal::fixed([1, 2, 3, 4]),
+        );
+        assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_with_bucket_partition() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::String,
+            Transform::Bucket(4),
+            Literal::int(2),
+        );
+        assert_file_scan_task_serde_round_trip(task);
     }
 
     #[tokio::test]
     async fn test_select_with_file_column() {
-        use arrow_array::cast::AsArray;
-
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
@@ -2066,7 +2719,7 @@ pub mod tests {
         // Decode the RunArray to verify it contains the file path
         let run_array = file_col
             .as_any()
-            .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+            .downcast_ref::<RunArray<Int32Type>>()
             .expect("_file column should be a RunArray");
 
         let values = run_array.values();
@@ -2167,7 +2820,7 @@ pub mod tests {
             let file_col = batch.column_by_name(RESERVED_COL_NAME_FILE).unwrap();
             let run_array = file_col
                 .as_any()
-                .downcast_ref::<arrow_array::RunArray<arrow_array::types::Int32Type>>()
+                .downcast_ref::<RunArray<Int32Type>>()
                 .expect("_file column should be a RunArray");
 
             let values = run_array.values();
@@ -2332,6 +2985,123 @@ pub mod tests {
         );
     }
 
+    /// Builds a minimal single-snapshot table (no manifests on disk) whose schema
+    /// contains a column with the given name, so scan planning resolves column names
+    /// against a real schema. `TableScan::build()` only reads metadata, not manifest
+    /// files, so a snapshot pointing at a dummy manifest list is enough. Used to
+    /// reproduce issue #2837.
+    fn table_with_data_column(column_name: &str) -> Table {
+        use crate::spec::{
+            FormatVersion, MAIN_BRANCH, Operation, Snapshot, SnapshotReference, SnapshotRetention,
+            SortOrder, Summary, TableMetadataBuilder, UnboundPartitionSpec,
+        };
+
+        let schema = Schema::builder()
+            .with_schema_id(0)
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::required(2, column_name, Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(1)
+            .with_timestamp_ms(1)
+            .with_sequence_number(0)
+            .with_schema_id(0)
+            .with_manifest_list("/snap-1.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+
+        let metadata = TableMetadataBuilder::new(
+            schema,
+            UnboundPartitionSpec::builder().with_spec_id(0).build(),
+            SortOrder::unsorted_order(),
+            "s3://bucket/table".to_string(),
+            FormatVersion::V2,
+            HashMap::new(),
+        )
+        .unwrap()
+        .add_snapshot(snapshot)
+        .unwrap()
+        .set_ref(MAIN_BRANCH, SnapshotReference {
+            snapshot_id: 1,
+            retention: SnapshotRetention::Branch {
+                min_snapshots_to_keep: None,
+                max_snapshot_age_ms: None,
+                max_ref_age_ms: None,
+            },
+        })
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+
+        Table::builder()
+            .metadata(metadata)
+            .identifier(TableIdent::from_strs(["db", "table1"]).unwrap())
+            .file_io(FileIO::new_with_fs())
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    /// A user data column named `pos` (a delete-file internal column name that is not a
+    /// data-table metadata column) must be projectable rather than shadowed. Regression
+    /// test for issue #2837.
+    #[test]
+    fn test_scan_projects_data_column_named_like_delete_file_column() {
+        for column_name in ["pos", "file_path"] {
+            let table = table_with_data_column(column_name);
+
+            // Projecting the data column must succeed and resolve to its real field id (2),
+            // not the reserved delete-file field id.
+            let table_scan = table
+                .scan()
+                .select([column_name])
+                .build()
+                .unwrap_or_else(|e| panic!("scan of data column `{column_name}` failed: {e}"));
+
+            assert_eq!(
+                table_scan.plan_context.as_ref().unwrap().field_ids.as_ref(),
+                &[2]
+            );
+
+            // The default projection (all columns) must resolve to the real field ids
+            // too, not shadow the data column with a reserved delete-file id.
+            let default_scan = table.scan().build().unwrap();
+            assert_eq!(
+                default_scan
+                    .plan_context
+                    .as_ref()
+                    .unwrap()
+                    .field_ids
+                    .as_ref(),
+                &[1, 2]
+            );
+        }
+    }
+
+    /// Projecting a genuinely absent column still fails with a clear "not found" error
+    /// rather than being silently accepted as a metadata column.
+    #[test]
+    fn test_scan_rejects_unknown_column_named_like_delete_file_column() {
+        // This table has no `pos` column (only `id` and `file_path`).
+        let table = table_with_data_column("file_path");
+
+        let err = table
+            .scan()
+            .select(["pos"])
+            .build()
+            .expect_err("projecting an absent column should fail");
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.to_string().contains("not found"));
+    }
+
     #[tokio::test]
     async fn test_scan_deadlock() {
         let mut fixture = TableTestFixture::new();
@@ -2364,5 +3134,583 @@ pub mod tests {
 
         // Assert it finished (didn't timeout)
         assert!(result.is_ok(), "Scan timed out - deadlock detected");
+    }
+
+    #[tokio::test]
+    async fn test_select_with_spec_id_column() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Select regular columns plus the _spec_id column
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_SPEC_ID, "z"])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify we have 3 columns: x, _spec_id, and z
+        assert_eq!(batches[0].num_columns(), 3);
+
+        // Verify the x column exists and has correct data
+        let col1 = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col1.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        // Verify the _spec_id column exists
+        let spec_id_col = batches[0].column_by_name(RESERVED_COL_NAME_SPEC_ID);
+        assert!(
+            spec_id_col.is_some(),
+            "_spec_id column should be present in the batch"
+        );
+
+        // Verify the _spec_id data type
+        let spec_id_col = spec_id_col.unwrap();
+        assert!(
+            matches!(
+                spec_id_col.data_type(),
+                arrow_schema::DataType::RunEndEncoded(_, _)
+            ),
+            "_spec_id column should use RunEndEncoded type"
+        );
+
+        // Decode the RunArray to verify it contains the spec id
+        let run_array = spec_id_col
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("_spec_id column should be a RunArray");
+
+        let values = run_array.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 1, "Should have a single _spec_id");
+
+        let spec_id = int_values.value(0);
+        assert_eq!(spec_id, 0, "_spec_id should be 0, got: {spec_id}");
+
+        // Verify 'z' column exists
+        assert!(batches[0].column_by_name("z").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_select_with_last_updated_sequence_number_column() {
+        // A v2 fixture: data files have a null first_row_id. Per the spec's Row
+        // Lineage read rules, a file with a null first_row_id produces a null
+        // _last_updated_sequence_number for all rows; both lineage columns are
+        // gated on first_row_id.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        // Every row's value is null (v2 files have no first_row_id).
+        assert_last_updated_seq_all(&batches, None);
+    }
+
+    #[tokio::test]
+    async fn test_select_with_last_updated_sequence_number_column_v3() {
+        // A v3 fixture: the data file inherits a first_row_id and a data sequence
+        // number through manifest read. End to end, the projected
+        // _last_updated_sequence_number materializes to the file's data sequence
+        // number for every row, exercising the full inherit, populate and
+        // materialize wiring, not just a hand-built task.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_v3_manifest_files().await;
+
+        // The added file inherits the current snapshot's sequence number; derive it
+        // from the fixture rather than hardcoding so the assertion tracks the fixture.
+        let expected_seq = fixture
+            .table
+            .metadata()
+            .current_snapshot()
+            .unwrap()
+            .sequence_number();
+
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batches: Vec<_> = table_scan
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        assert_last_updated_seq_all(&batches, Some(expected_seq));
+    }
+
+    #[tokio::test]
+    async fn test_select_with_spec_id_column_from_unpartitioned_table() {
+        let mut fixture = TableTestFixture::new_unpartitioned();
+        fixture.setup_unpartitioned_manifest_files().await;
+
+        // Select regular columns plus the _spec_id column
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_SPEC_ID])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify we have 2 columns: x and _spec_id
+        assert_eq!(batches[0].num_columns(), 2);
+
+        // Verify the _spec_id column exists
+        let spec_id_col = batches[0].column_by_name(RESERVED_COL_NAME_SPEC_ID);
+        assert!(
+            spec_id_col.is_some(),
+            "_spec_id column should be present in the batch"
+        );
+
+        // Verify the _spec_id data type
+        let spec_id_col = spec_id_col.unwrap();
+        assert!(
+            matches!(
+                spec_id_col.data_type(),
+                arrow_schema::DataType::RunEndEncoded(_, _)
+            ),
+            "_spec_id column should use RunEndEncoded type"
+        );
+
+        // Decode the RunArray to verify it contains the spec id
+        let run_array = spec_id_col
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("_spec_id column should be a RunArray");
+
+        let values = run_array.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 1, "Should have a single _spec_id");
+
+        let spec_id = int_values.value(0);
+        assert_eq!(spec_id, 0, "_spec_id should be 0, got: {spec_id}");
+    }
+
+    #[tokio::test]
+    async fn test_select_with_spec_id_column_with_partition_evolution() {
+        let mut fixture = TableTestFixture::new_with_partition_evolution();
+        fixture
+            .setup_manifest_files_with_partition_evolution()
+            .await;
+
+        // Select regular columns plus the _spec_id column
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_SPEC_ID, "z"])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+
+        // Verify the x column exists and has correct data
+        let col1 = batches[0].column_by_name("x").unwrap();
+        let int64_arr = col1.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(int64_arr.value(0), 1);
+
+        // Verify the _spec_id column exists
+        let spec_id_col = batches[0].column_by_name(RESERVED_COL_NAME_SPEC_ID);
+        assert!(
+            spec_id_col.is_some(),
+            "_spec_id column should be present in the batch"
+        );
+
+        // Verify the _spec_id data type
+        let spec_id_col = spec_id_col.unwrap();
+        assert!(
+            matches!(
+                spec_id_col.data_type(),
+                arrow_schema::DataType::RunEndEncoded(_, _)
+            ),
+            "_spec_id column should use RunEndEncoded type"
+        );
+
+        // Decode the RunArray to verify it contains the spec id
+        let run_array = spec_id_col
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("_spec_id column should be a RunArray");
+
+        let values = run_array.values();
+        let int_values = values.as_primitive::<Int32Type>();
+        assert_eq!(int_values.len(), 1, "Should have a single _spec_id");
+
+        let spec_id = int_values.value(0);
+        assert_eq!(spec_id, 2, "_spec_id should be 2, got: {spec_id}");
+    }
+
+    #[tokio::test]
+    async fn test_select_with_pos_and_file_columns() {
+        use arrow_array::cast::AsArray;
+
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // Select regular columns plus the _pos column
+        let table_scan = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_POS, RESERVED_COL_NAME_FILE])
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 2);
+
+        // Examine batches are 1.paruqet and 3.parquet, 2.parquet is deleted.
+        for batch in batches.iter() {
+            // Verify we have 3 columns: x, _pos and _file
+            assert_eq!(batch.num_columns(), 3);
+
+            // Verify the x column exists and has correct data
+            let x_col = batch.column_by_name("x").unwrap();
+            let x_arr = x_col.as_primitive::<arrow_array::types::Int64Type>();
+            assert_eq!(x_arr.value(0), 1);
+
+            // The _pos column exists and verify it is Int64Array with the expected values
+            let pos_col = batch.column(1);
+            let pos_array: &Int64Array = pos_col
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("_pos column should be a Int64Array");
+            assert_eq!(*pos_array, Int64Array::from_iter_values(0i64..1024));
+
+            // Verify the _file column exists
+            let file_col = batch.column_by_name(RESERVED_COL_NAME_FILE);
+            assert!(
+                file_col.is_some(),
+                "_file column should be present in the batch"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pos_column_at_start_with_filters() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // y is in [4, 5)
+        let predicate = Reference::new("y")
+            .greater_than(Datum::long(4i64))
+            .and(Reference::new("y").less_than_or_equal_to(Datum::long(5i64)));
+        // Select _pos at the start
+        let table_scan = fixture
+            .table
+            .scan()
+            .select([RESERVED_COL_NAME_POS, "x", "y"])
+            .with_filter(predicate)
+            .with_row_selection_enabled(true)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 2);
+
+        // Examine batches are 1.paruqet and 3.parquet, 2.parquet is deleted.
+        for batch in batches.iter() {
+            assert_eq!(batch.num_columns(), 3);
+            assert_eq!(batch.num_rows(), 12);
+
+            // Verify _pos is at position 0
+            let schema = batch.schema();
+            assert_eq!(schema.field(0).name(), RESERVED_COL_NAME_POS);
+            assert_eq!(schema.field(1).name(), "x");
+            assert_eq!(schema.field(2).name(), "y");
+
+            let pos_col = batch.column(0);
+            let pos_array: &Int64Array = pos_col
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("_pos column should be a Int64Array");
+            assert_eq!(*pos_array, Int64Array::from_iter_values(1012i64..1024));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_repeated_pos_column_with_filter() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+
+        // a NOT STARTSWITH "Apa"
+        let predicate = Reference::new("a").not_starts_with(Datum::string("Apa"));
+        // Select '_pos' columns twice
+        let table_scan = fixture
+            .table
+            .scan()
+            .select([RESERVED_COL_NAME_POS, "a", RESERVED_COL_NAME_POS, "x"])
+            .with_row_selection_enabled(true)
+            .with_filter(predicate)
+            .build()
+            .unwrap();
+
+        let batch_stream = table_scan.to_arrow().await.unwrap();
+
+        let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
+        assert_eq!(batches.len(), 2);
+
+        // Examine batches are 1.paruqet and 3.parquet, 2.parquet is deleted.
+        for batch in batches.iter() {
+            assert_eq!(batch.num_rows(), 512);
+
+            // fetch the 1st _pos column by name and verify it is Int64Array with the expected values
+            let pos_col = batch
+                .column_by_name("_pos")
+                .expect("_pos column should be present in the batch");
+            let pos_array: &Int64Array = pos_col
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("_pos column should be a Int64Array");
+            assert_eq!(*pos_array, Int64Array::from_iter_values(512i64..1024));
+
+            // fetch the 2nd _pos column by index and verify it is Int64Array with the expected values
+            let pos_col = batch.column(2);
+            let pos_array: &Int64Array = pos_col
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("_pos column should be a Int64Array");
+            assert_eq!(*pos_array, Int64Array::from_iter_values(512i64..1024));
+        }
+    }
+
+    /// End-to-end through `TableScan`: a data file with three row groups planned
+    /// as a single whole-file `FileScanTask` must yield contiguous, file-absolute
+    /// `_pos` values (0..300) across the row-group boundaries.
+    #[tokio::test]
+    async fn test_pos_across_row_groups_via_table_scan() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_multi_row_group_manifest(&[]).await;
+
+        // Planning must produce exactly one whole-file task with _pos projected and
+        // no delete files, confirming TableScan does not sub-split the file.
+        let tasks: Vec<_> = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_POS])
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1, "expected a single FileScanTask");
+        let task = &tasks[0];
+        assert!(
+            task.project_field_ids().contains(&RESERVED_FIELD_ID_POS),
+            "_pos field id must be projected into the FileScanTask"
+        );
+        assert_eq!(task.start(), 0, "TableScan should plan whole-file tasks");
+        assert_eq!(task.length(), task.file_size_in_bytes());
+        assert!(task.deletes().is_empty());
+
+        // Reading that task yields absolute _pos 0..300 in order.
+        let batches: Vec<_> = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_POS])
+            .build()
+            .unwrap()
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let pos: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column_by_name(RESERVED_COL_NAME_POS)
+                    .expect("_pos column should be present")
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("_pos column should be a Int64Array")
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(pos, (0..300).collect::<Vec<i64>>());
+
+        // Sanity: x == 1000 + _pos, proving _pos aligns with the actual rows read.
+        let x: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column_by_name("x")
+                    .unwrap()
+                    .as_primitive::<arrow_array::types::Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(x, (1000..1300).collect::<Vec<i64>>());
+    }
+
+    /// A positional delete file registered in the manifest must be attached to the planned
+    /// `FileScanTask` and applied on read, while surviving `_pos` values stay file-absolute.
+    #[tokio::test]
+    async fn test_pos_with_positional_deletes_via_table_scan() {
+        let mut fixture = TableTestFixture::new();
+        // Delete file-absolute positions 150 (middle row group) and 299 (last row).
+        fixture.setup_multi_row_group_manifest(&[150, 299]).await;
+
+        // Planning must attach the positional delete file to the task.
+        let tasks: Vec<_> = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_POS])
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].deletes().len(),
+            1,
+            "positional delete file should be planned into the task"
+        );
+        assert_eq!(
+            tasks[0].deletes()[0].file_type(),
+            DataContentType::PositionDeletes
+        );
+
+        // Reading applies the deletes; _pos must skip 150 and 299 and stay absolute.
+        let batches: Vec<_> = fixture
+            .table
+            .scan()
+            .select(["x", RESERVED_COL_NAME_POS])
+            .build()
+            .unwrap()
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let pos: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column_by_name(RESERVED_COL_NAME_POS)
+                    .expect("_pos column should be present")
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("_pos column should be a Int64Array")
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(
+            total, 298,
+            "two rows should be removed by positional deletes"
+        );
+        assert!(!pos.contains(&150) && !pos.contains(&299), "got {pos:?}");
+        let expected: Vec<i64> = (0..150).chain(151..299).collect();
+        assert_eq!(pos, expected);
+    }
+
+    /// A filter that only matches the middle row group (`y` in [1100, 1200)) and
+    /// prunes the other two row groups by statistics, so only the middle row group
+    /// is read. `_pos` must report the file-absolute positions 100..200 for those
+    /// rows, not values reset to 0..100.
+    ///
+    /// `y` is a non-partition column, so pruning here is driven purely by Parquet
+    /// row-group statistics (the TableTestFixture's partition column is `x`).
+    #[tokio::test]
+    async fn test_pos_reads_only_middle_row_group_via_filter() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_multi_row_group_manifest(&[]).await;
+
+        // Middle row group holds y = 1100..1200 at file positions 100..200.
+        let predicate = Reference::new("y")
+            .greater_than_or_equal_to(Datum::long(1100))
+            .and(Reference::new("y").less_than(Datum::long(1200)));
+
+        let batches: Vec<_> = fixture
+            .table
+            .scan()
+            .select(["y", RESERVED_COL_NAME_POS])
+            .with_filter(predicate)
+            .with_row_group_filtering_enabled(true)
+            .build()
+            .unwrap()
+            .to_arrow()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let total: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total, 100, "only the middle row group should be read");
+
+        let pos: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column_by_name(RESERVED_COL_NAME_POS)
+                    .expect("_pos column should be present")
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .expect("_pos column should be a Int64Array")
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(
+            pos,
+            (100..200).collect::<Vec<i64>>(),
+            "_pos must be file-absolute for the middle row group"
+        );
+
+        // Cross-check: y == 1000 + _pos for every surviving row.
+        let y: Vec<i64> = batches
+            .iter()
+            .flat_map(|b| {
+                b.column_by_name("y")
+                    .unwrap()
+                    .as_primitive::<arrow_array::types::Int64Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect();
+        assert_eq!(y, (1100..1200).collect::<Vec<i64>>());
     }
 }

@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures::channel::mpsc::Sender;
@@ -28,8 +29,9 @@ use crate::scan::{
     PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping, SchemaRef,
-    SnapshotRef, TableMetadataRef,
+    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
+    PartitionSpecRef, PrimitiveType, SchemaRef, SnapshotRef, SortOrderRef, StructType,
+    TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -48,6 +50,9 @@ pub(crate) struct ManifestFileContext {
     delete_file_index: DeleteFileIndex,
     name_mapping: Option<Arc<NameMapping>>,
     case_sensitive: bool,
+    partition_spec: Option<PartitionSpecRef>,
+    unified_partition_type: Option<Arc<StructType>>,
+    sort_orders: Arc<HashMap<i64, SortOrderRef>>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -63,11 +68,36 @@ pub(crate) struct ManifestEntryContext {
     pub delete_file_index: DeleteFileIndex,
     pub name_mapping: Option<Arc<NameMapping>>,
     pub case_sensitive: bool,
+    pub partition_spec: Option<PartitionSpecRef>,
+    pub unified_partition_type: Option<Arc<StructType>>,
+    pub sort_order_id: Option<i32>,
+    pub sort_order: Option<SortOrderRef>,
+}
+
+/// Returns whether any `int` or `float` field of `written` is widened in `current`, to
+/// `long`/`double` or to `unknown` once its source column is dropped, i.e. partition
+/// values written with `written` need normalizing before they compare against predicates
+/// bound to the current schema or against delete-file partitions.
+fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
+    current.fields().iter().zip(written.fields()).any(|(c, w)| {
+        matches!(
+            (
+                w.field_type.as_primitive_type(),
+                c.field_type.as_primitive_type()
+            ),
+            (
+                Some(PrimitiveType::Int),
+                Some(PrimitiveType::Long | PrimitiveType::Unknown)
+            ) | (
+                Some(PrimitiveType::Float),
+                Some(PrimitiveType::Double | PrimitiveType::Unknown)
+            )
+        )
+    })
 }
 
 impl ManifestFileContext {
-    /// Consumes this [`ManifestFileContext`], fetching its Manifest from FileIO and then
-    /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
+    /// Fetches the manifest and streams its live entries to the context's channel.
     pub(crate) async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
         let ManifestFileContext {
             object_cache,
@@ -80,14 +110,57 @@ impl ManifestFileContext {
             delete_file_index,
             name_mapping,
             case_sensitive,
+            partition_spec,
+            unified_partition_type,
+            sort_orders,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
+        // A manifest written under an older schema stores partition values in that
+        // schema's (narrower) types. When the current partition type widens the one the
+        // manifest was written with (e.g. an int source column promoted to long), widen
+        // each entry's partition tuple here so the pruning evaluator and the delete-file
+        // index compare like-typed values. The gate compares the partition types
+        // themselves, not schema ids, since v1 may omit them (defaulting to 0). Column
+        // bounds are widened lazily where the metrics evaluator compares them.
+        let promotion_target: Option<(StructType, StructType)> = match partition_spec.as_ref() {
+            Some(spec) => {
+                let current = spec.partition_type(&snapshot_schema)?;
+                let written = spec.partition_type(manifest.metadata().schema())?;
+                partition_types_differ(&current, &written).then_some((current, written))
+            }
+            None => None,
+        };
+
         for manifest_entry in manifest.entries() {
+            if !manifest_entry.is_alive() {
+                continue;
+            }
+
+            let manifest_entry = match promotion_target.as_ref() {
+                Some((current, written)) => {
+                    let mut entry = manifest_entry.as_ref().clone();
+                    entry.data_file.partition =
+                        entry.data_file.promoted_partition(current, written)?;
+                    Arc::new(entry)
+                }
+                None => manifest_entry.clone(),
+            };
+
+            // Carry the raw id through unresolved, then resolve it to an order for the
+            // reader. The resolved order is `None` for the unsorted order (empty fields) so
+            // that `Some` always means genuinely sorted, matching Java's `isSorted()` gate;
+            // the raw id above keeps the "physically sorted but definition dropped" case
+            // recoverable.
+            let sort_order_id = manifest_entry.data_file().sort_order_id();
+            let sort_order = sort_order_id
+                .and_then(|id| sort_orders.get(&(id as i64)))
+                .filter(|order| !order.is_unsorted())
+                .cloned();
+
             let manifest_entry_context = ManifestEntryContext {
-                // TODO: refactor to avoid the expensive ManifestEntry clone
-                manifest_entry: manifest_entry.clone(),
+                manifest_entry,
                 expression_evaluator_cache: expression_evaluator_cache.clone(),
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
@@ -96,6 +169,10 @@ impl ManifestFileContext {
                 delete_file_index: delete_file_index.clone(),
                 name_mapping: name_mapping.clone(),
                 case_sensitive,
+                partition_spec: partition_spec.clone(),
+                unified_partition_type: unified_partition_type.clone(),
+                sort_order_id,
+                sort_order,
             };
 
             sender
@@ -118,13 +195,15 @@ impl ManifestEntryContext {
                 self.manifest_entry.data_file(),
                 self.manifest_entry.sequence_number(),
             )
-            .await;
+            .await?;
 
-        Ok(FileScanTask::builder()
+        FileScanTask::builder()
             .with_file_size_in_bytes(self.manifest_entry.file_size_in_bytes())
             .with_start(0)
             .with_length(self.manifest_entry.file_size_in_bytes())
             .with_record_count(Some(self.manifest_entry.record_count()))
+            .with_first_row_id(self.manifest_entry.data_file().first_row_id())
+            .with_data_sequence_number(self.manifest_entry.sequence_number())
             .with_data_file_path(self.manifest_entry.file_path().to_string())
             .with_data_file_format(self.manifest_entry.file_format())
             .with_schema(self.snapshot_schema)
@@ -135,11 +214,31 @@ impl ManifestEntryContext {
             )
             .with_deletes(deletes)
             .with_partition(Some(self.manifest_entry.data_file.partition.clone()))
-            // TODO: Pass actual PartitionSpec through context chain for native flow
-            .with_partition_spec(None)
+            .with_partition_spec(self.partition_spec.clone())
             .with_name_mapping(self.name_mapping)
+            .with_unified_partition_type(self.unified_partition_type.clone())
             .with_case_sensitive(self.case_sensitive)
-            .build())
+            .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
+            .with_sort_order_id(self.sort_order_id)
+            .with_sort_order(self.sort_order)
+            .build()
+    }
+
+    /// Consume this `ManifestEntryContext`, returning a COW rewrite file candidate.
+    ///
+    /// The scan task keeps everything planned for a normal read (projection,
+    /// delete files, partition metadata, ...) except the row predicate: the
+    /// candidate was already selected by that predicate during planning, and
+    /// the rewrite must read the whole file.
+    pub(crate) async fn into_cow_rewrite_file(self) -> Result<crate::cow_rewrite::CowRewriteFile> {
+        let old_data_file = self.manifest_entry.data_file().clone();
+        let mut scan_task = self.into_file_scan_task().await?;
+        scan_task.clear_predicate();
+
+        Ok(crate::cow_rewrite::CowRewriteFile {
+            old_data_file,
+            scan_task,
+        })
     }
 }
 
@@ -150,6 +249,9 @@ pub(crate) struct PlanContext {
     pub snapshot: SnapshotRef,
 
     pub table_metadata: TableMetadataRef,
+    /// The schema the scan projects. For a scan of the current state, this is
+    /// the table's current schema, not the snapshot's; for time travel, it is
+    /// the schema the snapshot was written with.
     pub snapshot_schema: SchemaRef,
     pub case_sensitive: bool,
     pub predicate: Option<Arc<Predicate>>,
@@ -161,6 +263,13 @@ pub(crate) struct PlanContext {
     pub partition_filter_cache: Arc<PartitionFilterCache>,
     pub manifest_evaluator_cache: Arc<ManifestEvaluatorCache>,
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
+
+    pub unified_partition_type: Option<Arc<StructType>>,
+
+    /// The table's sort orders keyed by id, precomputed once so each
+    /// [`ManifestFileContext`] carries only this narrow map rather than the full table
+    /// metadata. Mirrors how `unified_partition_type` carries a precomputed value.
+    pub sort_orders: Arc<HashMap<i64, SortOrderRef>>,
 }
 
 impl PlanContext {
@@ -171,6 +280,8 @@ impl PlanContext {
             .await
     }
 
+    /// Returns the partition filter for a manifest. See [`PartitionFilterCache::get`] for the
+    /// always-true fallback when the manifest's spec cannot be resolved against the scan schema.
     fn get_partition_filter(&self, manifest_file: &ManifestFile) -> Result<Arc<BoundPredicate>> {
         let partition_spec_id = manifest_file.partition_spec_id;
 
@@ -284,6 +395,12 @@ impl PlanContext {
             delete_file_index,
             name_mapping: self.name_mapping.clone(),
             case_sensitive: self.case_sensitive,
+            partition_spec: self
+                .table_metadata
+                .partition_spec_by_id(manifest_file.partition_spec_id)
+                .cloned(),
+            unified_partition_type: self.unified_partition_type.clone(),
+            sort_orders: self.sort_orders.clone(),
         }
     }
 }

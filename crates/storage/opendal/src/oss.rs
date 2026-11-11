@@ -53,5 +53,5 @@ pub(crate) fn oss_config_build(cfg: &OssConfig, path: &str) -> Result<Operator> 
 
     let builder = cfg.clone().into_builder().bucket(bucket);
 
-    Ok(Operator::new(builder).map_err(from_opendal_error)?.finish())
+    Operator::new(builder).map_err(from_opendal_error)
 }

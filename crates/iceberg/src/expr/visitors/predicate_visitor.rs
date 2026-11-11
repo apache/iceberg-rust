@@ -169,7 +169,7 @@ pub(crate) fn visit<V: PredicateVisitor>(visitor: &mut V, predicate: &Predicate)
             PredicateOperator::IsNan => visitor.is_nan(expr.term(), predicate),
             PredicateOperator::NotNan => visitor.not_nan(expr.term(), predicate),
             op => {
-                panic!("Unexpected op for unary predicate: {}", &op)
+                panic!("Unexpected op for unary predicate: {}", op)
             }
         },
         Predicate::Binary(expr) => {
@@ -193,7 +193,7 @@ pub(crate) fn visit<V: PredicateVisitor>(visitor: &mut V, predicate: &Predicate)
                     visitor.not_starts_with(reference, literal, predicate)
                 }
                 op => {
-                    panic!("Unexpected op for binary predicate: {}", &op)
+                    panic!("Unexpected op for binary predicate: {}", op)
                 }
             }
         }
@@ -204,7 +204,7 @@ pub(crate) fn visit<V: PredicateVisitor>(visitor: &mut V, predicate: &Predicate)
                 PredicateOperator::In => visitor.r#in(reference, literals, predicate),
                 PredicateOperator::NotIn => visitor.not_in(reference, literals, predicate),
                 op => {
-                    panic!("Unexpected op for set predicate: {}", &op)
+                    panic!("Unexpected op for set predicate: {}", op)
                 }
             }
         }

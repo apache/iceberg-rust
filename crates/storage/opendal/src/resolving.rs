@@ -33,9 +33,9 @@ use iceberg::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::OpenDalStorage;
 #[cfg(feature = "opendal-s3")]
 use crate::s3::CustomAwsCredentialLoader;
+use crate::{OpenDalClientConfig, OpenDalStorage};
 
 /// Schemes supported by OpenDalResolvingStorage
 pub const SCHEME_MEMORY: &str = "memory";
@@ -51,6 +51,7 @@ pub const SCHEME_ABFS: &str = "abfs";
 pub const SCHEME_WASBS: &str = "wasbs";
 pub const SCHEME_WASB: &str = "wasb";
 pub const SCHEME_HF: &str = "hf";
+pub const SCHEME_HDFS: &str = "hdfs";
 
 /// Parse a URL scheme string.
 fn parse_scheme(scheme: &str) -> Result<&'static str> {
@@ -62,6 +63,7 @@ fn parse_scheme(scheme: &str) -> Result<&'static str> {
         SCHEME_OSS => Ok("oss"),
         SCHEME_ABFSS | SCHEME_ABFS | SCHEME_WASBS | SCHEME_WASB => Ok("azdls"),
         SCHEME_HF => Ok("hf"),
+        SCHEME_HDFS => Ok("hdfs"),
         s => Err(Error::new(
             ErrorKind::FeatureUnsupported,
             format!("Unsupported storage scheme: {s}"),
@@ -86,13 +88,16 @@ fn build_storage_for_scheme(
     props: &HashMap<String, String>,
     #[cfg(feature = "opendal-s3")] customized_credential_load: &Option<CustomAwsCredentialLoader>,
 ) -> Result<OpenDalStorage> {
+    let client_config = OpenDalClientConfig::from_properties(props)?;
     match scheme {
         #[cfg(feature = "opendal-s3")]
         "s3" => {
             let config = crate::s3::s3_config_parse(props.clone())?;
             Ok(OpenDalStorage::S3 {
                 config: Arc::new(config),
+                multipart_part_size: crate::s3::s3_multipart_part_size_parse(props)?,
                 customized_credential_load: customized_credential_load.clone(),
+                client_config: crate::s3::s3_client_config(props, client_config)?,
             })
         }
         #[cfg(feature = "opendal-gcs")]
@@ -100,6 +105,7 @@ fn build_storage_for_scheme(
             let config = crate::gcs::gcs_config_parse(props.clone())?;
             Ok(OpenDalStorage::Gcs {
                 config: Arc::new(config),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-oss")]
@@ -107,6 +113,7 @@ fn build_storage_for_scheme(
             let config = crate::oss::oss_config_parse(props.clone())?;
             Ok(OpenDalStorage::Oss {
                 config: Arc::new(config),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-azdls")]
@@ -114,18 +121,31 @@ fn build_storage_for_scheme(
             let config = crate::azdls::azdls_config_parse(props.clone())?;
             Ok(OpenDalStorage::Azdls {
                 config: Arc::new(config),
+                client_config,
             })
         }
         #[cfg(feature = "opendal-fs")]
-        "file" => Ok(OpenDalStorage::LocalFs),
+        "file" => Ok(OpenDalStorage::LocalFs { client_config }),
         #[cfg(feature = "opendal-memory")]
-        "memory" => Ok(OpenDalStorage::Memory(crate::memory::memory_config_build()?)),
+        "memory" => Ok(OpenDalStorage::Memory {
+            operator: crate::memory::memory_config_build()?,
+            client_config,
+        }),
         #[cfg(feature = "opendal-hf")]
         "hf" => {
             let config = crate::hf::hf_config_parse(props.clone())?;
             Ok(OpenDalStorage::Hf {
                 config: Arc::new(config),
+                client_config,
             })
+        }
+        #[cfg(feature = "opendal-hdfs-native")]
+        "hdfs" => {
+            let config = crate::hdfs_native::hdfs_native_config_parse(props.clone())?;
+            Ok(OpenDalStorage::HdfsNative(crate::HdfsNativeStorage::new(
+                config,
+                client_config,
+            )))
         }
         unsupported => Err(Error::new(
             ErrorKind::FeatureUnsupported,
@@ -139,6 +159,12 @@ fn build_storage_for_scheme(
 /// This factory accepts paths from any supported storage system and dynamically
 /// delegates operations to the appropriate [`OpenDalStorage`] variant based on
 /// the path scheme.
+///
+/// # Serialization
+///
+/// Serialization fails when a custom S3 credential loader is configured because the loader holds
+/// process-local state that cannot be reconstructed in another process. Construct the factory
+/// without a custom loader before serializing it.
 ///
 /// # Example
 ///
@@ -156,7 +182,11 @@ fn build_storage_for_scheme(
 pub struct OpenDalResolvingStorageFactory {
     /// Custom AWS credential loader for S3 storage.
     #[cfg(feature = "opendal-s3")]
-    #[serde(skip)]
+    #[serde(
+        skip_deserializing,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::serialize_custom_credential_loader"
+    )]
     customized_credential_load: Option<CustomAwsCredentialLoader>,
 }
 
@@ -324,7 +354,40 @@ impl Storage for OpenDalResolvingStorage {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
+    use crate::OPENDAL_IO_TIMEOUT_MS;
+
+    #[cfg(feature = "opendal-s3")]
+    #[derive(Debug)]
+    struct EmptyCredentialLoader;
+
+    #[cfg(feature = "opendal-s3")]
+    impl crate::s3::ProvideCredential for EmptyCredentialLoader {
+        type Credential = crate::s3::AwsCredential;
+
+        async fn provide_credential(
+            &self,
+            _ctx: &reqsign_core::Context,
+        ) -> reqsign_core::Result<Option<Self::Credential>> {
+            Ok(None)
+        }
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_custom_credential_loader_serialization_fails() {
+        let factory = OpenDalResolvingStorageFactory::new()
+            .with_s3_credential_loader(CustomAwsCredentialLoader::new(EmptyCredentialLoader));
+        let file_io = iceberg::io::FileIOBuilder::new(Arc::new(factory)).build();
+
+        let err = file_io.serialize_all().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("custom AWS credential loaders cannot be serialized")
+        );
+    }
 
     /// Builds a resolving storage with empty props, suitable for `resolve()`
     /// calls that don't actually hit any backend.
@@ -334,6 +397,39 @@ mod tests {
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: None,
+        }
+    }
+
+    #[test]
+    fn test_resolve_propagates_io_timeout() {
+        let mut storage = empty_resolving_storage();
+        storage
+            .props
+            .insert(OPENDAL_IO_TIMEOUT_MS.to_string(), "45000".to_string());
+
+        let paths: &[&str] = &[
+            #[cfg(feature = "opendal-memory")]
+            "memory:/key",
+            #[cfg(feature = "opendal-fs")]
+            "file:/key",
+            #[cfg(feature = "opendal-s3")]
+            "s3://bucket/key",
+            #[cfg(feature = "opendal-gcs")]
+            "gs://bucket/key",
+            #[cfg(feature = "opendal-oss")]
+            "oss://bucket/key",
+            #[cfg(feature = "opendal-azdls")]
+            "abfss://myfs@myaccount.dfs.core.windows.net/key",
+            #[cfg(feature = "opendal-hf")]
+            "hf://datasets/user/repo/key",
+        ];
+        for path in paths {
+            let resolved = storage.resolve(path).unwrap();
+            assert_eq!(
+                resolved.client_config().io_timeout(),
+                Duration::from_secs(45),
+                "{path}"
+            );
         }
     }
 
@@ -351,6 +447,33 @@ mod tests {
 
         assert!(Arc::ptr_eq(&a, &b), "s3 and s3a should share one instance");
         assert!(Arc::ptr_eq(&a, &c), "s3 and s3n should share one instance");
+    }
+
+    #[cfg(feature = "opendal-hdfs-native")]
+    #[test]
+    fn test_resolve_hdfs_native_returns_hdfs_variant() {
+        let storage = empty_resolving_storage();
+
+        let resolved = storage.resolve("hdfs://nameservice1/a/b").unwrap();
+
+        assert!(
+            matches!(&*resolved, OpenDalStorage::HdfsNative(_)),
+            "expected HdfsNative variant, got {resolved:?}"
+        );
+    }
+
+    #[cfg(feature = "opendal-hdfs-native")]
+    #[test]
+    fn test_resolve_hdfs_native_distinct_authorities_share_instance() {
+        let storage = empty_resolving_storage();
+
+        let a = storage.resolve("hdfs://ns1/a").unwrap();
+        let b = storage.resolve("hdfs://ns2/b").unwrap();
+
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "different authorities should share the OpenDalStorage::HdfsNative instance (operator cache is internal)"
+        );
     }
 
     #[cfg(feature = "opendal-azdls")]

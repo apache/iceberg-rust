@@ -23,16 +23,21 @@ use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use arrow_schema::{Field, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{
+    DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 use super::{ArrowReader, CollectFieldIdVisitor};
 use crate::arrow::arrow_schema_to_schema;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::expr::BoundPredicate;
 use crate::expr::visitors::bound_predicate_visitor::visit;
-use crate::spec::{NameMapping, NestedField, PrimitiveType, Schema, Type};
+use crate::spec::{
+    LIST_FIELD_NAME, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MappedField, NameMapping,
+    NestedField, PrimitiveType, Schema, Type,
+};
 use crate::{Error, ErrorKind};
 
 impl ArrowReader {
@@ -81,6 +86,11 @@ impl ArrowReader {
                 Self::include_leaf_field_id(&map_type.key_field, field_ids);
                 Self::include_leaf_field_id(&map_type.value_field, field_ids);
             }
+            // Variant projection is rejected earlier (in `get_arrow_projection_mask`); this
+            // arm only keeps the match exhaustive. Treat it as a leaf, like a primitive.
+            Type::Variant(_) => {
+                field_ids.push(field.id);
+            }
         }
     }
 
@@ -119,6 +129,19 @@ impl ArrowReader {
             return Ok(ProjectionMask::all());
         }
 
+        // Reading variant columns is not supported yet (see #2188 follow-ups): reject any
+        // projection that touches a variant, rather than returning a partial/incorrect batch.
+        for field_id in field_ids {
+            if let Some(field) = iceberg_schema_of_task.field_by_id(*field_id)
+                && type_contains_variant(&field.field_type)
+            {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    "Reading variant columns is not supported yet",
+                ));
+            }
+        }
+
         if use_fallback {
             // Position-based projection necessary because file lacks embedded field IDs
             Self::get_arrow_projection_mask_fallback(field_ids, parquet_schema)
@@ -153,28 +176,23 @@ impl ArrowReader {
         arrow_schema: &ArrowSchemaRef,
         type_promotion_is_valid: fn(Option<&PrimitiveType>, Option<&PrimitiveType>) -> bool,
     ) -> Result<ProjectionMask> {
-        let mut column_map = HashMap::new();
+        let mut column_map = HashMap::with_capacity(leaf_field_ids.len());
         let fields = arrow_schema.fields();
+        // HashSet for O(1) membership checks instead of O(n) slice scans.
+        let leaf_field_id_set: HashSet<i32> = leaf_field_ids.iter().copied().collect();
 
         // Pre-project only the fields that have been selected, possibly avoiding converting
         // some Arrow types that are not yet supported.
-        let mut projected_fields: HashMap<arrow_schema::FieldRef, i32> = HashMap::new();
         let projected_arrow_schema = ArrowSchema::new_with_metadata(
             fields.filter_leaves(|_, f| {
-                f.metadata()
-                    .get(PARQUET_FIELD_ID_META_KEY)
-                    .and_then(|field_id| i32::from_str(field_id).ok())
-                    .is_some_and(|field_id| {
-                        projected_fields.insert((*f).clone(), field_id);
-                        leaf_field_ids.contains(&field_id)
-                    })
+                parquet_field_id(f).is_some_and(|field_id| leaf_field_id_set.contains(&field_id))
             }),
             arrow_schema.metadata().clone(),
         );
         let iceberg_schema = arrow_schema_to_schema(&projected_arrow_schema)?;
 
         fields.filter_leaves(|idx, field| {
-            let Some(field_id) = projected_fields.get(field).cloned() else {
+            let Some(field_id) = parquet_field_id(field) else {
                 return false;
             };
 
@@ -201,7 +219,9 @@ impl ArrowReader {
 
         // Schema evolution: New columns may not exist in old Parquet files.
         // We only project existing columns; RecordBatchTransformer adds default/NULL values.
-        let mut indices = vec![];
+        // If other leaves are selected, a struct whose requested leaves are all missing gets no
+        // column and reads as NULL (#3378).
+        let mut indices = Vec::with_capacity(leaf_field_ids.len());
         for field_id in leaf_field_ids {
             if let Some(col_idx) = column_map.get(field_id) {
                 indices.push(*col_idx);
@@ -245,6 +265,23 @@ impl ArrowReader {
     }
 }
 
+/// Whether `field_type` is, or transitively contains, a variant type.
+fn type_contains_variant(field_type: &Type) -> bool {
+    match field_type {
+        Type::Variant(_) => true,
+        Type::Struct(s) => s
+            .fields()
+            .iter()
+            .any(|f| type_contains_variant(&f.field_type)),
+        Type::List(l) => type_contains_variant(&l.element_field.field_type),
+        Type::Map(m) => {
+            type_contains_variant(&m.key_field.field_type)
+                || type_contains_variant(&m.value_field.field_type)
+        }
+        Type::Primitive(_) => false,
+    }
+}
+
 /// Build the map of parquet field id to Parquet column index in the schema.
 /// Returns None if the Parquet file doesn't have field IDs embedded (e.g., migrated tables).
 pub(super) fn build_field_id_map(
@@ -262,17 +299,34 @@ pub(super) fn build_field_id_map(
                 column_map.insert(basic_info.id(), idx);
             }
             ParquetType::GroupType { .. } => {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Leaf column in schema should be primitive type but got {field_type:?}"
-                    ),
+                return Err(invalid_data!(
+                    "Leaf column in schema should be primitive type but got {field_type:?}"
                 ));
             }
         };
     }
 
     Ok(Some(column_map))
+}
+
+/// Finds the Parquet leaf column index carrying `field_id` by its embedded id.
+///
+/// Unlike [`build_field_id_map`], a leaf without an embedded id does not abort the
+/// search -- it is simply skipped. This tolerates files that legitimately mix id-bearing
+/// and id-less leaves, e.g. a Variant column whose internal metadata/value leaves are
+/// required by the spec to have no field id, alongside a reserved metadata column that
+/// does carry its id.
+pub(super) fn find_leaf_by_field_id(
+    parquet_schema: &SchemaDescriptor,
+    field_id: i32,
+) -> Option<usize> {
+    parquet_schema.columns().iter().position(|col| {
+        matches!(
+            col.self_type(),
+            ParquetType::PrimitiveType { basic_info, .. }
+                if basic_info.has_id() && basic_info.id() == field_id
+        )
+    })
 }
 
 /// Build a fallback field ID map for Parquet files without embedded field IDs.
@@ -325,11 +379,7 @@ pub(super) fn build_fallback_field_id_map(
 fn build_field_id_map_from_arrow_schema(arrow_schema: &ArrowSchemaRef) -> HashMap<i32, usize> {
     let mut column_map = HashMap::new();
     arrow_schema.fields().filter_leaves(|idx, field| {
-        if let Some(field_id) = field
-            .metadata()
-            .get(PARQUET_FIELD_ID_META_KEY)
-            .and_then(|value| i32::from_str(value).ok())
-        {
+        if let Some(field_id) = parquet_field_id(field) {
             column_map.insert(field_id, idx);
         }
         false
@@ -337,9 +387,17 @@ fn build_field_id_map_from_arrow_schema(arrow_schema: &ArrowSchemaRef) -> HashMa
     column_map
 }
 
+/// Returns the field ID in `field`'s `PARQUET:field_id` metadata, if it has a valid one.
+fn parquet_field_id(field: &Field) -> Option<i32> {
+    field
+        .metadata()
+        .get(PARQUET_FIELD_ID_META_KEY)
+        .and_then(|field_id| i32::from_str(field_id).ok())
+}
+
 /// Apply name mapping to Arrow schema for Parquet files lacking field IDs.
 ///
-/// Assigns Iceberg field IDs based on column names using the name mapping,
+/// Assigns Iceberg field IDs based on names at every depth using the name mapping,
 /// enabling correct projection on migrated files (e.g., from Hive/Spark via add_files).
 ///
 /// Per Iceberg spec Column Projection rule #2:
@@ -368,41 +426,173 @@ pub(super) fn apply_name_mapping_to_arrow_schema(
         "Schema already has field IDs - name mapping should not be applied"
     );
 
-    let fields_with_mapped_ids: Vec<_> = arrow_schema
-        .fields()
-        .iter()
-        .map(|field| {
-            // Look up this column name in name mapping to get the Iceberg field ID.
-            // Corresponds to Java's ApplyNameMapping visitor which calls
-            // nameMapping.find(currentPath()) and returns field.withId() if found.
-            //
-            // If the field isn't in the mapping, leave it WITHOUT assigning an ID
-            // (matching Java's behavior of returning the field unchanged).
-            // Later, during projection, fields without IDs are filtered out.
-            let mapped_field_opt = name_mapping
-                .fields()
-                .iter()
-                .find(|f| f.names().contains(&field.name().to_string()));
+    let mut mapped_fields_by_name = HashMap::with_capacity(name_mapping.fields().len());
+    for mapped_field in name_mapping.fields() {
+        for name in mapped_field.names() {
+            // Preserve the existing first-match behavior for duplicate aliases.
+            mapped_fields_by_name
+                .entry(name.as_str())
+                .or_insert(mapped_field);
+        }
+    }
 
-            let mut metadata = field.metadata().clone();
-
-            if let Some(mapped_field) = mapped_field_opt
-                && let Some(field_id) = mapped_field.field_id()
-            {
-                // Field found in mapping with a field_id → assign it
-                metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
-            }
-            // If field_id is None, leave the field without an ID (will be filtered by projection)
-
-            Field::new(field.name(), field.data_type().clone(), field.is_nullable())
-                .with_metadata(metadata)
-        })
-        .collect();
+    let fields_with_mapped_ids = try_map_fields(arrow_schema.fields(), |field| {
+        let mapped_field = mapped_fields_by_name.get(field.name().as_str()).copied();
+        apply_name_mapping_to_field(field, mapped_field)
+    })?;
 
     Ok(Arc::new(ArrowSchema::new_with_metadata(
         fields_with_mapped_ids,
         arrow_schema.metadata().clone(),
     )))
+}
+
+/// Assigns IDs from `mapped_field` to `field` and its nested fields, as Java's ApplyNameMapping
+/// does. List elements match `element`, and map entries match `key` and `value`. A field
+/// without an entry, or whose entry has no field ID, keeps no ID, and so do its nested fields.
+fn apply_name_mapping_to_field(
+    field: &FieldRef,
+    mapped_field: Option<&MappedField>,
+) -> Result<FieldRef> {
+    let Some((mapped_field, field_id)) =
+        mapped_field.zip(mapped_field.and_then(MappedField::field_id))
+    else {
+        return Ok(Arc::clone(field));
+    };
+    let map_nested = |nested: &FieldRef, name: &str| {
+        let mapped_nested = find_mapped_field(mapped_field.fields().iter().map(Arc::as_ref), name);
+        apply_name_mapping_to_field(nested, mapped_nested)
+    };
+
+    let data_type = match field.data_type() {
+        DataType::Struct(fields) => DataType::Struct(try_map_fields(fields, |nested| {
+            map_nested(nested, nested.name())
+        })?),
+        DataType::List(element) => DataType::List(map_nested(element, LIST_FIELD_NAME)?),
+        DataType::LargeList(element) => DataType::LargeList(map_nested(element, LIST_FIELD_NAME)?),
+        DataType::FixedSizeList(element, size) => {
+            DataType::FixedSizeList(map_nested(element, LIST_FIELD_NAME)?, *size)
+        }
+        // The mapping has no entry for Arrow's entries struct. The shape checks are defensive,
+        // because parquet-rs builds every map as a struct of key and value.
+        DataType::Map(entries, sorted) => {
+            let DataType::Struct(entry_fields) = entries.data_type() else {
+                return Err(invalid_data!(
+                    "Map field `{}` must have struct type",
+                    field.name()
+                ));
+            };
+            let [key, value] = &entry_fields[..] else {
+                return Err(invalid_data!(
+                    "Map field `{}` must have exactly 2 fields, found {}",
+                    field.name(),
+                    entry_fields.len()
+                ));
+            };
+            let entry_fields = Fields::from([
+                map_nested(key, MAP_KEY_FIELD_NAME)?,
+                map_nested(value, MAP_VALUE_FIELD_NAME)?,
+            ]);
+            let entries = entries
+                .as_ref()
+                .clone()
+                .with_data_type(DataType::Struct(entry_fields));
+            DataType::Map(Arc::new(entries), *sorted)
+        }
+        // `Fields::filter_leaves` treats `ListView` and `LargeListView` as leaves, so projection
+        // cannot select their elements even with IDs.
+        other => other.clone(),
+    };
+
+    let mut field = field.as_ref().clone().with_data_type(data_type);
+    field
+        .metadata_mut()
+        .insert(PARQUET_FIELD_ID_META_KEY.to_string(), field_id.to_string());
+    Ok(Arc::new(field))
+}
+
+/// Returns the first entry in `mapped_fields` that lists `name`.
+fn find_mapped_field<'a>(
+    mapped_fields: impl IntoIterator<Item = &'a MappedField>,
+    name: &str,
+) -> Option<&'a MappedField> {
+    mapped_fields
+        .into_iter()
+        .find(|mapped_field| mapped_field.names().iter().any(|n| n == name))
+}
+
+/// Maps `fields` into a `Fields` sized up front, which `collect::<Result<_>>()` does not do.
+fn try_map_fields(
+    fields: &Fields,
+    mut map_field: impl FnMut(&FieldRef) -> Result<FieldRef>,
+) -> Result<Fields> {
+    let mut mapped = Vec::with_capacity(fields.len());
+    for field in fields {
+        mapped.push(map_field(field)?);
+    }
+    Ok(Fields::from(mapped))
+}
+
+/// Rewrites file-side Arrow `FixedSizeList` hints to `List`.
+///
+/// parquet-rs picks its list reader from the embedded Arrow schema. Iceberg has no
+/// fixed-size list type, so a `FixedSizeList` hint must become `List` before the stream
+/// reader is built. That uses the 3-level LIST reader (no null-row padding, no
+/// `PromotePlan` conversion). Returns `None` when the schema has no `FixedSizeList`.
+/// Unchanged fields are shared; nothing is allocated before the first change.
+///
+/// Same placement as the list-view rewrite in #3467: call this before name mapping and
+/// fallback IDs so nested IDs land on the rewritten `List` fields.
+pub(super) fn coerce_fixed_size_lists(arrow_schema: &ArrowSchemaRef) -> Option<ArrowSchemaRef> {
+    let fields = coerce_fixed_size_lists_in_fields(arrow_schema.fields())?;
+    Some(Arc::new(ArrowSchema::new_with_metadata(
+        fields,
+        arrow_schema.metadata().clone(),
+    )))
+}
+
+/// Returns `fields` with `FixedSizeList` rewritten to `List`, or `None` if they have none.
+fn coerce_fixed_size_lists_in_fields(fields: &Fields) -> Option<Fields> {
+    let (index, first) = fields
+        .iter()
+        .enumerate()
+        .find_map(|(index, field)| Some((index, coerce_fixed_size_lists_in_field(field)?)))?;
+    let rest = fields
+        .iter()
+        .skip(index + 1)
+        .map(coerce_fixed_size_lists_or_share);
+    Some(
+        fields
+            .iter()
+            .take(index)
+            .cloned()
+            .chain([first])
+            .chain(rest)
+            .collect(),
+    )
+}
+
+/// Returns `field` with `FixedSizeList` rewritten to `List`, or `None` if it has none.
+fn coerce_fixed_size_lists_in_field(field: &FieldRef) -> Option<FieldRef> {
+    let data_type = match field.data_type() {
+        DataType::FixedSizeList(element, _) => {
+            DataType::List(coerce_fixed_size_lists_or_share(element))
+        }
+        DataType::List(element) => DataType::List(coerce_fixed_size_lists_in_field(element)?),
+        DataType::LargeList(element) => {
+            DataType::LargeList(coerce_fixed_size_lists_in_field(element)?)
+        }
+        DataType::Map(entries, sorted) => {
+            DataType::Map(coerce_fixed_size_lists_in_field(entries)?, *sorted)
+        }
+        DataType::Struct(fields) => DataType::Struct(coerce_fixed_size_lists_in_fields(fields)?),
+        _ => return None,
+    };
+    Some(Arc::new(field.as_ref().clone().with_data_type(data_type)))
+}
+
+fn coerce_fixed_size_lists_or_share(field: &FieldRef) -> FieldRef {
+    coerce_fixed_size_lists_in_field(field).unwrap_or_else(|| Arc::clone(field))
 }
 
 /// Add position-based fallback field IDs to Arrow schema for Parquet files lacking them.
@@ -451,7 +641,7 @@ mod tests {
 
     use arrow_array::cast::AsArray;
     use arrow_array::{Array, ArrayRef, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY, ProjectionMask};
     use parquet::basic::Compression;
@@ -465,9 +655,38 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskStream};
     use crate::spec::{
-        DataFileFormat, Datum, MappedField, NameMapping, NestedField, PrimitiveType, Schema, Type,
+        DataFileFormat, Datum, MappedField, NameMapping, NestedField, PrimitiveType, Schema,
+        StructType, Type, VariantType,
     };
     use crate::{ErrorKind, Runtime};
+
+    #[test]
+    fn test_name_mapping_duplicate_alias_preserves_first_match() {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "name",
+            DataType::Utf8,
+            true,
+        )]));
+        for (first_id, expected) in [(Some(2), Some("2")), (None, None)] {
+            let name_mapping = NameMapping::new(vec![
+                MappedField::new(first_id, vec!["name".to_string()], vec![]),
+                MappedField::new(Some(4), vec!["name".to_string()], vec![]),
+            ]);
+
+            let mapped =
+                super::apply_name_mapping_to_arrow_schema(arrow_schema.clone(), &name_mapping)
+                    .unwrap();
+
+            assert_eq!(
+                mapped.fields()[0]
+                    .metadata()
+                    .get(PARQUET_FIELD_ID_META_KEY)
+                    .map(String::as_str),
+                expected,
+                "first matching field ID: {first_id:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_arrow_projection_mask() {
@@ -561,6 +780,61 @@ message schema {
         assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
     }
 
+    #[test]
+    fn test_arrow_projection_mask_variant_is_unsupported() {
+        // Reading variant columns is not supported yet: projecting one (top-level or
+        // nested) must fail loudly rather than return a partial/incorrect batch.
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+                    NestedField::required(
+                        3,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(4, "vv", Type::Variant(VariantType)).into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::required(
+                        5,
+                        "m",
+                        Type::Map(crate::spec::MapType::required(
+                            6,
+                            Type::Primitive(PrimitiveType::String),
+                            7,
+                            Type::Variant(VariantType),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        // The parquet/arrow schemas are irrelevant: the variant is rejected before they
+        // are consulted, so an empty descriptor is enough to drive the code path.
+        let parquet_schema = SchemaDescriptor::new(Arc::new(
+            parse_message_type("message schema { optional int32 id = 1; }").unwrap(),
+        ));
+        let arrow_schema = Arc::new(ArrowSchema::empty());
+
+        // 2 = top-level variant, 3 = struct containing a variant, 4 = the nested variant,
+        // 5 = map<string, variant>, plus a mix with a non-variant sibling.
+        for projected in [vec![2], vec![3], vec![4], vec![5], vec![1, 2]] {
+            let err = ArrowReader::get_arrow_projection_mask(
+                &projected,
+                &schema,
+                &parquet_schema,
+                &arrow_schema,
+                false,
+            )
+            .expect_err("variant projection must be rejected");
+            assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        }
+    }
+
     /// Test schema evolution: reading old Parquet file (with only column 'a')
     /// using a newer table schema (with columns 'a' and 'b').
     /// This tests that:
@@ -622,7 +896,8 @@ message schema {
                 .with_schema(new_schema.clone())
                 .with_project_field_ids(vec![1, 2]) // Request both columns 'a' and 'b'
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -721,7 +996,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -824,7 +1100,8 @@ message schema {
                 .with_project_field_ids(vec![2, 4])
                 .with_case_sensitive(false)
                 .with_name_mapping(Some(name_mapping))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -932,7 +1209,8 @@ message schema {
                 .with_case_sensitive(false)
                 .with_name_mapping(Some(name_mapping))
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -956,6 +1234,225 @@ message schema {
         assert_eq!(name_array.value(0), "Alice");
         let subdept_array = batch.column(1).as_string::<i32>();
         assert_eq!(subdept_array.value(0), "Bob");
+    }
+
+    /// Regression test for #3374: a struct in a name-mapped file reads correctly next to a
+    /// top-level column, and predicates resolve its fields.
+    #[tokio::test]
+    async fn test_read_parquet_with_name_mapping_maps_nested_fields() {
+        use arrow_array::types::Int32Type;
+        use arrow_array::{Int32Array, StructArray};
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(3, "a", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let name_mapping = Arc::new(NameMapping::new(vec![
+            MappedField::new(Some(1), vec!["id".to_string()], vec![]),
+            MappedField::new(Some(2), vec!["s".to_string()], vec![MappedField::new(
+                Some(3),
+                vec!["a".to_string()],
+                vec![],
+            )]),
+        ]));
+
+        // No field IDs at any level.
+        let s_col = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
+        )]);
+        let to_write = RecordBatch::try_from_iter_with_nullable(vec![
+            (
+                "id",
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+                true,
+            ),
+            ("s", Arc::new(s_col) as ArrayRef, true),
+        ])
+        .unwrap();
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
+        let file = File::create(&file_path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, to_write.schema(), None).unwrap();
+        writer.write(&to_write).unwrap();
+        writer.close().unwrap();
+
+        let file_size = std::fs::metadata(&file_path).unwrap().len();
+        let tasks = |predicate| {
+            Box::pin(futures::stream::iter([Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(file_size)
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path.clone())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2])
+                .with_case_sensitive(false)
+                .with_name_mapping(Some(name_mapping.clone()))
+                .with_predicate(predicate)
+                .build()
+                .unwrap())])) as FileScanTaskStream
+        };
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+
+        let result = reader
+            .clone()
+            .read(tasks(None))
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        let s = result[0].column(1).as_struct();
+        assert_eq!(s.null_count(), 0);
+        assert_eq!(
+            s.column(0).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![10, 20, 30])
+        );
+
+        // `s.a` resolves, so the row filter rejects the nested predicate as it does for files
+        // with embedded IDs, rather than matching no rows.
+        let predicate = Reference::new("s.a")
+            .greater_than(Datum::int(15))
+            .bind(schema.clone(), true)
+            .unwrap();
+        let err = reader
+            .read(tasks(Some(predicate)))
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    /// Every nested Arrow type gets IDs, with list and map entries matched by their spec names.
+    #[test]
+    fn test_apply_name_mapping_to_nested_arrow_types() {
+        use arrow_schema::Fields;
+
+        use super::apply_name_mapping_to_arrow_schema;
+        use crate::arrow::arrow_schema_to_schema;
+
+        let field = |name: &str, data_type| Field::new(name, data_type, true);
+        let item = |data_type| Arc::new(field("item", data_type));
+        let entries = Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("keys", DataType::Utf8, false),
+                field("values", DataType::Int32),
+            ])),
+            false,
+        );
+        let x = Fields::from(vec![field("x", DataType::Int32)]);
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field("id", DataType::Int32),
+            // `s.id` must take its ID from the entry for `s`, not from the top-level `id`.
+            field(
+                "s",
+                DataType::Struct(Fields::from(vec![field("id", DataType::Int32)])),
+            ),
+            field("list", DataType::List(item(DataType::Int32))),
+            field("fixed", DataType::FixedSizeList(item(DataType::Int32), 2)),
+            field("large", DataType::LargeList(item(DataType::Struct(x)))),
+            field("map", DataType::Map(Arc::new(entries), true)),
+        ]));
+        let entry =
+            |id, name: &str, fields| MappedField::new(Some(id), vec![name.to_string()], fields);
+        let name_mapping = NameMapping::new(vec![
+            entry(1, "id", vec![]),
+            entry(2, "s", vec![entry(3, "id", vec![])]),
+            entry(4, "list", vec![entry(5, "element", vec![])]),
+            entry(6, "fixed", vec![entry(7, "element", vec![])]),
+            entry(8, "large", vec![entry(9, "element", vec![entry(
+                10,
+                "x",
+                vec![],
+            )])]),
+            entry(11, "map", vec![
+                entry(12, "key", vec![]),
+                entry(13, "value", vec![]),
+            ]),
+        ]);
+
+        let mapped = apply_name_mapping_to_arrow_schema(arrow_schema, &name_mapping).unwrap();
+
+        // The list size and the map ordering carry over.
+        assert!(matches!(
+            mapped.field(3).data_type(),
+            DataType::FixedSizeList(_, 2)
+        ));
+        assert!(matches!(
+            mapped.field(5).data_type(),
+            DataType::Map(_, true)
+        ));
+        // The conversion fails on any field without an ID.
+        let schema = arrow_schema_to_schema(&mapped).unwrap();
+        let names: Vec<_> = (1..=13)
+            .map(|id| schema.name_by_field_id(id).unwrap_or_default())
+            .collect();
+        assert_eq!(names, [
+            "id",
+            "s",
+            "s.id",
+            "list",
+            "list.element",
+            "fixed",
+            "fixed.element",
+            "large",
+            "large.element",
+            "large.element.x",
+            "map",
+            "map.key",
+            "map.value",
+        ]);
+    }
+
+    /// A field without an entry, or whose entry has no field ID, keeps no ID, and so do its
+    /// nested fields.
+    #[test]
+    fn test_apply_name_mapping_skips_unmapped_fields() {
+        use arrow_schema::Fields;
+
+        use super::{apply_name_mapping_to_arrow_schema, build_field_id_map_from_arrow_schema};
+
+        let int = |name: &str| Field::new(name, DataType::Int32, true);
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new(
+                "s",
+                DataType::Struct(Fields::from(vec![int("a"), int("b")])),
+                true,
+            ),
+            Field::new("t", DataType::Struct(Fields::from(vec![int("c")])), true),
+        ]));
+        let entry = |id, name: &str, fields| MappedField::new(id, vec![name.to_string()], fields);
+        let name_mapping = NameMapping::new(vec![
+            // No entry for `s.b`.
+            entry(Some(1), "s", vec![entry(Some(2), "a", vec![])]),
+            entry(None, "t", vec![entry(Some(3), "c", vec![])]),
+        ]);
+
+        let mapped = apply_name_mapping_to_arrow_schema(arrow_schema, &name_mapping).unwrap();
+
+        // Only `s.a`, leaf 0, resolves to an ID.
+        assert_eq!(
+            build_field_id_map_from_arrow_schema(&mapped),
+            HashMap::from([(2, 0)])
+        );
     }
 
     /// Test reading Parquet files without field IDs with partial projection.
@@ -1025,7 +1522,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 3])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1112,7 +1610,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2, 3])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1213,7 +1712,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1252,10 +1752,10 @@ message schema {
     }
 
     /// Test reading Parquet files without field IDs with nested types (struct).
-    /// Java's pruneColumnsFallback() projects entire top-level columns including nested content.
-    /// This test verifies that a top-level struct field is projected correctly with all its nested fields.
+    /// Java's pruneColumnsFallback() projects entire top-level columns including nested content,
+    /// but only top-level fields get fallback ids, so struct fields read as null.
     #[tokio::test]
-    async fn test_read_parquet_without_field_ids_with_struct() {
+    async fn test_read_parquet_without_field_ids_reads_struct_fields_as_null() {
         use arrow_array::{Int32Array, StructArray};
         use arrow_schema::Fields;
 
@@ -1267,14 +1767,14 @@ message schema {
                     NestedField::required(
                         2,
                         "person",
-                        Type::Struct(crate::spec::StructType::new(vec![
-                            NestedField::required(
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(
                                 3,
                                 "name",
                                 Type::Primitive(PrimitiveType::String),
                             )
                             .into(),
-                            NestedField::required(4, "age", Type::Primitive(PrimitiveType::Int))
+                            NestedField::optional(4, "age", Type::Primitive(PrimitiveType::Int))
                                 .into(),
                         ])),
                     )
@@ -1343,7 +1843,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1368,16 +1869,9 @@ message schema {
 
         let person_array = batch.column(1).as_struct();
         assert_eq!(person_array.num_columns(), 2);
-
-        let name_array = person_array.column(0).as_string::<i32>();
-        assert_eq!(name_array.value(0), "Alice");
-        assert_eq!(name_array.value(1), "Bob");
-
-        let age_array = person_array
-            .column(1)
-            .as_primitive::<arrow_array::types::Int32Type>();
-        assert_eq!(age_array.value(0), 30);
-        assert_eq!(age_array.value(1), 25);
+        assert_eq!(person_array.null_count(), 0);
+        assert_eq!(person_array.column(0).null_count(), 2);
+        assert_eq!(person_array.column(1).null_count(), 2);
     }
 
     /// Test reading Parquet files without field IDs with schema evolution - column added in the middle.
@@ -1440,7 +1934,8 @@ message schema {
                 .with_schema(schema.clone())
                 .with_project_field_ids(vec![1, 5, 2])
                 .with_case_sensitive(false)
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1551,7 +2046,8 @@ message schema {
                 .with_project_field_ids(vec![1, 2, 3])
                 .with_case_sensitive(false)
                 .with_predicate(Some(predicate.bind(schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1693,7 +2189,8 @@ message schema {
                 .with_case_sensitive(false)
                 .with_partition(Some(partition_data))
                 .with_partition_spec(Some(partition_spec))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1807,7 +2304,7 @@ message schema {
                     NestedField::required(
                         1,
                         "person",
-                        Type::Struct(crate::spec::StructType::new(vec![
+                        Type::Struct(StructType::new(vec![
                             NestedField::required(
                                 5,
                                 "name",
@@ -1826,7 +2323,7 @@ message schema {
                             element_field: NestedField::required(
                                 7,
                                 "element",
-                                Type::Struct(crate::spec::StructType::new(vec![
+                                Type::Struct(StructType::new(vec![
                                     NestedField::required(
                                         8,
                                         "name",
@@ -1900,7 +2397,8 @@ message schema {
                 .with_project_field_ids(vec![4])
                 .with_case_sensitive(false)
                 .with_predicate(Some(predicate.bind(iceberg_schema, true).unwrap()))
-                .build())]
+                .build()
+                .unwrap())]
             .into_iter(),
         )) as FileScanTaskStream;
 
@@ -1923,5 +2421,658 @@ message schema {
             })
             .collect();
         assert_eq!(ids, vec![2, 3]);
+    }
+
+    /// Reads a file written with an older nested schema through an evolved one. This relies
+    /// on parquet-rs attaching `PARQUET:field_id` to struct children, list elements, and map
+    /// keys and values, which the hand-built fixtures in `record_batch_transformer` assume.
+    #[tokio::test]
+    async fn test_read_evolved_nested_fields_by_field_id() {
+        use serde_json::{Value, json};
+
+        use crate::arrow::schema_to_arrow_schema;
+        use crate::spec::PrimitiveType::{Int, Long};
+        use crate::spec::{ListType, MapType};
+
+        fn struct_of(fields: &[(i32, &str, PrimitiveType)]) -> Type {
+            Type::Struct(StructType::new(
+                fields
+                    .iter()
+                    .map(|(id, name, ty)| {
+                        NestedField::optional(*id, *name, Type::Primitive(ty.clone())).into()
+                    })
+                    .collect(),
+            ))
+        }
+        fn schema(s: Type, element: Type, value: Type) -> Schema {
+            let string = Type::Primitive(PrimitiveType::String);
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(Int)).into(),
+                    NestedField::optional(2, "s", s).into(),
+                    NestedField::optional(
+                        3,
+                        "l",
+                        Type::List(ListType::new(
+                            NestedField::list_element(7, element, true).into(),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        4,
+                        "m",
+                        Type::Map(MapType::required(9, string, 10, value)),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap()
+        }
+        fn to_batch(schema: &Schema, rows: Value) -> RecordBatch {
+            let fields = schema_to_arrow_schema(schema).unwrap().fields().to_vec();
+            serde_arrow::to_record_batch(&fields, &rows).unwrap()
+        }
+
+        let old_schema = schema(
+            struct_of(&[(5, "a", Int), (6, "b", PrimitiveType::String)]),
+            struct_of(&[(8, "x", Int)]),
+            struct_of(&[(11, "x", Int)]),
+        );
+        // Reorders `s`, adds children before, between, and after existing ones, and
+        // promotes int to long.
+        let new_schema = Arc::new(schema(
+            struct_of(&[
+                (6, "b", PrimitiveType::String),
+                (12, "c", Int),
+                (5, "a", Long),
+            ]),
+            struct_of(&[(13, "y", Int), (8, "x", Int)]),
+            struct_of(&[(11, "x", Long), (14, "y", Int)]),
+        ));
+        let old_batch = to_batch(
+            &old_schema,
+            json!([
+                {"id": 1, "s": {"a": 1, "b": "p"}, "l": [{"x": 10}, {"x": 11}], "m": {"k1": {"x": 100}}},
+                {"id": 2, "s": null, "l": null, "m": {"k2": {"x": 200}}},
+                {"id": 3, "s": {"a": 3, "b": null}, "l": [{"x": 30}], "m": null},
+            ]),
+        );
+        let expected = to_batch(
+            &new_schema,
+            json!([
+                {
+                    "id": 1,
+                    "s": {"b": "p", "c": null, "a": 1},
+                    "l": [{"y": null, "x": 10}, {"y": null, "x": 11}],
+                    "m": {"k1": {"x": 100, "y": null}},
+                },
+                {"id": 2, "s": null, "l": null, "m": {"k2": {"x": 200, "y": null}}},
+                {"id": 3, "s": {"b": null, "c": null, "a": 3}, "l": [{"y": null, "x": 30}], "m": null},
+            ]),
+        );
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/old.parquet", tmp_dir.path().to_str().unwrap());
+        let mut writer =
+            ArrowWriter::try_new(File::create(&file_path).unwrap(), old_batch.schema(), None)
+                .unwrap();
+        writer.write(&old_batch).unwrap();
+        writer.close().unwrap();
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(file_path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(new_schema)
+                .with_project_field_ids(vec![1, 2, 3, 4])
+                .with_case_sensitive(false)
+                .build()
+                .unwrap())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        assert_eq!(result, vec![expected]);
+    }
+
+    #[test]
+    fn test_coerce_fixed_size_lists_rewrites_nested() {
+        let item = |ty| Arc::new(Field::new("item", ty, true));
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("plain", DataType::Int32, true),
+            Field::new(
+                "fsl",
+                DataType::FixedSizeList(item(DataType::Int32), 2),
+                true,
+            ),
+            Field::new(
+                "nested",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "inner",
+                    DataType::FixedSizeList(item(DataType::Int32), 3),
+                    true,
+                )])),
+                true,
+            ),
+            Field::new(
+                "list_of_fsl",
+                DataType::List(Arc::new(Field::new(
+                    "element",
+                    DataType::FixedSizeList(item(DataType::Int32), 2),
+                    true,
+                ))),
+                true,
+            ),
+        ]));
+
+        let coerced = super::coerce_fixed_size_lists(&schema).expect("should rewrite");
+        assert!(matches!(
+            coerced.field_with_name("fsl").unwrap().data_type(),
+            DataType::List(_)
+        ));
+        let DataType::Struct(fields) = coerced.field_with_name("nested").unwrap().data_type()
+        else {
+            panic!("nested should stay Struct");
+        };
+        assert!(matches!(fields[0].data_type(), DataType::List(_)));
+        let DataType::List(element) = coerced.field_with_name("list_of_fsl").unwrap().data_type()
+        else {
+            panic!("list_of_fsl should stay List");
+        };
+        assert!(matches!(element.data_type(), DataType::List(_)));
+        assert!(super::coerce_fixed_size_lists(&coerced).is_none());
+    }
+
+    /// parquet-rs can return a LIST as `FixedSizeList` when the file's embedded Arrow schema
+    /// says so. Rewrite the hint to `List` before reading so the scan never sees FixedSizeList.
+    #[tokio::test]
+    async fn test_read_fixed_size_list_column_as_list() {
+        use arrow_array::{FixedSizeListArray, Int32Array};
+        use arrow_buffer::{NullBuffer, OffsetBuffer};
+
+        use crate::spec::ListType;
+
+        let with_id = |field: Field, id: i32| {
+            field.with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                id.to_string(),
+            )]))
+        };
+
+        // Row 0: [1, 2]; row 1: null; row 2: [5, 6].
+        let values = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            None,
+            None,
+            Some(5),
+            Some(6),
+        ])) as ArrayRef;
+        let row_nulls = NullBuffer::from(vec![true, false, true]);
+        let optional_element = Arc::new(with_id(Field::new("element", DataType::Int32, true), 3));
+        let required_element = Arc::new(with_id(Field::new("element", DataType::Int32, false), 5));
+        let optional_fsl = FixedSizeListArray::new(
+            Arc::clone(&optional_element),
+            2,
+            Arc::clone(&values),
+            Some(row_nulls.clone()),
+        );
+        let required_fsl =
+            FixedSizeListArray::new(Arc::clone(&required_element), 2, values, Some(row_nulls));
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            with_id(
+                Field::new(
+                    "optional",
+                    DataType::FixedSizeList(optional_element, 2),
+                    true,
+                ),
+                2,
+            ),
+            with_id(
+                Field::new(
+                    "required",
+                    DataType::FixedSizeList(required_element, 2),
+                    true,
+                ),
+                4,
+            ),
+            with_id(Field::new("id", DataType::Int32, true), 1),
+        ]));
+        let batch = RecordBatch::try_new(file_schema.clone(), vec![
+            Arc::new(optional_fsl) as ArrayRef,
+            Arc::new(required_fsl) as ArrayRef,
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        ])
+        .unwrap();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let path = format!("{}/fsl.parquet", tmp_dir.path().to_str().unwrap());
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), file_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        2,
+                        "optional",
+                        Type::List(ListType::new(
+                            NestedField::list_element(
+                                3,
+                                Type::Primitive(PrimitiveType::Int),
+                                false,
+                            )
+                            .into(),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        4,
+                        "required",
+                        Type::List(ListType::new(
+                            NestedField::list_element(5, Type::Primitive(PrimitiveType::Int), true)
+                                .into(),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(table_schema)
+                .with_project_field_ids(vec![1, 2, 4])
+                .with_case_sensitive(false)
+                .build()
+                .unwrap())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        let out = &result[0];
+        assert_eq!(out.num_rows(), 3);
+
+        let expected_offsets = OffsetBuffer::new(vec![0, 2, 2, 4].into());
+        let expected_values = Arc::new(Int32Array::from(vec![1, 2, 5, 6])) as ArrayRef;
+        let expected_nulls = NullBuffer::from(vec![true, false, true]);
+        let schema = out.schema();
+        for (name, element_nullable) in [("optional", true), ("required", false)] {
+            let col = schema.index_of(name).unwrap();
+            let list = out.column(col).as_list::<i32>();
+            assert_eq!(list.offsets(), &expected_offsets, "{name} offsets");
+            assert_eq!(
+                list.values().as_ref(),
+                expected_values.as_ref(),
+                "{name} values"
+            );
+            assert_eq!(list.nulls(), Some(&expected_nulls), "{name} nulls");
+            let DataType::List(element) = schema.field(col).data_type() else {
+                panic!("{name} should be List");
+            };
+            assert_eq!(
+                element.is_nullable(),
+                element_nullable,
+                "{name} element nullability"
+            );
+        }
+        let id_col = schema.index_of("id").unwrap();
+        assert_eq!(
+            out.column(id_col).as_ref(),
+            &Int32Array::from(vec![1, 2, 3]) as &dyn Array
+        );
+    }
+
+    /// Migrated files have no field IDs. Cover name mapping and fallback IDs with a null row,
+    /// nested FixedSizeList shapes, and a required top-level element.
+    #[tokio::test]
+    async fn test_read_fixed_size_list_without_field_ids() {
+        use arrow_array::{FixedSizeListArray, Int32Array, ListArray, MapArray, StructArray};
+        use arrow_buffer::{NullBuffer, OffsetBuffer};
+
+        use crate::spec::{ListType, MapType};
+
+        let item = |nullable| Arc::new(Field::new("item", DataType::Int32, nullable));
+        let values = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            None,
+            None,
+            Some(5),
+            Some(6),
+        ])) as ArrayRef;
+        let row_nulls = NullBuffer::from(vec![true, false, true]);
+        let fsl = |nullable_element| {
+            FixedSizeListArray::new(
+                item(nullable_element),
+                2,
+                Arc::clone(&values),
+                Some(row_nulls.clone()),
+            )
+        };
+
+        let top = fsl(false);
+        let in_struct = StructArray::new(
+            Fields::from(vec![Field::new(
+                "inner",
+                DataType::FixedSizeList(item(true), 2),
+                true,
+            )]),
+            vec![Arc::new(fsl(true)) as ArrayRef],
+            None,
+        );
+        let map_entries = StructArray::new(
+            Fields::from(vec![
+                Field::new("keys", DataType::Utf8, false),
+                Field::new("values", DataType::FixedSizeList(item(true), 2), true),
+            ]),
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+                Arc::new(FixedSizeListArray::new(
+                    item(true),
+                    2,
+                    Arc::new(Int32Array::from(vec![
+                        Some(10),
+                        Some(11),
+                        Some(20),
+                        Some(21),
+                    ])) as ArrayRef,
+                    None,
+                )) as ArrayRef,
+            ],
+            None,
+        );
+        let as_map_value = MapArray::new(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(map_entries.fields().clone()),
+                false,
+            )),
+            OffsetBuffer::new(vec![0, 1, 1, 2].into()),
+            map_entries,
+            Some(row_nulls.clone()),
+            false,
+        );
+        let list_of_fsl = ListArray::new(
+            Arc::new(Field::new(
+                "element",
+                DataType::FixedSizeList(item(true), 2),
+                true,
+            )),
+            OffsetBuffer::new(vec![0, 1, 1, 2].into()),
+            Arc::new(FixedSizeListArray::new(
+                item(true),
+                2,
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(5), Some(6)])) as ArrayRef,
+                None,
+            )) as ArrayRef,
+            Some(row_nulls.clone()),
+        );
+        let nested_fsl = FixedSizeListArray::new(
+            Arc::new(Field::new(
+                "item",
+                DataType::FixedSizeList(item(true), 2),
+                true,
+            )),
+            1,
+            Arc::new(FixedSizeListArray::new(
+                item(true),
+                2,
+                Arc::clone(&values),
+                None,
+            )) as ArrayRef,
+            Some(row_nulls),
+        );
+
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("top", DataType::FixedSizeList(item(false), 2), true),
+            Field::new(
+                "s",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "inner",
+                    DataType::FixedSizeList(item(true), 2),
+                    true,
+                )])),
+                true,
+            ),
+            Field::new(
+                "m",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", DataType::FixedSizeList(item(true), 2), true),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
+            ),
+            Field::new(
+                "list_of_fsl",
+                DataType::List(Arc::new(Field::new(
+                    "element",
+                    DataType::FixedSizeList(item(true), 2),
+                    true,
+                ))),
+                true,
+            ),
+            Field::new(
+                "nested_fsl",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new(
+                        "item",
+                        DataType::FixedSizeList(item(true), 2),
+                        true,
+                    )),
+                    1,
+                ),
+                true,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(file_schema.clone(), vec![
+            Arc::new(top) as ArrayRef,
+            Arc::new(in_struct) as ArrayRef,
+            Arc::new(as_map_value) as ArrayRef,
+            Arc::new(list_of_fsl) as ArrayRef,
+            Arc::new(nested_fsl) as ArrayRef,
+        ])
+        .unwrap();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let path = format!("{}/fsl_no_ids.parquet", tmp_dir.path().to_str().unwrap());
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), file_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let file_size = std::fs::metadata(&path).unwrap().len();
+
+        let int_ty = Type::Primitive(PrimitiveType::Int);
+        let list_of = |id, required| {
+            Type::List(ListType::new(
+                NestedField::list_element(id, int_ty.clone(), required).into(),
+            ))
+        };
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "top", list_of(6, true)).into(),
+                    NestedField::optional(
+                        2,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(7, "inner", list_of(8, false)).into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        3,
+                        "m",
+                        Type::Map(MapType::optional(
+                            9,
+                            Type::Primitive(PrimitiveType::String),
+                            10,
+                            list_of(11, false),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        4,
+                        "list_of_fsl",
+                        Type::List(ListType::new(
+                            NestedField::list_element(12, list_of(13, false), false).into(),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        5,
+                        "nested_fsl",
+                        Type::List(ListType::new(
+                            NestedField::list_element(14, list_of(15, false), false).into(),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let name_mapping = Arc::new(NameMapping::new(vec![
+            MappedField::new(Some(1), vec!["top".to_string()], vec![MappedField::new(
+                Some(6),
+                vec!["element".to_string()],
+                vec![],
+            )]),
+            MappedField::new(Some(2), vec!["s".to_string()], vec![MappedField::new(
+                Some(7),
+                vec!["inner".to_string()],
+                vec![MappedField::new(
+                    Some(8),
+                    vec!["element".to_string()],
+                    vec![],
+                )],
+            )]),
+            MappedField::new(Some(3), vec!["m".to_string()], vec![
+                MappedField::new(Some(9), vec!["key".to_string()], vec![]),
+                MappedField::new(Some(10), vec!["value".to_string()], vec![MappedField::new(
+                    Some(11),
+                    vec!["element".to_string()],
+                    vec![],
+                )]),
+            ]),
+            MappedField::new(Some(4), vec!["list_of_fsl".to_string()], vec![
+                MappedField::new(Some(12), vec!["element".to_string()], vec![
+                    MappedField::new(Some(13), vec!["element".to_string()], vec![]),
+                ]),
+            ]),
+            MappedField::new(Some(5), vec!["nested_fsl".to_string()], vec![
+                MappedField::new(Some(14), vec!["element".to_string()], vec![
+                    MappedField::new(Some(15), vec!["element".to_string()], vec![]),
+                ]),
+            ]),
+        ]));
+
+        let assert_top_list = |out: &RecordBatch| {
+            assert_eq!(out.num_rows(), 3);
+            let top = out
+                .column(out.schema().index_of("top").unwrap())
+                .as_list::<i32>();
+            assert_eq!(
+                top.nulls(),
+                Some(&NullBuffer::from(vec![true, false, true]))
+            );
+            assert_eq!(
+                top.values().as_ref(),
+                &Int32Array::from(vec![1, 2, 5, 6]) as &dyn Array
+            );
+            let schema = out.schema();
+            for name in ["s", "m", "list_of_fsl", "nested_fsl"] {
+                let field = schema.field_with_name(name).unwrap();
+                assert!(
+                    !matches!(field.data_type(), DataType::FixedSizeList(_, _)),
+                    "{name} should not stay FixedSizeList: {:?}",
+                    field.data_type()
+                );
+            }
+        };
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let mapped_tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(file_size)
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(path.clone())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(Arc::clone(&table_schema))
+                .with_project_field_ids(vec![1, 2, 3, 4, 5])
+                .with_case_sensitive(false)
+                .with_name_mapping(Some(Arc::clone(&name_mapping)))
+                .build()
+                .unwrap())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+        let mapped = reader
+            .read(mapped_tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        assert_eq!(mapped.len(), 1);
+        assert_top_list(&mapped[0]);
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let fallback_tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(file_size)
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(table_schema)
+                .with_project_field_ids(vec![1, 2, 3, 4, 5])
+                .with_case_sensitive(false)
+                .build()
+                .unwrap())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+        let fallback = reader
+            .read(fallback_tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        assert_eq!(fallback.len(), 1);
+        assert_top_list(&fallback[0]);
     }
 }

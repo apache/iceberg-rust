@@ -40,48 +40,38 @@ readme = "project-description.md"
 requires-python = ">=3.10,<4"
 
 [tool.maturin]
+# sdist only: maturin adds these to wheels automatically (dist-info/licenses/).
 include = [
-  { path = "LICENSE", format = [
-    "sdist",
-    "wheel",
-  ] },
-  { path = "NOTICE", format = [
-    "sdist",
-    "wheel",
-  ] },
+  { path = "LICENSE", format = "sdist" },
+  { path = "NOTICE", format = "sdist" },
 ]
 module-name = "pyiceberg_core.pyiceberg_core_rust"
 profile = "release"
 python-source = "python"
-# Optimize for small binary size (https://github.com/apache/iceberg-rust/pull/1841)
+# Don't strip: depending on the binary's layout, a stripped macOS .so fails to import
+# with "mis-aligned LINKEDIT string pool" (https://github.com/apache/iceberg-rust/issues/3646).
 config = [
   "profile.release.lto=\"thin\"",
   "profile.release.codegen-units=1",
-  "profile.release.opt-level=\"z\"",
-  "profile.release.strip=true",
+  "profile.release.opt-level=3",
+  "profile.release.strip=false",
 ]
 
 [tool.ruff.lint]
 ignore = ["F403", "F405"]
 
 [tool.pytest.ini_options]
-filterwarnings = [
-  "error",
-  # huggingface_hub uses hf_xet.upload_files() internally which is deprecated in hf_xet
-  "ignore::DeprecationWarning:huggingface_hub",
-]
+filterwarnings = ["error"]
 
 [dependency-groups]
 dev = [
   "maturin>=1.9.4,<2.0",
   "pytest>=8.3.2",
-  "datafusion==52.*",
   # Set a PyIceberg lower bound; otherwise the resolver may select the
   # unrelated 0.0.2 stub.
-  # Keep pyarrow direct because current pyiceberg[pyarrow] releases depend on
-  # pyiceberg-core, which conflicts with this local pyiceberg-core project.
-  "pyiceberg[sql-sqlite]>=0.11",
+  # Install PyArrow directly instead of using pyiceberg[pyarrow]: that extra
+  # depends on the published pyiceberg-core, which conflicts with this local build.
+  "pyiceberg>=0.11",
   "pyarrow>=17",
   "fastavro>=1.11.1",
-  "huggingface_hub>=0.20",
 ]

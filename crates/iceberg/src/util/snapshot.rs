@@ -15,11 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashSet;
+
 use crate::spec::{SnapshotRef, TableMetadataRef};
+use crate::{Error, ErrorKind, Result};
 
 struct Ancestors {
     next: Option<SnapshotRef>,
     get_snapshot: Box<dyn Fn(i64) -> Option<SnapshotRef> + Send>,
+    visited: HashSet<i64>,
 }
 
 impl Iterator for Ancestors {
@@ -27,6 +31,10 @@ impl Iterator for Ancestors {
 
     fn next(&mut self) -> Option<Self::Item> {
         let snapshot = self.next.take()?;
+        // corrupt metadata with a parent cycle must not hang the traversal
+        if !self.visited.insert(snapshot.snapshot_id()) {
+            return None;
+        }
         self.next = snapshot
             .parent_snapshot_id()
             .and_then(|id| (self.get_snapshot)(id));
@@ -35,6 +43,9 @@ impl Iterator for Ancestors {
 }
 
 /// Iterate starting from `snapshot_id` (inclusive) to the root snapshot.
+///
+/// The iterator visits each snapshot at most once, so it terminates even on
+/// corrupt metadata whose parent pointers form a cycle.
 pub fn ancestors_of(
     table_metadata: &TableMetadataRef,
     snapshot_id: i64,
@@ -44,10 +55,16 @@ pub fn ancestors_of(
     Ancestors {
         next: initial,
         get_snapshot: Box::new(move |id| table_metadata.snapshot_by_id(id).cloned()),
+        visited: HashSet::new(),
     }
 }
 
 /// Iterate starting from `latest_snapshot_id` (inclusive) to `oldest_snapshot_id` (exclusive).
+///
+/// Note: if `oldest_snapshot_id` is `Some(id)` but `id` is not actually an
+/// ancestor of `latest_snapshot_id`, the walk is never stopped and this yields
+/// *all* ancestors of `latest_snapshot_id` down to the root. Callers that treat
+/// `oldest_snapshot_id` as a lower bound must validate the lineage themselves.
 pub fn ancestors_between(
     table_metadata: &TableMetadataRef,
     latest_snapshot_id: i64,
@@ -60,10 +77,63 @@ pub fn ancestors_between(
     })
 }
 
+/// Resolve the snapshot ID from the main-history entry with the greatest timestamp
+/// at or before `timestamp_ms` (milliseconds since the Unix epoch), taking the first
+/// entry on ties.
+///
+/// This matches Java's ordering, except that an entry at `i64::MIN` can match here
+/// but never matches in Java, which seeds its search with `Long.MIN_VALUE`.
+/// PyIceberg takes the last qualifying log entry, so ties or out-of-order
+/// timestamps can produce different results.
+///
+/// Returns [`ErrorKind::DataInvalid`] if no matching history exists.
+/// The returned snapshot may have expired, so
+/// [`snapshot_by_id`](crate::spec::TableMetadata::snapshot_by_id) can still return `None`.
+///
+/// ```
+/// # use iceberg::TableIdent;
+/// # use iceberg::io::FileIO;
+/// # use iceberg::table::StaticTable;
+/// use iceberg::util::snapshot::snapshot_id_as_of_time;
+/// # #[tokio::main]
+/// # async fn main() -> iceberg::Result<()> {
+/// # let location = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/example_table_metadata_v2.json");
+/// # let ident = TableIdent::from_strs(["ns", "t"])?;
+/// # let table = StaticTable::from_metadata_file(location, ident, FileIO::new_with_fs()).await?;
+/// let metadata = table.metadata();
+/// // The snapshot log has entries at 1515100955770 and 1555100955770.
+/// let snapshot_id = snapshot_id_as_of_time(&metadata, 1_555_100_955_770)?;
+/// assert_eq!(snapshot_id, 3055729675574597004);
+/// assert!(snapshot_id_as_of_time(&metadata, 1_515_100_955_769).is_err());
+/// # Ok(())
+/// # }
+/// ```
+pub fn snapshot_id_as_of_time(table_metadata: &TableMetadataRef, timestamp_ms: i64) -> Result<i64> {
+    table_metadata
+        .history()
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.timestamp_ms() <= timestamp_ms)
+        .max_by(|(idx_a, a), (idx_b, b)| {
+            a.timestamp_ms()
+                .cmp(&b.timestamp_ms())
+                // Earlier entries win ties, matching Java's timestamp selection.
+                .then(idx_b.cmp(idx_a))
+        })
+        .map(|(_, entry)| entry.snapshot_id)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("No snapshot history at or before timestamp {timestamp_ms} ms"),
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scan::tests::TableTestFixture;
+    use crate::spec::SnapshotLog;
+    use crate::test_utils::scan::TableTestFixture;
 
     // Five snapshots chained as: S1 (root) -> S2 -> S3 -> S4 -> S5 (current)
     const S1: i64 = 3051729675574597004;
@@ -75,6 +145,77 @@ mod tests {
     fn metadata() -> TableMetadataRef {
         let fixture = TableTestFixture::new_with_deep_history();
         std::sync::Arc::new(fixture.table.metadata().clone())
+    }
+
+    type History = [(i64, i64)];
+
+    fn metadata_with_history(history: &History) -> TableMetadataRef {
+        let mut metadata = metadata().as_ref().clone();
+        metadata.snapshot_log = history
+            .iter()
+            .map(|&(timestamp_ms, snapshot_id)| SnapshotLog {
+                timestamp_ms,
+                snapshot_id,
+            })
+            .collect();
+        metadata.into()
+    }
+
+    #[test]
+    fn test_snapshot_id_as_of_time() {
+        let cases: &[(&History, i64, i64)] = &[
+            (&[(1000, S1), (2000, S2)], 1000, S1),
+            (&[(1000, S1), (2000, S2)], 1500, S1),
+            (&[(1000, S1), (2000, S2)], 2000, S2),
+            (&[(1000, S1), (2000, S2)], 3000, S2),
+            // Rollback records when an existing snapshot becomes current again.
+            (&[(1000, S1), (2000, S2), (3000, S1)], 3500, S1),
+            // The first entry wins on ties.
+            (&[(1000, S1), (2000, S2), (2000, S3)], 2000, S2),
+            // Clock skew means the log need not be sorted by timestamp.
+            (&[(1000, S1), (3000, S2), (2500, S3)], 3500, S2),
+            (&[(1000, S1), (3000, S2), (2500, S3)], 2600, S3),
+            (&[(-2000, S1), (-1000, S2)], -1500, S1),
+            // Java returns no match here; see the docstring.
+            (&[(i64::MIN, S1), (0, S2)], i64::MIN, S1),
+            (&[(0, S1), (i64::MAX, S2)], i64::MAX, S2),
+        ];
+        for &(history, timestamp_ms, expected) in cases {
+            let metadata = metadata_with_history(history);
+            assert_eq!(
+                snapshot_id_as_of_time(&metadata, timestamp_ms).unwrap(),
+                expected,
+                "timestamp {timestamp_ms}, history {history:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_snapshot_id_as_of_time_without_history_at_timestamp() {
+        let cases: &[(&History, i64)] = &[
+            (&[], 1000),
+            (&[(1000, S1)], 999),
+            (&[(3000, S1)], 1500), // Expired prefix; S1 is still retained.
+        ];
+        for &(history, timestamp_ms) in cases {
+            let metadata = metadata_with_history(history);
+            assert!(metadata.snapshot_by_id(S1).is_some());
+            let err = snapshot_id_as_of_time(&metadata, timestamp_ms).unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains(&timestamp_ms.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_snapshot_id_as_of_time_ignores_snapshots_outside_main_history() {
+        let mut metadata = metadata().as_ref().clone();
+        metadata.snapshot_log.truncate(2);
+        // Newer retained snapshots may be staged or belong only to another branch.
+        assert!(metadata.snapshot_by_id(S5).is_some());
+        assert_eq!(
+            snapshot_id_as_of_time(&metadata.into(), i64::MAX).unwrap(),
+            S2
+        );
     }
 
     // --- ancestors_of ---

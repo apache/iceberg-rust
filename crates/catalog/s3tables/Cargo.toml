@@ -31,7 +31,6 @@ license = { workspace = true }
 repository = { workspace = true }
 
 [dependencies]
-anyhow = { workspace = true }
 async-trait = { workspace = true }
 aws-config = { workspace = true }
 aws-sdk-s3tables = { workspace = true }
@@ -47,3 +46,6 @@ itertools = { workspace = true }
 parquet = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
+
+[lints]
+workspace = true

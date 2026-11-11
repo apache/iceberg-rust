@@ -21,17 +21,22 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "sunday"
+      interval: "monthly"
     cooldown:
       default-days: 7
+    groups:
+      # The codeql-action init/autobuild/analyze steps must all run the
+      # same version - split PRs cause a version mismatch that fails the
+      # Analyze jobs. Group them so a single PR bumps all of them together.
+      codeql-action:
+        patterns:
+          - "github/codeql-action*"
 
   # Maintain dependencies for iceberg
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "weekly"
-      day: "sunday"
+      interval: "monthly"
     open-pull-requests-limit: 50
     versioning-strategy: lockfile-only
     ignore:
@@ -51,7 +56,6 @@ updates:
   - package-ecosystem: "uv"
     directory: "/bindings/python"
     schedule:
-      interval: "weekly"
-      day: "sunday"
+      interval: "monthly"
     cooldown:
       default-days: 7

@@ -25,8 +25,9 @@ use super::_const_schema::{
 };
 use super::_serde::{ManifestFileV1, ManifestFileV2, ManifestFileV3};
 use super::{FormatVersion, ManifestContentType, ManifestFile, UNASSIGNED_SEQUENCE_NUMBER};
-use crate::error::Result;
-use crate::io::FileWrite;
+use crate::avro::new_writer;
+use crate::error::{Result, invalid_data};
+use crate::io::{FileMetadata, FileWrite};
 use crate::{Error, ErrorKind};
 
 /// A manifest list writer.
@@ -149,7 +150,9 @@ impl ManifestListWriter {
             FormatVersion::V2 => &MANIFEST_LIST_AVRO_SCHEMA_V2,
             FormatVersion::V3 => &MANIFEST_LIST_AVRO_SCHEMA_V3,
         };
-        let mut avro_writer = Writer::new(avro_schema, Vec::new());
+        let mut avro_writer = new_writer(avro_schema, Vec::new()).expect(
+            "Manifest list Avro schemas should resolve because they refer to no named types.",
+        );
         for (key, value) in metadata {
             avro_writer
                 .add_user_metadata(key, value)
@@ -196,24 +199,20 @@ impl ManifestListWriter {
         Ok(())
     }
 
-    /// Write the manifest list to the output file.
-    pub async fn close(mut self) -> Result<()> {
+    /// Write the manifest list and return its stored size.
+    pub async fn close(mut self) -> Result<FileMetadata> {
         let data = self.avro_writer.into_inner()?;
         self.writer.write(Bytes::from(data)).await?;
-        self.writer.close().await?;
-        Ok(())
+        self.writer.close().await
     }
 
     /// Assign sequence numbers to manifest if they are unassigned
     fn assign_sequence_numbers(&self, manifest: &mut ManifestFile) -> Result<()> {
         if manifest.sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
             if manifest.added_snapshot_id != self.snapshot_id {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Found unassigned sequence number for a manifest from snapshot {}.",
-                        manifest.added_snapshot_id
-                    ),
+                return Err(invalid_data!(
+                    "Found unassigned sequence number for a manifest from snapshot {}.",
+                    manifest.added_snapshot_id
                 ));
             }
             manifest.sequence_number = self.sequence_number;
@@ -221,12 +220,9 @@ impl ManifestListWriter {
 
         if manifest.min_sequence_number == UNASSIGNED_SEQUENCE_NUMBER {
             if manifest.added_snapshot_id != self.snapshot_id {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Found unassigned sequence number for a manifest from snapshot {}.",
-                        manifest.added_snapshot_id
-                    ),
+                return Err(invalid_data!(
+                    "Found unassigned sequence number for a manifest from snapshot {}.",
+                    manifest.added_snapshot_id
                 ));
             }
             manifest.min_sequence_number = self.sequence_number;
@@ -265,13 +261,10 @@ impl ManifestListWriter {
                         .checked_add(existing_rows_count)
                         .and_then(|sum| sum.checked_add(added_rows_count))
                         .ok_or_else(|| {
-                            Error::new(
-                                ErrorKind::DataInvalid,
-                                format!(
+                            invalid_data!(
                                     "Row ID overflow when computing next row ID for Manifest {}. Next Row ID: {writer_next_row_id}, Existing Rows Count: {existing_rows_count}, Added Rows Count: {added_rows_count}",
                                     manifest.manifest_path
-                                ),
-                            )
+                                )
                         }).map(Some)?;
                     }
                     (None, None) => {
@@ -291,22 +284,16 @@ impl ManifestListWriter {
 
 fn require_row_counts_in_manifest(manifest: &ManifestFile) -> Result<(u64, u64)> {
     let existing_rows_count = manifest.existing_rows_count.ok_or_else(|| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
+        invalid_data!(
                 "Cannot include a Manifest without existing-rows-count to a table with row lineage enabled. Manifest path: {}",
                 manifest.manifest_path,
-            ),
-        )
+            )
     })?;
     let added_rows_count = manifest.added_rows_count.ok_or_else(|| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            format!(
+        invalid_data!(
                 "Cannot include a Manifest without added-rows-count to a table with row lineage enabled. Manifest path: {}",
                 manifest.manifest_path,
-            ),
-        )
+            )
     })?;
     Ok((existing_rows_count, added_rows_count))
 }
@@ -315,10 +302,14 @@ fn require_row_counts_in_manifest(manifest: &ManifestFile) -> Result<(u64, u64)>
 mod test {
     use std::fs;
     use std::path::Path;
+    use std::sync::Arc;
 
     use tempfile::TempDir;
 
     use super::ManifestListWriter;
+    use crate::avro::assert_deflate_codec;
+    use crate::encryption::kms::{KeyManagementClient, MemoryKeyManagementClient};
+    use crate::encryption::{EncryptedInputFile, EncryptionManager};
     use crate::io::{FileIO, FileWrite};
     use crate::spec::{
         Datum, FieldSummary, ManifestContentType, ManifestFile, ManifestList,
@@ -362,6 +353,7 @@ mod test {
         writer.close().await.unwrap();
 
         let bs = fs::read(path).unwrap();
+        assert_deflate_codec(&bs);
 
         let manifest_list =
             ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V1).unwrap();
@@ -409,6 +401,7 @@ mod test {
         writer.close().await.unwrap();
 
         let bs = fs::read(path).unwrap();
+        assert_deflate_codec(&bs);
         let manifest_list =
             ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
         expected_manifest_list.entries[0].sequence_number = seq_num;
@@ -458,6 +451,7 @@ mod test {
         writer.close().await.unwrap();
 
         let bs = fs::read(path).unwrap();
+        assert_deflate_codec(&bs);
         let manifest_list =
             ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V3).unwrap();
         expected_manifest_list.entries[0].sequence_number = seq_num;
@@ -605,6 +599,78 @@ mod test {
         assert_eq!(manifest_list, expected_manifest_list);
 
         temp_dir.close().unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_writer_v3_encrypted_round_trip() {
+        let (mgr, file_io) = fresh_encryption_manager_and_io();
+        let path = "memory:///manifest_list_v3_encrypted.avro";
+
+        let encrypted_output = mgr.encrypt(file_io.new_output(path).unwrap());
+
+        let snapshot_id = 9_000_000_000_000_001i64;
+        let seq_num = 7i64;
+        let mut expected = ManifestList {
+            entries: vec![ManifestFile {
+                manifest_path: "memory:///encrypted/v3_m0.avro".to_string(),
+                manifest_length: 1234,
+                partition_spec_id: 0,
+                content: ManifestContentType::Data,
+                sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                min_sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
+                added_snapshot_id: snapshot_id,
+                added_files_count: Some(2),
+                existing_files_count: Some(0),
+                deleted_files_count: Some(0),
+                added_rows_count: Some(10),
+                existing_rows_count: Some(0),
+                deleted_rows_count: Some(0),
+                partitions: Some(vec![FieldSummary {
+                    contains_null: false,
+                    contains_nan: Some(false),
+                    lower_bound: Some(Datum::long(1).to_bytes().unwrap()),
+                    upper_bound: Some(Datum::long(1).to_bytes().unwrap()),
+                }]),
+                key_metadata: None,
+                first_row_id: None,
+            }],
+        };
+
+        let file_writer = encrypted_output.writer().await.unwrap();
+        let mut writer = ManifestListWriter::v3(file_writer, snapshot_id, Some(0), seq_num, None);
+        writer
+            .add_manifests(expected.entries.clone().into_iter())
+            .unwrap();
+        let file_metadata = writer.close().await.unwrap();
+
+        let raw_bytes = file_io.new_input(path).unwrap().read().await.unwrap();
+        assert!(
+            ManifestList::parse_with_version(&raw_bytes, crate::spec::FormatVersion::V3).is_err(),
+            "raw bytes should be ciphertext, not parseable as Avro"
+        );
+
+        let key_metadata = encrypted_output.key_metadata_with_saved_file_metadata(&file_metadata);
+        assert_eq!(key_metadata.file_length(), Some(raw_bytes.len() as u64));
+        let plaintext = EncryptedInputFile::new(file_io.new_input(path).unwrap(), key_metadata)
+            .read()
+            .await
+            .unwrap();
+        let manifest_list =
+            ManifestList::parse_with_version(&plaintext, crate::spec::FormatVersion::V3).unwrap();
+
+        expected.entries[0].sequence_number = seq_num;
+        expected.entries[0].min_sequence_number = seq_num;
+        assert_eq!(manifest_list, expected);
+    }
+
+    fn fresh_encryption_manager_and_io() -> (EncryptionManager, FileIO) {
+        let kms = MemoryKeyManagementClient::new();
+        kms.add_master_key("master-1").unwrap();
+        let mgr = EncryptionManager::builder()
+            .kms_client(Arc::new(kms) as Arc<dyn KeyManagementClient>)
+            .table_key_id("master-1")
+            .build();
+        (mgr, FileIO::new_with_memory())
     }
 
     async fn file_writer(path: &Path, io: FileIO) -> Box<dyn FileWrite> {

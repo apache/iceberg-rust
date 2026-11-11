@@ -23,16 +23,19 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::lock::{Mutex, MutexGuard};
+use iceberg_property_macro::Properties;
 use itertools::Itertools;
 
 use super::namespace_state::NamespaceState;
+use crate::encryption::kms::{KeyManagementClient, KmsClientFactory};
+use crate::error::invalid_data;
 use crate::io::{FileIO, FileIOBuilder, MemoryStorageFactory, StorageFactory};
 use crate::runtime::Runtime;
 use crate::spec::{TableMetadata, TableMetadataBuilder};
 use crate::table::Table;
 use crate::{
-    Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    TableCommit, TableCreation, TableIdent,
+    Catalog, CatalogBuilder, MetadataLocation, Namespace, NamespaceIdent, Result, TableCommit,
+    TableCreation, TableIdent, delete_removed_metadata_files,
 };
 
 /// Memory catalog warehouse location
@@ -42,25 +45,11 @@ pub const MEMORY_CATALOG_WAREHOUSE: &str = "warehouse";
 const LOCATION: &str = "location";
 
 /// Builder for [`MemoryCatalog`].
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct MemoryCatalogBuilder {
-    config: MemoryCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
-}
-
-impl Default for MemoryCatalogBuilder {
-    fn default() -> Self {
-        Self {
-            config: MemoryCatalogConfig {
-                name: None,
-                warehouse: "".to_string(),
-                props: HashMap::new(),
-            },
-            storage_factory: None,
-            runtime: None,
-        }
-    }
 }
 
 impl CatalogBuilder for MemoryCatalogBuilder {
@@ -71,83 +60,92 @@ impl CatalogBuilder for MemoryCatalogBuilder {
         self
     }
 
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
+        self
+    }
+
     fn with_runtime(mut self, runtime: Runtime) -> Self {
         self.runtime = Some(runtime);
         self
     }
 
     fn load(
-        mut self,
+        self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.config.name = Some(name.into());
+        let name = name.into();
 
-        if props.contains_key(MEMORY_CATALOG_WAREHOUSE) {
-            self.config.warehouse = props
-                .get(MEMORY_CATALOG_WAREHOUSE)
-                .cloned()
-                .unwrap_or_default()
-        }
-
-        // Collect other remaining properties
-        self.config.props = props
-            .into_iter()
-            .filter(|(k, _)| k != MEMORY_CATALOG_WAREHOUSE)
-            .collect();
-
-        let result = {
-            if self.config.name.is_none() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog name is required",
-                ))
-            } else if self.config.warehouse.is_empty() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog warehouse is required",
-                ))
-            } else {
-                let runtime = self.runtime.unwrap_or_else(Runtime::current);
-                MemoryCatalog::new(self.config, self.storage_factory, runtime)
+        async move {
+            let catalog_properties = MemoryCatalogProperties::from_properties(&props)?;
+            if catalog_properties.warehouse.is_empty() {
+                return Err(invalid_data!("Catalog warehouse is required"));
             }
-        };
 
-        std::future::ready(result)
+            let runtime = self.runtime.unwrap_or_else(Runtime::current);
+            let kms_client = match self.kms_client_factory {
+                Some(factory) => Some(factory.create_kms_client(&props).await?),
+                None => None,
+            };
+            MemoryCatalog::new(
+                name,
+                catalog_properties,
+                props,
+                self.storage_factory,
+                runtime,
+                kms_client,
+            )
+        }
     }
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct MemoryCatalogConfig {
-    name: Option<String>,
+/// Memory catalog properties parsed from a catalog property map.
+#[derive(Debug, Properties)]
+pub(crate) struct MemoryCatalogProperties {
+    #[property(key = MEMORY_CATALOG_WAREHOUSE, default = "")]
     warehouse: String,
-    props: HashMap<String, String>,
 }
 
 /// Memory catalog implementation.
-#[derive(Debug)]
 pub struct MemoryCatalog {
+    name: String,
+    properties: MemoryCatalogProperties,
     root_namespace_state: Mutex<NamespaceState>,
     file_io: FileIO,
-    warehouse_location: String,
     runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
+}
+
+impl std::fmt::Debug for MemoryCatalog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MemoryCatalog")
+            .field("name", &self.name)
+            .field("properties", &self.properties)
+            .finish_non_exhaustive()
+    }
 }
 
 impl MemoryCatalog {
     /// Creates a memory catalog.
     fn new(
-        config: MemoryCatalogConfig,
+        name: String,
+        properties: MemoryCatalogProperties,
+        props: HashMap<String, String>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
         // Use provided factory or default to MemoryStorageFactory
         let factory = storage_factory.unwrap_or_else(|| Arc::new(MemoryStorageFactory));
 
         Ok(Self {
+            name,
+            properties,
+            file_io: FileIOBuilder::new(factory).with_props(props).build(),
             root_namespace_state: Mutex::new(NamespaceState::default()),
-            file_io: FileIOBuilder::new(factory).with_props(config.props).build(),
-            warehouse_location: config.warehouse,
             runtime,
+            kms_client,
         })
     }
 
@@ -160,13 +158,16 @@ impl MemoryCatalog {
         let metadata_location = root_namespace_state.get_existing_table_location(table_ident)?;
         let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata(metadata)
             .metadata_location(metadata_location.to_string())
             .file_io(self.file_io.clone())
-            .runtime(self.runtime.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 }
 
@@ -286,42 +287,46 @@ impl Catalog for MemoryCatalog {
         let table_name = table_creation.name.clone();
         let table_ident = TableIdent::new(namespace_ident.clone(), table_name);
 
-        let (table_creation, location) = match table_creation.location.clone() {
-            Some(location) => (table_creation, location),
-            None => {
-                let namespace_properties = root_namespace_state.get_properties(namespace_ident)?;
-                let location_prefix = match namespace_properties.get(LOCATION) {
-                    Some(namespace_location) => namespace_location.clone(),
-                    None => format!("{}/{}", self.warehouse_location, namespace_ident.join("/")),
-                };
+        let table_creation = if table_creation.location.is_some() {
+            table_creation
+        } else {
+            let namespace_properties = root_namespace_state.get_properties(namespace_ident)?;
+            let location_prefix = match namespace_properties.get(LOCATION) {
+                Some(namespace_location) => namespace_location.clone(),
+                None => format!(
+                    "{}/{}",
+                    self.properties.warehouse,
+                    namespace_ident.join("/")
+                ),
+            };
 
-                let location = format!("{}/{}", location_prefix, table_ident.name());
+            let location = format!("{}/{}", location_prefix, table_ident.name());
 
-                let new_table_creation = TableCreation {
-                    location: Some(location.clone()),
-                    ..table_creation
-                };
-
-                (new_table_creation, location)
+            TableCreation {
+                location: Some(location),
+                ..table_creation
             }
         };
 
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
             .metadata;
-        let metadata_location = MetadataLocation::new_with_metadata(location, &metadata);
+        let metadata_location = MetadataLocation::try_new_with_metadata(&metadata)?;
 
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
         root_namespace_state.insert_new_table(&table_ident, metadata_location.to_string())?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io.clone())
             .metadata_location(metadata_location.to_string())
             .metadata(metadata)
             .identifier(table_ident)
-            .runtime(self.runtime.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Load table from the catalog.
@@ -382,13 +387,16 @@ impl Catalog for MemoryCatalog {
 
         let metadata = TableMetadata::read_from(&self.file_io, &metadata_location).await?;
 
-        Table::builder()
+        let mut builder = Table::builder()
             .file_io(self.file_io.clone())
             .metadata_location(metadata_location)
             .metadata(metadata)
             .identifier(table_ident.clone())
-            .runtime(self.runtime.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
     }
 
     /// Update a table in the catalog.
@@ -398,6 +406,7 @@ impl Catalog for MemoryCatalog {
         let current_table = self
             .load_table_from_locked_state(commit.identifier(), &root_namespace_state)
             .await?;
+        let base_metadata = current_table.metadata_ref();
 
         // Apply TableCommit to get staged table
         let staged_table = commit.apply(current_table)?;
@@ -412,6 +421,14 @@ impl Catalog for MemoryCatalog {
 
         // Flip the pointer to reference the new metadata file.
         let updated_table = root_namespace_state.commit_table_update(staged_table)?;
+        drop(root_namespace_state);
+
+        delete_removed_metadata_files(
+            updated_table.file_io(),
+            &base_metadata,
+            updated_table.metadata(),
+        )
+        .await;
 
         Ok(updated_table)
     }
@@ -428,14 +445,69 @@ pub(crate) mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::io::FileIO;
-    use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, Type};
+    use crate::ErrorKind;
+    use crate::encryption::kms::MemoryKmsClientFactory;
+    use crate::io::{FileIO, LocalFsStorageFactory};
+    use crate::spec::{
+        NestedField, PartitionSpec, PrimitiveType, Schema, SortOrder, TableProperties, Type,
+    };
     use crate::test_utils::test_runtime;
     use crate::transaction::{ApplyTransactionAction, Transaction};
 
     fn temp_path() -> String {
         let temp_dir = TempDir::new().unwrap();
         temp_dir.path().to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn test_catalog_properties() {
+        let properties = MemoryCatalogProperties::from_properties(&HashMap::from([(
+            MEMORY_CATALOG_WAREHOUSE.to_string(),
+            "memory:///warehouse".to_string(),
+        )]))
+        .unwrap();
+
+        assert_eq!(properties.warehouse, "memory:///warehouse");
+    }
+
+    #[test]
+    fn test_catalog_properties_warehouse_defaults_to_empty() {
+        let missing = MemoryCatalogProperties::from_properties(&HashMap::new()).unwrap();
+        let explicitly_empty = MemoryCatalogProperties::from_properties(&HashMap::from([(
+            MEMORY_CATALOG_WAREHOUSE.to_string(),
+            String::new(),
+        )]))
+        .unwrap();
+
+        assert_eq!(missing.warehouse, "");
+        assert_eq!(explicitly_empty.warehouse, "");
+    }
+
+    #[tokio::test]
+    async fn test_catalog_forwards_properties_to_file_io() {
+        let catalog = MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([
+                    (
+                        MEMORY_CATALOG_WAREHOUSE.to_string(),
+                        "memory:///warehouse".to_string(),
+                    ),
+                    ("custom.property".to_string(), "value".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+        let file_io_props = catalog.file_io.config().props();
+
+        assert_eq!(
+            file_io_props.get("custom.property"),
+            Some(&"value".to_string())
+        );
+        assert_eq!(
+            file_io_props.get(MEMORY_CATALOG_WAREHOUSE),
+            Some(&"memory:///warehouse".to_string())
+        );
     }
 
     pub(crate) async fn new_memory_catalog() -> impl Catalog {
@@ -1381,17 +1453,28 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_throws_error_if_table_location_and_namespace_location_and_warehouse_location_are_missing()
-     {
-        let catalog = MemoryCatalogBuilder::default()
+    async fn test_load_throws_error_if_warehouse_is_missing() {
+        let error = MemoryCatalogBuilder::default()
             .load("memory", HashMap::from([]))
-            .await;
+            .await
+            .unwrap_err();
 
-        assert!(catalog.is_err());
-        assert_eq!(
-            catalog.unwrap_err().to_string(),
-            "DataInvalid => Catalog warehouse is required"
-        );
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(error.message(), "Catalog warehouse is required");
+    }
+
+    #[tokio::test]
+    async fn test_load_throws_error_if_warehouse_is_empty() {
+        let error = MemoryCatalogBuilder::default()
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), String::new())]),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        assert_eq!(error.message(), "Catalog warehouse is required");
     }
 
     #[tokio::test]
@@ -1911,6 +1994,200 @@ pub(crate) mod tests {
         );
     }
 
+    async fn create_table_with_properties<C: Catalog>(
+        catalog: &C,
+        properties: HashMap<String, String>,
+    ) -> Table {
+        let namespace_ident = NamespaceIdent::new("abc".into());
+        create_namespace(catalog, &namespace_ident).await;
+        catalog
+            .create_table(
+                &namespace_ident,
+                TableCreation::builder()
+                    .name("test".into())
+                    .schema(simple_table_schema())
+                    .properties(properties)
+                    .build(),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn commit_property_update<C: Catalog>(catalog: &C, table: &Table, value: &str) -> Table {
+        let tx = Transaction::new(table);
+        tx.update_table_properties()
+            .set("key".to_string(), value.to_string())
+            .apply(tx)
+            .unwrap()
+            .commit(catalog)
+            .await
+            .unwrap()
+    }
+
+    /// Commits `num_commits` property updates and returns the metadata location of every
+    /// table version, oldest first.
+    async fn commit_metadata_versions<C: Catalog>(
+        catalog: &C,
+        mut table: Table,
+        num_commits: usize,
+    ) -> Vec<String> {
+        let mut locations = vec![table.metadata_location().unwrap().to_string()];
+        for i in 0..num_commits {
+            table = commit_property_update(catalog, &table, &i.to_string()).await;
+            locations.push(table.metadata_location().unwrap().to_string());
+        }
+        locations
+    }
+
+    async fn existing_files(file_io: &FileIO, locations: &[String]) -> Vec<String> {
+        let mut existing = Vec::new();
+        for location in locations {
+            if file_io.exists(location).await.unwrap() {
+                existing.push(location.clone());
+            }
+        }
+        existing
+    }
+
+    #[tokio::test]
+    async fn test_update_table_deletes_metadata_files_removed_from_log_when_enabled() {
+        let catalog = new_memory_catalog().await;
+        let table = create_table_with_properties(
+            &catalog,
+            HashMap::from([
+                (
+                    TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED.to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                    "1".to_string(),
+                ),
+            ]),
+        )
+        .await;
+        let file_io = table.file_io().clone();
+
+        let locations = commit_metadata_versions(&catalog, table, 3).await;
+
+        // The current metadata file and the one entry left in the metadata log remain.
+        assert_eq!(
+            existing_files(&file_io, &locations).await,
+            locations[2..].to_vec()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table_deletes_removed_metadata_files_on_commit_that_enables_cleanup() {
+        let catalog = new_memory_catalog().await;
+        let table = create_table_with_properties(
+            &catalog,
+            HashMap::from([(
+                TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                "1".to_string(),
+            )]),
+        )
+        .await;
+        let file_io = table.file_io().clone();
+        let v0 = table.metadata_location().unwrap().to_string();
+        let v1_table = commit_property_update(&catalog, &table, "1").await;
+        let v1 = v1_table.metadata_location().unwrap().to_string();
+        let v2_table = commit_property_update(&catalog, &v1_table, "2").await;
+        let v2 = v2_table.metadata_location().unwrap().to_string();
+
+        let tx = Transaction::new(&v2_table);
+        let v3_table = tx
+            .update_table_properties()
+            .set(
+                TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED.to_string(),
+                "true".to_string(),
+            )
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let v3 = v3_table.metadata_location().unwrap().to_string();
+
+        // v0 fell out of the log while cleanup was disabled, so only v1 is deleted.
+        assert_eq!(
+            existing_files(&file_io, &[v0.clone(), v1, v2.clone(), v3.clone()]).await,
+            vec![v0, v2, v3]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_table_keeps_metadata_files_removed_from_log_when_not_enabled() {
+        for delete_after_commit in [None, Some("false")] {
+            let catalog = new_memory_catalog().await;
+            let mut properties = HashMap::from([(
+                TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                "1".to_string(),
+            )]);
+            if let Some(value) = delete_after_commit {
+                properties.insert(
+                    TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED.to_string(),
+                    value.to_string(),
+                );
+            }
+            let table = create_table_with_properties(&catalog, properties).await;
+            let file_io = table.file_io().clone();
+
+            let locations = commit_metadata_versions(&catalog, table, 3).await;
+
+            assert_eq!(existing_files(&file_io, &locations).await, locations);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_update_table_succeeds_when_deleting_removed_metadata_file_fails() {
+        let warehouse = TempDir::new().unwrap();
+        let catalog = MemoryCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "memory",
+                HashMap::from([(
+                    MEMORY_CATALOG_WAREHOUSE.to_string(),
+                    warehouse.path().to_str().unwrap().to_string(),
+                )]),
+            )
+            .await
+            .unwrap();
+        let table = create_table_with_properties(
+            &catalog,
+            HashMap::from([
+                (
+                    TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED.to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX.to_string(),
+                    "1".to_string(),
+                ),
+            ]),
+        )
+        .await;
+        let file_io = table.file_io().clone();
+        let v0 = table.metadata_location().unwrap().to_string();
+        let v1_table = commit_property_update(&catalog, &table, "1").await;
+        let v1 = v1_table.metadata_location().unwrap().to_string();
+
+        // A non-empty directory in place of v0 makes its deletion fail.
+        std::fs::remove_file(&v0).unwrap();
+        std::fs::create_dir(&v0).unwrap();
+        std::fs::write(format!("{v0}/blocker"), b"").unwrap();
+
+        let v2_table = commit_property_update(&catalog, &v1_table, "2").await;
+        let v2 = v2_table.metadata_location().unwrap().to_string();
+        let v3_table = commit_property_update(&catalog, &v2_table, "3").await;
+        let v3 = v3_table.metadata_location().unwrap().to_string();
+
+        assert_eq!(
+            existing_files(&file_io, &[v0.clone(), v1, v2.clone(), v3.clone()]).await,
+            vec![v0, v2, v3]
+        );
+    }
+
     #[tokio::test]
     async fn test_update_table_fails_if_table_doesnt_exist() {
         let catalog = new_memory_catalog().await;
@@ -1932,6 +2209,91 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::TableNotFound);
+    }
+
+    /// Master key bytes used to generate the encrypted testdata fixtures.
+    /// See `testdata/manifests_lists/README.md`.
+    const FIXTURE_MASTER_KEY_ID: &str = "master-1";
+    const FIXTURE_MASTER_KEY_BYTES: [u8; 16] = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+        0x0f,
+    ];
+
+    /// Builds a `MemoryKmsClientFactory` seeded with the fixture master key.
+    fn fixture_kms_factory() -> MemoryKmsClientFactory {
+        use crate::encryption::SensitiveBytes;
+
+        let factory = MemoryKmsClientFactory::new();
+        factory
+            .add_master_key_bytes(
+                FIXTURE_MASTER_KEY_ID,
+                SensitiveBytes::new(FIXTURE_MASTER_KEY_BYTES),
+            )
+            .unwrap();
+        factory
+    }
+
+    /// Loads the encrypted V3 metadata fixture and patches its snapshot's
+    /// manifest-list to point at the on-disk encrypted testdata file.
+    fn load_encrypted_fixture_metadata() -> TableMetadata {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let metadata_json = std::fs::read_to_string(format!(
+            "{manifest_dir}/testdata/table_metadata/TableMetadataV3ValidEncryption.json"
+        ))
+        .unwrap();
+        let mut metadata: TableMetadata = serde_json::from_str(&metadata_json).unwrap();
+
+        let manifest_list_path =
+            format!("{manifest_dir}/testdata/manifests_lists/manifest-list-v3-encrypted.avro");
+        let snapshot = metadata.snapshots.get_mut(&1).unwrap();
+        let mut patched = snapshot.as_ref().clone();
+        patched.manifest_list = manifest_list_path;
+        *snapshot = Arc::new(patched);
+
+        metadata
+    }
+
+    #[tokio::test]
+    async fn catalog_kms_factory_client_reaches_table_encryption_manager() {
+        let warehouse = temp_path();
+        let catalog = MemoryCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .with_kms_client_factory(Arc::new(fixture_kms_factory()))
+            .load(
+                "memory",
+                HashMap::from([(MEMORY_CATALOG_WAREHOUSE.to_string(), warehouse)]),
+            )
+            .await
+            .unwrap();
+
+        let namespace_ident = NamespaceIdent::new("enc_ns".into());
+        create_namespace(&catalog, &namespace_ident).await;
+
+        let metadata = load_encrypted_fixture_metadata();
+        let metadata_dir = TempDir::new().unwrap();
+        let metadata_location =
+            format!("{}/v1.metadata.json", metadata_dir.path().to_str().unwrap());
+        std::fs::write(&metadata_location, serde_json::to_vec(&metadata).unwrap()).unwrap();
+
+        let table_ident = TableIdent::new(namespace_ident, "enc".to_string());
+        catalog
+            .register_table(&table_ident, metadata_location)
+            .await
+            .unwrap();
+
+        let table = catalog.load_table(&table_ident).await.unwrap();
+        assert!(
+            table.encryption_manager().is_some(),
+            "factory-built KMS client should have reached the table's EncryptionManager"
+        );
+
+        let snapshot_ref = table.metadata().current_snapshot().unwrap();
+        let manifest_list = table
+            .object_cache()
+            .get_manifest_list(snapshot_ref, &table.metadata_ref())
+            .await
+            .unwrap();
+        assert_eq!(manifest_list.entries().len(), 0);
     }
 
     fn build_table(ident: TableIdent) -> Table {

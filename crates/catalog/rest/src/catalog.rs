@@ -17,17 +17,23 @@
 
 //! This module contains the iceberg REST catalog implementation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt::{Debug, Formatter};
 use std::future::Future;
+use std::num::NonZeroU32;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
 use async_trait::async_trait;
-use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
+use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
+use iceberg::io::{
+    ADLS_SAS_TOKEN, FileIO, FileIOBuilder, GCS_TOKEN, S3_SESSION_TOKEN, StorageFactory,
+};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, Runtime,
-    TableCommit, TableCreation, TableIdent,
+    SessionCatalog, SessionContext, TableCommit, TableCreation, TableIdent,
 };
 use itertools::Itertools;
 use reqwest::header::{
@@ -37,9 +43,15 @@ use reqwest::{Client, Method, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
 
+use crate::auth::{
+    AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, AuthSession, NoopAuthManager, OAuth2Manager,
+};
 use crate::client::{
     HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
+use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
+use crate::request::HttpRequest;
+use crate::response::HttpResponse;
 use crate::types::{
     CatalogConfig, CommitTableRequest, CommitTableResponse, CreateNamespaceRequest,
     CreateTableRequest, ListNamespaceResponse, ListTablesResponse, LoadTableResult,
@@ -50,105 +62,127 @@ use crate::types::{
 pub const REST_CATALOG_PROP_URI: &str = "uri";
 /// REST catalog warehouse location
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
-/// Disable header redaction in error logs (defaults to false for security)
+/// Requested page size for namespace and table listings; see
+/// [`RestSessionCatalogBuilder::with_page_size`].
+pub const REST_CATALOG_PROP_PAGE_SIZE: &str = "rest-page-size";
+/// Disable header redaction in error logs and `Debug` output (defaults to
+/// false for security)
 pub const REST_CATALOG_PROP_DISABLE_HEADER_REDACTION: &str = "disable-header-redaction";
+/// Authentication scheme: `none` or `oauth2`. When unset, `oauth2` is used
+/// if a `token`, `credential` or `oauth2-server-uri` is configured, `none`
+/// otherwise.
+pub const REST_CATALOG_PROP_AUTH_TYPE: &str = "rest.auth.type";
+/// Maximum number of loaded tables kept for freshness-aware loading (defaults
+/// to 100; 0 disables the cache). The cache is keyed by session id, so it only
+/// helps callers that reuse a [`SessionContext`], and a table changed through
+/// this catalog is invalidated only for the session that changed it. Loads that
+/// vend short-lived storage credentials are never cached.
+pub const REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES: &str = "rest-table-cache.max-entries";
+/// How long a loaded table stays cached for freshness-aware loading, in
+/// milliseconds (defaults to 5 minutes; must be positive and at most 1000 years).
+pub const REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS: &str =
+    "rest-table-cache.expire-after-write-ms";
+
+const TABLE_CACHE_MAX_ENTRIES_DEFAULT: u64 = 100;
+const TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT: u64 = 5 * 60 * 1000;
+/// moka panics on a time-to-live beyond 1000 years.
+const TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX: Duration = Duration::from_secs(1000 * 365 * 24 * 3600);
+
+/// Tables loaded with an `ETag`, keyed by session id and identifier. Loads that
+/// vend short-lived storage credentials are not cached, since a `304` cannot
+/// refresh them.
+type TableCache = moka::sync::Cache<(String, TableIdent), (String, Table)>;
+
+/// Whether a `loadTable` config key carries a short-lived storage credential.
+fn is_short_lived_credential(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key == S3_SESSION_TOKEN || key == GCS_TOKEN || key.starts_with(ADLS_SAS_TOKEN)
+}
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const PATH_V1: &str = "v1";
 
-/// Builder for [`RestCatalog`].
-#[derive(Debug)]
+/// Builder for [`RestCatalog`], the [`Catalog`]-compatible façade over a
+/// [`RestSessionCatalog`].
+///
+/// The resulting catalog binds one [`SessionContext`] to every operation. Use
+/// [`RestSessionCatalogBuilder`] when the caller supplies a context per operation.
+#[derive(Debug, Default)]
 pub struct RestCatalogBuilder {
-    config: RestCatalogConfig,
-    storage_factory: Option<Arc<dyn StorageFactory>>,
-    runtime: Option<Runtime>,
-}
-
-impl Default for RestCatalogBuilder {
-    fn default() -> Self {
-        Self {
-            config: RestCatalogConfig {
-                name: None,
-                uri: "".to_string(),
-                warehouse: None,
-                props: HashMap::new(),
-                client: None,
-            },
-            storage_factory: None,
-            runtime: None,
-        }
-    }
+    session_context: Option<SessionContext>,
+    inner: RestSessionCatalogBuilder,
 }
 
 impl CatalogBuilder for RestCatalogBuilder {
     type C = RestCatalog;
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
-        self.storage_factory = Some(storage_factory);
+        self.inner = self.inner.with_storage_factory(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.inner = self.inner.with_kms_client_factory(kms_client_factory);
         self
     }
 
     fn with_runtime(mut self, runtime: Runtime) -> Self {
-        self.runtime = Some(runtime);
+        self.inner = self.inner.with_runtime(runtime);
         self
     }
 
     fn load(
-        mut self,
+        self,
         name: impl Into<String>,
         props: HashMap<String, String>,
     ) -> impl Future<Output = Result<Self::C>> + Send {
-        self.config.name = Some(name.into());
+        let name = name.into();
+        async move {
+            let context = self.session_context.unwrap_or_else(SessionContext::empty);
+            let session_catalog = Arc::new(self.inner.load(name, props).await?);
 
-        if props.contains_key(REST_CATALOG_PROP_URI) {
-            self.config.uri = props
-                .get(REST_CATALOG_PROP_URI)
-                .cloned()
-                .unwrap_or_default();
+            Ok(RestCatalog::from_session_catalog(context, session_catalog))
         }
-
-        if props.contains_key(REST_CATALOG_PROP_WAREHOUSE) {
-            self.config.warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned()
-        }
-
-        // Collect other remaining properties
-        self.config.props = props
-            .into_iter()
-            .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE)
-            .collect();
-
-        let result = {
-            if self.config.name.is_none() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog name is required",
-                ))
-            } else if self.config.uri.is_empty() {
-                Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    "Catalog uri is required",
-                ))
-            } else {
-                let runtime = self.runtime.unwrap_or_else(Runtime::current);
-                Ok(RestCatalog::new(self.config, self.storage_factory, runtime))
-            }
-        };
-
-        std::future::ready(result)
     }
 }
 
 impl RestCatalogBuilder {
+    /// Sets the requested page size for namespace and table listings; see
+    /// [`RestSessionCatalogBuilder::with_page_size`].
+    pub fn with_page_size(mut self, page_size: NonZeroU32) -> Self {
+        self.inner = self.inner.with_page_size(page_size);
+        self
+    }
+
     /// Configures the catalog with a custom HTTP client.
     pub fn with_client(mut self, client: Client) -> Self {
-        self.config.client = Some(client);
+        self.inner = self.inner.with_client(client);
+        self
+    }
+
+    /// Binds the session context forwarded with every catalog operation.
+    ///
+    /// If this is not called, [`load`](CatalogBuilder::load) creates a fresh
+    /// [`SessionContext::empty`] context.
+    pub fn with_session_context(mut self, context: SessionContext) -> Self {
+        self.session_context = Some(context);
+        self
+    }
+
+    /// Sets a custom auth manager, overriding the `rest.auth.type` configuration.
+    ///
+    /// The builder takes ownership of the manager. The loaded catalog shares it
+    /// across authentication sessions and requests.
+    pub fn with_auth_manager<M>(mut self, auth_manager: M) -> Self
+    where M: AuthManager + 'static {
+        self.inner = self.inner.with_auth_manager(auth_manager);
         self
     }
 }
 
 /// Rest catalog configuration.
-#[derive(Clone, Debug, TypedBuilder)]
+#[derive(Clone, TypedBuilder)]
 pub(crate) struct RestCatalogConfig {
     #[builder(default, setter(strip_option))]
     name: Option<String>,
@@ -163,6 +197,49 @@ pub(crate) struct RestCatalogConfig {
 
     #[builder(default)]
     client: Option<Client>,
+
+    /// Lazily-created default HTTP client, shared through clones of this
+    /// config so OAuth and catalog traffic reuse one connection pool
+    /// (matching the single-client behavior before the AuthManager refactor).
+    #[builder(default)]
+    default_client: Arc<OnceLock<Client>>,
+}
+
+/// Property keys whose values are secrets, or may embed them (headers,
+/// connection strings, keys like `adls.account-key` or `s3.sse.key`).
+fn is_sensitive_prop(key: &str) -> bool {
+    key.contains("token")
+        || key.contains("credential")
+        || key.contains("secret")
+        || key.contains("password")
+        || key.contains("key")
+        || key.contains("connection-string")
+        || key.starts_with("header.")
+}
+
+/// Redacts secret property values: this config is printed by the derived
+/// [`Debug`] implementations of [`RestSessionCatalog`] and [`RestCatalog`].
+impl Debug for RestCatalogConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let props: HashMap<&str, &str> = self
+            .props
+            .iter()
+            .map(|(key, value)| {
+                let value = if is_sensitive_prop(key) {
+                    "[REDACTED]"
+                } else {
+                    value.as_str()
+                };
+                (key.as_str(), value)
+            })
+            .collect();
+        f.debug_struct("RestCatalogConfig")
+            .field("name", &self.name)
+            .field("uri", &self.uri)
+            .field("warehouse", &self.warehouse)
+            .field("props", &props)
+            .finish_non_exhaustive()
+    }
 }
 
 impl RestCatalogConfig {
@@ -179,11 +256,35 @@ impl RestCatalogConfig {
     }
 
     pub(crate) fn get_token_endpoint(&self) -> String {
-        if let Some(oauth2_uri) = self.props.get("oauth2-server-uri") {
-            oauth2_uri.to_string()
-        } else {
-            [&self.uri, PATH_V1, "oauth", "tokens"].join("/")
-        }
+        self.explicit_oauth2_server_uri()
+            .unwrap_or_else(|| default_token_endpoint(&self.uri))
+    }
+
+    /// The `oauth2-server-uri` property, only when explicitly configured.
+    pub(crate) fn explicit_oauth2_server_uri(&self) -> Option<String> {
+        self.props.get("oauth2-server-uri").cloned()
+    }
+
+    /// Parse only the effective value, after server defaults and overrides are merged.
+    fn page_size(&self) -> Result<Option<NonZeroU32>> {
+        self.props
+            .get(REST_CATALOG_PROP_PAGE_SIZE)
+            .map(|value| {
+                let invalid_page_size = || {
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid {REST_CATALOG_PROP_PAGE_SIZE}: {value}"),
+                    )
+                };
+                let page_size = value
+                    .parse::<NonZeroU32>()
+                    .map_err(|err| invalid_page_size().with_source(err))?;
+                if page_size.get() > i32::MAX as u32 {
+                    return Err(invalid_page_size());
+                }
+                Ok(page_size)
+            })
+            .transpose()
     }
 
     fn namespaces_endpoint(&self) -> String {
@@ -215,9 +316,13 @@ impl RestCatalogConfig {
         ])
     }
 
-    /// Get the client from the config.
-    pub(crate) fn client(&self) -> Option<Client> {
-        self.client.clone()
+    /// The HTTP client: the configured one, or a lazily-created default that
+    /// is shared across every user of this config (and its clones), so token
+    /// and catalog requests keep sharing one connection pool.
+    pub(crate) fn client(&self) -> Client {
+        self.client
+            .clone()
+            .unwrap_or_else(|| self.default_client.get_or_init(Client::default).clone())
     }
 
     /// Get the token from the config.
@@ -229,89 +334,18 @@ impl RestCatalogConfig {
 
     /// Get the credentials from the config. The client can use these credentials to fetch a new
     /// token.
-    ///
-    /// ## Output
-    ///
-    /// - `None`: No credential is set.
-    /// - `Some(None, client_secret)`: No client_id is set, use client_secret directly.
-    /// - `Some(Some(client_id), client_secret)`: Both client_id and client_secret are set.
     pub(crate) fn credential(&self) -> Option<(Option<String>, String)> {
-        let cred = self.props.get("credential")?;
-
-        match cred.split_once(':') {
-            Some((client_id, client_secret)) => {
-                Some((Some(client_id.to_string()), client_secret.to_string()))
-            }
-            None => Some((None, cred.to_string())),
-        }
+        credential_from_props(&self.props)
     }
 
-    /// Get the extra headers from config, which includes:
-    ///
-    /// - `content-type`
-    /// - `x-client-version`
-    /// - `user-agent`
-    /// - All headers specified by `header.xxx` in props.
+    /// Get the extra headers from config, see [`extra_headers_from_props`].
     pub(crate) fn extra_headers(&self) -> Result<HeaderMap> {
-        let mut headers = HeaderMap::from_iter([
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            ),
-            (
-                HeaderName::from_static("x-client-version"),
-                HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
-            ),
-            (
-                header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
-            ),
-        ]);
-
-        for (key, value) in self
-            .props
-            .iter()
-            .filter_map(|(k, v)| k.strip_prefix("header.").map(|k| (k, v)))
-        {
-            headers.insert(
-                HeaderName::from_str(key).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid header name: {key}"),
-                    )
-                    .with_source(e)
-                })?,
-                HeaderValue::from_str(value).map_err(|e| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        format!("Invalid header value: {value}"),
-                    )
-                    .with_source(e)
-                })?,
-            );
-        }
-
-        Ok(headers)
+        extra_headers_from_props(&self.props)
     }
 
     /// Get the optional OAuth headers from the config.
     pub(crate) fn extra_oauth_params(&self) -> HashMap<String, String> {
-        let mut params = HashMap::new();
-
-        if let Some(scope) = self.props.get("scope") {
-            params.insert("scope".to_string(), scope.to_string());
-        } else {
-            params.insert("scope".to_string(), "catalog".to_string());
-        }
-
-        let optional_params = ["audience", "resource"];
-        for param_name in optional_params {
-            if let Some(value) = self.props.get(param_name) {
-                params.insert(param_name.to_string(), value.to_string());
-            }
-        }
-
-        params
+        oauth_params_from_props(&self.props)
     }
 
     /// Check if header redaction is disabled in error logs.
@@ -325,14 +359,55 @@ impl RestCatalogConfig {
             .unwrap_or(false)
     }
 
+    /// Builds the table cache for freshness-aware loading, or `None` when
+    /// `rest-table-cache.max-entries` is 0.
+    fn table_cache(&self) -> Result<Option<TableCache>> {
+        let parse = |key: &str, default: u64| -> Result<u64> {
+            self.props.get(key).map_or(Ok(default), |v| {
+                v.parse().map_err(|e| {
+                    Error::new(ErrorKind::DataInvalid, format!("Invalid {key}: {v}")).with_source(e)
+                })
+            })
+        };
+        let expire_after_write_ms = parse(
+            REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS,
+            TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT,
+        )?;
+        let expire_after_write = Duration::from_millis(expire_after_write_ms);
+        // Zero is ambiguous: it could mean "disable" or "never expire".
+        if expire_after_write.is_zero() || expire_after_write > TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid {REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS}: {expire_after_write_ms} (must be between 1 ms and 1000 years)"
+                ),
+            ));
+        }
+        let max_entries = parse(
+            REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES,
+            TABLE_CACHE_MAX_ENTRIES_DEFAULT,
+        )?;
+        Ok((max_entries > 0).then(|| {
+            TableCache::builder()
+                .max_capacity(max_entries)
+                .time_to_live(expire_after_write)
+                .build()
+        }))
+    }
+
     /// Merge the `RestCatalogConfig` with the a [`CatalogConfig`] (fetched from the REST server).
     pub(crate) fn merge_with_config(mut self, mut config: CatalogConfig) -> Self {
-        if let Some(uri) = config.overrides.remove("uri") {
+        if let Some(uri) = config.overrides.remove(REST_CATALOG_PROP_URI) {
             self.uri = uri;
         }
 
         let mut props = config.defaults;
         props.extend(self.props);
+        // The builder moved the client warehouse off the props; restore it
+        // between defaults and overrides (default < client < override).
+        if let Some(warehouse) = &self.warehouse {
+            props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
+        }
         props.extend(config.overrides);
 
         self.props = props;
@@ -340,57 +415,470 @@ impl RestCatalogConfig {
     }
 }
 
-#[derive(Debug)]
-struct RestContext {
-    client: HttpClient,
-    /// Runtime config is fetched from rest server and stored here.
-    ///
-    /// It's could be different from the user config.
-    config: RestCatalogConfig,
+/// Parses the `credential` property.
+///
+/// ## Output
+///
+/// - `None`: No credential is set.
+/// - `Some(None, client_secret)`: No client_id is set, use client_secret directly.
+/// - `Some(Some(client_id), client_secret)`: Both client_id and client_secret are set.
+pub(crate) fn credential_from_props(
+    props: &HashMap<String, String>,
+) -> Option<(Option<String>, String)> {
+    let cred = props.get("credential")?;
+
+    match cred.split_once(':') {
+        Some((client_id, client_secret)) => {
+            Some((Some(client_id.to_string()), client_secret.to_string()))
+        }
+        None => Some((None, cred.to_string())),
+    }
 }
 
-/// Rest catalog implementation.
+/// The extra headers added to each request, which include:
+///
+/// - `content-type`
+/// - `x-client-version`
+/// - `user-agent`
+/// - All headers specified by `header.xxx` in props.
+pub(crate) fn extra_headers_from_props(props: &HashMap<String, String>) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::from_iter([
+        (
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        ),
+        (
+            HeaderName::from_static("x-client-version"),
+            HeaderValue::from_static(ICEBERG_REST_SPEC_VERSION),
+        ),
+        (
+            header::USER_AGENT,
+            HeaderValue::from_str(&format!("iceberg-rust/{CARGO_PKG_VERSION}")).unwrap(),
+        ),
+    ]);
+
+    headers.extend(explicit_headers_from_props(props)?);
+
+    Ok(headers)
+}
+
+/// The default OAuth2 token endpoint for a catalog `uri`.
+pub(crate) fn default_token_endpoint(uri: &str) -> String {
+    [uri, PATH_V1, "oauth", "tokens"].join("/")
+}
+
+/// Only the headers explicitly configured via `header.xxx` props (no defaults).
+pub(crate) fn explicit_headers_from_props(props: &HashMap<String, String>) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    for (key, value) in props
+        .iter()
+        .filter_map(|(k, v)| k.strip_prefix("header.").map(|k| (k, v)))
+    {
+        headers.insert(
+            HeaderName::from_str(key).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid header name: {key}"),
+                )
+                .with_source(e)
+            })?,
+            HeaderValue::from_str(value).map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    // The value itself is omitted: it may be a secret.
+                    format!("Invalid value for header: {key}"),
+                )
+                .with_source(e)
+            })?,
+        );
+    }
+
+    Ok(headers)
+}
+
+/// The optional OAuth parameters added to each authentication request.
+pub(crate) fn oauth_params_from_props(props: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut params = HashMap::new();
+
+    if let Some(scope) = props.get("scope") {
+        params.insert("scope".to_string(), scope.to_string());
+    } else {
+        params.insert("scope".to_string(), "catalog".to_string());
+    }
+
+    let optional_params = ["audience", "resource"];
+    for param_name in optional_params {
+        if let Some(value) = props.get(param_name) {
+            params.insert(param_name.to_string(), value.to_string());
+        }
+    }
+
+    params
+}
+
+struct RestCatalogClient {
+    /// The manager that created `catalog_session`; retained so each request can
+    /// derive authentication for its [`SessionContext`].
+    auth_manager: Arc<dyn AuthManager>,
+    /// The catalog-wide session passed to [`AuthManager::contextual_session`].
+    catalog_session: Arc<dyn AuthSession>,
+    /// Shared HTTP transport and configuration. It remains unauthenticated;
+    /// request-time clones attach the contextual session.
+    http_client: HttpClient,
+    /// Runtime config is fetched from rest server and stored here.
+    ///
+    /// It could be different from the user config.
+    config: RestCatalogConfig,
+    /// Capabilities the server advertises (see [`RestSessionCatalog::supports_endpoint`]).
+    endpoints: HashSet<Endpoint>,
+    /// Validated page size from the merged runtime configuration.
+    page_size: Option<NonZeroU32>,
+    /// Tables reused when the server answers a load with `304 Not Modified`.
+    table_cache: Option<TableCache>,
+}
+
+impl Debug for RestCatalogClient {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Auth managers and sessions may contain secrets, so keep them out of
+        // the catalog's derived Debug output just as HttpClient does.
+        f.debug_struct("RestCatalogClient")
+            .field("http_client", &self.http_client)
+            .field("config", &self.config)
+            .field("endpoints", &self.endpoints)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RestCatalogClient {
+    /// Initializes the runtime config, advertised endpoints, auth manager, and
+    /// catalog authentication session shared by one REST catalog instance.
+    async fn init(
+        user_config: &RestCatalogConfig,
+        auth_manager: Arc<dyn AuthManager>,
+    ) -> Result<Self> {
+        let http_client = HttpClient::new(user_config)?;
+        // The init session lives only for the config handshake, so a
+        // manager whose session guards a one-shot resource can release
+        // it before deriving the catalog session.
+        let catalog_config = {
+            let init_session = auth_manager
+                .init_session(&http_client, &Self::auth_props(user_config))
+                .await?;
+            Self::load_config(&http_client, init_session.as_ref(), user_config).await?
+        };
+        // Use the advertised endpoints as-is, falling back to
+        // `DEFAULT_ENDPOINTS` when absent or empty.
+        let endpoints = match &catalog_config.endpoints {
+            Some(advertised) if !advertised.is_empty() => advertised.iter().cloned().collect(),
+            _ => crate::endpoint::DEFAULT_ENDPOINTS.clone(),
+        };
+        let config = user_config.clone().merge_with_config(catalog_config);
+        let page_size = config.page_size()?;
+        let http_client = http_client.update_with(&config)?;
+        // The manager is handed an unauthenticated client: its own
+        // requests must not be signed by the session it is deriving.
+        let catalog_session = auth_manager
+            .catalog_session(&http_client, &Self::auth_props(&config))
+            .await?;
+
+        Ok(Self {
+            auth_manager,
+            catalog_session,
+            table_cache: config.table_cache()?,
+            config,
+            http_client,
+            endpoints,
+            page_size,
+        })
+    }
+
+    fn invalidate_table(&self, context: &SessionContext, table: &TableIdent) {
+        if let Some(cache) = &self.table_cache {
+            cache.invalidate(&(context.session_id().to_string(), table.clone()));
+        }
+    }
+
+    /// Testing only: the bearer token the catalog session would attach.
+    #[cfg(test)]
+    async fn token(&self) -> Option<String> {
+        self.http_client.token(self.catalog_session.as_ref()).await
+    }
+
+    /// Sends `request` with the authentication derived for `context`.
+    async fn query_catalog(
+        &self,
+        context: &SessionContext,
+        request: HttpRequest,
+    ) -> Result<HttpResponse> {
+        let session = self
+            .auth_manager
+            .contextual_session(context, Arc::clone(&self.catalog_session))
+            .await?;
+        self.http_client
+            .query_catalog(session.as_ref(), request)
+            .await
+    }
+
+    /// The properties handed to the [`AuthManager`], with the catalog `uri`
+    /// and `warehouse` made explicit.
+    fn auth_props(config: &RestCatalogConfig) -> HashMap<String, String> {
+        // `oauth2-server-uri` stays absent unless explicitly configured, so an
+        // injected manager keeps its own endpoint. The resolved `uri` and
+        // `warehouse` ARE passed: the builder moved them off the props, and
+        // the built-in manager recomputes its token endpoint from the URI.
+        let mut props = config.props.clone();
+        props.insert(REST_CATALOG_PROP_URI.to_string(), config.uri.clone());
+        if let Some(warehouse) = &config.warehouse {
+            // A fallback only: after the handshake the merged props hold
+            // the resolved warehouse, server override included.
+            props
+                .entry(REST_CATALOG_PROP_WAREHOUSE.to_string())
+                .or_insert_with(|| warehouse.clone());
+        }
+        props
+    }
+
+    /// Loads the runtime config from the server using `user_config`.
+    ///
+    /// It's required for a REST catalog to update its config after creation.
+    async fn load_config(
+        http_client: &HttpClient,
+        auth_session: &dyn AuthSession,
+        user_config: &RestCatalogConfig,
+    ) -> Result<CatalogConfig> {
+        let mut request_builder = http_client.request(Method::GET, user_config.config_endpoint());
+
+        if let Some(warehouse_location) = &user_config.warehouse {
+            request_builder = request_builder.query(&[("warehouse", warehouse_location)]);
+        }
+
+        let request = HttpRequest::build(request_builder)?;
+
+        let http_response = http_client.query_catalog(auth_session, request).await?;
+
+        match http_response.status() {
+            StatusCode::OK => deserialize_catalog_response(http_response),
+            _ => Err(deserialize_unexpected_catalog_error(
+                http_response,
+                http_client.disable_header_redaction(),
+            )),
+        }
+    }
+}
+
+/// A [`Catalog`]-compatible façade over [`RestSessionCatalog`].
+///
+/// Every operation is forwarded with the single [`SessionContext`] selected by
+/// [`RestCatalogBuilder`]. Use [`RestSessionCatalog`] when the caller needs to
+/// provide a context per operation.
 #[derive(Debug)]
 pub struct RestCatalog {
-    /// User config is stored as-is and never be changed.
-    ///
-    /// It could be different from the config fetched from the server and used at runtime.
-    user_config: RestCatalogConfig,
-    ctx: OnceCell<RestContext>,
-    /// Storage factory for creating FileIO instances.
-    storage_factory: Option<Arc<dyn StorageFactory>>,
-    runtime: Runtime,
+    session_context: SessionContext,
+    inner: Arc<RestSessionCatalog>,
 }
 
 impl RestCatalog {
     /// Creates a `RestCatalog` from a [`RestCatalogConfig`].
+    #[cfg(test)]
     fn new(
+        context: SessionContext,
         config: RestCatalogConfig,
+        auth_manager: Option<Box<dyn AuthManager>>,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Self {
-        Self {
-            user_config: config,
-            ctx: OnceCell::new(),
+        let session_catalog = Arc::new(RestSessionCatalog::new(
+            config,
+            auth_manager,
             storage_factory,
             runtime,
+            kms_client,
+        ));
+
+        Self::from_session_catalog(context, session_catalog)
+    }
+
+    fn from_session_catalog(context: SessionContext, inner: Arc<RestSessionCatalog>) -> Self {
+        Self {
+            session_context: context,
+            inner,
+        }
+    }
+
+    #[cfg(test)]
+    async fn client(&self) -> Result<&RestCatalogClient> {
+        self.inner.client().await
+    }
+}
+
+/// Every operation forwards to its [`RestSessionCatalog`] equivalent with the
+/// bound [`SessionContext`]; see that implementation for the REST-specific
+/// behavior.
+#[async_trait]
+impl Catalog for RestCatalog {
+    async fn list_namespaces(
+        &self,
+        parent: Option<&NamespaceIdent>,
+    ) -> Result<Vec<NamespaceIdent>> {
+        self.inner
+            .list_namespaces(&self.session_context, parent)
+            .await
+    }
+
+    async fn create_namespace(
+        &self,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
+    ) -> Result<Namespace> {
+        self.inner
+            .create_namespace(&self.session_context, namespace, properties)
+            .await
+    }
+
+    async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
+        self.inner
+            .get_namespace(&self.session_context, namespace)
+            .await
+    }
+
+    async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
+        self.inner.namespace_exists(&self.session_context, ns).await
+    }
+
+    async fn update_namespace(
+        &self,
+        namespace: &NamespaceIdent,
+        properties: HashMap<String, String>,
+    ) -> Result<()> {
+        self.inner
+            .update_namespace(&self.session_context, namespace, properties)
+            .await
+    }
+
+    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+        self.inner
+            .drop_namespace(&self.session_context, namespace)
+            .await
+    }
+
+    async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+        self.inner
+            .list_tables(&self.session_context, namespace)
+            .await
+    }
+
+    async fn create_table(
+        &self,
+        namespace: &NamespaceIdent,
+        creation: TableCreation,
+    ) -> Result<Table> {
+        self.inner
+            .create_table(&self.session_context, namespace, creation)
+            .await
+    }
+
+    async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
+        self.inner
+            .load_table(&self.session_context, table_ident)
+            .await
+    }
+
+    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
+        self.inner.drop_table(&self.session_context, table).await
+    }
+
+    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
+        self.inner.purge_table(&self.session_context, table).await
+    }
+
+    async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
+        self.inner.table_exists(&self.session_context, table).await
+    }
+
+    async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
+        self.inner
+            .rename_table(&self.session_context, src, dest)
+            .await
+    }
+
+    async fn register_table(
+        &self,
+        table_ident: &TableIdent,
+        metadata_location: String,
+    ) -> Result<Table> {
+        self.inner
+            .register_table(&self.session_context, table_ident, metadata_location)
+            .await
+    }
+
+    async fn update_table(&self, commit: TableCommit) -> Result<Table> {
+        self.inner.update_table(&self.session_context, commit).await
+    }
+}
+
+/// REST catalog implementation of [`SessionCatalog`].
+///
+/// Each operation accepts a [`SessionContext`]. REST configuration, the auth manager, the catalog
+/// authentication session, and the HTTP client are initialized lazily once per catalog. Each
+/// REST request uses the contextual authentication session returned by the manager.
+#[derive(Debug)]
+pub struct RestSessionCatalog {
+    /// Builder-supplied override retained so lazy client initialization can
+    /// clone it into the runtime state. When absent, a manager is resolved from
+    /// `rest.auth.type` during initialization.
+    auth_manager_override: Option<Arc<dyn AuthManager>>,
+    /// User config is stored as-is and never changed.
+    ///
+    /// It could be different from the config fetched from the server and used at runtime.
+    user_config: RestCatalogConfig,
+    client: OnceCell<RestCatalogClient>,
+    /// Storage factory for creating FileIO instances.
+    storage_factory: Option<Arc<dyn StorageFactory>>,
+    runtime: Runtime,
+    /// Optional KMS client for encrypted tables.
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
+}
+
+impl RestSessionCatalog {
+    /// Creates a `RestSessionCatalog` from a [`RestCatalogConfig`].
+    fn new(
+        config: RestCatalogConfig,
+        auth_manager_override: Option<Box<dyn AuthManager>>,
+        storage_factory: Option<Arc<dyn StorageFactory>>,
+        runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
+    ) -> Self {
+        Self {
+            auth_manager_override: auth_manager_override.map(Arc::from),
+            user_config: config,
+            client: OnceCell::new(),
+            storage_factory,
+            runtime,
+            kms_client,
         }
     }
 
     /// Sends a DELETE request for the given table, optionally requesting purge.
-    async fn delete_table(&self, table: &TableIdent, purge: bool) -> Result<()> {
-        let context = self.context().await?;
+    async fn delete_table(
+        &self,
+        context: &SessionContext,
+        table: &TableIdent,
+        purge: bool,
+    ) -> Result<()> {
+        let client = self.client().await?;
 
-        let mut request_builder = context
-            .client
-            .request(Method::DELETE, context.config.table_endpoint(table));
+        let mut request_builder = client
+            .http_client
+            .request(Method::DELETE, client.config.table_endpoint(table));
 
         if purge {
             request_builder = request_builder.query(&[("purgeRequested", "true")]);
         }
 
-        let request = request_builder.build()?;
-        let http_response = context.client.query_catalog(request).await?;
+        let request = HttpRequest::build(request_builder)?;
+        client.invalidate_table(context, table);
+        let http_response = client.query_catalog(context, request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -400,50 +888,98 @@ impl RestCatalog {
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
-            )
-            .await),
+                client.http_client.disable_header_redaction(),
+            )),
         }
     }
 
-    /// Gets the [`RestContext`] from the catalog.
-    async fn context(&self) -> Result<&RestContext> {
-        self.ctx
-            .get_or_try_init(|| async {
-                let client = HttpClient::new(&self.user_config)?;
-                let catalog_config = RestCatalog::load_config(&client, &self.user_config).await?;
-                let config = self.user_config.clone().merge_with_config(catalog_config);
-                let client = client.update_with(&config)?;
+    /// The configured auth scheme: explicit `rest.auth.type` (matched
+    /// case-insensitively) when set; otherwise `oauth2` when a `token`,
+    /// `credential` or `oauth2-server-uri` is configured (preserving
+    /// pre-`rest.auth.type` setups), `none` when none is.
+    fn auth_type(config: &RestCatalogConfig) -> String {
+        config
+            .props
+            .get(REST_CATALOG_PROP_AUTH_TYPE)
+            // Matched case-insensitively, as the other flag properties are.
+            .map(|auth_type| auth_type.to_ascii_lowercase())
+            .unwrap_or_else(|| {
+                if config.token().is_some()
+                    || config.credential().is_some()
+                    || config.explicit_oauth2_server_uri().is_some()
+                {
+                    AUTH_TYPE_OAUTH2.to_string()
+                } else {
+                    AUTH_TYPE_NONE.to_string()
+                }
+            })
+    }
 
-                Ok(RestContext { config, client })
+    /// Resolves the auth manager: a `with_auth_manager` override wins,
+    /// otherwise one is built from the `rest.auth.type` configuration.
+    fn resolve_auth_manager(&self) -> Result<Arc<dyn AuthManager>> {
+        if let Some(auth_manager) = &self.auth_manager_override {
+            return Ok(auth_manager.clone());
+        }
+        let config = &self.user_config;
+        let auth_type = Self::auth_type(config);
+        // Java parity (`AuthManagers`): make the inference visible so users
+        // configure the type explicitly.
+        if auth_type == AUTH_TYPE_OAUTH2 && !config.props.contains_key(REST_CATALOG_PROP_AUTH_TYPE)
+        {
+            tracing::warn!(
+                "Inferring {REST_CATALOG_PROP_AUTH_TYPE}={AUTH_TYPE_OAUTH2} from the configured \
+                 OAuth properties; set it explicitly to avoid this warning"
+            );
+        }
+        match auth_type.as_str() {
+            AUTH_TYPE_NONE => Ok(Arc::new(NoopAuthManager)),
+            AUTH_TYPE_OAUTH2 => Ok(Arc::new(OAuth2Manager::from_config(config)?)),
+            other => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "unknown '{REST_CATALOG_PROP_AUTH_TYPE}': {other}; use \
+                     `RestSessionCatalogBuilder::with_auth_manager` or \
+                     `RestCatalogBuilder::with_auth_manager` to inject a custom auth manager"
+                ),
+            )),
+        }
+    }
+
+    /// Gets the [`RestCatalogClient`] from the catalog.
+    async fn client(&self) -> Result<&RestCatalogClient> {
+        self.client
+            .get_or_try_init(|| async {
+                RestCatalogClient::init(&self.user_config, self.resolve_auth_manager()?).await
             })
             .await
     }
 
-    /// Load the runtime config from the server by `user_config`.
-    ///
-    /// It's required for a REST catalog to update its config after creation.
-    async fn load_config(
-        client: &HttpClient,
-        user_config: &RestCatalogConfig,
-    ) -> Result<CatalogConfig> {
-        let mut request_builder = client.request(Method::GET, user_config.config_endpoint());
+    /// Returns whether the server supports `endpoint`, per the `endpoints` it
+    /// advertised in `GET /v1/config` (or a default base set when it advertised
+    /// none).
+    pub(crate) async fn supports_endpoint(&self, endpoint: &Endpoint) -> Result<bool> {
+        Ok(self.client().await?.endpoints.contains(endpoint))
+    }
 
-        if let Some(warehouse_location) = &user_config.warehouse {
-            request_builder = request_builder.query(&[("warehouse", warehouse_location)]);
-        }
-
-        let request = request_builder.build()?;
-
-        let http_response = client.query_catalog(request).await?;
+    /// Issue a `HEAD` request to `url` and interpret it as an existence check:
+    /// `2xx` means it exists, `404` means it doesn't.
+    async fn check_exists_via_head(
+        &self,
+        context: &SessionContext,
+        client: &RestCatalogClient,
+        url: String,
+    ) -> Result<bool> {
+        let request = HttpRequest::build(client.http_client.request(Method::HEAD, url))?;
+        let http_response = client.query_catalog(context, request).await?;
 
         match http_response.status() {
-            StatusCode::OK => deserialize_catalog_response(http_response).await,
+            StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                client.disable_header_redaction(),
-            )
-            .await),
+                client.http_client.disable_header_redaction(),
+            )),
         }
     }
 
@@ -452,14 +988,14 @@ impl RestCatalog {
         metadata_location: Option<&str>,
         extra_config: Option<HashMap<String, String>>,
     ) -> Result<FileIO> {
-        let mut props = self.context().await?.config.props.clone();
+        let mut props = self.client().await?.config.props.clone();
         if let Some(config) = extra_config {
             props.extend(config);
         }
 
         // If the warehouse is a logical identifier instead of a URL we don't want
         // to raise an exception
-        let warehouse_path = match self.context().await?.config.warehouse.as_deref() {
+        let warehouse_path = match self.client().await?.config.warehouse.as_deref() {
             Some(url) if Url::parse(url).is_ok() => Some(url),
             Some(_) => None,
             None => None,
@@ -479,7 +1015,7 @@ impl RestCatalog {
             .ok_or_else(|| {
                 Error::new(
                     ErrorKind::Unexpected,
-                    "StorageFactory must be provided for RestCatalog. Use `with_storage_factory` to configure it.",
+                    "StorageFactory must be provided for REST catalog table operations. Use `with_storage_factory` to configure it.",
                 )
             })?;
 
@@ -487,39 +1023,29 @@ impl RestCatalog {
 
         Ok(file_io)
     }
-
-    /// Invalidate the current token without generating a new one. On the next request, the client
-    /// will attempt to generate a new token.
-    pub async fn invalidate_token(&self) -> Result<()> {
-        self.context().await?.client.invalidate_token().await
-    }
-
-    /// Invalidate the current token and set a new one. Generates a new token before invalidating
-    /// the current token, meaning the old token will be used until this function acquires the lock
-    /// and overwrites the token.
-    ///
-    /// If credential is invalid, or the request fails, this method will return an error and leave
-    /// the current token unchanged.
-    pub async fn regenerate_token(&self) -> Result<()> {
-        self.context().await?.client.regenerate_token().await
-    }
 }
 
 /// All requests and expected responses are derived from the REST catalog API spec:
-/// https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml
+/// <https://github.com/apache/iceberg/blob/main/open-api/rest-catalog-open-api.yaml>
 #[async_trait]
-impl Catalog for RestCatalog {
+impl SessionCatalog for RestSessionCatalog {
     async fn list_namespaces(
         &self,
+        context: &SessionContext,
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
-        let context = self.context().await?;
-        let endpoint = context.config.namespaces_endpoint();
+        let client = self.client().await?;
+        let endpoint = client.config.namespaces_endpoint();
         let mut namespaces = Vec::new();
-        let mut next_token = None;
+        // An empty initial token explicitly opts in to pagination.
+        let mut next_token = client.page_size.map(|_| String::new());
 
         loop {
-            let mut request = context.client.request(Method::GET, endpoint.clone());
+            let mut request = client.http_client.request(Method::GET, endpoint.clone());
+
+            if let Some(page_size) = client.page_size {
+                request = request.query(&[("pageSize", page_size)]);
+            }
 
             // Filter on `parent={namespace}` if a parent namespace exists.
             if let Some(ns) = parent {
@@ -530,13 +1056,14 @@ impl Catalog for RestCatalog {
                 request = request.query(&[("pageToken", token)]);
             }
 
-            let http_response = context.client.query_catalog(request.build()?).await?;
+            let http_response = client
+                .query_catalog(context, HttpRequest::build(request)?)
+                .await?;
 
             match http_response.status() {
                 StatusCode::OK => {
                     let response =
-                        deserialize_catalog_response::<ListNamespaceResponse>(http_response)
-                            .await?;
+                        deserialize_catalog_response::<ListNamespaceResponse>(http_response)?;
 
                     namespaces.extend(response.namespaces);
 
@@ -554,9 +1081,8 @@ impl Catalog for RestCatalog {
                 _ => {
                     return Err(deserialize_unexpected_catalog_error(
                         http_response,
-                        context.client.disable_header_redaction(),
-                    )
-                    .await);
+                        client.http_client.disable_header_redaction(),
+                    ));
                 }
             }
         }
@@ -566,26 +1092,27 @@ impl Catalog for RestCatalog {
 
     async fn create_namespace(
         &self,
+        context: &SessionContext,
         namespace: &NamespaceIdent,
         properties: HashMap<String, String>,
     ) -> Result<Namespace> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
-        let request = context
-            .client
-            .request(Method::POST, context.config.namespaces_endpoint())
-            .json(&CreateNamespaceRequest {
-                namespace: namespace.clone(),
-                properties,
-            })
-            .build()?;
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(Method::POST, client.config.namespaces_endpoint())
+                .json(&CreateNamespaceRequest {
+                    namespace: namespace.clone(),
+                    properties,
+                }),
+        )?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = client.query_catalog(context, request).await?;
 
         match http_response.status() {
             StatusCode::OK => {
-                let response =
-                    deserialize_catalog_response::<NamespaceResponse>(http_response).await?;
+                let response = deserialize_catalog_response::<NamespaceResponse>(http_response)?;
                 Ok(Namespace::from(response))
             }
             StatusCode::CONFLICT => Err(Error::new(
@@ -594,26 +1121,29 @@ impl Catalog for RestCatalog {
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
-            )
-            .await),
+                client.http_client.disable_header_redaction(),
+            )),
         }
     }
 
-    async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
-        let context = self.context().await?;
+    async fn get_namespace(
+        &self,
+        context: &SessionContext,
+        namespace: &NamespaceIdent,
+    ) -> Result<Namespace> {
+        let client = self.client().await?;
 
-        let request = context
-            .client
-            .request(Method::GET, context.config.namespace_endpoint(namespace))
-            .build()?;
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(Method::GET, client.config.namespace_endpoint(namespace)),
+        )?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = client.query_catalog(context, request).await?;
 
         match http_response.status() {
             StatusCode::OK => {
-                let response =
-                    deserialize_catalog_response::<NamespaceResponse>(http_response).await?;
+                let response = deserialize_catalog_response::<NamespaceResponse>(http_response)?;
                 Ok(Namespace::from(response))
             }
             StatusCode::NOT_FOUND => Err(Error::new(
@@ -622,35 +1152,36 @@ impl Catalog for RestCatalog {
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
-            )
-            .await),
+                client.http_client.disable_header_redaction(),
+            )),
         }
     }
 
-    async fn namespace_exists(&self, ns: &NamespaceIdent) -> Result<bool> {
-        let context = self.context().await?;
-
-        let request = context
-            .client
-            .request(Method::HEAD, context.config.namespace_endpoint(ns))
-            .build()?;
-
-        let http_response = context.client.query_catalog(request).await?;
-
-        match http_response.status() {
-            StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
-            StatusCode::NOT_FOUND => Ok(false),
-            _ => Err(deserialize_unexpected_catalog_error(
-                http_response,
-                context.client.disable_header_redaction(),
-            )
-            .await),
+    async fn namespace_exists(
+        &self,
+        context: &SessionContext,
+        ns: &NamespaceIdent,
+    ) -> Result<bool> {
+        // Prefer a cheap HEAD when the server advertises it; otherwise fall back
+        // to loading the namespace (GET) and treating a missing namespace as
+        // `false`, so this still works against servers that don't advertise the
+        // HEAD route.
+        if !self.supports_endpoint(&V1_NAMESPACE_EXISTS).await? {
+            return match self.get_namespace(context, ns).await {
+                Ok(_) => Ok(true),
+                Err(e) if e.kind() == ErrorKind::NamespaceNotFound => Ok(false),
+                Err(e) => Err(e),
+            };
         }
+
+        let client = self.client().await?;
+        self.check_exists_via_head(context, client, client.config.namespace_endpoint(ns))
+            .await
     }
 
     async fn update_namespace(
         &self,
+        _context: &SessionContext,
         _namespace: &NamespaceIdent,
         _properties: HashMap<String, String>,
     ) -> Result<()> {
@@ -660,15 +1191,20 @@ impl Catalog for RestCatalog {
         ))
     }
 
-    async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
-        let context = self.context().await?;
+    async fn drop_namespace(
+        &self,
+        context: &SessionContext,
+        namespace: &NamespaceIdent,
+    ) -> Result<()> {
+        let client = self.client().await?;
 
-        let request = context
-            .client
-            .request(Method::DELETE, context.config.namespace_endpoint(namespace))
-            .build()?;
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(Method::DELETE, client.config.namespace_endpoint(namespace)),
+        )?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = client.query_catalog(context, request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -678,31 +1214,41 @@ impl Catalog for RestCatalog {
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
-            )
-            .await),
+                client.http_client.disable_header_redaction(),
+            )),
         }
     }
 
-    async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
-        let context = self.context().await?;
-        let endpoint = context.config.tables_endpoint(namespace);
+    async fn list_tables(
+        &self,
+        context: &SessionContext,
+        namespace: &NamespaceIdent,
+    ) -> Result<Vec<TableIdent>> {
+        let client = self.client().await?;
+        let endpoint = client.config.tables_endpoint(namespace);
         let mut identifiers = Vec::new();
-        let mut next_token = None;
+        // An empty initial token explicitly opts in to pagination.
+        let mut next_token = client.page_size.map(|_| String::new());
 
         loop {
-            let mut request = context.client.request(Method::GET, endpoint.clone());
+            let mut request = client.http_client.request(Method::GET, endpoint.clone());
+
+            if let Some(page_size) = client.page_size {
+                request = request.query(&[("pageSize", page_size)]);
+            }
 
             if let Some(token) = next_token {
                 request = request.query(&[("pageToken", token)]);
             }
 
-            let http_response = context.client.query_catalog(request.build()?).await?;
+            let http_response = client
+                .query_catalog(context, HttpRequest::build(request)?)
+                .await?;
 
             match http_response.status() {
                 StatusCode::OK => {
                     let response =
-                        deserialize_catalog_response::<ListTablesResponse>(http_response).await?;
+                        deserialize_catalog_response::<ListTablesResponse>(http_response)?;
 
                     identifiers.extend(response.identifiers);
 
@@ -720,9 +1266,8 @@ impl Catalog for RestCatalog {
                 _ => {
                     return Err(deserialize_unexpected_catalog_error(
                         http_response,
-                        context.client.disable_header_redaction(),
-                    )
-                    .await);
+                        client.http_client.disable_header_redaction(),
+                    ));
                 }
             }
         }
@@ -734,37 +1279,37 @@ impl Catalog for RestCatalog {
     ///
     /// In the resulting table, if there are any config properties that
     /// are present in both the response from the REST server and the
-    /// config provided when creating this `RestCatalog` instance then
-    /// the value provided locally to the `RestCatalog` will take precedence.
+    /// config provided when creating this `RestSessionCatalog` instance, then
+    /// the value provided locally to the `RestSessionCatalog` will take precedence.
     async fn create_table(
         &self,
+        context: &SessionContext,
         namespace: &NamespaceIdent,
         creation: TableCreation,
     ) -> Result<Table> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
         let table_ident = TableIdent::new(namespace.clone(), creation.name.clone());
 
-        let request = context
-            .client
-            .request(Method::POST, context.config.tables_endpoint(namespace))
-            .json(&CreateTableRequest {
-                name: creation.name,
-                location: creation.location,
-                schema: creation.schema,
-                partition_spec: creation.partition_spec,
-                write_order: creation.sort_order,
-                stage_create: Some(false),
-                properties: creation.properties,
-            })
-            .build()?;
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(Method::POST, client.config.tables_endpoint(namespace))
+                .json(&CreateTableRequest {
+                    name: creation.name,
+                    location: creation.location,
+                    schema: creation.schema,
+                    partition_spec: creation.partition_spec,
+                    write_order: creation.sort_order,
+                    stage_create: Some(false),
+                    properties: creation.properties,
+                }),
+        )?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = client.query_catalog(context, request).await?;
 
         let response = match http_response.status() {
-            StatusCode::OK => {
-                deserialize_catalog_response::<LoadTableResult>(http_response).await?
-            }
+            StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
                     ErrorKind::NamespaceNotFound,
@@ -780,9 +1325,8 @@ impl Catalog for RestCatalog {
             _ => {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
-                    context.client.disable_header_redaction(),
-                )
-                .await);
+                    client.http_client.disable_header_redaction(),
+                ));
             }
         };
 
@@ -801,11 +1345,14 @@ impl Catalog for RestCatalog {
             .load_file_io(Some(metadata_location), Some(config))
             .await?;
 
-        let table_builder = Table::builder()
+        let mut table_builder = Table::builder()
             .identifier(table_ident.clone())
             .file_io(file_io)
             .metadata(response.metadata)
             .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            table_builder = table_builder.kms_client(kms_client);
+        }
 
         if let Some(metadata_location) = response.metadata_location {
             table_builder.metadata_location(metadata_location).build()
@@ -817,23 +1364,52 @@ impl Catalog for RestCatalog {
     /// Load table from the catalog.
     ///
     /// If there are any config properties that are present in both the response from the REST
-    /// server and the config provided when creating this `RestCatalog` instance, then the value
-    /// provided locally to the `RestCatalog` will take precedence.
-    async fn load_table(&self, table_ident: &TableIdent) -> Result<Table> {
-        let context = self.context().await?;
+    /// server and the config provided when creating this `RestSessionCatalog` instance, then the
+    /// value provided locally to the `RestSessionCatalog` will take precedence.
+    async fn load_table(
+        &self,
+        context: &SessionContext,
+        table_ident: &TableIdent,
+    ) -> Result<Table> {
+        let client = self.client().await?;
+        let cache = client.table_cache.as_ref().map(|cache| {
+            let key = (context.session_id().to_string(), table_ident.clone());
+            (cache, key)
+        });
+        let cached = cache.as_ref().and_then(|(cache, key)| cache.get(key));
 
-        let request = context
-            .client
-            .request(Method::GET, context.config.table_endpoint(table_ident))
-            .build()?;
+        let mut request_builder = client
+            .http_client
+            .request(Method::GET, client.config.table_endpoint(table_ident));
+        if let Some((etag, _)) = &cached {
+            request_builder = request_builder.header(header::IF_NONE_MATCH, etag);
+        }
+        let request = HttpRequest::build(request_builder)?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        let http_response = client.query_catalog(context, request).await?;
 
-        let response = match http_response.status() {
-            StatusCode::OK | StatusCode::NOT_MODIFIED => {
-                deserialize_catalog_response::<LoadTableResult>(http_response).await?
+        let (response, etag) = match http_response.status() {
+            StatusCode::OK => {
+                let etag = http_response
+                    .headers()
+                    .get(header::ETAG)
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                (
+                    deserialize_catalog_response::<LoadTableResult>(http_response)?,
+                    etag,
+                )
+            }
+            StatusCode::NOT_MODIFIED => {
+                return cached.map(|(_, table)| table).ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Unexpected,
+                        "Received 304 Not Modified for a table load without If-None-Match",
+                    )
+                });
             }
             StatusCode::NOT_FOUND => {
+                client.invalidate_table(context, table_ident);
                 return Err(Error::new(
                     ErrorKind::TableNotFound,
                     "Tried to load a table that does not exist",
@@ -842,11 +1418,19 @@ impl Catalog for RestCatalog {
             _ => {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
-                    context.client.disable_header_redaction(),
-                )
-                .await);
+                    client.http_client.disable_header_redaction(),
+                ));
             }
         };
+
+        let vends_credentials = response
+            .storage_credentials
+            .as_ref()
+            .is_some_and(|credentials| !credentials.is_empty())
+            || response
+                .config
+                .keys()
+                .any(|key| is_short_lived_credential(key));
 
         let config = response
             .config
@@ -858,66 +1442,82 @@ impl Catalog for RestCatalog {
             .load_file_io(response.metadata_location.as_deref(), Some(config))
             .await?;
 
-        let table_builder = Table::builder()
+        let mut table_builder = Table::builder()
             .identifier(table_ident.clone())
             .file_io(file_io)
             .metadata(response.metadata)
             .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            table_builder = table_builder.kms_client(kms_client);
+        }
 
-        if let Some(metadata_location) = response.metadata_location {
+        let table = if let Some(metadata_location) = response.metadata_location {
             table_builder.metadata_location(metadata_location).build()
         } else {
             table_builder.build()
+        }?;
+
+        // A load racing a change to this table may cache the pre-change table;
+        // the next load's `If-None-Match` check replaces it.
+        if let Some((cache, key)) = cache {
+            match etag {
+                Some(etag) if !vends_credentials => cache.insert(key, (etag, table.clone())),
+                _ => cache.invalidate(&key),
+            }
         }
+        Ok(table)
     }
 
     /// Drop a table from the catalog.
-    async fn drop_table(&self, table: &TableIdent) -> Result<()> {
-        self.delete_table(table, false).await
+    async fn drop_table(&self, context: &SessionContext, table: &TableIdent) -> Result<()> {
+        self.delete_table(context, table, false).await
     }
 
     /// Drop a table from the catalog and purge its data by sending
     /// `purgeRequested=true` to the REST server.
-    async fn purge_table(&self, table: &TableIdent) -> Result<()> {
-        self.delete_table(table, true).await
+    async fn purge_table(&self, context: &SessionContext, table: &TableIdent) -> Result<()> {
+        self.delete_table(context, table, true).await
     }
 
     /// Check if a table exists in the catalog.
-    async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
-        let context = self.context().await?;
-
-        let request = context
-            .client
-            .request(Method::HEAD, context.config.table_endpoint(table))
-            .build()?;
-
-        let http_response = context.client.query_catalog(request).await?;
-
-        match http_response.status() {
-            StatusCode::NO_CONTENT | StatusCode::OK => Ok(true),
-            StatusCode::NOT_FOUND => Ok(false),
-            _ => Err(deserialize_unexpected_catalog_error(
-                http_response,
-                context.client.disable_header_redaction(),
-            )
-            .await),
+    async fn table_exists(&self, context: &SessionContext, table: &TableIdent) -> Result<bool> {
+        // Prefer a cheap HEAD when the server advertises it; otherwise fall back
+        // to loading the table (GET) and treating a missing table as `false`, so
+        // this still works against servers that don't advertise the HEAD route.
+        if !self.supports_endpoint(&V1_TABLE_EXISTS).await? {
+            return match self.load_table(context, table).await {
+                Ok(_) => Ok(true),
+                Err(e) if e.kind() == ErrorKind::TableNotFound => Ok(false),
+                Err(e) => Err(e),
+            };
         }
+
+        let client = self.client().await?;
+        self.check_exists_via_head(context, client, client.config.table_endpoint(table))
+            .await
     }
 
     /// Rename a table in the catalog.
-    async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
-        let context = self.context().await?;
+    async fn rename_table(
+        &self,
+        context: &SessionContext,
+        src: &TableIdent,
+        dest: &TableIdent,
+    ) -> Result<()> {
+        let client = self.client().await?;
 
-        let request = context
-            .client
-            .request(Method::POST, context.config.rename_table_endpoint())
-            .json(&RenameTableRequest {
-                source: src.clone(),
-                destination: dest.clone(),
-            })
-            .build()?;
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(Method::POST, client.config.rename_table_endpoint())
+                .json(&RenameTableRequest {
+                    source: src.clone(),
+                    destination: dest.clone(),
+                }),
+        )?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        client.invalidate_table(context, src);
+        let http_response = client.query_catalog(context, request).await?;
 
         match http_response.status() {
             StatusCode::NO_CONTENT | StatusCode::OK => Ok(()),
@@ -931,40 +1531,40 @@ impl Catalog for RestCatalog {
             )),
             _ => Err(deserialize_unexpected_catalog_error(
                 http_response,
-                context.client.disable_header_redaction(),
-            )
-            .await),
+                client.http_client.disable_header_redaction(),
+            )),
         }
     }
 
     async fn register_table(
         &self,
+        context: &SessionContext,
         table_ident: &TableIdent,
         metadata_location: String,
     ) -> Result<Table> {
-        let context = self.context().await?;
+        let client = self.client().await?;
 
-        let request = context
-            .client
-            .request(
-                Method::POST,
-                context
-                    .config
-                    .register_table_endpoint(table_ident.namespace()),
-            )
-            .json(&RegisterTableRequest {
-                name: table_ident.name.clone(),
-                metadata_location: metadata_location.clone(),
-                overwrite: Some(false),
-            })
-            .build()?;
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(
+                    Method::POST,
+                    client
+                        .config
+                        .register_table_endpoint(table_ident.namespace()),
+                )
+                .json(&RegisterTableRequest {
+                    name: table_ident.name.clone(),
+                    metadata_location: metadata_location.clone(),
+                    overwrite: Some(false),
+                }),
+        )?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        client.invalidate_table(context, table_ident);
+        let http_response = client.query_catalog(context, request).await?;
 
         let response: LoadTableResult = match http_response.status() {
-            StatusCode::OK => {
-                deserialize_catalog_response::<LoadTableResult>(http_response).await?
-            }
+            StatusCode::OK => deserialize_catalog_response::<LoadTableResult>(http_response)?,
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
                     ErrorKind::NamespaceNotFound,
@@ -980,9 +1580,8 @@ impl Catalog for RestCatalog {
             _ => {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
-                    context.client.disable_header_redaction(),
-                )
-                .await);
+                    client.http_client.disable_header_redaction(),
+                ));
             }
         };
 
@@ -993,35 +1592,44 @@ impl Catalog for RestCatalog {
 
         let file_io = self.load_file_io(Some(metadata_location), None).await?;
 
-        Table::builder()
+        let mut table_builder = Table::builder()
             .identifier(table_ident.clone())
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(metadata_location.clone())
-            .runtime(self.runtime.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            table_builder = table_builder.kms_client(kms_client);
+        }
+        table_builder.build()
     }
 
-    async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
-        let context = self.context().await?;
+    async fn update_table(
+        &self,
+        context: &SessionContext,
+        mut commit: TableCommit,
+    ) -> Result<Table> {
+        let client = self.client().await?;
 
-        let request = context
-            .client
-            .request(
-                Method::POST,
-                context.config.table_endpoint(commit.identifier()),
-            )
-            .json(&CommitTableRequest {
-                identifier: Some(commit.identifier().clone()),
-                requirements: commit.take_requirements(),
-                updates: commit.take_updates(),
-            })
-            .build()?;
+        let request = HttpRequest::build(
+            client
+                .http_client
+                .request(
+                    Method::POST,
+                    client.config.table_endpoint(commit.identifier()),
+                )
+                .json(&CommitTableRequest {
+                    identifier: Some(commit.identifier().clone()),
+                    requirements: commit.take_requirements(),
+                    updates: commit.take_updates(),
+                }),
+        )?;
 
-        let http_response = context.client.query_catalog(request).await?;
+        client.invalidate_table(context, commit.identifier());
+        let http_response = client.query_catalog(context, request).await?;
 
         let response: CommitTableResponse = match http_response.status() {
-            StatusCode::OK => deserialize_catalog_response(http_response).await?,
+            StatusCode::OK => deserialize_catalog_response(http_response)?,
             StatusCode::NOT_FOUND => {
                 return Err(Error::new(
                     ErrorKind::TableNotFound,
@@ -1056,9 +1664,8 @@ impl Catalog for RestCatalog {
             _ => {
                 return Err(deserialize_unexpected_catalog_error(
                     http_response,
-                    context.client.disable_header_redaction(),
-                )
-                .await);
+                    client.http_client.disable_header_redaction(),
+                ));
             }
         };
 
@@ -1066,13 +1673,204 @@ impl Catalog for RestCatalog {
             .load_file_io(Some(&response.metadata_location), None)
             .await?;
 
-        Table::builder()
+        let mut table_builder = Table::builder()
             .identifier(commit.identifier().clone())
             .file_io(file_io)
             .metadata(response.metadata)
             .metadata_location(response.metadata_location)
-            .runtime(self.runtime.clone())
-            .build()
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            table_builder = table_builder.kms_client(kms_client);
+        }
+        table_builder.build()
+    }
+}
+
+/// Builder for an unbound [`RestSessionCatalog`].
+///
+/// Unlike [`RestCatalogBuilder`], the resulting catalog accepts a
+/// [`SessionContext`] with each [`SessionCatalog`] operation.
+#[derive(Debug)]
+pub struct RestSessionCatalogBuilder {
+    config: RestCatalogConfig,
+    auth_manager: Option<Box<dyn AuthManager>>,
+    storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
+    runtime: Option<Runtime>,
+}
+
+impl Default for RestSessionCatalogBuilder {
+    fn default() -> Self {
+        Self {
+            config: RestCatalogConfig {
+                name: None,
+                uri: "".to_string(),
+                warehouse: None,
+                props: HashMap::new(),
+                client: None,
+                default_client: Arc::new(OnceLock::new()),
+            },
+            auth_manager: None,
+            storage_factory: None,
+            kms_client_factory: None,
+            runtime: None,
+        }
+    }
+}
+
+impl RestSessionCatalogBuilder {
+    /// Sets the requested page size for namespace and table listings.
+    ///
+    /// List operations still return all results. Without a page size, no
+    /// `pageSize` is sent. Precedence, lowest to highest: server defaults, this
+    /// value, [`REST_CATALOG_PROP_PAGE_SIZE`] passed to [`load`](Self::load), and
+    /// server overrides. Catalog operations fail with [`ErrorKind::DataInvalid`]
+    /// if the effective value is not in `1..=i32::MAX`.
+    pub fn with_page_size(mut self, page_size: NonZeroU32) -> Self {
+        self.config.props.insert(
+            REST_CATALOG_PROP_PAGE_SIZE.to_string(),
+            page_size.to_string(),
+        );
+        self
+    }
+
+    /// Configures the catalog with a custom HTTP client.
+    pub fn with_client(mut self, client: Client) -> Self {
+        self.config.client = Some(client);
+        self
+    }
+
+    /// Sets a custom auth manager, overriding the `rest.auth.type` configuration.
+    ///
+    /// The builder takes ownership of the manager. The loaded catalog shares it
+    /// across authentication sessions and requests.
+    pub fn with_auth_manager<M>(mut self, auth_manager: M) -> Self
+    where M: AuthManager + 'static {
+        self.auth_manager = Some(Box::new(auth_manager));
+        self
+    }
+
+    /// Set a custom StorageFactory to use for storage operations.
+    ///
+    /// When a StorageFactory is provided, the catalog will use it to build FileIO
+    /// instances for all storage operations instead of using the default factory.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage_factory` - The StorageFactory to use for creating storage instances
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use iceberg::io::StorageFactory;
+    /// use iceberg_catalog_rest::RestSessionCatalogBuilder;
+    /// use iceberg_storage_opendal::OpenDalStorageFactory;
+    /// use std::sync::Arc;
+    ///
+    /// let catalog = RestSessionCatalogBuilder::default()
+    ///     .with_storage_factory(Arc::new(OpenDalStorageFactory::S3 {
+    ///         customized_credential_load: None,
+    ///     }))
+    ///     .load("my_catalog", props)
+    ///     .await?;
+    /// ```
+    pub fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
+        self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    /// Set a [`KmsClientFactory`] to enable table encryption.
+    ///
+    /// When provided, the catalog calls the factory once during
+    /// [`load`](Self::load) with the catalog properties to create a shared
+    /// [`KeyManagementClient`].
+    /// That client is then passed to each table's `TableBuilder` so tables
+    /// with `encryption.key-id` set can construct an `EncryptionManager`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use iceberg::encryption::kms::KmsClientFactory;
+    /// use iceberg_catalog_rest::RestSessionCatalogBuilder;
+    /// use std::sync::Arc;
+    ///
+    /// let catalog = RestSessionCatalogBuilder::default()
+    ///     .with_kms_client_factory(Arc::new(MyKmsClientFactory))
+    ///     .load("my_catalog", props)
+    ///     .await?;
+    /// ```
+    pub fn with_kms_client_factory(
+        mut self,
+        kms_client_factory: Arc<dyn KmsClientFactory>,
+    ) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
+        self
+    }
+
+    /// Set a custom tokio Runtime to use for spawning async tasks.
+    ///
+    /// When a Runtime is provided, the catalog will propagate it to all tables
+    /// it creates. Tasks such as scan planning and delete file processing
+    /// will be spawned on this runtime.
+    pub fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.runtime = Some(runtime);
+        self
+    }
+
+    /// Creates a new session catalog instance.
+    ///
+    /// The server configuration handshake, endpoint negotiation, and
+    /// authentication sessions are initialized lazily on the first operation.
+    pub fn load(
+        mut self,
+        name: impl Into<String>,
+        props: HashMap<String, String>,
+    ) -> impl Future<Output = Result<RestSessionCatalog>> + Send {
+        self.config.name = Some(name.into());
+
+        if props.contains_key(REST_CATALOG_PROP_URI) {
+            self.config.uri = props
+                .get(REST_CATALOG_PROP_URI)
+                .cloned()
+                .unwrap_or_default();
+        }
+
+        if props.contains_key(REST_CATALOG_PROP_WAREHOUSE) {
+            self.config.warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned()
+        }
+
+        // Collect other remaining properties
+        self.config.props.extend(props);
+        self.config.props.remove(REST_CATALOG_PROP_URI);
+        self.config.props.remove(REST_CATALOG_PROP_WAREHOUSE);
+
+        async move {
+            if self.config.name.is_none() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog name is required",
+                ))
+            } else if self.config.uri.is_empty() {
+                Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Catalog uri is required",
+                ))
+            } else {
+                let runtime = self.runtime.unwrap_or_else(Runtime::current);
+                let kms_client = match self.kms_client_factory {
+                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                    None => None,
+                };
+
+                Ok(RestSessionCatalog::new(
+                    self.config,
+                    self.auth_manager,
+                    self.storage_factory,
+                    runtime,
+                    kms_client,
+                ))
+            }
+        }
     }
 }
 
@@ -1080,7 +1878,7 @@ impl Catalog for RestCatalog {
 mod tests {
     use std::fs::File;
     use std::io::BufReader;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use chrono::{TimeZone, Utc};
     use iceberg::io::LocalFsStorageFactory;
@@ -1089,13 +1887,413 @@ mod tests {
         SnapshotLog, SortDirection, SortField, SortOrder, Summary, Transform, Type,
         UnboundPartitionField, UnboundPartitionSpec,
     };
-    use iceberg::test_utils::test_runtime;
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
-    use mockito::{Mock, Server, ServerGuard};
+    use iceberg_test_utils::test_runtime;
+    use mockito::{Matcher, Mock, Server, ServerGuard};
     use serde_json::json;
     use uuid::uuid;
 
     use super::*;
+    use crate::auth::AuthSession;
+    use crate::request::HttpRequest;
+
+    #[derive(Debug)]
+    struct PlainContextSession;
+
+    #[async_trait]
+    impl AuthSession for PlainContextSession {
+        async fn authenticate(&self, _request: &mut HttpRequest) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct ContextSession(String);
+
+    #[async_trait]
+    impl AuthSession for ContextSession {
+        async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
+            request.headers_mut().insert(
+                "x-session-id",
+                HeaderValue::from_str(&self.0).expect("valid test session ID"),
+            );
+            Ok(())
+        }
+    }
+
+    #[derive(Debug)]
+    struct ContextManager {
+        catalog_session: Arc<dyn AuthSession>,
+        seen_session_ids: Arc<Mutex<Vec<String>>>,
+        fail_contextual_session: bool,
+    }
+
+    #[async_trait]
+    impl AuthManager for ContextManager {
+        async fn init_session(
+            &self,
+            _client: &HttpClient,
+            _props: &HashMap<String, String>,
+        ) -> Result<Box<dyn AuthSession>> {
+            Ok(Box::new(PlainContextSession))
+        }
+
+        async fn catalog_session(
+            &self,
+            _client: &HttpClient,
+            _props: &HashMap<String, String>,
+        ) -> Result<Arc<dyn AuthSession>> {
+            Ok(self.catalog_session.clone())
+        }
+
+        async fn contextual_session(
+            &self,
+            context: &SessionContext,
+            catalog_session: Arc<dyn AuthSession>,
+        ) -> Result<Arc<dyn AuthSession>> {
+            assert!(Arc::ptr_eq(&catalog_session, &self.catalog_session));
+            self.seen_session_ids
+                .lock()
+                .unwrap()
+                .push(context.session_id().to_string());
+            if self.fail_contextual_session {
+                return Err(Error::new(
+                    ErrorKind::Unexpected,
+                    "contextual session failure",
+                ));
+            }
+            Ok(Arc::new(ContextSession(context.session_id().to_string())))
+        }
+    }
+
+    fn test_catalog(config: RestCatalogConfig) -> RestSessionCatalog {
+        RestSessionCatalog::new(config, None, None, Runtime::current(), None)
+    }
+
+    fn test_catalog_with<M>(config: RestCatalogConfig, auth_manager: M) -> RestSessionCatalog
+    where M: AuthManager + 'static {
+        RestSessionCatalog::new(
+            config,
+            Some(Box::new(auth_manager)),
+            None,
+            Runtime::current(),
+            None,
+        )
+    }
+
+    fn context_catalog(
+        config: RestCatalogConfig,
+        fail_contextual_session: bool,
+    ) -> (RestSessionCatalog, Arc<Mutex<Vec<String>>>) {
+        let seen_session_ids = Arc::new(Mutex::new(Vec::new()));
+        let catalog_session: Arc<dyn AuthSession> = Arc::new(PlainContextSession);
+        let catalog = test_catalog_with(config, ContextManager {
+            catalog_session,
+            seen_session_ids: seen_session_ids.clone(),
+            fail_contextual_session,
+        });
+        (catalog, seen_session_ids)
+    }
+
+    fn test_client() -> HttpClient {
+        HttpClient::new(
+            &RestCatalogConfig::builder()
+                .uri("http://localhost".to_string())
+                .build(),
+        )
+        .unwrap()
+    }
+
+    /// Builds a [`RestSessionCatalog`] with the default test storage factory and runtime.
+    fn session_catalog(config: RestCatalogConfig) -> RestSessionCatalog {
+        RestSessionCatalog::new(
+            config,
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_page_size_precedence() {
+        // Server default < builder < load properties < server override.
+        for (default, builder, property, override_value, expected) in [
+            (Some("10"), None, None, None, 10),
+            (Some("10"), Some(20), None, None, 20),
+            (None, Some(20), None, None, 20),
+            (Some("10"), None, Some("30"), None, 30),
+            (Some("10"), Some(20), Some("30"), None, 30),
+            (Some("10"), Some(20), Some("30"), Some("40"), 40),
+            (None, None, None, Some("40"), 40),
+            (None, Some(1), None, None, 1),
+            (None, Some(i32::MAX as u32), None, None, i32::MAX as u32),
+            // Invalid lower-priority values must not reject a valid effective value.
+            (Some("invalid"), Some(20), None, None, 20),
+            (None, Some(20), Some("0"), Some("40"), 40),
+            (None, Some(u32::MAX), None, Some("40"), 40),
+        ] {
+            let mut server = Server::new_async().await;
+            let page_size_props = |value: Option<&str>| -> HashMap<String, String> {
+                value
+                    .map(|value| (REST_CATALOG_PROP_PAGE_SIZE.to_string(), value.to_string()))
+                    .into_iter()
+                    .collect()
+            };
+            let config_mock = server
+                .mock("GET", "/v1/config")
+                .with_status(200)
+                .with_body(
+                    json!({
+                        "defaults": page_size_props(default),
+                        "overrides": page_size_props(override_value),
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+            let list_mock = server
+                .mock("GET", "/v1/namespaces")
+                .match_query(Matcher::UrlEncoded("pageSize".into(), expected.to_string()))
+                .with_status(200)
+                .with_body(r#"{"namespaces": []}"#)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let mut builder_config = RestCatalogBuilder::default();
+            if let Some(page_size) = builder {
+                builder_config = builder_config.with_page_size(NonZeroU32::new(page_size).unwrap());
+            }
+            let mut props = page_size_props(property);
+            props.insert(REST_CATALOG_PROP_URI.to_string(), server.url());
+            let catalog = builder_config.load("test", props).await.unwrap();
+
+            catalog.list_namespaces(None).await.unwrap_or_else(|err| {
+                panic!(
+                    "default={default:?}, builder={builder:?}, property={property:?}, \
+                     override={override_value:?}, expected={expected}: {err}"
+                )
+            });
+            config_mock.assert_async().await;
+            list_mock.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_page_size_pagination() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let catalog = RestCatalogBuilder::default()
+            .with_page_size(NonZeroU32::MIN)
+            .load(
+                "test",
+                HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.url())]),
+            )
+            .await
+            .unwrap();
+
+        let mut mocks = Vec::new();
+        for (endpoint, parent, first_body, empty_body, last_body) in [
+            (
+                "/v1/namespaces",
+                Some("parent\u{1f}child"),
+                json!({"namespaces": [["ns1"]], "next-page-token": "next/+"}),
+                json!({"namespaces": [], "next-page-token": "last"}),
+                json!({"namespaces": [["ns2"]], "next-page-token": null}),
+            ),
+            (
+                "/v1/namespaces/ns1/tables",
+                None,
+                json!({"identifiers": [{"namespace": ["ns1"], "name": "t1"}], "next-page-token": "next/+"}),
+                json!({"identifiers": [], "next-page-token": "last"}),
+                json!({"identifiers": [{"namespace": ["ns1"], "name": "t2"}]}),
+            ),
+        ] {
+            // Page 1 opts in with an empty token. Later tokens and the multipart
+            // parent must survive URL encoding, independent of query parameter order.
+            // The empty middle page must not terminate pagination.
+            for (token, body) in [
+                ("", first_body),
+                ("next/+", empty_body),
+                ("last", last_body),
+            ] {
+                let mut query = vec![
+                    Matcher::UrlEncoded("pageSize".into(), "1".into()),
+                    Matcher::UrlEncoded("pageToken".into(), token.into()),
+                ];
+                if let Some(parent) = parent {
+                    query.push(Matcher::UrlEncoded("parent".into(), parent.into()));
+                }
+                mocks.push(
+                    server
+                        .mock("GET", endpoint)
+                        .match_query(Matcher::AllOf(query))
+                        .with_status(200)
+                        .with_body(body.to_string())
+                        .expect(1)
+                        .create_async()
+                        .await,
+                );
+            }
+        }
+
+        let parent = NamespaceIdent::from_vec(vec!["parent".into(), "child".into()]).unwrap();
+        assert_eq!(catalog.list_namespaces(Some(&parent)).await.unwrap(), vec![
+            NamespaceIdent::new("ns1".into()),
+            NamespaceIdent::new("ns2".into())
+        ]);
+        let namespace = NamespaceIdent::new("ns1".into());
+        assert_eq!(catalog.list_tables(&namespace).await.unwrap(), vec![
+            TableIdent::new(namespace.clone(), "t1".into()),
+            TableIdent::new(namespace, "t2".into())
+        ]);
+        config_mock.assert_async().await;
+        for mock in mocks {
+            mock.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_page_size_is_not_a_result_limit() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let catalog = RestCatalogBuilder::default()
+            .with_page_size(NonZeroU32::MIN)
+            .load(
+                "test",
+                HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.url())]),
+            )
+            .await
+            .unwrap();
+
+        // A server may ignore pageSize and return all results without a next token.
+        let mut mocks = Vec::new();
+        for (endpoint, body) in [
+            ("/v1/namespaces", json!({"namespaces": [["ns1"], ["ns2"]]})),
+            (
+                "/v1/namespaces/ns1/tables",
+                json!({"identifiers": [
+                    {"namespace": ["ns1"], "name": "t1"},
+                    {"namespace": ["ns1"], "name": "t2"},
+                ]}),
+            ),
+        ] {
+            mocks.push(
+                server
+                    .mock("GET", endpoint)
+                    .match_query(Matcher::AllOf(vec![
+                        Matcher::UrlEncoded("pageSize".into(), "1".into()),
+                        Matcher::UrlEncoded("pageToken".into(), "".into()),
+                    ]))
+                    .with_status(200)
+                    .with_body(body.to_string())
+                    .expect(1)
+                    .create_async()
+                    .await,
+            );
+        }
+
+        assert_eq!(catalog.list_namespaces(None).await.unwrap(), vec![
+            NamespaceIdent::new("ns1".into()),
+            NamespaceIdent::new("ns2".into())
+        ]);
+        let namespace = NamespaceIdent::new("ns1".into());
+        assert_eq!(catalog.list_tables(&namespace).await.unwrap(), vec![
+            TableIdent::new(namespace.clone(), "t1".into()),
+            TableIdent::new(namespace, "t2".into())
+        ]);
+        config_mock.assert_async().await;
+        for mock in mocks {
+            mock.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_page_size_absent() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let namespaces_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_query(Matcher::Missing)
+            .with_status(200)
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+        let tables_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables")
+            .match_query(Matcher::Missing)
+            .with_status(200)
+            .with_body(r#"{"identifiers": []}"#)
+            .create_async()
+            .await;
+        let catalog = RestCatalogBuilder::default()
+            .load(
+                "test",
+                HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.url())]),
+            )
+            .await
+            .unwrap();
+
+        assert!(catalog.list_namespaces(None).await.unwrap().is_empty());
+        assert!(
+            catalog
+                .list_tables(&NamespaceIdent::new("ns1".into()))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        config_mock.assert_async().await;
+        namespaces_mock.assert_async().await;
+        tables_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_invalid_page_size() {
+        for value in [
+            "",
+            "0",
+            "-1",
+            "abc",
+            "1.5",
+            "2147483648",
+            "4294967295",
+            "4294967296",
+        ] {
+            for source in ["defaults", "client", "overrides"] {
+                let mut server = Server::new_async().await;
+                let mut config = json!({"defaults": {}, "overrides": {}});
+                let mut props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), server.url())]);
+                if source == "client" {
+                    // Invalid client values must not fall back to a valid server default.
+                    config["defaults"][REST_CATALOG_PROP_PAGE_SIZE] = json!("1000");
+                    props.insert(REST_CATALOG_PROP_PAGE_SIZE.to_string(), value.to_string());
+                } else {
+                    config[source][REST_CATALOG_PROP_PAGE_SIZE] = json!(value);
+                }
+                let config_mock = server
+                    .mock("GET", "/v1/config")
+                    .with_status(200)
+                    .with_body(config.to_string())
+                    .create_async()
+                    .await;
+                let catalog = RestSessionCatalogBuilder::default()
+                    .load("test", props)
+                    .await
+                    .unwrap();
+                let err = catalog
+                    .list_namespaces(&SessionContext::empty(), None)
+                    .await
+                    .unwrap_err();
+                assert_eq!(err.kind(), ErrorKind::DataInvalid);
+                assert_eq!(
+                    err.message(),
+                    format!("Invalid {REST_CATALOG_PROP_PAGE_SIZE}: {value}")
+                );
+                config_mock.assert_async().await;
+            }
+        }
+    }
 
     #[tokio::test]
     async fn test_update_config() {
@@ -1115,15 +2313,11 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         assert_eq!(
             catalog
-                .context()
+                .client()
                 .await
                 .unwrap()
                 .config
@@ -1149,6 +2343,133 @@ mod tests {
             )
             .create_async()
             .await
+    }
+
+    /// Config mock that advertises the HEAD table/namespace-exists endpoints, so
+    /// `{table,namespace}_exists` take the HEAD path rather than the GET fallback.
+    async fn create_config_mock_with_exists_endpoints(server: &mut ServerGuard) -> Mock {
+        server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "overrides": { "warehouse": "s3://iceberg-catalog" },
+                "defaults": {},
+                "endpoints": [
+                    "HEAD /v1/{prefix}/namespaces/{namespace}",
+                    "HEAD /v1/{prefix}/namespaces/{namespace}/tables/{table}"
+                ]
+            }"#,
+            )
+            .create_async()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_config_advertised_endpoints() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "overrides": {},
+                "defaults": {},
+                "endpoints": [
+                    "GET /v1/{prefix}/namespaces",
+                    "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan"
+                ]
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        let plan = "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan"
+            .parse::<Endpoint>()
+            .unwrap();
+        assert!(catalog.inner.supports_endpoint(&plan).await.unwrap());
+        // Advertised list is present but does not include this route.
+        let delete_ns = "DELETE /v1/{prefix}/namespaces/{namespace}"
+            .parse::<Endpoint>()
+            .unwrap();
+        assert!(!catalog.inner.supports_endpoint(&delete_ns).await.unwrap());
+
+        config_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_config_without_endpoints_falls_back_to_default_set() {
+        let mut server = Server::new_async().await;
+
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(r#"{ "overrides": {}, "defaults": {} }"#)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        // A server that omits the `endpoints` field is assumed to support the
+        // standard base operations.
+        let load_table = "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}"
+            .parse::<Endpoint>()
+            .unwrap();
+        assert!(catalog.inner.supports_endpoint(&load_table).await.unwrap());
+        // But not an optional endpoint that must be advertised.
+        let plan = "POST /v1/{prefix}/namespaces/{namespace}/tables/{table}/plan"
+            .parse::<Endpoint>()
+            .unwrap();
+        assert!(!catalog.inner.supports_endpoint(&plan).await.unwrap());
+
+        config_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_config_with_empty_endpoints_falls_back_to_default_set() {
+        let mut server = Server::new_async().await;
+
+        // An explicit empty list is treated the same as an absent field: fall
+        // back to the standard base set.
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(r#"{ "overrides": {}, "defaults": {}, "endpoints": [] }"#)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        let load_table = "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}"
+            .parse::<Endpoint>()
+            .unwrap();
+        assert!(catalog.inner.supports_endpoint(&load_table).await.unwrap());
+
+        config_mock.assert_async().await;
     }
 
     async fn create_oauth_mock(server: &mut ServerGuard) -> Mock {
@@ -1187,16 +2508,14 @@ mod tests {
         let mut props = HashMap::new();
         props.insert("credential".to_string(), "client1:secret1".to_string());
 
-        let catalog = RestCatalog::new(
+        let catalog = session_catalog(
             RestCatalogConfig::builder()
                 .uri(server.url())
                 .props(props)
                 .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
+        let token = catalog.client().await.unwrap().token().await;
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
         assert_eq!(token, Some("ey000000000000".to_string()));
@@ -1213,13 +2532,9 @@ mod tests {
         let mut server = Server::new_async().await;
         let oauth_mock = server
             .mock("POST", "/v1/oauth/tokens")
-            .match_body(mockito::Matcher::Regex("scope=custom_scope".to_string()))
-            .match_body(mockito::Matcher::Regex(
-                "audience=custom_audience".to_string(),
-            ))
-            .match_body(mockito::Matcher::Regex(
-                "resource=custom_resource".to_string(),
-            ))
+            .match_body(Matcher::Regex("scope=custom_scope".to_string()))
+            .match_body(Matcher::Regex("audience=custom_audience".to_string()))
+            .match_body(Matcher::Regex("resource=custom_resource".to_string()))
             .with_status(200)
             .with_body(
                 r#"{
@@ -1235,150 +2550,17 @@ mod tests {
 
         let config_mock = create_config_mock(&mut server).await;
 
-        let catalog = RestCatalog::new(
+        let catalog = session_catalog(
             RestCatalogConfig::builder()
                 .uri(server.url())
                 .props(props)
                 .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
+        let token = catalog.client().await.unwrap().token().await;
 
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_invalidate_token() {
-        let mut server = Server::new_async().await;
-        let oauth_mock = create_oauth_mock(&mut server).await;
-        let config_mock = create_config_mock(&mut server).await;
-
-        let mut props = HashMap::new();
-        props.insert("credential".to_string(), "client1:secret1".to_string());
-
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder()
-                .uri(server.url())
-                .props(props)
-                .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
-
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
-
-        let oauth_mock =
-            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
-                .await;
-        catalog.invalidate_token().await.unwrap();
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000001".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_invalidate_token_failing_request() {
-        let mut server = Server::new_async().await;
-        let oauth_mock = create_oauth_mock(&mut server).await;
-        let config_mock = create_config_mock(&mut server).await;
-
-        let mut props = HashMap::new();
-        props.insert("credential".to_string(), "client1:secret1".to_string());
-
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder()
-                .uri(server.url())
-                .props(props)
-                .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
-
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
-
-        let oauth_mock =
-            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
-                .await;
-        catalog.invalidate_token().await.unwrap();
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        assert_eq!(token, None);
-    }
-
-    #[tokio::test]
-    async fn test_regenerate_token() {
-        let mut server = Server::new_async().await;
-        let oauth_mock = create_oauth_mock(&mut server).await;
-        let config_mock = create_config_mock(&mut server).await;
-
-        let mut props = HashMap::new();
-        props.insert("credential".to_string(), "client1:secret1".to_string());
-
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder()
-                .uri(server.url())
-                .props(props)
-                .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
-
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
-
-        let oauth_mock =
-            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 200)
-                .await;
-        catalog.regenerate_token().await.unwrap();
-        oauth_mock.assert_async().await;
-        let token = catalog.context().await.unwrap().client.token().await;
-        assert_eq!(token, Some("ey000000000001".to_string()));
-    }
-
-    #[tokio::test]
-    async fn test_regenerate_token_failing_request() {
-        let mut server = Server::new_async().await;
-        let oauth_mock = create_oauth_mock(&mut server).await;
-        let config_mock = create_config_mock(&mut server).await;
-
-        let mut props = HashMap::new();
-        props.insert("credential".to_string(), "client1:secret1".to_string());
-
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder()
-                .uri(server.url())
-                .props(props)
-                .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
-
-        let token = catalog.context().await.unwrap().client.token().await;
-        oauth_mock.assert_async().await;
-        config_mock.assert_async().await;
-        assert_eq!(token, Some("ey000000000000".to_string()));
-
-        let oauth_mock =
-            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "ey000000000001", 500)
-                .await;
-        let invalidate_result = catalog.regenerate_token().await;
-        assert!(invalidate_result.is_err());
-        oauth_mock.assert_async().await;
-        let token = catalog.context().await.unwrap().client.token().await;
-
-        // original token is left intact
         assert_eq!(token, Some("ey000000000000".to_string()));
     }
 
@@ -1405,7 +2587,7 @@ mod tests {
             ),
             (
                 header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
+                HeaderValue::from_str(&format!("iceberg-rust/{CARGO_PKG_VERSION}")).unwrap(),
             ),
         ]);
         assert_eq!(headers, expected_headers);
@@ -1442,7 +2624,7 @@ mod tests {
             ),
             (
                 header::USER_AGENT,
-                HeaderValue::from_str(&format!("iceberg-rs/{CARGO_PKG_VERSION}")).unwrap(),
+                HeaderValue::from_str(&format!("iceberg-rust/{CARGO_PKG_VERSION}")).unwrap(),
             ),
             (
                 HeaderName::from_static("customized-header"),
@@ -1470,16 +2652,14 @@ mod tests {
             format!("{}{}", auth_server.url(), auth_server_path).to_string(),
         );
 
-        let catalog = RestCatalog::new(
+        let catalog = session_catalog(
             RestCatalogConfig::builder()
                 .uri(server.url())
                 .props(props)
                 .build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
         );
 
-        let token = catalog.context().await.unwrap().client.token().await;
+        let token = catalog.client().await.unwrap().token().await;
 
         oauth_mock.assert_async().await;
         config_mock.assert_async().await;
@@ -1521,13 +2701,12 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
-        let _namespaces = catalog.list_namespaces(None).await.unwrap();
+        let _namespaces = catalog
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap();
 
         config_mock.assert_async().await;
         list_ns_mock.assert_async().await;
@@ -1552,13 +2731,12 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
-        let namespaces = catalog.list_namespaces(None).await.unwrap();
+        let namespaces = catalog
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap();
 
         let expected_ns = vec![
             NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]).unwrap(),
@@ -1569,6 +2747,909 @@ mod tests {
 
         config_mock.assert_async().await;
         list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_auth_type_none_disables_auth() {
+        // An explicit `rest.auth.type=none` wins over a configured token.
+        let props = HashMap::from([
+            (REST_CATALOG_PROP_AUTH_TYPE.to_string(), "none".to_string()),
+            ("token".to_string(), "some-oauth-token".to_string()),
+        ]);
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+
+        let session = test_catalog(config)
+            .resolve_auth_manager()
+            .unwrap()
+            .init_session(&test_client(), &HashMap::new())
+            .await
+            .unwrap();
+        let mut req = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/v1/config")
+                .build()
+                .unwrap(),
+        );
+        session.authenticate(&mut req).await.unwrap();
+        assert!(req.headers().get("authorization").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_header_prop_overrides_token_on_the_wire() {
+        // Pre-AuthManager behavior, preserved: extra headers are applied after
+        // authentication, so a user-configured `header.authorization` wins
+        // over a configured token.
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", "Basic xyz")
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+
+        let props = HashMap::from([
+            ("token".to_string(), "some-oauth-token".to_string()),
+            ("header.authorization".to_string(), "Basic xyz".to_string()),
+        ]);
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(props)
+                .build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        catalog.list_namespaces(None).await.unwrap();
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_builtin_oauth_endpoint_follows_uri_override() {
+        // When `/v1/config` overrides `uri` (and no explicit `oauth2-server-uri`
+        // is set), the built-in manager's default token endpoint must follow
+        // the merged URI.
+        let mut bootstrap = Server::new_async().await;
+        let overridden = Server::new_async().await;
+
+        let config_mock = bootstrap
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(format!(
+                r#"{{"overrides": {{"uri": "{}"}}, "defaults": {{}}}}"#,
+                overridden.url()
+            ))
+            .create_async()
+            .await;
+        // Handshake exchange still uses the bootstrap-derived default.
+        let bootstrap_oauth_mock =
+            create_oauth_mock_with_path(&mut bootstrap, "/v1/oauth/tokens", "tok-boot", 200).await;
+
+        let props = HashMap::from([("credential".to_string(), "client1:secret1".to_string())]);
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder()
+                .uri(bootstrap.url())
+                .props(props)
+                .build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        let client = catalog.client().await.unwrap();
+        config_mock.assert_async().await;
+        bootstrap_oauth_mock.assert_async().await;
+        // The catalog session's endpoint follows the overridden URI (visible
+        // via the session's Debug, which prints its token endpoint).
+        let session_debug = format!("{:?}", client.catalog_session);
+        assert!(session_debug.contains(&format!("{}/v1/oauth/tokens", overridden.url())));
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_authenticate_single_token_exchange() {
+        // Concurrent requests that all find no cached token must trigger ONE
+        // credential exchange (the lock is held across it), not one each.
+        let mut server = Server::new_async().await;
+        // create_oauth_mock_with_path expects exactly 1 hit.
+        let oauth_mock =
+            create_oauth_mock_with_path(&mut server, "/v1/oauth/tokens", "tok-once", 200).await;
+
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
+            .with_credential(Some("client1".to_string()), "secret1".to_string());
+        let session: Arc<dyn AuthSession> = Arc::from(
+            manager
+                .init_session(&test_client(), &HashMap::new())
+                .await
+                .unwrap(),
+        );
+
+        let client = Client::new();
+        let attempts = (0..8).map(|_| {
+            let session = session.clone();
+            let client = client.clone();
+            async move {
+                let mut req = HttpRequest::new(
+                    client
+                        .get("https://rest.example.com/v1/config")
+                        .build()
+                        .unwrap(),
+                );
+                session.authenticate(&mut req).await.unwrap();
+                req.headers()
+                    .get("authorization")
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string()
+            }
+        });
+        let bearers = futures::future::join_all(attempts).await;
+
+        oauth_mock.assert_async().await;
+        assert!(bearers.iter().all(|b| b == "Bearer tok-once"));
+    }
+
+    #[tokio::test]
+    async fn test_seeded_token_takes_precedence_over_credential() {
+        // token + credential: the seeded token is attached without any
+        // credential exchange.
+        let mut server = Server::new_async().await;
+        let oauth_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
+            .with_token("tok-seed")
+            .with_credential(Some("client1".to_string()), "secret1".to_string());
+        let session = manager
+            .init_session(&test_client(), &HashMap::new())
+            .await
+            .unwrap();
+
+        let mut req = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/v1/config")
+                .build()
+                .unwrap(),
+        );
+        session.authenticate(&mut req).await.unwrap();
+        assert_eq!(
+            req.headers().get("authorization").unwrap(),
+            "Bearer tok-seed"
+        );
+
+        oauth_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_injected_oauth_manager_keeps_endpoint_and_options() {
+        // An injected OAuth2Manager must keep its own token endpoint, extra
+        // headers and OAuth params across the config handshake: only explicit
+        // properties may override them, never synthesized defaults.
+        let mut server = Server::new_async().await;
+        // The server vends the credential, so the exchange runs through the
+        // post-handshake catalog session (exercising its property merging).
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(r#"{"defaults": {"credential": "client1:secret1"}, "overrides": {}}"#)
+            .create_async()
+            .await;
+
+        // The catalog-host default endpoint must never see the credential.
+        let default_endpoint_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .expect(0)
+            .create_async()
+            .await;
+        // The exchange hits the injected endpoint, carrying the injected
+        // header and OAuth param.
+        let custom_endpoint_mock = server
+            .mock("POST", "/custom/oauth/tokens")
+            .match_header("x-tenant", "t1")
+            // The default catalog scope must survive alongside the injected
+            // audience (with_extra_oauth_params merges onto the defaults).
+            .match_body(Matcher::AllOf(vec![
+                Matcher::Regex("scope=catalog".to_string()),
+                Matcher::Regex("audience=aud-1".to_string()),
+            ]))
+            .with_status(200)
+            .with_body(
+                r#"{
+                "access_token": "ey000000000000",
+                "token_type": "Bearer",
+                "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+                "expires_in": 86400
+                }"#,
+            )
+            .create_async()
+            .await;
+        let ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", "Bearer ey000000000000")
+            .with_body(r#"{"namespaces": []}"#)
+            .create_async()
+            .await;
+
+        let manager = OAuth2Manager::new(format!("{}/custom/oauth/tokens", server.url()))
+            .with_extra_headers(HeaderMap::from_iter([(
+                HeaderName::from_static("x-tenant"),
+                HeaderValue::from_static("t1"),
+            )]))
+            .with_extra_oauth_params(HashMap::from([(
+                "audience".to_string(),
+                "aud-1".to_string(),
+            )]));
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Box::new(manager)),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        catalog.list_namespaces(None).await.unwrap();
+
+        config_mock.assert_async().await;
+        custom_endpoint_mock.assert_async().await;
+        default_endpoint_mock.assert_async().await;
+        ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_props_token_takes_precedence_over_props_credential() {
+        // Both arriving through the properties rather than the builder.
+        let mut server = Server::new_async().await;
+        let oauth_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()));
+        let session = manager
+            .init_session(
+                &test_client(),
+                &HashMap::from([
+                    ("token".to_string(), "tok-props".to_string()),
+                    ("credential".to_string(), "client1:secret1".to_string()),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let mut req = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/v1/config")
+                .build()
+                .unwrap(),
+        );
+        session.authenticate(&mut req).await.unwrap();
+        assert_eq!(
+            req.headers().get("authorization").unwrap(),
+            "Bearer tok-props"
+        );
+        oauth_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_manager_exchanges_over_the_catalog_client() {
+        // The manager exchanges the credential over the client it is handed,
+        // sharing the catalog's connection pool. Its own extra headers go on
+        // the token request; the catalog's do not.
+        let mut server = Server::new_async().await;
+        let token_mock = server
+            .mock("POST", "/v1/oauth/tokens")
+            .match_header("x-from", "manager")
+            .match_header("x-catalog-only", Matcher::Missing)
+            .with_status(200)
+            .with_body(r#"{"access_token": "tok", "token_type": "Bearer"}"#)
+            .create_async()
+            .await;
+
+        let catalog_client = HttpClient::new(
+            &RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(HashMap::from([(
+                    "header.x-catalog-only".to_string(),
+                    "not-on-token-requests".to_string(),
+                )]))
+                .build(),
+        )
+        .unwrap();
+
+        let manager = OAuth2Manager::new(format!("{}/v1/oauth/tokens", server.url()))
+            .with_credential(Some("client1".to_string()), "secret1".to_string())
+            .with_extra_headers(HeaderMap::from_iter([(
+                HeaderName::from_static("x-from"),
+                HeaderValue::from_static("manager"),
+            )]));
+        let session = manager
+            .init_session(&catalog_client, &HashMap::new())
+            .await
+            .unwrap();
+
+        let mut req = HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/v1/namespaces")
+                .build()
+                .unwrap(),
+        );
+        session.authenticate(&mut req).await.unwrap();
+        token_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_handshake_is_authenticated_by_the_init_session() {
+        // `/v1/config` goes out with the init session's authentication, not
+        // unauthenticated and not with a later one.
+        let mut server = Server::new_async().await;
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .match_header("authorization", "Bearer tok-init")
+            .with_status(200)
+            .with_body(r#"{"defaults": {}, "overrides": {}}"#)
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(HashMap::from([(
+                    "token".to_string(),
+                    "tok-init".to_string(),
+                )]))
+                .build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        catalog.client().await.unwrap();
+        config_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_init_session_receives_user_props() {
+        use tokio::sync::Mutex as AsyncMutex;
+
+        // A custom manager initializes from the user configuration: the
+        // props carry the catalog `uri` and the user's credentials.
+        #[derive(Debug)]
+        struct PlainSession;
+        #[async_trait]
+        impl AuthSession for PlainSession {
+            async fn authenticate(&self, _request: &mut HttpRequest) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        #[derive(Debug)]
+        struct CapturingManager(Arc<AsyncMutex<Option<HashMap<String, String>>>>);
+        #[async_trait]
+        impl AuthManager for CapturingManager {
+            async fn init_session(
+                &self,
+                _client: &HttpClient,
+                props: &HashMap<String, String>,
+            ) -> Result<Box<dyn AuthSession>> {
+                *self.0.lock().await = Some(props.clone());
+                Ok(Box::new(PlainSession))
+            }
+            async fn catalog_session(
+                &self,
+                _client: &HttpClient,
+                _props: &HashMap<String, String>,
+            ) -> Result<Arc<dyn AuthSession>> {
+                Ok(Arc::new(PlainSession))
+            }
+        }
+
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let captured = Arc::new(AsyncMutex::new(None));
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(HashMap::from([(
+                    "token".to_string(),
+                    "tok-user".to_string(),
+                )]))
+                .build(),
+            Some(Box::new(CapturingManager(captured.clone()))),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        catalog.client().await.unwrap();
+        config_mock.assert_async().await;
+        let props = captured.lock().await.clone().unwrap();
+        assert_eq!(props.get("token").map(String::as_str), Some("tok-user"));
+        assert_eq!(
+            props.get(REST_CATALOG_PROP_URI).map(String::as_str),
+            Some(server.url().as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_catalog_session_receives_resolved_warehouse() {
+        use tokio::sync::Mutex as AsyncMutex;
+
+        // A custom manager must receive the resolved warehouse in the props
+        // handed to `catalog_session`, with the standard precedence:
+        // server default < client-side warehouse < server override.
+        #[derive(Debug)]
+        struct PlainSession;
+        #[async_trait]
+        impl AuthSession for PlainSession {
+            async fn authenticate(&self, _request: &mut HttpRequest) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        #[derive(Debug)]
+        struct CapturingManager(Arc<AsyncMutex<Option<HashMap<String, String>>>>);
+        #[async_trait]
+        impl AuthManager for CapturingManager {
+            async fn init_session(
+                &self,
+                _client: &HttpClient,
+                _props: &HashMap<String, String>,
+            ) -> Result<Box<dyn AuthSession>> {
+                Ok(Box::new(PlainSession))
+            }
+            async fn catalog_session(
+                &self,
+                _client: &HttpClient,
+                props: &HashMap<String, String>,
+            ) -> Result<Arc<dyn AuthSession>> {
+                *self.0.lock().await = Some(props.clone());
+                Ok(Arc::new(PlainSession))
+            }
+        }
+
+        // Client warehouse wins over a server default.
+        let mut server = Server::new_async().await;
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .match_query(Matcher::UrlEncoded(
+                "warehouse".to_string(),
+                "client-wh".to_string(),
+            ))
+            .with_status(200)
+            .with_body(r#"{"defaults": {"warehouse": "default-wh"}, "overrides": {}}"#)
+            .create_async()
+            .await;
+        let captured = Arc::new(AsyncMutex::new(None));
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .warehouse("client-wh".to_string())
+                .build(),
+            Some(Box::new(CapturingManager(captured.clone()))),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        catalog.client().await.unwrap();
+        config_mock.assert_async().await;
+        let props = captured.lock().await.clone().unwrap();
+        assert_eq!(
+            props.get("warehouse").map(String::as_str),
+            Some("client-wh")
+        );
+
+        // A server override wins over the client warehouse.
+        let mut server = Server::new_async().await;
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .match_query(Matcher::UrlEncoded(
+                "warehouse".to_string(),
+                "client-wh".to_string(),
+            ))
+            .with_status(200)
+            .with_body(r#"{"defaults": {}, "overrides": {"warehouse": "override-wh"}}"#)
+            .create_async()
+            .await;
+        let captured = Arc::new(AsyncMutex::new(None));
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .warehouse("client-wh".to_string())
+                .build(),
+            Some(Box::new(CapturingManager(captured.clone()))),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        catalog.client().await.unwrap();
+        config_mock.assert_async().await;
+        let props = captured.lock().await.clone().unwrap();
+        assert_eq!(
+            props.get("warehouse").map(String::as_str),
+            Some("override-wh")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_init_session_dropped_before_catalog_session() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        // A manager whose init session guards a one-shot resource (released on
+        // drop) must see it released before `catalog_session` is invoked.
+        #[derive(Debug)]
+        struct GuardSession(Arc<AtomicBool>);
+        impl Drop for GuardSession {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        #[async_trait]
+        impl AuthSession for GuardSession {
+            async fn authenticate(&self, _request: &mut HttpRequest) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        #[derive(Debug)]
+        struct PlainSession;
+        #[async_trait]
+        impl AuthSession for PlainSession {
+            async fn authenticate(&self, _request: &mut HttpRequest) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        #[derive(Debug)]
+        struct GuardManager(Arc<AtomicBool>);
+        #[async_trait]
+        impl AuthManager for GuardManager {
+            async fn init_session(
+                &self,
+                _client: &HttpClient,
+                _props: &HashMap<String, String>,
+            ) -> Result<Box<dyn AuthSession>> {
+                Ok(Box::new(GuardSession(self.0.clone())))
+            }
+            async fn catalog_session(
+                &self,
+                _client: &HttpClient,
+                _props: &HashMap<String, String>,
+            ) -> Result<Arc<dyn AuthSession>> {
+                if !self.0.load(Ordering::SeqCst) {
+                    return Err(Error::new(
+                        ErrorKind::Unexpected,
+                        "init session must be dropped before catalog_session",
+                    ));
+                }
+                Ok(Arc::new(PlainSession))
+            }
+        }
+
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            Some(Box::new(GuardManager(dropped.clone()))),
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        catalog.client().await.unwrap();
+        config_mock.assert_async().await;
+        assert!(dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn test_contextual_session_authenticates_each_catalog_request() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let first_page = server
+            .mock("GET", "/v1/namespaces")
+            .match_header("x-session-id", "session-123")
+            .with_body(r#"{"namespaces": [["ns1"]], "next-page-token": "next"}"#)
+            .create_async()
+            .await;
+        let second_page = server
+            .mock("GET", "/v1/namespaces?pageToken=next")
+            .match_header("x-session-id", "session-123")
+            .with_body(r#"{"namespaces": [["ns2"]]}"#)
+            .create_async()
+            .await;
+
+        let (catalog, seen_session_ids) = context_catalog(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            false,
+        );
+        let context = SessionContext::builder()
+            .session_id("session-123".to_string())
+            .build();
+
+        let namespaces = catalog.list_namespaces(&context, None).await.unwrap();
+
+        assert_eq!(namespaces, vec![
+            NamespaceIdent::new("ns1".to_string()),
+            NamespaceIdent::new("ns2".to_string()),
+        ]);
+        assert_eq!(*seen_session_ids.lock().unwrap(), vec![
+            "session-123",
+            "session-123"
+        ]);
+        config_mock.assert_async().await;
+        first_page.assert_async().await;
+        second_page.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_contextual_session_authenticates_namespace_exists_head() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock_with_exists_endpoints(&mut server).await;
+        let exists_mock = server
+            .mock("HEAD", "/v1/namespaces/ns1")
+            .match_header("x-session-id", "namespace-session")
+            .with_status(204)
+            .create_async()
+            .await;
+        let (catalog, seen_session_ids) = context_catalog(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            false,
+        );
+        let context = SessionContext::builder()
+            .session_id("namespace-session".to_string())
+            .build();
+
+        assert!(
+            catalog
+                .namespace_exists(&context, &NamespaceIdent::new("ns1".to_string()))
+                .await
+                .unwrap()
+        );
+        assert_eq!(*seen_session_ids.lock().unwrap(), vec!["namespace-session"]);
+        config_mock.assert_async().await;
+        exists_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_contextual_session_authenticates_table_exists_head() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock_with_exists_endpoints(&mut server).await;
+        let exists_mock = server
+            .mock("HEAD", "/v1/namespaces/ns1/tables/table1")
+            .match_header("x-session-id", "table-session")
+            .with_status(204)
+            .create_async()
+            .await;
+        let (catalog, seen_session_ids) = context_catalog(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            false,
+        );
+        let context = SessionContext::builder()
+            .session_id("table-session".to_string())
+            .build();
+
+        assert!(
+            catalog
+                .table_exists(
+                    &context,
+                    &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "table1".to_string(),),
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(*seen_session_ids.lock().unwrap(), vec!["table-session"]);
+        config_mock.assert_async().await;
+        exists_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_contextual_session_authenticates_write_operation() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let drop_mock = server
+            .mock("DELETE", "/v1/namespaces/ns1")
+            .match_header("x-session-id", "write-session")
+            .with_status(204)
+            .create_async()
+            .await;
+        let (catalog, seen_session_ids) = context_catalog(
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            false,
+        );
+        let context = SessionContext::builder()
+            .session_id("write-session".to_string())
+            .build();
+
+        catalog
+            .drop_namespace(&context, &NamespaceIdent::new("ns1".to_string()))
+            .await
+            .unwrap();
+        assert_eq!(*seen_session_ids.lock().unwrap(), vec!["write-session"]);
+        config_mock.assert_async().await;
+        drop_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_contextual_session_error_prevents_operation_request() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let list_mock = server
+            .mock("GET", "/v1/namespaces")
+            .expect(0)
+            .create_async()
+            .await;
+        let (catalog, seen_session_ids) =
+            context_catalog(RestCatalogConfig::builder().uri(server.url()).build(), true);
+        let context = SessionContext::builder()
+            .session_id("failing-session".to_string())
+            .build();
+
+        let error = catalog.list_namespaces(&context, None).await.unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::Unexpected);
+        assert_eq!(error.message(), "contextual session failure");
+        assert_eq!(*seen_session_ids.lock().unwrap(), vec!["failing-session"]);
+        config_mock.assert_async().await;
+        list_mock.assert_async().await;
+    }
+
+    #[test]
+    fn test_config_debug_redacts_secrets() {
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([
+                ("token".to_string(), "tok-secret".to_string()),
+                ("credential".to_string(), "id:cred-secret".to_string()),
+                ("header.authorization".to_string(), "Basic xyz".to_string()),
+                ("adls.account-key".to_string(), "adls-secret".to_string()),
+                ("s3.sse.key".to_string(), "sse-secret".to_string()),
+                (
+                    "adls.connection-string".to_string(),
+                    "cs-secret".to_string(),
+                ),
+                ("warehouse".to_string(), "wh1".to_string()),
+            ]))
+            .build();
+
+        let out = format!("{config:?}");
+        assert!(!out.contains("tok-secret"));
+        assert!(!out.contains("cred-secret"));
+        assert!(!out.contains("Basic xyz"));
+        assert!(!out.contains("adls-secret"));
+        assert!(!out.contains("sse-secret"));
+        assert!(!out.contains("cs-secret"));
+        assert!(out.contains("[REDACTED]"));
+        assert!(out.contains("wh1"));
+    }
+
+    #[tokio::test]
+    async fn test_auth_type_defaults() {
+        // Unset `rest.auth.type`: `oauth2` when any OAuth material is
+        // configured (existing setups keep working), `none` otherwise.
+        let bare = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .build();
+        assert!(
+            format!("{:?}", test_catalog(bare).resolve_auth_manager().unwrap())
+                .contains("NoopAuthManager")
+        );
+
+        let with_token = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([("token".to_string(), "tok".to_string())]))
+            .build();
+        assert!(
+            format!(
+                "{:?}",
+                test_catalog(with_token).resolve_auth_manager().unwrap()
+            )
+            .contains("OAuth2Manager")
+        );
+
+        // An explicit type is matched case-insensitively.
+        let mixed_case = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([(
+                REST_CATALOG_PROP_AUTH_TYPE.to_string(),
+                "OAuth2".to_string(),
+            )]))
+            .build();
+        assert!(
+            format!(
+                "{:?}",
+                test_catalog(mixed_case).resolve_auth_manager().unwrap()
+            )
+            .contains("OAuth2Manager")
+        );
+
+        // An explicit OAuth endpoint is oauth2 intent too: the manager can
+        // still pick up a server-supplied token from `/v1/config`.
+        let with_endpoint = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([(
+                "oauth2-server-uri".to_string(),
+                "http://auth.example.com/tokens".to_string(),
+            )]))
+            .build();
+        assert!(
+            format!(
+                "{:?}",
+                test_catalog(with_endpoint).resolve_auth_manager().unwrap()
+            )
+            .contains("OAuth2Manager")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unknown_auth_type_is_rejected() {
+        let props = HashMap::from([(
+            REST_CATALOG_PROP_AUTH_TYPE.to_string(),
+            "kerberos".to_string(),
+        )]);
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(props)
+            .build();
+
+        let err = test_catalog(config).resolve_auth_manager().unwrap_err();
+        assert!(err.message().contains(REST_CATALOG_PROP_AUTH_TYPE));
+    }
+
+    #[tokio::test]
+    async fn test_with_auth_manager_overrides_config() {
+        // A custom auth manager takes precedence over `rest.auth.type`.
+        #[derive(Debug)]
+        struct StubAuthManager;
+        #[async_trait]
+        impl AuthManager for StubAuthManager {
+            async fn init_session(
+                &self,
+                _client: &HttpClient,
+                _props: &HashMap<String, String>,
+            ) -> Result<Box<dyn AuthSession>> {
+                unimplemented!()
+            }
+            async fn catalog_session(
+                &self,
+                _client: &HttpClient,
+                _props: &HashMap<String, String>,
+            ) -> Result<Arc<dyn AuthSession>> {
+                unimplemented!()
+            }
+        }
+
+        let config = RestCatalogConfig::builder()
+            .uri("http://localhost".to_string())
+            .props(HashMap::from([(
+                REST_CATALOG_PROP_AUTH_TYPE.to_string(),
+                "kerberos".to_string(),
+            )]))
+            .build();
+
+        // The unknown auth type is never consulted.
+        let catalog = test_catalog_with(config, StubAuthManager);
+        assert!(catalog.resolve_auth_manager().is_ok());
     }
 
     #[tokio::test]
@@ -1604,13 +3685,12 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
-        let namespaces = catalog.list_namespaces(None).await.unwrap();
+        let namespaces = catalog
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap();
 
         let expected_ns = vec![
             NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]).unwrap(),
@@ -1704,13 +3784,12 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
-        let namespaces = catalog.list_namespaces(None).await.unwrap();
+        let namespaces = catalog
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap();
 
         let expected_ns = vec![
             NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]).unwrap(),
@@ -1758,14 +3837,11 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let namespaces = catalog
             .create_namespace(
+                &SessionContext::empty(),
                 &NamespaceIdent::from_vec(vec!["ns1".to_string(), "ns11".to_string()]).unwrap(),
                 HashMap::from([("key1".to_string(), "value1".to_string())]),
             )
@@ -1802,14 +3878,13 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let namespaces = catalog
-            .get_namespace(&NamespaceIdent::new("ns1".to_string()))
+            .get_namespace(
+                &SessionContext::empty(),
+                &NamespaceIdent::new("ns1".to_string()),
+            )
             .await
             .unwrap();
 
@@ -1828,7 +3903,7 @@ mod tests {
     async fn check_namespace_exists() {
         let mut server = Server::new_async().await;
 
-        let config_mock = create_config_mock(&mut server).await;
+        let config_mock = create_config_mock_with_exists_endpoints(&mut server).await;
 
         let get_ns_mock = server
             .mock("HEAD", "/v1/namespaces/ns1")
@@ -1836,10 +3911,48 @@ mod tests {
             .create_async()
             .await;
 
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        assert!(
+            catalog
+                .namespace_exists(
+                    &SessionContext::empty(),
+                    &NamespaceIdent::new("ns1".to_string())
+                )
+                .await
+                .unwrap()
+        );
+
+        config_mock.assert_async().await;
+        get_ns_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_namespace_exists_falls_back_to_get_when_head_not_advertised() {
+        let mut server = Server::new_async().await;
+
+        // No `endpoints` advertised, and the default set has no HEAD namespace
+        // route, so `namespace_exists` falls back to a GET load-namespace.
+        let config_mock = create_config_mock(&mut server).await;
+        let get_ns_mock = server
+            .mock("GET", "/v1/namespaces/ns1")
+            .with_status(200)
+            .with_body(
+                r#"{
+                "namespace": ["ns1"],
+                "properties": {}
+            }"#,
+            )
+            .create_async()
+            .await;
+
         let catalog = RestCatalog::new(
+            SessionContext::empty(),
             RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
+            None,
         );
 
         assert!(
@@ -1865,14 +3978,13 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         catalog
-            .drop_namespace(&NamespaceIdent::new("ns1".to_string()))
+            .drop_namespace(
+                &SessionContext::empty(),
+                &NamespaceIdent::new("ns1".to_string()),
+            )
             .await
             .unwrap();
 
@@ -1906,14 +4018,13 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let tables = catalog
-            .list_tables(&NamespaceIdent::new("ns1".to_string()))
+            .list_tables(
+                &SessionContext::empty(),
+                &NamespaceIdent::new("ns1".to_string()),
+            )
             .await
             .unwrap();
 
@@ -1975,14 +4086,13 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let tables = catalog
-            .list_tables(&NamespaceIdent::new("ns1".to_string()))
+            .list_tables(
+                &SessionContext::empty(),
+                &NamespaceIdent::new("ns1".to_string()),
+            )
             .await
             .unwrap();
 
@@ -2107,14 +4217,13 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let tables = catalog
-            .list_tables(&NamespaceIdent::new("ns1".to_string()))
+            .list_tables(
+                &SessionContext::empty(),
+                &NamespaceIdent::new("ns1".to_string()),
+            )
             .await
             .unwrap();
 
@@ -2152,17 +4261,13 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         catalog
-            .drop_table(&TableIdent::new(
-                NamespaceIdent::new("ns1".to_string()),
-                "table1".to_string(),
-            ))
+            .drop_table(
+                &SessionContext::empty(),
+                &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "table1".to_string()),
+            )
             .await
             .unwrap();
 
@@ -2174,7 +4279,7 @@ mod tests {
     async fn test_check_table_exists() {
         let mut server = Server::new_async().await;
 
-        let config_mock = create_config_mock(&mut server).await;
+        let config_mock = create_config_mock_with_exists_endpoints(&mut server).await;
 
         let check_table_exists_mock = server
             .mock("HEAD", "/v1/namespaces/ns1/tables/table1")
@@ -2182,10 +4287,47 @@ mod tests {
             .create_async()
             .await;
 
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        assert!(
+            catalog
+                .table_exists(
+                    &SessionContext::empty(),
+                    &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "table1".to_string(),),
+                )
+                .await
+                .unwrap()
+        );
+
+        config_mock.assert_async().await;
+        check_table_exists_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_table_exists_falls_back_to_load_when_head_not_advertised() {
+        let mut server = Server::new_async().await;
+
+        // No `endpoints` advertised, and the default set has no HEAD table
+        // route, so `table_exists` falls back to a GET load-table.
+        let config_mock = create_config_mock(&mut server).await;
+        let load_table_mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/table1")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/{}",
+                env!("CARGO_MANIFEST_DIR"),
+                "load_table_response.json"
+            ))
+            .create_async()
+            .await;
+
         let catalog = RestCatalog::new(
+            SessionContext::empty(),
             RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
+            None,
         );
 
         assert!(
@@ -2199,7 +4341,7 @@ mod tests {
         );
 
         config_mock.assert_async().await;
-        check_table_exists_mock.assert_async().await;
+        load_table_mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -2214,14 +4356,11 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         catalog
             .rename_table(
+                &SessionContext::empty(),
                 &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "table1".to_string()),
                 &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "table2".to_string()),
             )
@@ -2249,17 +4388,13 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let table = catalog
-            .load_table(&TableIdent::new(
-                NamespaceIdent::new("ns1".to_string()),
-                "test1".to_string(),
-            ))
+            .load_table(
+                &SessionContext::empty(),
+                &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string()),
+            )
             .await
             .unwrap();
 
@@ -2346,6 +4481,342 @@ mod tests {
         rename_table_mock.assert_async().await;
     }
 
+    /// A `loadTable` body for `ns1.test1` whose `metadata-location` names `tag`.
+    fn load_table_body(tag: &str) -> serde_json::Value {
+        let file = File::open(format!(
+            "{}/testdata/load_table_response.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let mut body: serde_json::Value = serde_json::from_reader(BufReader::new(file)).unwrap();
+        body["metadata-location"] = json!(format!("s3://warehouse/{tag}.metadata.json"));
+        body
+    }
+
+    /// Mocks one `loadTable` of `ns1.test1` that expects `if_none_match` and
+    /// answers `status`, carrying `etag` if given.
+    async fn load_table_mock(
+        server: &mut ServerGuard,
+        if_none_match: Matcher,
+        status: usize,
+        etag: Option<&str>,
+    ) -> Mock {
+        let mut mock = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .match_header("if-none-match", if_none_match)
+            .with_status(status);
+        if let Some(etag) = etag {
+            mock = mock.with_header("etag", etag);
+            if status == 200 {
+                mock = mock.with_body(load_table_body(etag.trim_matches('"')).to_string());
+            }
+        }
+        mock.create_async().await
+    }
+
+    fn test_table_ident() -> TableIdent {
+        TableIdent::from_strs(["ns1", "test1"]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_load_table_revalidates_cached_table_with_etag() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let _v1 = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\"")).await;
+        let reuse_v1 = load_table_mock(&mut server, "\"v1\"".into(), 304, None).await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let context = SessionContext::empty();
+        let location = |table: Table| table.metadata_location().unwrap().to_string();
+
+        let v1 = "s3://warehouse/v1.metadata.json";
+        let v2 = "s3://warehouse/v2.metadata.json";
+        let ident = test_table_ident();
+        let load = || catalog.load_table(&context, &ident);
+        assert_eq!(location(load().await.unwrap()), v1);
+        assert_eq!(location(load().await.unwrap()), v1);
+
+        reuse_v1.remove_async().await;
+        let _v2 = load_table_mock(&mut server, "\"v1\"".into(), 200, Some("\"v2\"")).await;
+        let reuse_v2 = load_table_mock(&mut server, "\"v2\"".into(), 304, None).await;
+        assert_eq!(location(load().await.unwrap()), v2);
+        assert_eq!(location(load().await.unwrap()), v2);
+        reuse_v2.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_load_table_not_modified_without_cached_table() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let _load = load_table_mock(&mut server, Matcher::Missing, 304, None).await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        let err = catalog
+            .load_table(&SessionContext::empty(), &test_table_ident())
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+    }
+
+    #[tokio::test]
+    async fn test_table_cache_is_per_session() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let miss = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\""))
+            .await
+            .expect(2);
+        let hit = load_table_mock(&mut server, "\"v1\"".into(), 304, None).await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let session = |id: &str| SessionContext::builder().session_id(id.to_string()).build();
+
+        for id in ["a", "b", "a"] {
+            catalog
+                .load_table(&session(id), &test_table_ident())
+                .await
+                .unwrap();
+        }
+
+        miss.assert_async().await;
+        hit.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_table_cache_disabled_with_zero_max_entries() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let load = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\""))
+            .await
+            .expect(2);
+        let catalog = session_catalog(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(HashMap::from([(
+                    REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES.to_string(),
+                    "0".to_string(),
+                )]))
+                .build(),
+        );
+        let context = SessionContext::empty();
+
+        catalog
+            .load_table(&context, &test_table_ident())
+            .await
+            .unwrap();
+        catalog
+            .load_table(&context, &test_table_ident())
+            .await
+            .unwrap();
+
+        load.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_table_changes_invalidate_cached_table() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let miss = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\""))
+            .await
+            .expect(5);
+        let hit = load_table_mock(&mut server, "\"v1\"".into(), 304, None).await;
+        let _drop = server
+            .mock("DELETE", "/v1/namespaces/ns1/tables/test1")
+            .with_status(204)
+            .create_async()
+            .await;
+        let _rename = server
+            .mock("POST", "/v1/tables/rename")
+            .with_status(204)
+            .create_async()
+            .await;
+        let _register = server
+            .mock("POST", "/v1/namespaces/ns1/register")
+            .with_status(200)
+            .with_body(load_table_body("v1").to_string())
+            .create_async()
+            .await;
+        let _commit = server
+            .mock("POST", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body_from_file(format!(
+                "{}/testdata/update_table_response.json",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .create_async()
+            .await;
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+        let ident = test_table_ident();
+
+        // After each change the next load must miss the cache; only the
+        // commit's own refresh is answered from it.
+        catalog.load_table(&ident).await.unwrap();
+        catalog.drop_table(&ident).await.unwrap();
+        catalog.load_table(&ident).await.unwrap();
+        let dest = TableIdent::from_strs(["ns1", "test2"]).unwrap();
+        catalog.rename_table(&ident, &dest).await.unwrap();
+        catalog.load_table(&ident).await.unwrap();
+        let location = "s3://warehouse/v1.metadata.json".to_string();
+        catalog.register_table(&ident, location).await.unwrap();
+        let table = catalog.load_table(&ident).await.unwrap();
+        let tx = Transaction::new(&table);
+        tx.update_table_properties()
+            .set("k".to_string(), "v".to_string())
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        catalog.load_table(&ident).await.unwrap();
+
+        miss.assert_async().await;
+        hit.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_load_table_404_invalidates_cached_table() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let miss = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\""))
+            .await
+            .expect(2);
+        let _gone = load_table_mock(&mut server, "\"v1\"".into(), 404, None).await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let context = SessionContext::empty();
+        let ident = test_table_ident();
+
+        catalog.load_table(&context, &ident).await.unwrap();
+        let err = catalog.load_table(&context, &ident).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::TableNotFound);
+        catalog.load_table(&context, &ident).await.unwrap();
+
+        miss.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_load_table_vending_credentials_evicts_cached_table() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let miss = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\""))
+            .await
+            .expect(2);
+        let mut body = load_table_body("v2");
+        body["storage-credentials"] = json!([{
+            "prefix": "s3://warehouse/",
+            "config": { "s3.session-token": "token" },
+        }]);
+        let _vended = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .match_header("if-none-match", "\"v1\"")
+            .with_status(200)
+            .with_header("etag", "\"v2\"")
+            .with_body(body.to_string())
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let context = SessionContext::empty();
+
+        for _ in 0..3 {
+            catalog
+                .load_table(&context, &test_table_ident())
+                .await
+                .unwrap();
+        }
+
+        miss.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_load_table_with_vended_credentials_is_not_cached() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let mut body = load_table_body("v1");
+        body["config"] = json!({ "s3.session-token": "token" });
+        let load = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .match_header("if-none-match", Matcher::Missing)
+            .with_status(200)
+            .with_header("etag", "\"v1\"")
+            .with_body(body.to_string())
+            .expect(2)
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let context = SessionContext::empty();
+
+        catalog
+            .load_table(&context, &test_table_ident())
+            .await
+            .unwrap();
+        catalog
+            .load_table(&context, &test_table_ident())
+            .await
+            .unwrap();
+
+        load.assert_async().await;
+    }
+
+    #[test]
+    fn test_table_cache_rejects_out_of_range_expiry() {
+        for value in ["0", "31536000000001"] {
+            let config = RestCatalogConfig::builder()
+                .uri("http://localhost".to_string())
+                .props(HashMap::from([(
+                    REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS.to_string(),
+                    value.to_string(),
+                )]))
+                .build();
+
+            assert_eq!(
+                config.table_cache().unwrap_err().kind(),
+                ErrorKind::DataInvalid
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_short_lived_credential() {
+        for key in [
+            "S3.Session-Token",
+            "gcs.oauth2.token",
+            "adls.sas-token.account",
+        ] {
+            assert!(is_short_lived_credential(key), "{key}");
+        }
+        for key in ["s3.sse.key", "s3.access-key-id", "encryption.key-id"] {
+            assert!(!is_short_lived_credential(key), "{key}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_failed_drop_still_invalidates_cached_table() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let load = load_table_mock(&mut server, Matcher::Missing, 200, Some("\"v1\""))
+            .await
+            .expect(2);
+        // Cut the connection mid-response so the drop fails inside `query_catalog`.
+        let _drop = server
+            .mock("DELETE", "/v1/namespaces/ns1/tables/test1")
+            .with_chunked_body(|_| Err(std::io::Error::other("connection reset")))
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let context = SessionContext::empty();
+        let ident = test_table_ident();
+
+        catalog.load_table(&context, &ident).await.unwrap();
+        catalog.drop_table(&context, &ident).await.unwrap_err();
+        catalog.load_table(&context, &ident).await.unwrap();
+
+        load.assert_async().await;
+    }
+
     #[tokio::test]
     async fn test_load_table_404() {
         let mut server = Server::new_async().await;
@@ -2367,17 +4838,13 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let table = catalog
-            .load_table(&TableIdent::new(
-                NamespaceIdent::new("ns1".to_string()),
-                "test1".to_string(),
-            ))
+            .load_table(
+                &SessionContext::empty(),
+                &TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string()),
+            )
             .await;
 
         assert!(table.is_err());
@@ -2404,11 +4871,7 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let table_creation = TableCreation::builder()
             .name("test1".to_string())
@@ -2429,13 +4892,14 @@ mod tests {
             .properties(HashMap::from([("owner".to_string(), "testx".to_string())]))
             .partition_spec(
                 UnboundPartitionSpec::builder()
-                    .add_partition_fields(vec![
+                    .add_partition_field(
                         UnboundPartitionField::builder()
-                            .source_id(1)
+                            .source_ids(vec![1])
+                            .name("id")
                             .transform(Transform::Truncate(3))
-                            .name("id".to_string())
-                            .build(),
-                    ])
+                            .build()
+                            .unwrap(),
+                    )
                     .unwrap()
                     .build(),
             )
@@ -2455,7 +4919,11 @@ mod tests {
             .build();
 
         let table = catalog
-            .create_table(&NamespaceIdent::from_strs(["ns1"]).unwrap(), table_creation)
+            .create_table(
+                &SessionContext::empty(),
+                &NamespaceIdent::from_strs(["ns1"]).unwrap(),
+                table_creation,
+            )
             .await
             .unwrap();
 
@@ -2554,11 +5022,7 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let table_creation = TableCreation::builder()
             .name("test1".to_string())
@@ -2580,7 +5044,11 @@ mod tests {
             .build();
 
         let table_result = catalog
-            .create_table(&NamespaceIdent::from_strs(["ns1"]).unwrap(), table_creation)
+            .create_table(
+                &SessionContext::empty(),
+                &NamespaceIdent::from_strs(["ns1"]).unwrap(),
+                table_creation,
+            )
             .await;
 
         assert!(table_result.is_err());
@@ -2625,9 +5093,12 @@ mod tests {
             .await;
 
         let catalog = RestCatalog::new(
+            SessionContext::empty(),
             RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
+            None,
         );
 
         let table1 = {
@@ -2770,9 +5241,12 @@ mod tests {
             .await;
 
         let catalog = RestCatalog::new(
+            SessionContext::empty(),
             RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
             Some(Arc::new(LocalFsStorageFactory)),
             Runtime::current(),
+            None,
         );
 
         let table1 = {
@@ -2835,11 +5309,7 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
         let table_ident =
             TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string());
         let metadata_location = String::from(
@@ -2847,7 +5317,7 @@ mod tests {
         );
 
         let table = catalog
-            .register_table(&table_ident, metadata_location)
+            .register_table(&SessionContext::empty(), &table_ident, metadata_location)
             .await
             .unwrap();
 
@@ -2887,11 +5357,7 @@ mod tests {
             .create_async()
             .await;
 
-        let catalog = RestCatalog::new(
-            RestCatalogConfig::builder().uri(server.url()).build(),
-            Some(Arc::new(LocalFsStorageFactory)),
-            Runtime::current(),
-        );
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
 
         let table_ident =
             TableIdent::new(NamespaceIdent::new("ns1".to_string()), "test1".to_string());
@@ -2899,7 +5365,7 @@ mod tests {
             "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json",
         );
         let table = catalog
-            .register_table(&table_ident, metadata_location)
+            .register_table(&SessionContext::empty(), &table_ident, metadata_location)
             .await;
 
         assert!(table.is_err());
@@ -2928,7 +5394,8 @@ mod tests {
 
         assert!(catalog.is_ok());
 
-        let catalog_config = catalog.unwrap().user_config;
+        let catalog = catalog.unwrap();
+        let catalog_config = &catalog.inner.user_config;
         assert_eq!(catalog_config.name.as_deref(), Some("test"));
         assert_eq!(catalog_config.uri, "http://localhost:8080");
         assert_eq!(catalog_config.warehouse, None);
@@ -2957,5 +5424,116 @@ mod tests {
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
             assert_eq!(err.message(), "Catalog uri is required");
         }
+    }
+
+    #[tokio::test]
+    async fn test_create_session_catalog() {
+        let builder = RestSessionCatalogBuilder::default();
+
+        let result = builder
+            .load(
+                "test",
+                HashMap::from([
+                    (
+                        REST_CATALOG_PROP_URI.to_string(),
+                        "http://localhost:8080".to_string(),
+                    ),
+                    ("a".to_string(), "b".to_string()),
+                ]),
+            )
+            .await;
+
+        assert!(result.is_ok());
+
+        let catalog = result.unwrap();
+
+        let catalog_config = catalog.user_config;
+        assert_eq!(catalog_config.name.as_deref(), Some("test"));
+        assert_eq!(catalog_config.uri, "http://localhost:8080");
+        assert_eq!(catalog_config.warehouse, None);
+        // The default builder sets no client (only `with_client` does).
+        assert!(catalog_config.client.is_none());
+
+        // `uri` is consumed into its own field; other props are retained.
+        assert_eq!(catalog_config.props.get("a"), Some(&"b".to_string()));
+        assert!(!catalog_config.props.contains_key(REST_CATALOG_PROP_URI));
+    }
+
+    #[tokio::test]
+    async fn test_create_rest_catalog_with_session() {
+        let context = SessionContext::builder()
+            .session_id("test-id".to_string())
+            .build();
+
+        let result = RestCatalogBuilder::default()
+            .with_session_context(context)
+            .load(
+                "test",
+                HashMap::from([(
+                    REST_CATALOG_PROP_URI.to_string(),
+                    "http://localhost:8080".to_string(),
+                )]),
+            )
+            .await;
+
+        assert!(result.is_ok());
+
+        // The context passed to `with_session_context` is the one the catalog is bound to.
+        let catalog = result.unwrap();
+        assert_eq!(catalog.session_context.session_id(), "test-id");
+    }
+
+    #[tokio::test]
+    async fn test_create_rest_catalog_default_session() {
+        let result = RestCatalogBuilder::default()
+            .load(
+                "test",
+                HashMap::from([(
+                    REST_CATALOG_PROP_URI.to_string(),
+                    "http://localhost:8080".to_string(),
+                )]),
+            )
+            .await;
+
+        assert!(result.is_ok());
+
+        // Without `with_session_context`, the catalog falls back to `SessionContext::empty()`,
+        // which assigns a fresh v4 UUID.
+        let catalog = result.unwrap();
+        assert!(uuid::Uuid::parse_str(catalog.session_context.session_id()).is_ok());
+    }
+
+    /// Smoke test: a [`Catalog`] trait method delegates through the façade to `RestSessionCatalog`.
+    #[tokio::test]
+    async fn test_rest_catalog_delegates() {
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let list_ns_mock = server
+            .mock("GET", "/v1/namespaces")
+            .with_body(
+                r#"{
+                "namespaces": [["ns1"]]
+            }"#,
+            )
+            .create_async()
+            .await;
+
+        let catalog = RestCatalog::new(
+            SessionContext::empty(),
+            RestCatalogConfig::builder().uri(server.url()).build(),
+            None,
+            Some(Arc::new(LocalFsStorageFactory)),
+            Runtime::current(),
+            None,
+        );
+
+        let namespaces = catalog.list_namespaces(None).await.unwrap();
+
+        assert_eq!(namespaces, vec![
+            NamespaceIdent::from_vec(vec!["ns1".to_string()]).unwrap()
+        ]);
+
+        config_mock.assert_async().await;
+        list_ns_mock.assert_async().await;
     }
 }

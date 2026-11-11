@@ -32,6 +32,7 @@
 
 mod azdls;
 mod gcs;
+mod hdfs_native;
 mod hf;
 mod oss;
 mod s3;
@@ -40,6 +41,7 @@ use std::collections::HashMap;
 
 pub use azdls::*;
 pub use gcs::*;
+pub use hdfs_native::*;
 pub use hf::*;
 pub use oss::*;
 pub use s3::*;
@@ -50,7 +52,6 @@ use serde::{Deserialize, Serialize};
 /// This struct contains only configuration properties without specifying
 /// which storage backend to use. The storage type is determined by the
 /// explicit factory selection.
-/// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct StorageConfig {
     /// Configuration properties for the storage backend

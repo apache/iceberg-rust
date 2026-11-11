@@ -64,8 +64,8 @@ pub fn create_transform_function(transform: &Transform) -> Result<BoxedTransform
         Transform::Hour => Ok(Box::new(temporal::Hour {})),
         Transform::Bucket(mod_n) => Ok(Box::new(bucket::Bucket::new(*mod_n))),
         Transform::Truncate(width) => Ok(Box::new(truncate::Truncate::new(*width))),
-        Transform::Unknown => Err(crate::error::Error::new(
-            crate::ErrorKind::FeatureUnsupported,
+        Transform::Unknown => Err(Error::new(
+            ErrorKind::FeatureUnsupported,
             "Transform Unknown is not implemented",
         )),
     }

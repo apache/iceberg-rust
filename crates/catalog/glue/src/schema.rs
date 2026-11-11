@@ -25,7 +25,7 @@ pub(crate) const ICEBERG_FIELD_CURRENT: &str = "iceberg.field.current";
 use std::collections::{HashMap, HashSet};
 
 use aws_sdk_glue::types::Column;
-use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, visit_schema};
+use iceberg::spec::{PrimitiveType, SchemaVisitor, TableMetadata, VariantType, visit_schema};
 use iceberg::{Error, ErrorKind, Result};
 
 use crate::error::from_aws_build_error;
@@ -81,11 +81,7 @@ impl GlueSchemaBuilder {
 impl SchemaVisitor for GlueSchemaBuilder {
     type T = String;
 
-    fn schema(
-        &mut self,
-        _schema: &iceberg::spec::Schema,
-        value: Self::T,
-    ) -> iceberg::Result<String> {
+    fn schema(&mut self, _schema: &iceberg::spec::Schema, value: Self::T) -> Result<String> {
         Ok(value)
     }
 
@@ -98,7 +94,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
         &mut self,
         r#_struct: &iceberg::spec::StructType,
         results: Vec<String>,
-    ) -> iceberg::Result<String> {
+    ) -> Result<String> {
         Ok(format!("struct<{}>", results.join(", ")))
     }
 
@@ -107,13 +103,9 @@ impl SchemaVisitor for GlueSchemaBuilder {
         Ok(())
     }
 
-    fn field(
-        &mut self,
-        field: &iceberg::spec::NestedFieldRef,
-        value: String,
-    ) -> iceberg::Result<String> {
+    fn field(&mut self, field: &iceberg::spec::NestedFieldRef, value: String) -> Result<String> {
         if self.is_inside_struct() {
-            return Ok(format!("{}:{}", field.name, &value));
+            return Ok(format!("{}:{}", field.name, value));
         }
 
         if !self.added_names.insert(field.name.clone()) {
@@ -148,7 +140,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
         Ok(value)
     }
 
-    fn list(&mut self, _list: &iceberg::spec::ListType, value: String) -> iceberg::Result<String> {
+    fn list(&mut self, _list: &iceberg::spec::ListType, value: String) -> Result<String> {
         Ok(format!("array<{value}>"))
     }
 
@@ -157,12 +149,22 @@ impl SchemaVisitor for GlueSchemaBuilder {
         _map: &iceberg::spec::MapType,
         key_value: String,
         value: String,
-    ) -> iceberg::Result<String> {
+    ) -> Result<String> {
         Ok(format!("map<{key_value},{value}>"))
     }
 
-    fn primitive(&mut self, p: &iceberg::spec::PrimitiveType) -> iceberg::Result<Self::T> {
+    fn primitive(&mut self, p: &PrimitiveType) -> Result<Self::T> {
+        // Glue column types are informational for Iceberg tables; readers use Iceberg metadata as
+        // the source of truth. Keep the existing Glue-compatible spellings and use the Iceberg
+        // display representation for geospatial types. A non-failing fallback for all other types
+        // is tracked in https://github.com/apache/iceberg-rust/issues/3375.
         let glue_type = match p {
+            PrimitiveType::Unknown => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Conversion from {p:?} is not supported"),
+                ));
+            }
             PrimitiveType::Boolean => "boolean".to_string(),
             PrimitiveType::Int => "int".to_string(),
             PrimitiveType::Long => "bigint".to_string(),
@@ -181,6 +183,7 @@ impl SchemaVisitor for GlueSchemaBuilder {
                 "string".to_string()
             }
             PrimitiveType::Binary | PrimitiveType::Fixed(_) => "binary".to_string(),
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => p.to_string(),
             PrimitiveType::Decimal { precision, scale } => {
                 format!("decimal({precision},{scale})")
             }
@@ -188,20 +191,35 @@ impl SchemaVisitor for GlueSchemaBuilder {
 
         Ok(glue_type)
     }
+
+    fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
+        Ok("variant".to_string())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use iceberg::TableCreation;
-    use iceberg::spec::{NestedField, Schema, StructType, TableMetadataBuilder, Type};
+    use iceberg::spec::{
+        FormatVersion, GeometryType, NestedField, PrimitiveType, Schema, StructType,
+        TableMetadataBuilder, Type,
+    };
 
     use super::*;
 
     fn create_metadata(schema: Schema) -> Result<TableMetadata> {
+        create_metadata_with_format_version(schema, FormatVersion::V2)
+    }
+
+    fn create_metadata_with_format_version(
+        schema: Schema,
+        format_version: FormatVersion,
+    ) -> Result<TableMetadata> {
         let table_creation = TableCreation::builder()
             .name("my_table".to_string())
             .location("my_location".to_string())
             .schema(schema)
+            .format_version(format_version)
             .build();
         let metadata = TableMetadataBuilder::from_table_creation(table_creation)?
             .build()?
@@ -624,5 +642,54 @@ mod tests {
 
         assert_eq!(result, expected);
         Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_variant() -> Result<()> {
+        let record = r#"{
+            "type": "struct",
+            "schema-id": 1,
+            "fields": [
+                {
+                    "id": 1,
+                    "name": "v",
+                    "required": true,
+                    "type": "variant"
+                }
+            ]
+        }"#;
+
+        let schema = serde_json::from_str::<Schema>(record)?;
+        // Variant requires format version 3.
+        let metadata = create_metadata_with_format_version(schema, FormatVersion::V3)?;
+
+        let result = GlueSchemaBuilder::from_iceberg(&metadata)?.build();
+
+        let expected = vec![create_column("v", "variant", "1", false)?];
+
+        assert_eq!(result, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_geospatial_type() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let metadata = create_metadata_with_format_version(schema, FormatVersion::V3).unwrap();
+
+        let result = GlueSchemaBuilder::from_iceberg(&metadata).unwrap().build();
+
+        assert_eq!(result, vec![
+            create_column("geom", "geometry(OGC:CRS84)", "1", false,).unwrap()
+        ]);
     }
 }

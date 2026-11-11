@@ -27,6 +27,7 @@ use aws_sdk_s3tables::operation::get_table::{GetTableError, GetTableOutput};
 use aws_sdk_s3tables::operation::list_tables::ListTablesOutput;
 use aws_sdk_s3tables::operation::update_table_metadata_location::UpdateTableMetadataLocationError;
 use aws_sdk_s3tables::types::OpenTableFormat;
+use iceberg::encryption::kms::{KeyManagementClient, KmsClientFactory};
 use iceberg::io::{FileIO, FileIOBuilder, StorageFactory};
 use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
@@ -71,6 +72,7 @@ struct S3TablesCatalogConfig {
 pub struct S3TablesCatalogBuilder {
     config: S3TablesCatalogConfig,
     storage_factory: Option<Arc<dyn StorageFactory>>,
+    kms_client_factory: Option<Arc<dyn KmsClientFactory>>,
     runtime: Option<Runtime>,
 }
 
@@ -86,6 +88,7 @@ impl Default for S3TablesCatalogBuilder {
                 props: HashMap::new(),
             },
             storage_factory: None,
+            kms_client_factory: None,
             runtime: None,
         }
     }
@@ -131,6 +134,11 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
 
     fn with_storage_factory(mut self, storage_factory: Arc<dyn StorageFactory>) -> Self {
         self.storage_factory = Some(storage_factory);
+        self
+    }
+
+    fn with_kms_client_factory(mut self, kms_client_factory: Arc<dyn KmsClientFactory>) -> Self {
+        self.kms_client_factory = Some(kms_client_factory);
         self
     }
 
@@ -183,7 +191,11 @@ impl CatalogBuilder for S3TablesCatalogBuilder {
                     Some(rt) => rt,
                     None => Runtime::try_current()?,
                 };
-                S3TablesCatalog::new(self.config, self.storage_factory, runtime).await
+                let kms_client = match self.kms_client_factory {
+                    Some(factory) => Some(factory.create_kms_client(&self.config.props).await?),
+                    None => None,
+                };
+                S3TablesCatalog::new(self.config, self.storage_factory, runtime, kms_client).await
             }
         }
     }
@@ -196,6 +208,7 @@ pub struct S3TablesCatalog {
     s3tables_client: aws_sdk_s3tables::Client,
     file_io: FileIO,
     runtime: Runtime,
+    kms_client: Option<Arc<dyn KeyManagementClient>>,
 }
 
 impl S3TablesCatalog {
@@ -204,6 +217,7 @@ impl S3TablesCatalog {
         config: S3TablesCatalogConfig,
         storage_factory: Option<Arc<dyn StorageFactory>>,
         runtime: Runtime,
+        kms_client: Option<Arc<dyn KeyManagementClient>>,
     ) -> Result<Self> {
         let s3tables_client = if let Some(client) = config.client.clone() {
             client
@@ -227,6 +241,7 @@ impl S3TablesCatalog {
             s3tables_client,
             file_io,
             runtime,
+            kms_client,
         })
     }
 
@@ -270,13 +285,16 @@ impl S3TablesCatalog {
         })?;
         let metadata = TableMetadata::read_from(&self.file_io, metadata_location).await?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident.clone())
             .metadata(metadata)
             .metadata_location(metadata_location)
             .file_io(self.file_io.clone())
-            .runtime(self.runtime.clone())
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
         Ok((table, resp.version_token))
     }
 }
@@ -553,7 +571,7 @@ impl Catalog for S3TablesCatalog {
         let metadata = TableMetadataBuilder::from_table_creation(creation)?
             .build()?
             .metadata;
-        let metadata_location = MetadataLocation::new_with_metadata(table_location, &metadata);
+        let metadata_location = MetadataLocation::try_new_with_metadata(&metadata)?;
         metadata.write_to(&self.file_io, &metadata_location).await?;
 
         // update metadata location
@@ -569,13 +587,16 @@ impl Catalog for S3TablesCatalog {
             .await
             .map_err(from_aws_sdk_error)?;
 
-        let table = Table::builder()
+        let mut builder = Table::builder()
             .identifier(table_ident)
             .metadata_location(metadata_location_str)
             .metadata(metadata)
             .file_io(self.file_io.clone())
-            .runtime(self.runtime.clone())
-            .build()?;
+            .runtime(self.runtime.clone());
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let table = builder.build()?;
         Ok(table)
     }
 
@@ -703,25 +724,23 @@ impl Catalog for S3TablesCatalog {
             .version_token(version_token)
             .metadata_location(staged_metadata_location_str);
 
-        let _ = builder.send().await.map_err(|e| {
-            let error = e.into_service_error();
-            match error {
-                UpdateTableMetadataLocationError::ConflictException(_) => Error::new(
+        let _ = builder
+            .send()
+            .await
+            .map_err(|e| match e.as_service_error() {
+                Some(UpdateTableMetadataLocationError::ConflictException(_)) => Error::new(
                     ErrorKind::CatalogCommitConflicts,
                     format!("Commit conflicted for table: {table_ident}"),
                 )
-                .with_retryable(true),
-                UpdateTableMetadataLocationError::NotFoundException(_) => Error::new(
+                .with_retryable(true)
+                .with_source(e),
+                Some(UpdateTableMetadataLocationError::NotFoundException(_)) => Error::new(
                     ErrorKind::TableNotFound,
                     format!("Table {table_ident} is not found"),
-                ),
-                _ => Error::new(
-                    ErrorKind::Unexpected,
-                    "Operation failed for hitting aws sdk error",
-                ),
-            }
-            .with_source(anyhow::Error::msg(format!("aws sdk error: {error:?}")))
-        })?;
+                )
+                .with_source(e),
+                _ => from_aws_sdk_error(e),
+            })?;
 
         Ok(staged_table)
     }
@@ -729,20 +748,38 @@ impl Catalog for S3TablesCatalog {
 
 /// Format AWS SDK error into iceberg error
 pub(crate) fn from_aws_sdk_error<T>(error: aws_sdk_s3tables::error::SdkError<T>) -> Error
-where T: std::fmt::Debug {
+where T: std::error::Error + Send + Sync + 'static {
     Error::new(
         ErrorKind::Unexpected,
         format!("Operation failed for hitting aws sdk error: {error:?}"),
     )
+    .with_source(error)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::error::Error as _;
+
     use futures::TryStreamExt;
     use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
 
     use super::*;
+
+    #[test]
+    fn test_from_aws_sdk_error_keeps_sdk_error_as_source() {
+        let err = from_aws_sdk_error(
+            aws_sdk_s3tables::error::SdkError::<GetTableError>::construction_failure("boom"),
+        );
+
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(
+            err.source()
+                .and_then(|source| source
+                    .downcast_ref::<aws_sdk_s3tables::error::SdkError<GetTableError>>())
+                .is_some()
+        );
+    }
 
     async fn load_s3tables_catalog_from_env() -> Result<Option<S3TablesCatalog>> {
         let table_bucket_arn = match std::env::var("TABLE_BUCKET_ARN").ok() {
@@ -759,7 +796,7 @@ mod tests {
         };
 
         Ok(Some(
-            S3TablesCatalog::new(config, None, Runtime::current()).await?,
+            S3TablesCatalog::new(config, None, Runtime::current(), None).await?,
         ))
     }
 

@@ -1,0 +1,6 @@
+error: Properties fields must declare exactly one of key, prefix, or nested in #[property(...)]
+  --> tests/compile-fail/derive-properties/multiple_sources.rs:25:5
+   |
+25 | /     #[property(key = "value", prefix = "values.", default = HashMap::new())]
+26 | |     value: HashMap<String, u64>,
+   | |_______________________________^

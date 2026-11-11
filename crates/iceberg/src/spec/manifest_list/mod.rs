@@ -31,6 +31,10 @@ pub use serde_bytes::ByteBuf;
 pub use writer::*;
 
 use self::_const_schema::MANIFEST_LIST_AVRO_SCHEMA_V1;
+pub(crate) use self::_const_schema::{
+    MANIFEST_CONTENT_FIELD_ID, MANIFEST_SEQUENCE_NUMBER_FIELD_ID, MIN_SEQUENCE_NUMBER_FIELD_ID,
+    manifest_file_fields,
+};
 use super::FormatVersion;
 use crate::error::Result;
 
@@ -61,7 +65,9 @@ impl ManifestList {
     pub fn parse_with_version(bs: &[u8], version: FormatVersion) -> Result<ManifestList> {
         match version {
             FormatVersion::V1 => {
-                let reader = Reader::with_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1, bs)?;
+                let reader = Reader::builder(bs)
+                    .reader_schema(&MANIFEST_LIST_AVRO_SCHEMA_V1)
+                    .build()?;
                 let values = Value::Array(reader.collect::<std::result::Result<Vec<Value>, _>>()?);
                 from_value::<_serde::ManifestListV1>(&values)?.try_into()
             }
@@ -152,7 +158,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V1).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V1).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -196,7 +202,7 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: Some(
-                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1).to_bytes().unwrap())}]
+                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1_f32).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1_f32).to_bytes().unwrap())}]
                     ),
                     key_metadata: None,
                     first_row_id: None,
@@ -230,7 +236,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V2).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -265,12 +271,12 @@ mod test {
 
         let manifest_entry: ManifestFileV2 = manifest_list.entries[0].clone().try_into().unwrap();
         let mut writer =
-            Writer::with_codec(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new(), Codec::Snappy);
+            Writer::with_codec(&MANIFEST_LIST_AVRO_SCHEMA_V2, Vec::new(), Codec::Snappy).unwrap();
         writer.append_ser(manifest_entry).unwrap();
         let bs = writer.into_inner().unwrap();
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V2).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V2).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }
@@ -314,7 +320,7 @@ mod test {
                     existing_rows_count: Some(0),
                     deleted_rows_count: Some(0),
                     partitions: Some(
-                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1).to_bytes().unwrap())}]
+                        vec![FieldSummary { contains_null: false, contains_nan: Some(false), lower_bound: Some(Datum::float(1.1_f32).to_bytes().unwrap()), upper_bound: Some(Datum::float(2.1_f32).to_bytes().unwrap())}]
                     ),
                     key_metadata: None,
                     first_row_id: Some(13),
@@ -349,7 +355,7 @@ mod test {
         let bs = fs::read(full_path).expect("read_file must succeed");
 
         let parsed_manifest_list =
-            ManifestList::parse_with_version(&bs, crate::spec::FormatVersion::V3).unwrap();
+            ManifestList::parse_with_version(&bs, FormatVersion::V3).unwrap();
 
         assert_eq!(manifest_list, parsed_manifest_list);
     }

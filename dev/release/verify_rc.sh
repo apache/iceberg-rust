@@ -19,6 +19,12 @@
 
 set -Eeuo pipefail
 
+# bash 3.2 (macOS default) does not run the ERR trap for a failing subshell:
+# the script still exits on failure but does not report which step failed.
+if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
+  echo "Warning: bash ${BASH_VERSION} will not print which step failed. Use bash 4 or newer to see it." >&2
+fi
+
 CURRENT_STEP=""
 VERIFY_SUCCESS="no"
 VERIFY_OWNS_TMPDIR="0"
@@ -96,6 +102,12 @@ Options:
       Whether to check Apache license headers against the extracted source archive.
       Default: 1
 
+  --check_crate_licenses <0|1>
+      Whether to check that every publishable crate in the extracted source archive
+      packages the root LICENSE and NOTICE (dev/release/licenses.py crates check).
+      Requires cargo and python3.
+      Default: 1
+
   --build <0|1>
       Whether to build and test the Rust source distribution.
       Default: 1
@@ -116,7 +128,7 @@ Examples:
   $0 0.9.1 2 --download 0
   $0 0.9.1 2 --import_gpg_keys 1
   $0 0.9.1 2 --verify_git_tag 0
-  $0 0.9.1 2 --download 0 --build 0 --python 0 --check_headers 0 --verify_signature 0
+  $0 0.9.1 2 --download 0 --build 0 --python 0 --check_headers 0 --check_crate_licenses 0 --verify_signature 0
 USAGE
 }
 
@@ -245,6 +257,12 @@ parse_args() {
         require_option_value "$1" "${2:-}"
         validate_bool_option "$1" "$2"
         CHECK_HEADERS="$2"
+        shift 2
+        ;;
+      --check_crate_licenses | --check-crate-licenses)
+        require_option_value "$1" "${2:-}"
+        validate_bool_option "$1" "$2"
+        CHECK_CRATE_LICENSES="$2"
         shift 2
         ;;
       --build)
@@ -421,6 +439,15 @@ check_license_headers() {
   docker run --rm -v "${VERIFY_TMPDIR}/${ARCHIVE_BASE_NAME}:/github/workspace" apache/skywalking-eyes header check
 }
 
+check_crate_licenses() {
+  require_command cargo
+  require_command python3
+  (
+    trap - ERR
+    python3 "${ARCHIVE_BASE_NAME}/dev/release/licenses.py" crates check
+  )
+}
+
 test_source_distribution() {
   require_command make
   (
@@ -459,6 +486,7 @@ IMPORT_GPG_KEYS="0"
 VERIFY_GIT_TAG="1"
 GIT_REPO_URL="https://github.com/apache/iceberg-rust.git"
 CHECK_HEADERS="1"
+CHECK_CRATE_LICENSES="1"
 BUILD="1"
 PYTHON="1"
 
@@ -499,6 +527,12 @@ if enabled "${CHECK_HEADERS}"; then
   run_step "Check license headers" check_license_headers
 else
   skip_step "Check license headers"
+fi
+
+if enabled "${CHECK_CRATE_LICENSES}"; then
+  run_step "Check crate licenses in source archive" check_crate_licenses
+else
+  skip_step "Check crate licenses in source archive"
 fi
 
 if enabled "${BUILD}"; then
