@@ -404,6 +404,14 @@ impl Transform {
         )
     }
 
+    /// Whether a partition field with this transform may be named after its source column.
+    ///
+    /// Void is allowed because removing an identity field from a format version 1 spec leaves
+    /// a void field that keeps the identity field's name.
+    pub(crate) fn may_share_name_with_source(&self) -> bool {
+        matches!(self, Transform::Identity | Transform::Void)
+    }
+
     /// Return the unique transform name to check if similar transforms for the same source field
     /// are added multiple times in partition spec builder.
     pub fn dedup_name(&self) -> String {

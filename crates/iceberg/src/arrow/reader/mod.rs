@@ -47,7 +47,7 @@ pub(crate) use options::ParquetReadOptions;
 use predicate_visitor::{CollectFieldIdVisitor, PredicateConverter};
 use projection::{
     add_fallback_field_ids_to_arrow_schema, apply_name_mapping_to_arrow_schema,
-    find_leaf_by_field_id,
+    coerce_fixed_size_lists, find_leaf_by_field_id,
 };
 
 /// Builder to create ArrowReader
@@ -160,6 +160,7 @@ impl ArrowReaderBuilder {
             row_selection_enabled: self.row_selection_enabled,
             bloom_filter_enabled: self.bloom_filter_enabled,
             parquet_read_options: self.parquet_read_options,
+            runtime: self.runtime.clone(),
         }
     }
 }
@@ -178,4 +179,5 @@ pub struct ArrowReader {
     row_selection_enabled: bool,
     bloom_filter_enabled: bool,
     parquet_read_options: ParquetReadOptions,
+    runtime: Runtime,
 }
