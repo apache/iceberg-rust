@@ -526,17 +526,10 @@ pub(crate) mod _serde {
                         }
                     }
                     Type::Primitive(PrimitiveType::Uuid) => {
-                        if v.len() == 16 {
-                            let bytes: [u8; 16] = v.as_slice().try_into().map_err(|_| {
-                                invalid_err_with_reason("bytes", "UUID must be exactly 16 bytes")
-                            })?;
-                            Ok(Some(Literal::uuid(Uuid::from_bytes(bytes))))
-                        } else {
-                            Err(invalid_err_with_reason(
-                                "bytes",
-                                "UUID must be exactly 16 bytes",
-                            ))
-                        }
+                        let bytes: [u8; 16] = v.as_slice().try_into().map_err(|_| {
+                            invalid_err_with_reason("bytes", "UUID must be exactly 16 bytes")
+                        })?;
+                        Ok(Some(Literal::uuid(Uuid::from_bytes(bytes))))
                     }
                     Type::Primitive(PrimitiveType::Decimal { precision, .. }) => {
                         let required_bytes = Type::decimal_required_bytes(*precision)? as usize;
