@@ -3763,6 +3763,85 @@ message schema {
         assert_variant(&nested_fields[0], nested.column(0));
     }
 
+    /// A null `nested` row reads as null with `payload` stored optional, and stored required as
+    /// iceberg-java writes a required variant, where `payload` has no null buffer of its own.
+    #[tokio::test]
+    async fn test_read_variant_nested_in_null_struct_row() {
+        use arrow_array::StructArray;
+        use arrow_buffer::NullBuffer;
+        let nested_nulls = NullBuffer::from(vec![true, false, true]);
+        for payload_required in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let dir = tmp.path().to_str().unwrap();
+            let payload = if payload_required {
+                NestedField::required(3, "payload", Type::Variant(VariantType))
+            } else {
+                NestedField::optional(3, "payload", Type::Variant(VariantType))
+            };
+            let nested_type = Type::Struct(StructType::new(vec![payload.into()]));
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(2, "nested", nested_type.clone()).into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let payload_nulls = (!payload_required).then(|| nested_nulls.clone());
+            let nested_with = |nested_fields: Fields, variant_fields: Fields| {
+                Arc::new(StructArray::new(
+                    nested_fields,
+                    vec![Arc::new(StructArray::new(
+                        variant_fields,
+                        variant_struct_array().as_struct().columns().to_vec(),
+                        payload_nulls.clone(),
+                    )) as ArrayRef],
+                    Some(nested_nulls.clone()),
+                )) as ArrayRef
+            };
+            let file_nested_fields = Fields::from(vec![
+                Field::new(
+                    "payload",
+                    DataType::Struct(variant_arrow_fields()),
+                    !payload_required,
+                )
+                .with_metadata(field_id_meta(3)),
+            ]);
+            let arrow_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("nested", DataType::Struct(file_nested_fields.clone()), true)
+                    .with_metadata(field_id_meta(2)),
+            ]));
+            let path = write_variant_parquet(
+                arrow_schema,
+                vec![nested_with(file_nested_fields, variant_arrow_fields())],
+                dir,
+            );
+
+            let batches = read_variant(schema, &path, vec![2]).await;
+            let DataType::Struct(table_nested_fields) =
+                crate::arrow::type_to_arrow_type(&nested_type).unwrap()
+            else {
+                unreachable!()
+            };
+            let DataType::Struct(table_variant_fields) =
+                crate::arrow::type_to_arrow_type(&Type::Variant(VariantType)).unwrap()
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                table_nested_fields[0].extension_type_name(),
+                Some("arrow.parquet.variant")
+            );
+            let nested = batches[0].column_by_name("nested").unwrap();
+            assert_eq!(
+                nested,
+                &nested_with(table_nested_fields, table_variant_fields)
+            );
+            // Struct equality skips children under a null parent, so pin `payload`'s own nulls.
+            assert_eq!(nested.as_struct().column(0).nulls(), payload_nulls.as_ref());
+        }
+    }
+
     #[tokio::test]
     async fn test_read_variant_in_list() {
         use arrow_array::{Int32Array, ListArray};
