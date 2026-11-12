@@ -746,6 +746,68 @@ fn try_map_fields(
     Ok(Fields::from(mapped))
 }
 
+/// Rewrites file-side Arrow `FixedSizeList` hints to `List`.
+///
+/// parquet-rs picks its list reader from the embedded Arrow schema. Iceberg has no
+/// fixed-size list type, so a `FixedSizeList` hint must become `List` before the stream
+/// reader is built. That uses the 3-level LIST reader (no null-row padding, no
+/// `PromotePlan` conversion). Returns `None` when the schema has no `FixedSizeList`.
+/// Unchanged fields are shared; nothing is allocated before the first change.
+///
+/// Same placement as the list-view rewrite in #3467: call this before name mapping and
+/// fallback IDs so nested IDs land on the rewritten `List` fields.
+pub(super) fn coerce_fixed_size_lists(arrow_schema: &ArrowSchemaRef) -> Option<ArrowSchemaRef> {
+    let fields = coerce_fixed_size_lists_in_fields(arrow_schema.fields())?;
+    Some(Arc::new(ArrowSchema::new_with_metadata(
+        fields,
+        arrow_schema.metadata().clone(),
+    )))
+}
+
+/// Returns `fields` with `FixedSizeList` rewritten to `List`, or `None` if they have none.
+fn coerce_fixed_size_lists_in_fields(fields: &Fields) -> Option<Fields> {
+    let (index, first) = fields
+        .iter()
+        .enumerate()
+        .find_map(|(index, field)| Some((index, coerce_fixed_size_lists_in_field(field)?)))?;
+    let rest = fields
+        .iter()
+        .skip(index + 1)
+        .map(coerce_fixed_size_lists_or_share);
+    Some(
+        fields
+            .iter()
+            .take(index)
+            .cloned()
+            .chain([first])
+            .chain(rest)
+            .collect(),
+    )
+}
+
+/// Returns `field` with `FixedSizeList` rewritten to `List`, or `None` if it has none.
+fn coerce_fixed_size_lists_in_field(field: &FieldRef) -> Option<FieldRef> {
+    let data_type = match field.data_type() {
+        DataType::FixedSizeList(element, _) => {
+            DataType::List(coerce_fixed_size_lists_or_share(element))
+        }
+        DataType::List(element) => DataType::List(coerce_fixed_size_lists_in_field(element)?),
+        DataType::LargeList(element) => {
+            DataType::LargeList(coerce_fixed_size_lists_in_field(element)?)
+        }
+        DataType::Map(entries, sorted) => {
+            DataType::Map(coerce_fixed_size_lists_in_field(entries)?, *sorted)
+        }
+        DataType::Struct(fields) => DataType::Struct(coerce_fixed_size_lists_in_fields(fields)?),
+        _ => return None,
+    };
+    Some(Arc::new(field.as_ref().clone().with_data_type(data_type)))
+}
+
+fn coerce_fixed_size_lists_or_share(field: &FieldRef) -> FieldRef {
+    coerce_fixed_size_lists_in_field(field).unwrap_or_else(|| Arc::clone(field))
+}
+
 /// Add position-based fallback field IDs to Arrow schema for Parquet files lacking them.
 /// Enables projection on migrated files (e.g., from Hive/Spark).
 ///
@@ -3815,5 +3877,536 @@ message schema {
         let map = batches[0].column_by_name("m").unwrap().as_map();
         // The map's value column holds the 3 variants.
         assert_variant(&map.entries().fields()[1], map.values());
+    }
+
+    #[test]
+    fn test_coerce_fixed_size_lists_rewrites_nested() {
+        let item = |ty| Arc::new(Field::new("item", ty, true));
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("plain", DataType::Int32, true),
+            Field::new(
+                "fsl",
+                DataType::FixedSizeList(item(DataType::Int32), 2),
+                true,
+            ),
+            Field::new(
+                "nested",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "inner",
+                    DataType::FixedSizeList(item(DataType::Int32), 3),
+                    true,
+                )])),
+                true,
+            ),
+            Field::new(
+                "list_of_fsl",
+                DataType::List(Arc::new(Field::new(
+                    "element",
+                    DataType::FixedSizeList(item(DataType::Int32), 2),
+                    true,
+                ))),
+                true,
+            ),
+        ]));
+
+        let coerced = super::coerce_fixed_size_lists(&schema).expect("should rewrite");
+        assert!(matches!(
+            coerced.field_with_name("fsl").unwrap().data_type(),
+            DataType::List(_)
+        ));
+        let DataType::Struct(fields) = coerced.field_with_name("nested").unwrap().data_type()
+        else {
+            panic!("nested should stay Struct");
+        };
+        assert!(matches!(fields[0].data_type(), DataType::List(_)));
+        let DataType::List(element) = coerced.field_with_name("list_of_fsl").unwrap().data_type()
+        else {
+            panic!("list_of_fsl should stay List");
+        };
+        assert!(matches!(element.data_type(), DataType::List(_)));
+        assert!(super::coerce_fixed_size_lists(&coerced).is_none());
+    }
+
+    /// parquet-rs can return a LIST as `FixedSizeList` when the file's embedded Arrow schema
+    /// says so. Rewrite the hint to `List` before reading so the scan never sees FixedSizeList.
+    #[tokio::test]
+    async fn test_read_fixed_size_list_column_as_list() {
+        use arrow_array::{FixedSizeListArray, Int32Array};
+        use arrow_buffer::{NullBuffer, OffsetBuffer};
+
+        use crate::spec::ListType;
+
+        let with_id = |field: Field, id: i32| {
+            field.with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                id.to_string(),
+            )]))
+        };
+
+        // Row 0: [1, 2]; row 1: null; row 2: [5, 6].
+        let values = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            None,
+            None,
+            Some(5),
+            Some(6),
+        ])) as ArrayRef;
+        let row_nulls = NullBuffer::from(vec![true, false, true]);
+        let optional_element = Arc::new(with_id(Field::new("element", DataType::Int32, true), 3));
+        let required_element = Arc::new(with_id(Field::new("element", DataType::Int32, false), 5));
+        let optional_fsl = FixedSizeListArray::new(
+            Arc::clone(&optional_element),
+            2,
+            Arc::clone(&values),
+            Some(row_nulls.clone()),
+        );
+        let required_fsl =
+            FixedSizeListArray::new(Arc::clone(&required_element), 2, values, Some(row_nulls));
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            with_id(
+                Field::new(
+                    "optional",
+                    DataType::FixedSizeList(optional_element, 2),
+                    true,
+                ),
+                2,
+            ),
+            with_id(
+                Field::new(
+                    "required",
+                    DataType::FixedSizeList(required_element, 2),
+                    true,
+                ),
+                4,
+            ),
+            with_id(Field::new("id", DataType::Int32, true), 1),
+        ]));
+        let batch = RecordBatch::try_new(file_schema.clone(), vec![
+            Arc::new(optional_fsl) as ArrayRef,
+            Arc::new(required_fsl) as ArrayRef,
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        ])
+        .unwrap();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let path = format!("{}/fsl.parquet", tmp_dir.path().to_str().unwrap());
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), file_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        2,
+                        "optional",
+                        Type::List(ListType::new(
+                            NestedField::list_element(
+                                3,
+                                Type::Primitive(PrimitiveType::Int),
+                                false,
+                            )
+                            .into(),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        4,
+                        "required",
+                        Type::List(ListType::new(
+                            NestedField::list_element(5, Type::Primitive(PrimitiveType::Int), true)
+                                .into(),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(table_schema)
+                .with_project_field_ids(vec![1, 2, 4])
+                .with_case_sensitive(false)
+                .build()
+                .unwrap())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        assert_eq!(result.len(), 1);
+        let out = &result[0];
+        assert_eq!(out.num_rows(), 3);
+
+        let expected_offsets = OffsetBuffer::new(vec![0, 2, 2, 4].into());
+        let expected_values = Arc::new(Int32Array::from(vec![1, 2, 5, 6])) as ArrayRef;
+        let expected_nulls = NullBuffer::from(vec![true, false, true]);
+        let schema = out.schema();
+        for (name, element_nullable) in [("optional", true), ("required", false)] {
+            let col = schema.index_of(name).unwrap();
+            let list = out.column(col).as_list::<i32>();
+            assert_eq!(list.offsets(), &expected_offsets, "{name} offsets");
+            assert_eq!(
+                list.values().as_ref(),
+                expected_values.as_ref(),
+                "{name} values"
+            );
+            assert_eq!(list.nulls(), Some(&expected_nulls), "{name} nulls");
+            let DataType::List(element) = schema.field(col).data_type() else {
+                panic!("{name} should be List");
+            };
+            assert_eq!(
+                element.is_nullable(),
+                element_nullable,
+                "{name} element nullability"
+            );
+        }
+        let id_col = schema.index_of("id").unwrap();
+        assert_eq!(
+            out.column(id_col).as_ref(),
+            &Int32Array::from(vec![1, 2, 3]) as &dyn Array
+        );
+    }
+
+    /// Migrated files have no field IDs. Cover name mapping and fallback IDs with a null row,
+    /// nested FixedSizeList shapes, and a required top-level element.
+    #[tokio::test]
+    async fn test_read_fixed_size_list_without_field_ids() {
+        use arrow_array::{FixedSizeListArray, Int32Array, ListArray, MapArray, StructArray};
+        use arrow_buffer::{NullBuffer, OffsetBuffer};
+
+        use crate::spec::{ListType, MapType};
+
+        let item = |nullable| Arc::new(Field::new("item", DataType::Int32, nullable));
+        let values = Arc::new(Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            None,
+            None,
+            Some(5),
+            Some(6),
+        ])) as ArrayRef;
+        let row_nulls = NullBuffer::from(vec![true, false, true]);
+        let fsl = |nullable_element| {
+            FixedSizeListArray::new(
+                item(nullable_element),
+                2,
+                Arc::clone(&values),
+                Some(row_nulls.clone()),
+            )
+        };
+
+        let top = fsl(false);
+        let in_struct = StructArray::new(
+            Fields::from(vec![Field::new(
+                "inner",
+                DataType::FixedSizeList(item(true), 2),
+                true,
+            )]),
+            vec![Arc::new(fsl(true)) as ArrayRef],
+            None,
+        );
+        let map_entries = StructArray::new(
+            Fields::from(vec![
+                Field::new("keys", DataType::Utf8, false),
+                Field::new("values", DataType::FixedSizeList(item(true), 2), true),
+            ]),
+            vec![
+                Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+                Arc::new(FixedSizeListArray::new(
+                    item(true),
+                    2,
+                    Arc::new(Int32Array::from(vec![
+                        Some(10),
+                        Some(11),
+                        Some(20),
+                        Some(21),
+                    ])) as ArrayRef,
+                    None,
+                )) as ArrayRef,
+            ],
+            None,
+        );
+        let as_map_value = MapArray::new(
+            Arc::new(Field::new(
+                "entries",
+                DataType::Struct(map_entries.fields().clone()),
+                false,
+            )),
+            OffsetBuffer::new(vec![0, 1, 1, 2].into()),
+            map_entries,
+            Some(row_nulls.clone()),
+            false,
+        );
+        let list_of_fsl = ListArray::new(
+            Arc::new(Field::new(
+                "element",
+                DataType::FixedSizeList(item(true), 2),
+                true,
+            )),
+            OffsetBuffer::new(vec![0, 1, 1, 2].into()),
+            Arc::new(FixedSizeListArray::new(
+                item(true),
+                2,
+                Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(5), Some(6)])) as ArrayRef,
+                None,
+            )) as ArrayRef,
+            Some(row_nulls.clone()),
+        );
+        let nested_fsl = FixedSizeListArray::new(
+            Arc::new(Field::new(
+                "item",
+                DataType::FixedSizeList(item(true), 2),
+                true,
+            )),
+            1,
+            Arc::new(FixedSizeListArray::new(
+                item(true),
+                2,
+                Arc::clone(&values),
+                None,
+            )) as ArrayRef,
+            Some(row_nulls),
+        );
+
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("top", DataType::FixedSizeList(item(false), 2), true),
+            Field::new(
+                "s",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "inner",
+                    DataType::FixedSizeList(item(true), 2),
+                    true,
+                )])),
+                true,
+            ),
+            Field::new(
+                "m",
+                DataType::Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        DataType::Struct(Fields::from(vec![
+                            Field::new("keys", DataType::Utf8, false),
+                            Field::new("values", DataType::FixedSizeList(item(true), 2), true),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+                true,
+            ),
+            Field::new(
+                "list_of_fsl",
+                DataType::List(Arc::new(Field::new(
+                    "element",
+                    DataType::FixedSizeList(item(true), 2),
+                    true,
+                ))),
+                true,
+            ),
+            Field::new(
+                "nested_fsl",
+                DataType::FixedSizeList(
+                    Arc::new(Field::new(
+                        "item",
+                        DataType::FixedSizeList(item(true), 2),
+                        true,
+                    )),
+                    1,
+                ),
+                true,
+            ),
+        ]));
+        let batch = RecordBatch::try_new(file_schema.clone(), vec![
+            Arc::new(top) as ArrayRef,
+            Arc::new(in_struct) as ArrayRef,
+            Arc::new(as_map_value) as ArrayRef,
+            Arc::new(list_of_fsl) as ArrayRef,
+            Arc::new(nested_fsl) as ArrayRef,
+        ])
+        .unwrap();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let path = format!("{}/fsl_no_ids.parquet", tmp_dir.path().to_str().unwrap());
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), file_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let file_size = std::fs::metadata(&path).unwrap().len();
+
+        let int_ty = Type::Primitive(PrimitiveType::Int);
+        let list_of = |id, required| {
+            Type::List(ListType::new(
+                NestedField::list_element(id, int_ty.clone(), required).into(),
+            ))
+        };
+        let table_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "top", list_of(6, true)).into(),
+                    NestedField::optional(
+                        2,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(7, "inner", list_of(8, false)).into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        3,
+                        "m",
+                        Type::Map(MapType::optional(
+                            9,
+                            Type::Primitive(PrimitiveType::String),
+                            10,
+                            list_of(11, false),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        4,
+                        "list_of_fsl",
+                        Type::List(ListType::new(
+                            NestedField::list_element(12, list_of(13, false), false).into(),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        5,
+                        "nested_fsl",
+                        Type::List(ListType::new(
+                            NestedField::list_element(14, list_of(15, false), false).into(),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let name_mapping = Arc::new(NameMapping::new(vec![
+            MappedField::new(Some(1), vec!["top".to_string()], vec![MappedField::new(
+                Some(6),
+                vec!["element".to_string()],
+                vec![],
+            )]),
+            MappedField::new(Some(2), vec!["s".to_string()], vec![MappedField::new(
+                Some(7),
+                vec!["inner".to_string()],
+                vec![MappedField::new(
+                    Some(8),
+                    vec!["element".to_string()],
+                    vec![],
+                )],
+            )]),
+            MappedField::new(Some(3), vec!["m".to_string()], vec![
+                MappedField::new(Some(9), vec!["key".to_string()], vec![]),
+                MappedField::new(Some(10), vec!["value".to_string()], vec![MappedField::new(
+                    Some(11),
+                    vec!["element".to_string()],
+                    vec![],
+                )]),
+            ]),
+            MappedField::new(Some(4), vec!["list_of_fsl".to_string()], vec![
+                MappedField::new(Some(12), vec!["element".to_string()], vec![
+                    MappedField::new(Some(13), vec!["element".to_string()], vec![]),
+                ]),
+            ]),
+            MappedField::new(Some(5), vec!["nested_fsl".to_string()], vec![
+                MappedField::new(Some(14), vec!["element".to_string()], vec![
+                    MappedField::new(Some(15), vec!["element".to_string()], vec![]),
+                ]),
+            ]),
+        ]));
+
+        let assert_top_list = |out: &RecordBatch| {
+            assert_eq!(out.num_rows(), 3);
+            let top = out
+                .column(out.schema().index_of("top").unwrap())
+                .as_list::<i32>();
+            assert_eq!(
+                top.nulls(),
+                Some(&NullBuffer::from(vec![true, false, true]))
+            );
+            assert_eq!(
+                top.values().as_ref(),
+                &Int32Array::from(vec![1, 2, 5, 6]) as &dyn Array
+            );
+            let schema = out.schema();
+            for name in ["s", "m", "list_of_fsl", "nested_fsl"] {
+                let field = schema.field_with_name(name).unwrap();
+                assert!(
+                    !matches!(field.data_type(), DataType::FixedSizeList(_, _)),
+                    "{name} should not stay FixedSizeList: {:?}",
+                    field.data_type()
+                );
+            }
+        };
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let mapped_tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(file_size)
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(path.clone())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(Arc::clone(&table_schema))
+                .with_project_field_ids(vec![1, 2, 3, 4, 5])
+                .with_case_sensitive(false)
+                .with_name_mapping(Some(Arc::clone(&name_mapping)))
+                .build()
+                .unwrap())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+        let mapped = reader
+            .read(mapped_tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        assert_eq!(mapped.len(), 1);
+        assert_top_list(&mapped[0]);
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let fallback_tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(file_size)
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(table_schema)
+                .with_project_field_ids(vec![1, 2, 3, 4, 5])
+                .with_case_sensitive(false)
+                .build()
+                .unwrap())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+        let fallback = reader
+            .read(fallback_tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        assert_eq!(fallback.len(), 1);
+        assert_top_list(&fallback[0]);
     }
 }
