@@ -26,22 +26,15 @@ use crate::spec::{ManifestContentType, ManifestEntry, ManifestFile};
 /// decrypting it when the entry records key metadata.
 pub struct ManifestReader {
     file_io: FileIO,
-    runtime: Option<Runtime>,
+    /// Manifests are parsed on this runtime's cpu handle, so the Avro decoding
+    /// of many manifests runs in parallel instead of on the calling task.
+    runtime: Runtime,
 }
 
 impl ManifestReader {
-    /// Create a manifest reader.
-    pub(crate) fn new(file_io: FileIO) -> Self {
-        Self {
-            file_io,
-            runtime: None,
-        }
-    }
-
-    /// Parses manifests on `runtime`'s cpu handle instead of the calling task.
-    pub(crate) fn with_runtime(mut self, runtime: Runtime) -> Self {
-        self.runtime = Some(runtime);
-        self
+    /// Create a manifest reader that parses manifests on `runtime`.
+    pub(crate) fn new(file_io: FileIO, runtime: Runtime) -> Self {
+        Self { file_io, runtime }
     }
 
     /// Read, decrypt, parse and return the manifest described by
@@ -62,16 +55,15 @@ impl ManifestReader {
             None => input_file.read().await?,
         };
 
-        let (metadata, mut entries) = match &self.runtime {
-            Some(runtime) => {
-                let location = manifest_file.manifest_path.clone();
-                runtime
-                    .cpu()
-                    .spawn(async move { Manifest::try_from_avro_bytes(&bytes, Some(&location)) })
-                    .await??
-            }
-            None => Manifest::try_from_avro_bytes(&bytes, Some(&manifest_file.manifest_path))?,
-        };
+        let location = manifest_file.manifest_path.clone();
+        let (metadata, mut entries) = self
+            .runtime
+            .cpu()
+            .spawn(async move { Manifest::try_from_avro_bytes(&bytes, Some(&location)) })
+            .await
+            // A `JoinError` (the parse panicked, or the cpu runtime shut down)
+            // names no manifest; a parse error already does.
+            .map_err(|err| err.with_context("manifest", &manifest_file.manifest_path))??;
 
         for entry in &mut entries {
             entry.inherit_data(manifest_file);
@@ -181,7 +173,10 @@ mod tests {
         // Writing the manifest yields the manifest list entry describing it.
         let manifest_file = writer.write_manifest_file().await.unwrap();
 
-        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        let manifest = ManifestReader::new(io, test_runtime())
+            .read(&manifest_file)
+            .await
+            .unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
             manifest.entries()[0].data_file().file_path(),
@@ -222,13 +217,18 @@ mod tests {
         let mut manifest_file = writer.write_manifest_file().await.unwrap();
         manifest_file.sequence_number = 36;
 
-        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        let manifest = ManifestReader::new(io, test_runtime())
+            .read(&manifest_file)
+            .await
+            .unwrap();
         assert_eq!(manifest.entries()[0].sequence_number(), Some(0));
         assert_eq!(manifest.entries()[0].file_sequence_number, Some(0));
     }
 
+    /// A parse spawned on a shut-down cpu runtime fails with a `JoinError`,
+    /// which names no file; the reader must add the manifest path itself.
     #[tokio::test]
-    async fn test_read_parses_on_runtime() {
+    async fn test_read_names_manifest_when_parse_is_cancelled() {
         let schema = test_schema();
         let partition_spec = PartitionSpec::builder(schema.clone())
             .with_spec_id(0)
@@ -236,7 +236,7 @@ mod tests {
             .unwrap();
 
         let io = FileIO::new_with_memory();
-        let path = "memory:///table/metadata/runtime.avro";
+        let path = "memory:///table/metadata/cancelled.avro";
         let mut writer = ManifestWriterBuilder::new(
             io.new_output(path).unwrap(),
             Some(1),
@@ -247,16 +247,16 @@ mod tests {
         writer.add_entry(test_entry()).unwrap();
         let manifest_file = writer.write_manifest_file().await.unwrap();
 
-        let inline = ManifestReader::new(io.clone())
+        let cpu_rt = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let runtime = Runtime::new(&cpu_rt);
+        cpu_rt.shutdown_background();
+
+        let err = ManifestReader::new(io, runtime)
             .read(&manifest_file)
             .await
-            .unwrap();
-        let spawned = ManifestReader::new(io)
-            .with_runtime(test_runtime())
-            .read(&manifest_file)
-            .await
-            .unwrap();
-        assert_eq!(spawned, inline);
+            .expect_err("a cancelled parse must fail the read");
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.to_string().contains(path), "{err}");
     }
 
     #[tokio::test]
@@ -286,7 +286,7 @@ mod tests {
         assert!(manifest_file.key_metadata.is_some());
 
         // Reading with the recorded key metadata must recover the entry.
-        let manifest = ManifestReader::new(io.clone())
+        let manifest = ManifestReader::new(io.clone(), test_runtime())
             .read(&manifest_file)
             .await
             .unwrap();
@@ -300,7 +300,7 @@ mod tests {
         let mut plaintext_entry = manifest_file.clone();
         plaintext_entry.key_metadata = None;
         assert!(
-            ManifestReader::new(io)
+            ManifestReader::new(io, test_runtime())
                 .read(&plaintext_entry)
                 .await
                 .is_err(),
@@ -360,7 +360,7 @@ mod tests {
     /// A reader with an unused in-memory `FileIO`, for exercising the pure
     /// row-id assignment logic without touching storage.
     fn test_reader() -> ManifestReader {
-        ManifestReader::new(FileIO::new_with_memory())
+        ManifestReader::new(FileIO::new_with_memory(), test_runtime())
     }
 
     /// Builds a data-file manifest entry with the given status, record count,

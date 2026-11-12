@@ -3196,11 +3196,13 @@ mod tests {
     }
 
     /// A manifest parse spawned on a shut-down cpu runtime is cancelled, which
-    /// takes the same `JoinError` path a panicking parse does.
+    /// takes the same `JoinError` path a panicking parse does. The error must
+    /// still name the manifest, which a `JoinError` on its own does not.
     #[tokio::test]
     async fn test_plan_files_reports_cancelled_manifest_parse_as_error() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
+        let path = first_manifest_path(&fixture).await;
         let io_rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -3217,6 +3219,7 @@ mod tests {
             .await
             .expect_err("a cancelled manifest parse must fail the plan");
         assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.to_string().contains(&path), "{err}");
         io_rt.shutdown_background();
     }
 
