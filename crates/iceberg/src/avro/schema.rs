@@ -1381,4 +1381,27 @@ mod tests {
         };
         assert_eq!(record.fields[0].schema, AvroSchema::Bytes);
     }
+
+    #[test]
+    fn test_uuid_to_avro_fixed_uuid_schema() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Uuid)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let AvroSchema::Record(record) = schema_to_avro_schema("t", &schema).unwrap() else {
+            panic!("expected Avro record schema");
+        };
+        let output = serde_json::to_value(&record.fields[0].schema).unwrap();
+
+        let expected = serde_json::json!({
+            "type": "fixed",
+            "name": "uuid_fixed",
+            "size": 16,
+            "logicalType": "uuid",
+        });
+        assert_eq!(output, expected);
+    }
 }
