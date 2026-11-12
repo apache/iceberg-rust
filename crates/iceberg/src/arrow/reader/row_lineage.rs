@@ -124,13 +124,10 @@ fn append_row_id(batch: RecordBatch, row_id: ArrayRef) -> Result<RecordBatch> {
     }
 
     fields.push(Arc::new(
-        Field::new(RESERVED_COL_NAME_ROW_ID, DataType::Int64, true).with_metadata(
-            [(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                RESERVED_FIELD_ID_ROW_ID.to_string(),
-            )]
-            .into(),
-        ),
+        Field::new(RESERVED_COL_NAME_ROW_ID, DataType::Int64, true).with_metadata([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            RESERVED_FIELD_ID_ROW_ID.to_string(),
+        )]),
     ));
     columns.push(row_id);
 
@@ -152,7 +149,7 @@ mod tests {
     fn field_with_id(name: &str, dt: DataType, id: i32) -> Arc<Field> {
         Arc::new(
             Field::new(name, dt, true)
-                .with_metadata([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())].into()),
+                .with_metadata([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())]),
         )
     }
 

@@ -43,6 +43,7 @@ use iceberg::{Error, ErrorKind, Result};
 use iceberg_property_macro::Properties;
 use opendal::Operator;
 use opendal::layers::{RetryLayer, TimeoutLayer};
+use opendal::options::WriteOptions;
 use serde::{Deserialize, Serialize};
 use utils::from_opendal_error;
 
@@ -118,6 +119,18 @@ pub use resolving::{OpenDalResolvingStorage, OpenDalResolvingStorageFactory};
 /// affected and stays at its 60-second default.
 pub const OPENDAL_IO_TIMEOUT_MS: &str = "opendal.io-timeout-ms";
 
+/// Number of times to retry a failed operation on any backend, `0` to disable retrying. Unset keeps
+/// OpenDAL's default. For S3, [`S3_RETRY_NUM_RETRIES`](iceberg::io::S3_RETRY_NUM_RETRIES) takes precedence.
+pub const OPENDAL_RETRY_NUM_RETRIES: &str = "opendal.retry.num-retries";
+
+/// Minimum wait in milliseconds before retrying a failed operation on any backend. Unset keeps
+/// OpenDAL's default. For S3, [`S3_RETRY_MIN_WAIT_MS`](iceberg::io::S3_RETRY_MIN_WAIT_MS) takes precedence.
+pub const OPENDAL_RETRY_MIN_WAIT_MS: &str = "opendal.retry.min-wait-ms";
+
+/// Maximum wait in milliseconds between two retries on any backend. Unset keeps OpenDAL's default.
+/// For S3, [`S3_RETRY_MAX_WAIT_MS`](iceberg::io::S3_RETRY_MAX_WAIT_MS) takes precedence.
+pub const OPENDAL_RETRY_MAX_WAIT_MS: &str = "opendal.retry.max-wait-ms";
+
 /// Matches OpenDAL's `TimeoutLayer` default.
 const DEFAULT_IO_TIMEOUT_MS: NonZeroU64 = NonZeroU64::new(10_000).unwrap();
 
@@ -129,15 +142,35 @@ pub struct OpenDalClientConfig {
     #[property(
         key = OPENDAL_IO_TIMEOUT_MS,
         default = DEFAULT_IO_TIMEOUT_MS,
-        parse_with = parse_io_timeout_ms
+        parse_with = parse_positive_ms
     )]
     io_timeout_ms: NonZeroU64,
+    /// Retries on any backend.
+    #[property(key = OPENDAL_RETRY_NUM_RETRIES, default = None)]
+    retry_num_retries: Option<usize>,
+    /// Delay before the first retry on any backend in milliseconds.
+    #[property(
+        key = OPENDAL_RETRY_MIN_WAIT_MS,
+        default = None,
+        parse_with = parse_positive_ms
+    )]
+    retry_min_wait_ms: Option<NonZeroU64>,
+    /// Upper bound of the delay between two retries on any backend in milliseconds.
+    #[property(
+        key = OPENDAL_RETRY_MAX_WAIT_MS,
+        default = None,
+        parse_with = parse_positive_ms
+    )]
+    retry_max_wait_ms: Option<NonZeroU64>,
 }
 
 impl Default for OpenDalClientConfig {
     fn default() -> Self {
         Self {
             io_timeout_ms: DEFAULT_IO_TIMEOUT_MS,
+            retry_num_retries: None,
+            retry_min_wait_ms: None,
+            retry_max_wait_ms: None,
         }
     }
 }
@@ -146,9 +179,30 @@ impl OpenDalClientConfig {
     pub(crate) fn io_timeout(&self) -> Duration {
         Duration::from_millis(self.io_timeout_ms.get())
     }
+
+    /// The retry policy, with jitter; OpenDAL's default when no key is set.
+    pub(crate) fn retry_layer(&self) -> RetryLayer {
+        let mut layer = RetryLayer::new();
+        if self.retry_num_retries.is_none()
+            && self.retry_min_wait_ms.is_none()
+            && self.retry_max_wait_ms.is_none()
+        {
+            return layer;
+        }
+        if let Some(times) = self.retry_num_retries {
+            layer = layer.with_max_times(times);
+        }
+        if let Some(ms) = self.retry_min_wait_ms {
+            layer = layer.with_min_delay(Duration::from_millis(ms.get()));
+        }
+        if let Some(ms) = self.retry_max_wait_ms {
+            layer = layer.with_max_delay(Duration::from_millis(ms.get()));
+        }
+        layer.with_jitter()
+    }
 }
 
-fn parse_io_timeout_ms(value: &str) -> Result<NonZeroU64> {
+fn parse_positive_ms(value: &str) -> Result<NonZeroU64> {
     value.parse().map_err(|error| {
         Error::new(
             ErrorKind::DataInvalid,
@@ -239,8 +293,9 @@ impl StorageFactory for OpenDalStorageFactory {
                 customized_credential_load,
             } => Ok(Arc::new(OpenDalStorage::S3 {
                 config: s3_config_parse(config.props().clone())?.into(),
+                multipart_part_size: s3_multipart_part_size_parse(config.props())?,
                 customized_credential_load: customized_credential_load.clone(),
-                client_config,
+                client_config: s3_client_config(config.props(), client_config)?,
             })),
             #[cfg(feature = "opendal-gcs")]
             OpenDalStorageFactory::Gcs => Ok(Arc::new(OpenDalStorage::Gcs {
@@ -320,9 +375,13 @@ pub enum OpenDalStorage {
     /// Accepts any S3-family URL (`s3://`, `s3a://`, `s3n://`); the scheme is
     /// derived from the path at call time.
     #[cfg(feature = "opendal-s3")]
+    #[non_exhaustive]
     S3 {
         /// S3 configuration.
         config: Arc<S3Config>,
+        /// Bytes carried by one multipart upload request.
+        #[serde(default = "default_multipart_part_size")]
+        multipart_part_size: u64,
         /// Custom AWS credential loader.
         #[serde(skip)]
         customized_credential_load: Option<CustomAwsCredentialLoader>,
@@ -507,7 +566,7 @@ impl OpenDalStorage {
         // benefits non-object-store backends.
         let operator = operator
             .layer(TimeoutLayer::new().with_io_timeout(self.client_config().io_timeout()))
-            .layer(RetryLayer::new());
+            .layer(self.client_config().retry_layer());
         Ok((operator, relative_path))
     }
 
@@ -540,6 +599,24 @@ impl OpenDalStorage {
                 not(feature = "opendal-hdfs-native"),
             ))]
             _ => unreachable!(),
+        }
+    }
+
+    /// Bounds the S3 request size. Without a chunk size OpenDAL turns each caller
+    /// buffer into one request, and `ParquetWriter` hands over a whole row group
+    /// at a time. Other backends keep OpenDAL's defaults.
+    #[allow(unreachable_patterns)]
+    fn write_options(&self) -> WriteOptions {
+        match self {
+            #[cfg(feature = "opendal-s3")]
+            OpenDalStorage::S3 {
+                multipart_part_size,
+                ..
+            } => WriteOptions {
+                chunk: Some(usize::try_from(*multipart_part_size).unwrap_or(usize::MAX)),
+                ..WriteOptions::default()
+            },
+            _ => WriteOptions::default(),
         }
     }
 
@@ -702,7 +779,7 @@ impl Storage for OpenDalStorage {
 
     async fn write(&self, path: &str, bs: Bytes) -> Result<()> {
         let (op, relative_path) = self.create_operator(&path)?;
-        op.write(relative_path, bs)
+        op.write_options(relative_path, bs, self.write_options())
             .await
             .map_err(from_opendal_error)?;
         Ok(())
@@ -711,7 +788,9 @@ impl Storage for OpenDalStorage {
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
         let (op, relative_path) = self.create_operator(&path)?;
         Ok(Box::new(OpenDalWriter::new(
-            op.writer(relative_path).await.map_err(from_opendal_error)?,
+            op.writer_options(relative_path, self.write_options())
+                .await
+                .map_err(from_opendal_error)?,
         )))
     }
 
@@ -901,11 +980,78 @@ mod tests {
         );
     }
 
+    fn retry_config(props: &[(&str, &str)]) -> Result<OpenDalClientConfig> {
+        OpenDalClientConfig::from_properties(
+            &props
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect::<HashMap<_, _>>(),
+        )
+    }
+
+    fn retry_layer_debug(props: &[(&str, &str)]) -> Result<String> {
+        Ok(format!("{:?}", retry_config(props)?.retry_layer()))
+    }
+
+    #[test]
+    fn test_retry_defaults_match_opendal() {
+        // `RetryLayer` has no getters, so compare through `Debug`.
+        assert_eq!(
+            retry_layer_debug(&[]).unwrap(),
+            format!("{:?}", RetryLayer::new())
+        );
+        assert_ne!(
+            format!("{:?}", RetryLayer::new()),
+            format!("{:?}", RetryLayer::new().with_jitter())
+        );
+    }
+
+    #[test]
+    fn test_retry_properties_reach_retry_layer() {
+        let expected = RetryLayer::new()
+            .with_max_times(5)
+            .with_min_delay(Duration::from_millis(100))
+            .with_max_delay(Duration::from_millis(200))
+            .with_jitter();
+        assert_eq!(
+            retry_layer_debug(&[
+                (OPENDAL_RETRY_NUM_RETRIES, "5"),
+                (OPENDAL_RETRY_MIN_WAIT_MS, "100"),
+                (OPENDAL_RETRY_MAX_WAIT_MS, "200"),
+            ])
+            .unwrap(),
+            format!("{expected:?}")
+        );
+
+        // any one property switches jitter on and leaves the others at OpenDAL's defaults
+        assert_eq!(
+            retry_layer_debug(&[(OPENDAL_RETRY_NUM_RETRIES, "0")]).unwrap(),
+            format!("{:?}", RetryLayer::new().with_max_times(0).with_jitter())
+        );
+    }
+
+    #[test]
+    fn test_retry_property_parsing_rejects_invalid_values() {
+        for (key, invalid) in [
+            (OPENDAL_RETRY_NUM_RETRIES, "-1"),
+            (OPENDAL_RETRY_NUM_RETRIES, "abc"),
+            (OPENDAL_RETRY_NUM_RETRIES, ""),
+            (OPENDAL_RETRY_MIN_WAIT_MS, "0"),
+            (OPENDAL_RETRY_MIN_WAIT_MS, "abc"),
+            (OPENDAL_RETRY_MAX_WAIT_MS, "0"),
+            (OPENDAL_RETRY_MAX_WAIT_MS, "12.5"),
+        ] {
+            let err = retry_config(&[(key, invalid)]).unwrap_err().to_string();
+            assert!(err.contains(key), "{key}={invalid}: {err}");
+        }
+    }
+
     #[cfg(feature = "opendal-s3")]
     #[test]
     fn test_client_config_serde_round_trip() {
         let storage = OpenDalStorage::S3 {
             config: Arc::new(S3Config::default()),
+            multipart_part_size: default_multipart_part_size(),
             customized_credential_load: None,
             client_config: client_config("45000").unwrap(),
         };
@@ -1122,6 +1268,7 @@ mod tests {
     fn test_relativize_path_s3() {
         let storage = OpenDalStorage::S3 {
             config: Arc::new(S3Config::default()),
+            multipart_part_size: default_multipart_part_size(),
             customized_credential_load: None,
             client_config: OpenDalClientConfig::default(),
         };

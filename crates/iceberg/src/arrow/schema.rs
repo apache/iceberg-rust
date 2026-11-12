@@ -106,6 +106,71 @@ impl ExtensionType for VariantExtensionType {
     }
 }
 
+/// Whether `field` carries the [`VariantExtensionType`].
+pub(crate) fn is_variant_field(field: &Field) -> bool {
+    field.extension_type_name() == Some(VariantExtensionType::NAME)
+}
+
+/// Whether `data_type` can hold a variant's `metadata` or `value` bytes.
+fn is_variant_binary(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => true,
+        DataType::Dictionary(_, value_type) => is_variant_binary(value_type),
+        _ => false,
+    }
+}
+
+/// Checks that `field` stores a variant unshredded: `metadata` and `value` bytes, matched by
+/// name, with a required `metadata`.
+pub(crate) fn validate_unshredded_variant(field: &Field, variant_field_id: i32) -> Result<()> {
+    let invalid = |problem: String| {
+        invalid_data!(
+            "Variant column `{}` (field id {variant_field_id}) {problem}",
+            field.name()
+        )
+    };
+    let DataType::Struct(subfields) = field.data_type() else {
+        return Err(invalid(format!(
+            "must be stored as a group, found {}",
+            field.data_type()
+        )));
+    };
+    if subfields.find("typed_value").is_some() {
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            format!(
+                "Reading shredded variant column `{}` (field id {variant_field_id}) is not supported yet, see https://github.com/apache/iceberg-rust/issues/3606",
+                field.name()
+            ),
+        ));
+    }
+    for name in ["metadata", "value"] {
+        match subfields.find(name) {
+            Some((_, subfield)) if !is_variant_binary(subfield.data_type()) => {
+                return Err(invalid(format!(
+                    "has a non-binary `{name}` field: {}",
+                    subfield.data_type()
+                )));
+            }
+            // The Parquet and Arrow variant specs require `metadata`, and the table type reads
+            // it as non-nullable.
+            Some((_, subfield)) if name == "metadata" && subfield.is_nullable() => {
+                return Err(invalid(
+                    "has an optional `metadata` field, which must be required".to_string(),
+                ));
+            }
+            Some(_) => {}
+            None => return Err(invalid(format!("is missing the `{name}` field"))),
+        }
+    }
+    if subfields.len() != 2 {
+        return Err(invalid(
+            "has fields other than `metadata` and `value`".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn to_arrow_wkb_edges(algorithm: EdgeInterpolationAlgorithm) -> WkbEdges {
     match algorithm {
         EdgeInterpolationAlgorithm::Spherical => WkbEdges::Spherical,
@@ -416,7 +481,7 @@ pub(super) fn try_get_field_id_from_metadata(field: &Field) -> Result<Option<i32
         .transpose()
 }
 
-pub(super) fn get_field_id_from_metadata(field: &FieldRef) -> Result<i32> {
+pub(super) fn get_field_id_from_metadata(field: &Field) -> Result<i32> {
     try_get_field_id_from_metadata(field)?
         .ok_or_else(|| invalid_data!("Field id not found in metadata"))
 }
