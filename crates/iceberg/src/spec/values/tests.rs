@@ -1611,7 +1611,7 @@ fn test_avro_uuid_value_converts_to_datum_uuid() {
 }
 
 #[test]
-fn test_avro_fixed_value_converts_to_datum_uuid() {
+fn test_avro_fixed_16_bytes_value_converts_to_datum_uuid() {
     let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
     let avro_value = Value::Record(vec![
         ("type".to_string(), Value::String("uuid".to_string())),
@@ -1627,7 +1627,7 @@ fn test_avro_fixed_value_converts_to_datum_uuid() {
 }
 
 #[test]
-fn test_datum_16_fixed_converts_to_avro_fixed_value() {
+fn test_datum_16_fixed_converts_to_avro_fixed_16_bytes_value() {
     let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
     let output = to_value(Datum::fixed(bytes)).unwrap();
 
