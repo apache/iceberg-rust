@@ -73,6 +73,7 @@ parquet = { workspace = true, features = [
   "geospatial",
 ] }
 parquet-geospatial = { workspace = true }
+parquet-variant-compute = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 roaring = { workspace = true }
