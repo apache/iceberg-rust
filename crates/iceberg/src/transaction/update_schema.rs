@@ -355,6 +355,10 @@ fn add_columns_to_mapped_fields<'a>(
     added: &[NestedFieldRef],
     adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
 ) -> Vec<MappedField> {
+    let added_ids: HashMap<&str, i32> = added
+        .iter()
+        .map(|add| (add.name.as_str(), add.id))
+        .collect();
     fields
         .map(|field| {
             let nested_added = field
@@ -370,9 +374,9 @@ fn add_columns_to_mapped_fields<'a>(
                 .names()
                 .iter()
                 .filter(|name| {
-                    !added
-                        .iter()
-                        .any(|add| &add.name == *name && Some(add.id) != field.field_id())
+                    added_ids
+                        .get(name.as_str())
+                        .is_none_or(|id| Some(*id) == field.field_id())
                 })
                 .cloned()
                 .collect();
@@ -529,6 +533,11 @@ impl StatelessAction for UpdateSchemaAction {
             .with_fields(new_fields)
             .with_identifier_field_ids(base_schema.identifier_field_ids())
             .build()?;
+
+        // Additions under a deleted ancestor are not in the new schema and their IDs can be
+        // reassigned later, so they must not get name mapping entries.
+        additions_by_parent
+            .retain(|parent_id, _| parent_id.is_none_or(|id| schema.field_by_id(id).is_some()));
 
         let mut updates = vec![
             TableUpdate::AddSchema { schema },
@@ -1302,6 +1311,26 @@ mod tests {
         ])
     }
 
+    fn nested_table_name_mapping() -> NameMapping {
+        NameMapping::new(vec![
+            mapped(1, "x", vec![]),
+            mapped(2, "y", vec![]),
+            mapped(3, "z", vec![]),
+            mapped(4, "person", vec![
+                mapped(5, "name", vec![]),
+                mapped(6, "age", vec![]),
+            ]),
+            mapped(7, "tags", vec![mapped(8, "element", vec![
+                mapped(9, "key", vec![]),
+                mapped(10, "value", vec![]),
+            ])]),
+            mapped(11, "props", vec![
+                mapped(12, "key", vec![]),
+                mapped(13, "value", vec![mapped(14, "data", vec![])]),
+            ]),
+        ])
+    }
+
     #[tokio::test]
     async fn test_add_root_column_adds_name_mapping_entry() {
         let table = with_name_mapping_property(
@@ -1331,23 +1360,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_nested_columns_adds_name_mapping_entries_under_parents() {
-        let mapping = NameMapping::new(vec![
-            mapped(1, "x", vec![]),
-            mapped(2, "y", vec![]),
-            mapped(3, "z", vec![]),
-            mapped(4, "person", vec![
-                mapped(5, "name", vec![]),
-                mapped(6, "age", vec![]),
-            ]),
-            mapped(7, "tags", vec![mapped(8, "element", vec![
-                mapped(9, "key", vec![]),
-                mapped(10, "value", vec![]),
-            ])]),
-            mapped(11, "props", vec![
-                mapped(12, "key", vec![]),
-                mapped(13, "value", vec![mapped(14, "data", vec![])]),
-            ]),
-        ]);
+        let mapping = nested_table_name_mapping();
         let table = with_name_mapping_property(
             make_v2_table_with_nested(),
             serde_json::to_string(&mapping).unwrap(),
@@ -1439,6 +1452,39 @@ mod tests {
             )])]),
         ]);
         assert_eq!(updates[2..], [name_mapping_property_update(&expected)]);
+    }
+
+    #[tokio::test]
+    async fn test_add_column_under_deleted_parent_adds_no_name_mapping_entry() {
+        let table = with_name_mapping_property(
+            make_v2_table_with_nested(),
+            serde_json::to_string(&nested_table_name_mapping()).unwrap(),
+        );
+        let action = Transaction::new(&table)
+            .update_schema()
+            .delete_column("person")
+            .add_column(
+                AddColumn::builder()
+                    .name("name")
+                    .field_type(Type::Primitive(PrimitiveType::String))
+                    .parent("person")
+                    .build(),
+            )
+            .add_column(AddColumn::optional(
+                "new_col",
+                Type::Primitive(PrimitiveType::Int),
+            ));
+
+        let updates = commit_with_fresh_state(action, &table)
+            .await
+            .unwrap()
+            .take_updates();
+
+        let mut expected_fields = nested_table_name_mapping().fields().to_vec();
+        expected_fields.push(mapped(16, "new_col", vec![]));
+        assert_eq!(updates[2..], [name_mapping_property_update(
+            &NameMapping::new(expected_fields)
+        )]);
     }
 
     #[tokio::test]
