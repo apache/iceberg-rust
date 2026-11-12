@@ -135,8 +135,7 @@ impl ObjectCache {
         runtime: &Runtime,
     ) -> Result<Arc<Manifest>> {
         let Some(cache) = self.cache() else {
-            return ManifestReader::new(self.file_io.clone())
-                .with_runtime(runtime.clone())
+            return ManifestReader::new(self.file_io.clone(), runtime.clone())
                 .read(manifest_file)
                 .await
                 .map(Arc::new);
@@ -215,8 +214,7 @@ impl ObjectCache {
         manifest_file: &ManifestFile,
         runtime: &Runtime,
     ) -> Result<CachedItem> {
-        let manifest = ManifestReader::new(self.file_io.clone())
-            .with_runtime(runtime.clone())
+        let manifest = ManifestReader::new(self.file_io.clone(), runtime.clone())
             .read(manifest_file)
             .await?;
 
