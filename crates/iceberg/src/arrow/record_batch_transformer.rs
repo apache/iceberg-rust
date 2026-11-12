@@ -31,10 +31,11 @@ use arrow_schema::{
 };
 use arrow_select::zip::zip;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use parquet_variant_compute::{VariantArray, unshred_variant};
 
 use crate::arrow::schema::{
     get_field_id_from_metadata, is_variant_field, try_get_field_id_from_metadata,
-    validate_unshredded_variant,
+    validate_variant_storage,
 };
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
 use crate::arrow::{
@@ -221,6 +222,12 @@ pub(crate) enum PromotePlan {
         entries: Vec<ChildPlan>,
         sorted: bool,
     },
+    /// Merges the `typed_value` of a shredded variant into `value`.
+    Unshred {
+        target_type: DataType,
+        name: String,
+        field_id: i32,
+    },
 }
 
 #[derive(Debug)]
@@ -257,7 +264,8 @@ impl PromotePlan {
     /// Checks the storage as projection does. A variant's `metadata` and `value` carry no field
     /// ids, so they are matched by name.
     fn build_variant(source: &Field, target: &Field) -> Result<Self> {
-        validate_unshredded_variant(source, get_field_id_from_metadata(target)?)?;
+        let field_id = get_field_id_from_metadata(target)?;
+        validate_variant_storage(source, field_id)?;
         let (source_type, target_type) = (source.data_type(), target.data_type());
         if source_type == target_type {
             return Ok(PromotePlan::PassThrough);
@@ -270,6 +278,13 @@ impl PromotePlan {
         else {
             return Err(mismatch());
         };
+        if source_fields.find("typed_value").is_some() {
+            return Ok(PromotePlan::Unshred {
+                target_type: target_type.clone(),
+                name: source.name().clone(),
+                field_id,
+            });
+        }
         let children = target_fields
             .iter()
             .map(|target_field| {
@@ -452,6 +467,16 @@ impl PromotePlan {
     }
 
     fn apply(&self, array: &ArrayRef) -> Result<ArrayRef> {
+        self.apply_under(array, None)
+    }
+
+    /// `parent_nulls` are the null rows of the enclosing structs. A required child has no
+    /// valid value in these rows.
+    fn apply_under(
+        &self,
+        array: &ArrayRef,
+        parent_nulls: Option<&arrow_buffer::NullBuffer>,
+    ) -> Result<ArrayRef> {
         match self {
             PromotePlan::PassThrough => Ok(Arc::clone(array)),
             PromotePlan::Cast(target_type) => Ok(cast(array.as_ref(), target_type)?),
@@ -459,7 +484,12 @@ impl PromotePlan {
                 let source = array
                     .as_struct_opt()
                     .ok_or_else(|| promote_err(array, "struct"))?;
-                Ok(Arc::new(Self::apply_struct(source, fields, children)?))
+                Ok(Arc::new(Self::apply_struct(
+                    source,
+                    fields,
+                    children,
+                    parent_nulls,
+                )?))
             }
             PromotePlan::List { field, element } => {
                 let array = match array.data_type() {
@@ -485,7 +515,7 @@ impl PromotePlan {
                 let source = array
                     .as_map_opt()
                     .ok_or_else(|| promote_err(array, "map"))?;
-                let entries = Self::apply_struct(source.entries(), entry_fields, entries)?;
+                let entries = Self::apply_struct(source.entries(), entry_fields, entries, None)?;
                 Ok(Arc::new(MapArray::try_new(
                     field.clone(),
                     source.offsets().clone(),
@@ -494,6 +524,34 @@ impl PromotePlan {
                     *sorted,
                 )?))
             }
+            PromotePlan::Unshred {
+                target_type,
+                name,
+                field_id,
+            } => {
+                let (storage_fields, columns, nulls) = array
+                    .as_struct_opt()
+                    .ok_or_else(|| promote_err(array, "struct"))?
+                    .clone()
+                    .into_parts();
+                // `unshred_variant` skips null rows, so mark the rows under a null parent as
+                // null. The output keeps the nulls of `array`, because Arrow rejects a null in
+                // a required child of a valid row.
+                let skip = arrow_buffer::NullBuffer::union(parent_nulls, nulls.as_ref());
+                let storage = StructArray::try_new(storage_fields, columns, skip)?;
+                let unshredded = VariantArray::try_new(&storage)
+                    .and_then(|variant| unshred_variant(&variant))
+                    .map_err(|e| {
+                        invalid_data!(
+                            "Variant column `{name}` (field id {field_id}) has invalid shredded data: {e}"
+                        )
+                    })?;
+                let (fields, columns, _) = cast(&ArrayRef::from(unshredded), target_type)?
+                    .as_struct()
+                    .clone()
+                    .into_parts();
+                Ok(Arc::new(StructArray::try_new(fields, columns, nulls)?))
+            }
         }
     }
 
@@ -501,12 +559,14 @@ impl PromotePlan {
         source: &StructArray,
         fields: &Fields,
         children: &[ChildPlan],
+        parent_nulls: Option<&arrow_buffer::NullBuffer>,
     ) -> Result<StructArray> {
+        let nulls = arrow_buffer::NullBuffer::union(parent_nulls, source.nulls());
         let columns = children
             .iter()
             .map(|child| match child {
                 ChildPlan::FromSource { source_index, plan } => {
-                    plan.apply(source.column(*source_index))
+                    plan.apply_under(source.column(*source_index), nulls.as_ref())
                 }
                 ChildPlan::Add { target_type, value } => {
                     RecordBatchTransformer::create_column(target_type, value.as_ref(), source.len())
@@ -1917,6 +1977,42 @@ mod test {
         assert_eq!(promoted.as_struct(), &expected);
     }
 
+    /// Only an object can have both `value` and `typed_value`.
+    #[test]
+    fn promote_shredded_variant_rejects_invalid_row() {
+        use arrow_array::{BinaryArray, Int64Array};
+        let source = Arc::new(StructArray::new(
+            Fields::from(vec![
+                Field::new("metadata", DataType::Binary, false),
+                Field::new("value", DataType::Binary, true),
+                Field::new("typed_value", DataType::Int64, true),
+            ]),
+            vec![
+                Arc::new(BinaryArray::from(vec![b"\x01\x00\x00".as_ref()])) as ArrayRef,
+                Arc::new(BinaryArray::from(vec![Some(b"\x0c\x01".as_ref())])) as ArrayRef,
+                Arc::new(Int64Array::from(vec![Some(5)])) as ArrayRef,
+            ],
+            None,
+        )) as ArrayRef;
+
+        let err = PromotePlan::build_field(
+            &Field::new("v", source.data_type().clone(), true),
+            &variant_target(),
+            &empty_schema(),
+            &HashMap::new(),
+        )
+        .unwrap()
+        .apply(&source)
+        .unwrap_err();
+        assert_eq!(
+            (err.kind(), err.message()),
+            (
+                ErrorKind::DataInvalid,
+                "Variant column `v` (field id 2) has invalid shredded data: Invalid argument error: Invalid shredded variant: both value and typed_value are non-null"
+            )
+        );
+    }
+
     /// Reports the same errors as projection, which validates data files before this runs.
     #[test]
     fn promote_variant_rejects_unsupported_storage() {
@@ -1928,17 +2024,6 @@ mod test {
             )
         };
         for (storage, expected) in [
-            (
-                DataType::Struct(Fields::from(vec![
-                    binary("metadata", true),
-                    binary("value", true),
-                    Field::new("typed_value", DataType::Int64, true),
-                ])),
-                (
-                    ErrorKind::FeatureUnsupported,
-                    "Reading shredded variant column `v` (field id 2) is not supported yet, see https://github.com/apache/iceberg-rust/issues/3606".to_string(),
-                ),
-            ),
             (
                 DataType::Struct(Fields::from(vec![
                     binary("metadata", true),
