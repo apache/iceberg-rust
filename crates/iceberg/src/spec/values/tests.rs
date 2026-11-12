@@ -760,6 +760,22 @@ fn check_raw_literal_error_via_avro(input: Value, expected_type: &Type) {
     assert!(result.is_err(), "Expected error but got: {result:?}");
 }
 
+fn check_raw_literal_serde_via_json(
+    input: JsonValue,
+    expected_literal: Literal,
+    expected_type: &Type,
+) {
+    let raw_literal: RawLiteral = serde_json::from_value(input).unwrap();
+    let result = raw_literal.try_into(expected_type).unwrap();
+    assert_eq!(result, Some(expected_literal));
+}
+
+fn check_raw_literal_error_via_json(input: JsonValue, expected_type: &Type) {
+    let raw_literal: RawLiteral = serde_json::from_value(input).unwrap();
+    let result = raw_literal.try_into(expected_type);
+    assert!(result.is_err(), "Expected error but got: {result:?}");
+}
+
 #[test]
 fn test_raw_literal_bytes_binary() {
     let bytes = vec![1u8, 2u8, 3u8, 4u8, 5u8];
@@ -858,6 +874,42 @@ fn test_raw_literal_string_should_reject_non_hyphenated_uuids() {
 
     check_raw_literal_string_error_via_avro(
         "{a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8}",
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
+
+#[test]
+fn test_raw_literal_json_string_should_accept_hyphenated_uuid_as_value() {
+    let s = "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8";
+    check_raw_literal_serde_via_json(
+        serde_json::json!(s),
+        Literal::uuid(Uuid::parse_str(s).unwrap()),
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
+
+#[test]
+fn test_raw_literal_json_string_should_reject_a_uuid_with_an_invalid_string() {
+    check_raw_literal_error_via_json(
+        serde_json::json!("not-a-uuid"),
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
+
+#[test]
+fn test_raw_literal_json_string_should_reject_non_hyphenated_uuids() {
+    check_raw_literal_error_via_json(
+        serde_json::json!("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8"),
+        &Primitive(PrimitiveType::Uuid),
+    );
+
+    check_raw_literal_error_via_json(
+        serde_json::json!("urn:uuid:A1A2A3A4-B1B2-C1C2-D1D2-D3D4D5D6D7D8"),
+        &Primitive(PrimitiveType::Uuid),
+    );
+
+    check_raw_literal_error_via_json(
+        serde_json::json!("{a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8}"),
         &Primitive(PrimitiveType::Uuid),
     );
 }
@@ -1673,6 +1725,97 @@ fn test_avro_bytes_value_converts_to_datum_16_binary() {
     ]);
 
     let output = apache_avro::from_value::<Datum>(&avro_value).unwrap();
+
+    assert_eq!(output, Datum::binary(bytes));
+}
+
+#[test]
+fn test_datum_uuid_converts_to_json_byte_array() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+
+    let output = serde_json::to_value(Datum::uuid(uuid_value)).unwrap();
+
+    let expected = serde_json::json!({
+        "type": "uuid",
+        "literal": uuid_value.as_bytes().to_vec(),
+    });
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_json_hyphenated_uuid_string_converts_to_datum_uuid() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+    let json_value = serde_json::json!({
+        "type": "uuid",
+        "literal": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    });
+
+    let output = serde_json::from_value::<Datum>(json_value).unwrap();
+
+    assert_eq!(output, Datum::uuid(uuid_value));
+}
+
+#[test]
+fn test_json_16_byte_array_converts_to_datum_uuid() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+    let json_value = serde_json::json!({
+        "type": "uuid",
+        "literal": uuid_value.as_bytes().to_vec(),
+    });
+
+    let output = serde_json::from_value::<Datum>(json_value).unwrap();
+
+    assert_eq!(output, Datum::uuid(uuid_value));
+}
+
+#[test]
+fn test_datum_16_fixed_converts_to_json_byte_array() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+
+    let output = serde_json::to_value(Datum::fixed(bytes)).unwrap();
+
+    let expected = serde_json::json!({
+        "type": "fixed[16]",
+        "literal": bytes.to_vec(),
+    });
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_json_16_byte_array_converts_to_datum_16_fixed() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+    let json_value = serde_json::json!({
+        "type": "fixed[16]",
+        "literal": bytes.to_vec(),
+    });
+
+    let output = serde_json::from_value::<Datum>(json_value).unwrap();
+
+    assert_eq!(output, Datum::fixed(bytes));
+}
+
+#[test]
+fn test_datum_16_binary_converts_to_json_byte_array() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+
+    let output = serde_json::to_value(Datum::binary(bytes)).unwrap();
+
+    let expected = serde_json::json!({
+        "type": "binary",
+        "literal": bytes.to_vec(),
+    });
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_json_16_byte_array_converts_to_datum_16_binary() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+    let json_value = serde_json::json!({
+        "type": "binary",
+        "literal": bytes.to_vec(),
+    });
+
+    let output = serde_json::from_value::<Datum>(json_value).unwrap();
 
     assert_eq!(output, Datum::binary(bytes));
 }
