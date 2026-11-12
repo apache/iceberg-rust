@@ -151,6 +151,12 @@ fn candidate_row_groups(
 
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
+        // A known-empty data file contributes no rows, regardless of predicates or deletes.
+        // Avoid opening it: an empty-file entry may not have a readable Parquet footer.
+        if task.record_count() == Some(0) {
+            return Ok(Box::pin(futures::stream::empty()));
+        }
+
         let should_load_page_index = (self.row_selection_enabled && task.predicate().is_some())
             || !task.deletes().is_empty();
         let mut parquet_read_options = self.parquet_read_options;
@@ -914,6 +920,123 @@ mod tests {
     };
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, SchemaRef, Type};
+
+    fn record_count_task(path: String, file_size: u64, record_count: Option<u64>) -> FileScanTask {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        FileScanTask::builder()
+            .with_data_file_path(path)
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_file_size_in_bytes(file_size)
+            .with_start(0)
+            .with_length(file_size)
+            .with_record_count(record_count)
+            .with_schema(Arc::new(schema))
+            .with_project_field_ids(vec![1])
+            .with_case_sensitive(true)
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_read_zero_record_files_without_opening_them() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing_path = temp_dir.path().join("missing.parquet");
+
+        for concurrency in [1, 2] {
+            // Neither a zero byte size nor a predicate is needed to recognize an empty file.
+            let tasks = [0, 128].map(|size| {
+                Ok(record_count_task(
+                    missing_path.to_str().unwrap().to_string(),
+                    size,
+                    Some(0),
+                ))
+            });
+            let result = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                .with_data_file_concurrency_limit(concurrency)
+                .build()
+                .read(Box::pin(futures::stream::iter(tasks)))
+                .unwrap();
+            let batches: Vec<RecordBatch> = result.stream().try_collect().await.unwrap();
+            assert!(batches.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_zero_size_files_with_nonzero_or_unknown_record_count() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("empty.parquet");
+        File::create(&path).unwrap();
+
+        for concurrency in [1, 2] {
+            for record_count in [Some(1), None] {
+                let task = record_count_task(path.to_str().unwrap().to_string(), 0, record_count);
+                let error = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                    .with_data_file_concurrency_limit(concurrency)
+                    .build()
+                    .read(Box::pin(futures::stream::iter([Ok(task)])))
+                    .unwrap()
+                    .stream()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("file size of 0 is less than footer")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_nonempty_files_alongside_zero_record_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("data.parquet");
+        let missing_path = temp_dir.path().join("missing.parquet");
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                "1".to_string(),
+            )])),
+        ]));
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(Int32Array::from(vec![
+            10, 20,
+        ]))])
+        .unwrap();
+        let mut writer = ArrowWriter::try_new(File::create(&path).unwrap(), schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let file_size = std::fs::metadata(&path).unwrap().len();
+
+        for concurrency in [1, 2] {
+            for record_count in [Some(2), None] {
+                let empty_task =
+                    record_count_task(missing_path.to_str().unwrap().to_string(), 0, Some(0));
+                let data_task =
+                    record_count_task(path.to_str().unwrap().to_string(), file_size, record_count);
+                let batches: Vec<RecordBatch> =
+                    ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                        .with_data_file_concurrency_limit(concurrency)
+                        .build()
+                        .read(Box::pin(futures::stream::iter([
+                            Ok(empty_task.clone()),
+                            Ok(data_task),
+                            Ok(empty_task),
+                        ])))
+                        .unwrap()
+                        .stream()
+                        .try_collect()
+                        .await
+                        .unwrap();
+                assert_eq!(batches, vec![batch.clone()]);
+            }
+        }
+    }
 
     // INT96 encoding: [nanos_low_u32, nanos_high_u32, julian_day_u32]
     // Julian day 2_440_588 = Unix epoch (1970-01-01)
