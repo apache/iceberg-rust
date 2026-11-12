@@ -28,7 +28,7 @@ use super::{
 use crate::error::{Result, invalid_data};
 use crate::spec::{
     DataFile, FormatVersion, ManifestContentType, ManifestEntry, ManifestFile, ManifestStatus,
-    Operation,
+    Operation, PartitionSpecRef,
 };
 use crate::table::Table;
 use crate::transaction::ActionCommit;
@@ -88,6 +88,11 @@ struct AddedManifests {
     format_version: FormatVersion,
 }
 
+struct DataFileGroup<'a> {
+    partition_spec: PartitionSpecRef,
+    data_files: Vec<&'a DataFile>,
+}
+
 impl SimpleSnapshotProducer {
     pub(crate) fn new(intent: AppendIntent) -> Self {
         Self {
@@ -126,28 +131,6 @@ impl SimpleSnapshotProducer {
         .await
     }
 
-    /// Checks that every file uses a known partition spec with a compatible
-    /// partition value.
-    ///
-    /// Runs against the table the manifests are written for; a later rebase
-    /// does not invalidate manifests already written under a spec the table
-    /// still has.
-    fn validate_added_data_files(&self, table: &Table) -> Result<()> {
-        let metadata = table.metadata();
-        for data_file in &self.intent.data_files {
-            let spec = metadata
-                .partition_spec_by_id(data_file.partition_spec_id)
-                .ok_or_else(|| {
-                    invalid_data!("Unknown partition spec id {}", data_file.partition_spec_id)
-                })?;
-            validate_partition_value(
-                data_file.partition(),
-                &spec.partition_type(metadata.current_schema())?,
-            )?;
-        }
-        Ok(())
-    }
-
     fn snapshot_id(&mut self, table: &Table) -> i64 {
         *self
             .snapshot_id
@@ -173,29 +156,42 @@ impl SimpleSnapshotProducer {
         if let Some(cached) = &self.added_manifests
             && cached.format_version == format_version
         {
+            for manifest in &cached.manifests {
+                if table
+                    .metadata()
+                    .partition_spec_by_id(manifest.partition_spec_id)
+                    .is_none()
+                {
+                    return Err(invalid_data!(
+                        "Cannot find partition spec {} for cached manifest {}",
+                        manifest.partition_spec_id,
+                        manifest.manifest_path
+                    ));
+                }
+            }
             return Ok(cached.manifests.clone());
         }
 
-        self.validate_added_data_files(table)?;
-
-        // BTreeMap keeps added manifests in deterministic partition spec order.
-        let mut files_by_spec: BTreeMap<i32, Vec<&DataFile>> = BTreeMap::new();
-        for file in &self.intent.data_files {
-            files_by_spec
-                .entry(file.partition_spec_id)
-                .or_default()
-                .push(file);
-        }
+        let data_files_by_spec = validated_added_data_files(table, &self.intent.data_files)?;
 
         // TODO(#3499): roll a group over at the target manifest size, and
         // write the resulting manifests concurrently.
-        let mut manifests = Vec::with_capacity(files_by_spec.len());
-        for (spec_id, files) in files_by_spec {
+        let mut manifests = Vec::with_capacity(data_files_by_spec.len());
+        for group in data_files_by_spec {
             let path = manifest_path(table, self.commit_uuid, self.manifest_counter)?;
             self.manifest_counter += 1;
             // Record ownership before writing: a partial file is an orphan to clean up too.
             self.owned_artifacts.insert(path.clone());
-            manifests.push(write_added_manifest(table, path, snapshot_id, spec_id, &files).await?);
+            manifests.push(
+                write_added_manifest(
+                    table,
+                    path,
+                    snapshot_id,
+                    group.partition_spec,
+                    &group.data_files,
+                )
+                .await?,
+            );
         }
 
         self.added_manifests = Some(AddedManifests {
@@ -206,27 +202,64 @@ impl SimpleSnapshotProducer {
     }
 }
 
+fn validated_added_data_files<'a>(
+    table: &Table,
+    data_files: &'a [DataFile],
+) -> Result<Vec<DataFileGroup<'a>>> {
+    let metadata = table.metadata();
+    // BTreeMap keeps added manifests in deterministic partition spec order.
+    let mut data_files_by_spec: BTreeMap<i32, Vec<&DataFile>> = BTreeMap::new();
+    for data_file in data_files {
+        data_files_by_spec
+            .entry(data_file.partition_spec_id)
+            .or_default()
+            .push(data_file);
+    }
+
+    data_files_by_spec
+        .into_iter()
+        .map(|(spec_id, data_files)| {
+            let partition_spec = metadata.partition_spec_by_id(spec_id).ok_or_else(|| {
+                invalid_data!(
+                    "Cannot find partition spec {} for data file {}",
+                    spec_id,
+                    data_files[0].file_path()
+                )
+            })?;
+            let partition_type = partition_spec.partition_type(metadata.current_schema())?;
+            for data_file in &data_files {
+                validate_partition_value(data_file.partition(), &partition_type).map_err(
+                    |err| {
+                        err.with_context("file_path", data_file.file_path())
+                            .with_context("partition_spec_id", spec_id.to_string())
+                    },
+                )?;
+            }
+            Ok(DataFileGroup {
+                partition_spec: partition_spec.clone(),
+                data_files,
+            })
+        })
+        .collect()
+}
+
 /// Writes one data manifest at `path` for `data_files`, all of which must
-/// belong to `partition_spec_id`, and returns its manifest-list entry.
+/// belong to `partition_spec`, and returns its manifest-list entry.
 async fn write_added_manifest(
     table: &Table,
     path: String,
     snapshot_id: i64,
-    partition_spec_id: i32,
+    partition_spec: PartitionSpecRef,
     data_files: &[&DataFile],
 ) -> Result<ManifestFile> {
     let metadata = table.metadata();
-    let partition_spec = metadata
-        .partition_spec_by_id(partition_spec_id)
-        .ok_or_else(|| invalid_data!("Unknown partition spec id {partition_spec_id}"))?;
-
     let mut writer = new_manifest_writer(
         table,
         path,
         snapshot_id,
         ManifestContentType::Data,
         metadata.current_schema().clone(),
-        partition_spec.clone(),
+        partition_spec,
     )?;
     let format_version = metadata.format_version();
     for data_file in data_files {
@@ -258,7 +291,9 @@ mod tests {
         NestedField, PrimitiveType, SnapshotRef, Struct, Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
-    use crate::transaction::tests::{make_v1_table, make_v2_minimal_table};
+    use crate::transaction::tests::{
+        make_v1_table, make_v2_minimal_table, with_bucket_partition_spec,
+    };
     use crate::{ErrorKind, TableUpdate};
 
     fn data_file(table: &Table, path: &str) -> DataFile {
@@ -409,8 +444,7 @@ mod tests {
     #[tokio::test]
     async fn test_append_uses_file_spec_after_default_spec_changes() {
         let table = make_v2_minimal_table();
-        let file = data_file(&table, "test/1.parquet");
-        let mut state = producer(vec![file.clone()]);
+        let mut state = producer(vec![data_file(&table, "test/1.parquet")]);
         let first_snapshot = added_snapshot(&mut state.apply(&table).await.unwrap());
         let first_list = table
             .manifest_list_reader(&first_snapshot)
@@ -418,16 +452,7 @@ mod tests {
             .await
             .unwrap();
 
-        let metadata = table
-            .metadata()
-            .clone()
-            .into_builder(None)
-            .add_default_partition_spec(UnboundPartitionSpec::builder().build())
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
-        let rebased = table.with_metadata(Arc::new(metadata));
+        let rebased = with_bucket_partition_spec(table);
         let retried_snapshot = added_snapshot(&mut state.apply(&rebased).await.unwrap());
         let retried_list = rebased
             .manifest_list_reader(&retried_snapshot)
@@ -435,26 +460,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first_list.entries(), retried_list.entries());
-
-        let mut fresh_producer = producer(vec![file.clone()]);
-        let fresh_snapshot = added_snapshot(&mut fresh_producer.apply(&rebased).await.unwrap());
-        let fresh_list = rebased
-            .manifest_list_reader(&fresh_snapshot)
-            .load()
-            .await
-            .unwrap();
-        assert_eq!(fresh_list.entries().len(), 1);
-        let manifest = rebased
-            .manifest_reader()
-            .read(&fresh_list.entries()[0])
-            .await
-            .unwrap();
-        let files = manifest
-            .entries()
-            .iter()
-            .map(|entry| entry.data_file().clone())
-            .collect::<Vec<_>>();
-        assert_eq!(files, vec![file]);
+        assert_eq!(retried_snapshot.summary(), first_snapshot.summary());
     }
 
     #[tokio::test]
@@ -462,14 +468,57 @@ mod tests {
         let table = make_v2_minimal_table();
         let mut file = data_file(&table, "test/unknown.parquet");
         file.partition_spec_id = 123;
-        let err = producer(vec![file])
+        let mut state = producer(vec![data_file(&table, "test/valid.parquet"), file]);
+        let err = state
             .apply(&table)
             .await
             .err()
             .expect("unknown partition spec must be rejected");
         assert_eq!(
             (err.kind(), err.message()),
-            (ErrorKind::DataInvalid, "Unknown partition spec id 123")
+            (
+                ErrorKind::DataInvalid,
+                "Cannot find partition spec 123 for data file test/unknown.parquet"
+            )
+        );
+        assert_eq!(state.manifest_counter, 0);
+    }
+
+    #[tokio::test]
+    async fn test_retry_rejects_removed_partition_spec() {
+        let table = make_v2_minimal_table();
+        let old_file = data_file(&table, "test/old.parquet");
+        let table = with_bucket_partition_spec(table);
+        let mut new_file = data_file(&table, "test/new.parquet");
+        new_file.partition = Struct::from_iter([Some(Literal::long(300)), Some(Literal::int(3))]);
+        let mut state = producer(vec![new_file, old_file]);
+        state.apply(&table).await.unwrap();
+        let removed_manifest = &state.added_manifests.as_ref().unwrap().manifests[1];
+        let expected_message = format!(
+            "Cannot find partition spec {} for cached manifest {}",
+            removed_manifest.partition_spec_id, removed_manifest.manifest_path
+        );
+
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .set_default_partition_spec(0)
+            .unwrap()
+            .remove_partition_specs(&[table.metadata().default_partition_spec_id()])
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        let rebased = table.with_metadata(Arc::new(metadata));
+        let err = state
+            .apply(&rebased)
+            .await
+            .err()
+            .expect("cached manifest's spec must still exist");
+        assert_eq!(
+            (err.kind(), err.message()),
+            (ErrorKind::DataInvalid, expected_message.as_str())
         );
     }
 

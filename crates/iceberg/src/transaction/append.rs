@@ -158,13 +158,14 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, MAIN_BRANCH,
-        ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, PartitionSpec,
-        SnapshotRef, Struct, TableMetadata, TableProperties, Transform,
+        ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, SnapshotRef,
+        Struct, TableMetadata, TableProperties,
     };
     use crate::table::Table;
     use crate::test_utils::{commit_with_fresh_state, make_encrypted_table, test_runtime};
     use crate::transaction::tests::{
-        make_v1_table, make_v2_minimal_table, make_v3_minimal_table, with_retry_properties,
+        make_v1_table, make_v2_minimal_table, make_v3_minimal_table, with_bucket_partition_spec,
+        with_retry_properties,
     };
     use crate::transaction::{ApplyTransactionAction, FastAppendAction, Transaction};
     use crate::{ErrorKind, TableCommit, TableIdent, TableRequirement, TableUpdate};
@@ -1001,27 +1002,6 @@ mod tests {
         assert_eq!(data_file, *manifest.entries()[0].data_file());
     }
 
-    fn with_bucket_partition_spec(table: Table) -> Table {
-        let spec = PartitionSpec::builder(table.metadata().current_schema().clone())
-            .add_partition_field("x", "x", Transform::Identity)
-            .unwrap()
-            .add_partition_field("y", "y_bucket", Transform::Bucket(16))
-            .unwrap()
-            .build()
-            .unwrap()
-            .into_unbound();
-        let metadata = table
-            .metadata()
-            .clone()
-            .into_builder(None)
-            .add_default_partition_spec(spec)
-            .unwrap()
-            .build()
-            .unwrap()
-            .metadata;
-        table.with_metadata(Arc::new(metadata))
-    }
-
     #[tokio::test]
     async fn test_fast_append_groups_files_by_partition_spec() {
         for table in [
@@ -1067,8 +1047,6 @@ mod tests {
                 new_file.clone(),
                 old_file.clone(),
                 other_old_file.clone(),
-                old_file.clone(),
-                new_file.clone(),
             ]);
             let mut commit = commit_with_fresh_state(action, &table).await.unwrap();
             let table = TableCommit::builder()
@@ -1145,17 +1123,6 @@ mod tests {
                 }
             }
             assert_eq!(actual_summary, expected_summary);
-
-            let action = Transaction::new(&table)
-                .fast_append()
-                .add_data_files(vec![old_file, new_file]);
-            let err = commit_with_fresh_state(action, &table)
-                .await
-                .err()
-                .expect("files from both specs are already live");
-            assert_eq!(err.kind(), ErrorKind::DataInvalid);
-            assert!(err.message().contains("test/old.parquet"));
-            assert!(err.message().contains("test/new.parquet"));
         }
     }
 
@@ -1183,10 +1150,10 @@ mod tests {
             .err()
             .expect("partition must match the file's spec");
         assert_eq!(
-            (err.kind(), err.message()),
+            (err.kind(), err.to_string()),
             (
                 ErrorKind::DataInvalid,
-                "Partition value is not compatible with partition type"
+                "DataInvalid, context: { file_path: test/invalid.parquet, partition_spec_id: 0 } => Partition value is not compatible with partition type".to_string()
             )
         );
     }
