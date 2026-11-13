@@ -21,6 +21,7 @@ mod data_file;
 mod encryption;
 mod error;
 mod manifest;
+mod transaction;
 mod transform;
 
 #[pymodule]
@@ -28,5 +29,6 @@ fn pyiceberg_core_rust(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
     transform::register_module(py, m)?;
     manifest::register_module(py, m)?;
     encryption::register_module(py, m)?;
+    transaction::register_module(py, m)?;
     Ok(())
 }
