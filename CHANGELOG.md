@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * `iceberg_catalog_loader::BoxedCatalogBuilder` has a new required method, `with_runtime`. Types implementing `CatalogBuilder` get it through the blanket impl; types implementing `BoxedCatalogBuilder` directly (for example, a wrapper around another `Box<dyn BoxedCatalogBuilder>`) must implement it, typically by forwarding the runtime to the builder they wrap.
 * `Transaction::commit` now returns `ErrorKind::PreconditionFailed` for read-only tables (`Table::readonly()`, e.g. from `StaticTable::into_table` or `TableBuilder::readonly(true)`), including empty transactions, which previously returned the table unchanged. Java treats an empty transaction on a static table as a no-op.
 * `ArrowReader` reads nested struct fields as null for Parquet files that have neither field ids nor a name mapping, as iceberg-java does. Earlier versions returned their stored values by position. Tables migrated without field ids need a name mapping (`schema.name-mapping.default`) that covers nested fields to read them.
+* `Catalog` and `SessionCatalog` have a new required method, `unregister_table`, which removes a table from the catalog without deleting its data or metadata files and returns the last committed table as read-only. Custom implementations must implement it; catalogs that cannot support it should return `ErrorKind::FeatureUnsupported`.
 
 ## [v0.10.1] - 2026-07-28
 

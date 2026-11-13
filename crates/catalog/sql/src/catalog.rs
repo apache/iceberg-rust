@@ -55,7 +55,8 @@ const SQL_CATALOG_PROP_BIND_STYLE_LEGACY: &str = "sql_bind_style";
 ///
 /// `V0` is a compatibility mode for catalog tables created before the `iceberg_type` column
 /// existed; it cannot be requested for a new catalog table, since table creation and
-/// registration are unsupported on `V0`.
+/// registration are unsupported on `V0`. Unregistration is unsupported too on `V0`, since
+/// the table cannot be registered again.
 pub const SQL_CATALOG_PROP_SCHEMA_VERSION: &str = "sql.schema-version";
 
 static CATALOG_TABLE_NAME: &str = "iceberg_tables";
@@ -568,6 +569,46 @@ impl SqlCatalog {
                 Ok(result)
             }
         }
+    }
+
+    /// Remove the entry only if it still points to the metadata we read.
+    async fn remove_table_at_location(
+        &self,
+        table_ident: &TableIdent,
+        metadata_location: &str,
+    ) -> Result<()> {
+        let result = self
+            .execute(
+                &format!(
+                    "DELETE FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      {}
+                      AND {CATALOG_FIELD_METADATA_LOCATION_PROP} = ?",
+                    self.schema_version.record_type_filter()
+                ),
+                vec![
+                    Some(&self.name),
+                    Some(table_ident.name()),
+                    Some(&table_ident.namespace().join(".")),
+                    Some(metadata_location),
+                ],
+                None,
+            )
+            .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                format!(
+                    "Cannot unregister table {table_ident}: metadata location changed or table was dropped"
+                ),
+            )
+            .with_retryable(true));
+        }
+
+        Ok(())
     }
 }
 
@@ -1168,6 +1209,60 @@ impl Catalog for SqlCatalog {
         Ok(builder.build()?)
     }
 
+    async fn unregister_table(&self, table_ident: &TableIdent) -> Result<Table> {
+        if self.schema_version != SchemaVersion::V1 {
+            return Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "Table unregistration is not supported for SQL catalog schema version {}",
+                    self.schema_version
+                ),
+            ));
+        }
+
+        let rows = self
+            .fetch_rows(
+                &format!(
+                    "SELECT {CATALOG_FIELD_METADATA_LOCATION_PROP}
+                     FROM {CATALOG_TABLE_NAME}
+                     WHERE {CATALOG_FIELD_CATALOG_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAME} = ?
+                      AND {CATALOG_FIELD_TABLE_NAMESPACE} = ?
+                      {}",
+                    self.schema_version.record_type_filter()
+                ),
+                vec![
+                    Some(&self.name),
+                    Some(table_ident.name()),
+                    Some(&table_ident.namespace().join(".")),
+                ],
+            )
+            .await?;
+        let Some(row) = rows.first() else {
+            return no_such_table_err(table_ident);
+        };
+        let metadata_location = row
+            .try_get::<String, _>(CATALOG_FIELD_METADATA_LOCATION_PROP)
+            .map_err(from_sqlx_error)?;
+
+        // read before (re-)moving, this way a failed read keeps the table registered
+        let metadata = TableMetadata::read_from(&self.fileio, &metadata_location).await?;
+        self.remove_table_at_location(table_ident, &metadata_location)
+            .await?;
+
+        let mut builder = Table::builder()
+            .identifier(table_ident.clone())
+            .metadata(metadata)
+            .metadata_location(metadata_location)
+            .file_io(self.fileio.clone())
+            .runtime(self.runtime.clone())
+            .readonly(true);
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        builder.build()
+    }
+
     /// Updates an existing table within the SQL catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         let table_ident = commit.identifier().clone();
@@ -1471,6 +1566,78 @@ mod tests {
         // catalog instantiation should not fail even if tables exist
         new_sql_catalog(warehouse_loc.clone(), Some("iceberg")).await;
         new_sql_catalog(warehouse_loc.clone(), Some("iceberg")).await;
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table() {
+        let catalog = new_sql_catalog(temp_path(), Some("iceberg")).await;
+        let namespace = NamespaceIdent::new("unregister_namespace".into());
+        create_namespace(&catalog, &namespace).await;
+        let table_ident = TableIdent::new(namespace, "unregister_table".into());
+        create_table(&catalog, &table_ident).await;
+
+        let before = catalog.load_table(&table_ident).await.unwrap();
+        let unregistered = catalog.unregister_table(&table_ident).await.unwrap();
+        assert_eq!(unregistered.identifier(), &table_ident);
+        assert_eq!(unregistered.metadata_location(), before.metadata_location());
+        assert_eq!(unregistered.metadata(), before.metadata());
+        assert!(unregistered.readonly());
+        assert!(!catalog.table_exists(&table_ident).await.unwrap());
+
+        let err = catalog.unregister_table(&table_ident).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::TableNotFound);
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table_rejects_changed_metadata_location() {
+        let db_path = temp_path();
+        let uri = format!("sqlite:{db_path}");
+        sqlx::Sqlite::create_database(&uri).await.unwrap();
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "iceberg",
+                HashMap::from([
+                    (SQL_CATALOG_PROP_URI.to_string(), uri),
+                    (SQL_CATALOG_PROP_WAREHOUSE.to_string(), temp_path()),
+                ]),
+            )
+            .await
+            .unwrap();
+        let namespace = NamespaceIdent::new("unregister_conflict".into());
+        create_namespace(&catalog, &namespace).await;
+        let table_ident = TableIdent::new(namespace, "table".into());
+        create_table(&catalog, &table_ident).await;
+
+        let stale_location = catalog
+            .load_table(&table_ident)
+            .await
+            .unwrap()
+            .metadata_location()
+            .unwrap()
+            .to_string();
+        catalog
+            .execute(
+                "UPDATE iceberg_tables SET metadata_location = ?
+                 WHERE catalog_name = ? AND table_namespace = ? AND table_name = ?",
+                vec![
+                    Some("new-location"),
+                    Some("iceberg"),
+                    Some("unregister_conflict"),
+                    Some("table"),
+                ],
+                None,
+            )
+            .await
+            .unwrap();
+
+        let err = catalog
+            .remove_table_at_location(&table_ident, &stale_location)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
+        assert!(err.retryable());
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
     }
 
     async fn new_commit_error_catalog() -> SqlCatalog {
@@ -2898,6 +3065,35 @@ mod tests {
             1,
             "only the pre-existing row should be present, got: {tables:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table_unsupported_on_v0_schema() {
+        install_default_drivers();
+
+        let (uri, temp_dir) = create_v0_sqlite_db().await;
+
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load("iceberg", catalog_props(&uri, &temp_dir, None))
+            .await
+            .expect("should open V0 catalog without migrating");
+        assert_eq!(catalog.schema_version, SchemaVersion::V0);
+
+        let namespace = NamespaceIdent::from_strs(["test_namespace"]).unwrap();
+        let table_ident = TableIdent::new(namespace, "existing_test_table".to_string());
+        let err = catalog
+            .unregister_table(&table_ident)
+            .await
+            .expect_err("table unregistration should be rejected on a V0 catalog table");
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(
+            err.to_string()
+                .contains("Table unregistration is not supported"),
+            "error should explain that table unregistration is unsupported, got: {err}"
+        );
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
     }
 
     #[tokio::test]
