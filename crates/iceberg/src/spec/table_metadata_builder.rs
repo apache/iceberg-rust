@@ -1107,6 +1107,8 @@ impl TableMetadataBuilder {
             .last_updated_ms
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
 
+        self.check_format_compatibility()?;
+
         // Check compatibility of the current schema to the default partition spec and sort order.
         // We use the `get_xxx` methods from the builder to avoid using the panicking
         // `TableMetadata.default_partition_spec` etc. methods.
@@ -1300,6 +1302,33 @@ impl TableMetadataBuilder {
         let fresh_sort_order = fresh_order.build(&fresh_schema)?;
 
         Ok((fresh_schema, fresh_spec, fresh_sort_order))
+    }
+
+    fn check_format_compatibility(&self) -> Result<()> {
+        let format_version = self.metadata.format_version;
+        if format_version < FormatVersion::V3 {
+            let encryption_properties = [
+                TableProperties::PROPERTY_ENCRYPTION_KEY_ID,
+                TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH,
+            ]
+            .into_iter()
+            .filter(|key| self.metadata.properties.contains_key(*key))
+            .collect::<Vec<_>>();
+            if !encryption_properties.is_empty() {
+                return Err(invalid_data!(
+                    "Invalid properties for {format_version}: [{}]",
+                    encryption_properties.join(", ")
+                ));
+            }
+
+            if !self.metadata.encryption_keys.is_empty() {
+                return Err(invalid_data!(
+                    "Encryption keys are not supported for {format_version} tables"
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     fn reuse_or_create_new_schema_id(&self, new_schema: &Schema) -> i32 {
@@ -2082,6 +2111,106 @@ mod tests {
         .unwrap();
 
         assert_eq!(build_result.metadata.metadata_log.len(), 0);
+    }
+
+    const KEY_ID: (&str, &str) = (TableProperties::PROPERTY_ENCRYPTION_KEY_ID, "master-1");
+    const KEY_LENGTH: (&str, &str) = (TableProperties::PROPERTY_ENCRYPTION_DATA_KEY_LENGTH, "16");
+
+    fn string_map(entries: &[(&str, &str)]) -> HashMap<String, String> {
+        entries
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    fn build_error(builder: TableMetadataBuilder) -> (ErrorKind, String) {
+        let err = builder.build().unwrap_err();
+        (err.kind(), err.message().to_string())
+    }
+
+    #[test]
+    fn test_build_rejects_encryption_properties_before_v3() {
+        for version in [FormatVersion::V1, FormatVersion::V2] {
+            for (properties, names) in [
+                (vec![KEY_ID], "encryption.key-id"),
+                (vec![KEY_LENGTH], "encryption.data-key-length"),
+                (
+                    vec![KEY_ID, KEY_LENGTH],
+                    "encryption.key-id, encryption.data-key-length",
+                ),
+            ] {
+                let builder = builder_without_changes(version)
+                    .set_properties(string_map(&properties))
+                    .unwrap();
+                assert_eq!(
+                    build_error(builder),
+                    (
+                        ErrorKind::DataInvalid,
+                        format!("Invalid properties for {version}: [{names}]")
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_rejects_encryption_keys_before_v3() {
+        let key = EncryptedKey::builder()
+            .key_id("key-1")
+            .encrypted_key_metadata(vec![1, 2, 3, 4])
+            .build();
+
+        for version in [FormatVersion::V1, FormatVersion::V2] {
+            let builder = builder_without_changes(version).add_encryption_key(key.clone());
+            assert_eq!(
+                build_error(builder),
+                (
+                    ErrorKind::DataInvalid,
+                    format!("Encryption keys are not supported for {version} tables")
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_accepts_encryption_properties_on_v3() {
+        let properties = string_map(&[KEY_ID, KEY_LENGTH]);
+
+        let metadata = builder_without_changes(FormatVersion::V3)
+            .set_properties(properties.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata.properties, properties);
+    }
+
+    #[test]
+    fn test_pre_v3_encryption_property_blocks_updates_until_removed() {
+        let legacy = || {
+            let mut builder = builder_without_changes(FormatVersion::V2);
+            builder.metadata.properties = string_map(&[KEY_ID]);
+            builder
+        };
+
+        let other_update = legacy()
+            .set_properties(string_map(&[("key", "value")]))
+            .unwrap();
+        assert_eq!(
+            build_error(other_update),
+            (
+                ErrorKind::DataInvalid,
+                "Invalid properties for v2: [encryption.key-id]".to_string()
+            )
+        );
+
+        let repaired = legacy()
+            .remove_properties(&[KEY_ID.0.to_string()])
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(repaired.metadata.properties, HashMap::new());
     }
 
     #[test]
@@ -3982,7 +4111,7 @@ mod tests {
 
     #[test]
     fn test_encryption_keys() {
-        let builder = builder_without_changes(FormatVersion::V2);
+        let builder = builder_without_changes(FormatVersion::V3);
 
         // Create test encryption keys
         let encryption_key_1 = EncryptedKey::builder()

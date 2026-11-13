@@ -17,7 +17,7 @@
 
 use std::cmp::min;
 
-use apache_avro::{Writer as AvroWriter, to_value};
+use apache_avro::to_value;
 use bytes::Bytes;
 use itertools::Itertools;
 use serde_json::to_vec;
@@ -26,6 +26,7 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
+use crate::avro::new_writer;
 use crate::encryption::EncryptedOutputFile;
 use crate::error::{Result, invalid_data};
 use crate::io::{FileMetadata, FileWrite, OutputFile};
@@ -432,7 +433,7 @@ impl ManifestWriter {
             // Manifest schema did not change between V2 and V3
             FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
         };
-        let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new())?;
+        let mut avro_writer = new_writer(&avro_schema, Vec::new())?;
         avro_writer.add_user_metadata(
             "schema".to_string(),
             to_vec(table_schema)
@@ -580,7 +581,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::avro::define_named_types_repeatedly;
+    use crate::avro::{assert_deflate_codec, define_named_types_repeatedly};
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Manifest, NestedField,
@@ -724,9 +725,9 @@ mod tests {
         writer.write_manifest_file().await.unwrap();
 
         // read back the manifest file and check the content
-        let actual_manifest =
-            Manifest::parse_avro(fs::read(path).expect("read_file must succeed").as_slice())
-                .unwrap();
+        let bytes = fs::read(path).expect("read_file must succeed");
+        assert_deflate_codec(&bytes);
+        let actual_manifest = Manifest::parse_avro(&bytes).unwrap();
 
         // The snapshot id is assigned when the entry is added and delete to the manifest. Existing entries are keep original.
         entries[0].snapshot_id = Some(3);
@@ -814,6 +815,7 @@ mod tests {
 
         // Read back the manifest file
         let bytes = fs::read(&path).expect("read_file must succeed");
+        assert_deflate_codec(&bytes);
         assert_eq!(manifest_file.manifest_length, bytes.len() as i64);
         let actual_manifest = Manifest::parse_avro(&bytes).unwrap();
 
