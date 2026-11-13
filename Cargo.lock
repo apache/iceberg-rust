@@ -2950,6 +2950,7 @@ dependencies = [
  "ordered-float 4.6.0",
  "parquet",
  "parquet-geospatial",
+ "parquet-variant-compute",
  "pretty_assertions",
  "rand 0.9.5",
  "regex",
@@ -4549,6 +4550,52 @@ dependencies = [
  "serde",
  "serde_json",
  "wkb",
+]
+
+[[package]]
+name = "parquet-variant"
+version = "60.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cd190b833203e27e585c1f07e6ab1abbf353336688202ce036ecd8b7bc18259"
+dependencies = [
+ "arrow-schema",
+ "chrono",
+ "half",
+ "indexmap 2.14.0",
+ "simdutf8",
+ "uuid",
+]
+
+[[package]]
+name = "parquet-variant-compute"
+version = "60.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca43d38e0b3f91d177150fc72c86af888dcbd3c3d93888c2a2fbc95721200d89"
+dependencies = [
+ "arrow",
+ "arrow-schema",
+ "chrono",
+ "half",
+ "indexmap 2.14.0",
+ "num-traits",
+ "parquet-variant",
+ "parquet-variant-json",
+ "uuid",
+]
+
+[[package]]
+name = "parquet-variant-json"
+version = "60.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dadd517b64ce5b9a7160130f6ded8eed81a20ef8cec8e3e2458165f5195701ec"
+dependencies = [
+ "arrow-schema",
+ "base64 0.23.0",
+ "chrono",
+ "parquet-variant",
+ "ryu",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
