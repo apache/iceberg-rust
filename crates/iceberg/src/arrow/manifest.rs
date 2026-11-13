@@ -57,10 +57,10 @@ const BATCH_SIZE: usize = 1024;
 /// Reads the entries of a manifest file as batches with one row per entry.
 ///
 /// `bytes` is the manifest file and `manifest_file` is its entry in the
-/// manifest list. The schema is the spec's v3 `manifest_entry` struct, with
-/// field IDs in the Arrow field metadata, so v1 to v3 manifests read into the
-/// same schema apart from `data_file.partition`, which follows the manifest's
-/// partition spec.
+/// manifest list. The schema is the spec's `manifest_entry` struct for the
+/// latest format version, with field IDs in the Arrow field metadata, so
+/// manifests of every format version read into the same schema apart from
+/// `data_file.partition`, which follows the manifest's partition spec.
 ///
 /// Fields are matched to the manifest's Avro schema by field ID. A v1
 /// manifest reads with the spec's v2+ defaults, and null snapshot IDs,
@@ -120,12 +120,8 @@ pub fn read_manifest_entries<B: AsRef<[u8]>>(
 /// Batches of the entries of a manifest file, returned by
 /// [`read_manifest_entries`].
 pub struct ManifestEntryBatchReader<B: AsRef<[u8]>> {
-    reader: Reader<Cursor<B>>,
-    schema: SchemaRef,
-    avro_schema: JsonValue,
-    zero_defaults: &'static [i32],
+    inner: ProjectingReader<B>,
     inheritance: Inheritance,
-    finished: bool,
 }
 
 /// The values that a manifest's entries inherit from the manifest list.
@@ -193,10 +189,14 @@ impl<B: AsRef<[u8]>> ManifestEntryBatchReader<B> {
             _ => &[DATA_FILE_CONTENT_FIELD_ID],
         };
         Ok(Self {
-            reader,
-            schema,
-            avro_schema,
-            zero_defaults,
+            inner: ProjectingReader {
+                reader,
+                schema,
+                avro_schema,
+                zero_defaults,
+                invalid: invalid_manifest,
+                finished: false,
+            },
             inheritance: Inheritance {
                 manifest_path: manifest_file.manifest_path.clone(),
                 added_snapshot_id: manifest_file.added_snapshot_id,
@@ -204,23 +204,12 @@ impl<B: AsRef<[u8]>> ManifestEntryBatchReader<B> {
                 content: manifest_file.content,
                 next_row_id: manifest_file.first_row_id.map(i64::try_from).transpose()?,
             },
-            finished: false,
         })
     }
 
     /// Returns the schema of every batch.
     pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    fn project(&mut self, batch: RecordBatch) -> Result<RecordBatch> {
-        let entries = project_struct(
-            &StructArray::from(batch),
-            &self.avro_schema,
-            self.schema.fields(),
-            self.zero_defaults,
-        )?;
-        Ok(RecordBatch::from(inherit(entries, &mut self.inheritance)?))
+        self.inner.schema.clone()
     }
 }
 
@@ -228,30 +217,22 @@ impl<B: AsRef<[u8]>> Iterator for ManifestEntryBatchReader<B> {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // First row ID inheritance can stop partway through a batch, so the
-        // batches after an error would get the wrong row IDs.
-        if self.finished {
-            return None;
-        }
-        let batch = self
-            .reader
-            .next()?
-            .map_err(invalid_manifest)
-            .and_then(|batch| self.project(batch));
-        self.finished = batch.is_err();
-        Some(batch)
+        let inheritance = &mut self.inheritance;
+        self.inner
+            .next_batch(|entries| inherit(entries, inheritance))
     }
 }
 
 /// Reads the entries of a manifest list as batches with one row per manifest.
 ///
-/// The schema is the spec's v3 `manifest_file` struct, with field IDs in the
-/// Arrow field metadata, so v1 to v3 manifest lists read into the same schema.
-/// Fields are matched to the manifest list's Avro schema by field ID. The
-/// format version comes from the `format-version` key that writers put in the
-/// file's metadata, and a manifest list without one is v1. A v1 manifest list
-/// reads with the spec's v2+ defaults. Partition summary bounds keep the binary
-/// single-value serialization they were written with.
+/// The schema is the spec's `manifest_file` struct for the latest format
+/// version, with field IDs in the Arrow field metadata, so manifest lists of
+/// every format version read into the same schema. Fields are matched to the
+/// manifest list's Avro schema by field ID. The format version comes from the
+/// `format-version` key that writers put in the file's metadata, and a
+/// manifest list without one is v1. A v1 manifest list reads with the spec's
+/// v2+ defaults. Partition summary bounds keep the binary single-value
+/// serialization they were written with.
 ///
 /// # Errors
 ///
@@ -282,11 +263,7 @@ pub fn read_manifest_list<B: AsRef<[u8]>>(bytes: B) -> Result<ManifestListBatchR
 /// Batches of the entries of a manifest list, returned by
 /// [`read_manifest_list`].
 pub struct ManifestListBatchReader<B: AsRef<[u8]>> {
-    reader: Reader<Cursor<B>>,
-    schema: SchemaRef,
-    avro_schema: JsonValue,
-    zero_defaults: &'static [i32],
-    finished: bool,
+    inner: ProjectingReader<B>,
 }
 
 impl<B: AsRef<[u8]>> ManifestListBatchReader<B> {
@@ -327,26 +304,20 @@ impl<B: AsRef<[u8]>> ManifestListBatchReader<B> {
             _ => &[],
         };
         Ok(Self {
-            reader,
-            schema,
-            avro_schema,
-            zero_defaults,
-            finished: false,
+            inner: ProjectingReader {
+                reader,
+                schema,
+                avro_schema,
+                zero_defaults,
+                invalid: invalid_manifest_list,
+                finished: false,
+            },
         })
     }
 
     /// Returns the schema of every batch.
     pub fn schema(&self) -> SchemaRef {
-        self.schema.clone()
-    }
-
-    fn project(&self, batch: RecordBatch) -> Result<RecordBatch> {
-        Ok(RecordBatch::from(project_struct(
-            &StructArray::from(batch),
-            &self.avro_schema,
-            self.schema.fields(),
-            self.zero_defaults,
-        )?))
+        self.inner.schema.clone()
     }
 }
 
@@ -354,14 +325,40 @@ impl<B: AsRef<[u8]>> Iterator for ManifestListBatchReader<B> {
     type Item = Result<RecordBatch>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next_batch(Ok)
+    }
+}
+
+/// Decodes an Avro file in batches and projects them onto `schema`.
+struct ProjectingReader<B: AsRef<[u8]>> {
+    reader: Reader<Cursor<B>>,
+    schema: SchemaRef,
+    avro_schema: JsonValue,
+    zero_defaults: &'static [i32],
+    invalid: fn(ArrowError) -> Error,
+    /// Set after an error. First row ID inheritance can stop partway through
+    /// a batch, so the batches after an error would get the wrong row IDs.
+    finished: bool,
+}
+
+impl<B: AsRef<[u8]>> ProjectingReader<B> {
+    /// Returns the next batch with `finish` applied to its projected rows.
+    fn next_batch(
+        &mut self,
+        finish: impl FnOnce(StructArray) -> Result<StructArray>,
+    ) -> Option<Result<RecordBatch>> {
         if self.finished {
             return None;
         }
-        let batch = self
-            .reader
-            .next()?
-            .map_err(invalid_manifest_list)
-            .and_then(|batch| self.project(batch));
+        let batch = self.reader.next()?.map_err(self.invalid).and_then(|batch| {
+            let rows = project_struct(
+                &StructArray::from(batch),
+                &self.avro_schema,
+                self.schema.fields(),
+                self.zero_defaults,
+            )?;
+            Ok(RecordBatch::from(finish(rows)?))
+        });
         self.finished = batch.is_err();
         Some(batch)
     }

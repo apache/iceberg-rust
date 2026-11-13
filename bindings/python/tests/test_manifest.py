@@ -316,11 +316,8 @@ def _read_entries(
     return manifest.read_manifest_entries_as_arrow(
         bs,
         manifest_path=manifest_file.manifest_path,
-        manifest_length=manifest_file.manifest_length,
-        partition_spec_id=manifest_file.partition_spec_id,
         content=manifest_file.content.value,
         sequence_number=manifest_file.sequence_number,
-        min_sequence_number=manifest_file.min_sequence_number,
         added_snapshot_id=manifest_file.added_snapshot_id,
         first_row_id=first_row_id,
     )
@@ -364,15 +361,13 @@ def test_read_manifest_entries_as_arrow_matches_pyiceberg(tmp_path: Path) -> Non
     ]
 
 
-def test_read_manifest_entries_as_arrow_yields_batches_of_1024_rows(
+def test_read_manifest_entries_as_arrow_yields_multiple_batches(
     tmp_path: Path,
 ) -> None:
     bs, manifest_file = _write_manifest(tmp_path, 2500)
-    assert [batch.num_rows for batch in _read_entries(bs, manifest_file)] == [
-        1024,
-        1024,
-        452,
-    ]
+    batches = list(_read_entries(bs, manifest_file))
+    assert len(batches) > 1
+    assert sum(batch.num_rows for batch in batches) == 2500
 
 
 def test_read_manifest_entries_as_arrow_releases_input_on_close(

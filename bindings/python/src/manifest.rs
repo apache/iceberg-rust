@@ -235,46 +235,39 @@ pub fn read_manifest_list(bs: &[u8]) -> PyResult<PyManifestList> {
 
 /// Reads the entries of a manifest as a `pyarrow.RecordBatchReader`.
 ///
-/// The other arguments are the manifest's entry in the manifest list, which
-/// the entries inherit snapshot IDs, sequence numbers, and first row IDs from.
-/// Raises `ValueError` for an invalid manifest header. An error while reading
-/// raises `pyarrow.ArrowInvalid`, which subclasses `ValueError`. The reader
-/// holds a reference to `bs` until it's closed or collected, and the next call
-/// into `pyiceberg_core` releases it.
+/// The other arguments come from the manifest's entry in the manifest list,
+/// which the entries inherit snapshot IDs, sequence numbers, and first row IDs
+/// from. Raises `ValueError` for an invalid manifest header. An error while
+/// reading raises `pyarrow.ArrowInvalid`, which subclasses `ValueError`. The
+/// reader holds a reference to `bs` until it's closed or collected, and the
+/// next call into `pyiceberg_core` releases it.
 #[pyfunction]
 #[pyo3(signature = (
     bs,
     *,
     manifest_path,
-    manifest_length,
-    partition_spec_id,
     content,
     sequence_number,
-    min_sequence_number,
     added_snapshot_id,
     first_row_id = None,
 ))]
-#[allow(clippy::too_many_arguments)]
 pub fn read_manifest_entries_as_arrow(
     py: Python<'_>,
     bs: PyBackedBytes,
     manifest_path: String,
-    manifest_length: i64,
-    partition_spec_id: i32,
     content: i32,
     sequence_number: i64,
-    min_sequence_number: i64,
     added_snapshot_id: i64,
     first_row_id: Option<u64>,
 ) -> PyResult<Bound<'_, PyAny>> {
-    // Inheritance reads none of the optional fields left as None.
+    // Inheritance reads only the fields set from the arguments.
     let manifest_file = ManifestFile {
         manifest_path,
-        manifest_length,
-        partition_spec_id,
+        manifest_length: 0,
+        partition_spec_id: 0,
         content: ManifestContentType::try_from(content).map_err(to_py_err)?,
         sequence_number,
-        min_sequence_number,
+        min_sequence_number: 0,
         added_snapshot_id,
         added_files_count: None,
         existing_files_count: None,
