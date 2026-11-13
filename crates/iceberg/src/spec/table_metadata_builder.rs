@@ -614,6 +614,7 @@ impl TableMetadataBuilder {
     /// Important: Use this method with caution. The builder does not check
     /// if the added schema is compatible with the current schema.
     pub fn add_schema(mut self, schema: Schema) -> Result<Self> {
+        TableMetadata::validate_schema_field_ids(&schema)?;
         let new_schema_id = self.reuse_or_create_new_schema_id(&schema);
         let schema_found = self.metadata.schemas.contains_key(&new_schema_id);
 
@@ -4457,5 +4458,65 @@ mod tests {
             .collect();
         assert_eq!(fields, vec![(1, 1006), (2, 1007)]);
         assert_eq!(result.metadata.last_partition_id, 1007);
+    }
+
+    #[test]
+    fn test_add_schema_accepts_max_table_field_id() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(2147483447, "a", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let metadata = builder_without_changes(FormatVersion::V2)
+            .add_schema(schema)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        assert_eq!(metadata.last_column_id, 2147483447);
+    }
+
+    #[test]
+    fn test_add_schema_rejects_field_ids_in_reserved_range() {
+        let top_level = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(2147483448, "a", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+        let nested = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(
+                    4,
+                    "s",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(
+                            2147483448,
+                            "a",
+                            Type::Primitive(PrimitiveType::Long),
+                        )
+                        .into(),
+                    ])),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        for format_version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
+            for schema in [top_level.clone(), nested.clone()] {
+                let err = builder_without_changes(format_version)
+                    .add_schema(schema)
+                    .unwrap_err();
+                assert_eq!(err.kind(), ErrorKind::DataInvalid);
+                assert_eq!(
+                    err.message(),
+                    "Schema 0 uses field id 2147483448, but table field ids must not exceed 2147483447; higher ids are reserved for metadata columns"
+                );
+            }
+        }
     }
 }
