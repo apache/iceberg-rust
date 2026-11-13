@@ -18,10 +18,13 @@
 //! Operation-scoped planning reports and asynchronous consumers.
 //!
 //! Reports describe work performed, including partial or failed scans, without an outcome tag.
-//! The default consumer logs at debug level.
+//! Configure delivery with [`crate::table::Table::with_metrics_reporter`] or override it with
+//! [`crate::scan::TableScanBuilder::with_metrics_reporter`]. The default consumer logs at debug level.
 
 use std::fmt::Debug;
 use std::time::Duration;
+
+pub(crate) mod filter;
 
 use crate::TableIdent;
 use crate::expr::Predicate;
@@ -45,7 +48,7 @@ use crate::expr::Predicate;
 /// yield during I/O, bound their own waits, and avoid blocking or aborting the process.
 /// Reporter time is excluded from the report's planning duration.
 #[async_trait::async_trait]
-pub(crate) trait MetricsReporter: Debug + Send + Sync {
+pub trait MetricsReporter: Debug + Send + Sync {
     /// Consumes one finalized report.
     async fn report(&self, report: MetricsReport);
 }
@@ -53,7 +56,7 @@ pub(crate) trait MetricsReporter: Debug + Send + Sync {
 /// A finalized operation report, extensible to additional operation types.
 #[derive(Debug)]
 #[non_exhaustive]
-pub(crate) enum MetricsReport {
+pub enum MetricsReport {
     /// Metrics from one scan-planning invocation, including COW planning.
     Scan(Box<ScanReport>),
 }
@@ -64,7 +67,7 @@ pub(crate) enum MetricsReport {
 /// Iceberg constructs reports; consumers receive them through [`MetricsReporter`].
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
-pub(crate) struct ScanReport {
+pub struct ScanReport {
     pub(crate) table_ident: TableIdent,
     pub(crate) snapshot_id: i64,
     pub(crate) schema_id: i32,
@@ -77,42 +80,45 @@ pub(crate) struct ScanReport {
 
 impl ScanReport {
     /// Returns the scanned table's identifier.
-    pub(crate) fn table_ident(&self) -> &TableIdent {
+    pub fn table_ident(&self) -> &TableIdent {
         &self.table_ident
     }
 
     /// Returns the selected snapshot ID.
-    pub(crate) fn snapshot_id(&self) -> i64 {
+    pub fn snapshot_id(&self) -> i64 {
         self.snapshot_id
     }
 
     /// Returns the source schema ID for a full projection, or 0 for a reduced schema.
-    pub(crate) fn schema_id(&self) -> i32 {
+    pub fn schema_id(&self) -> i32 {
         self.schema_id
     }
 
     /// Returns resolved projected IDs, including nested and filter-required fields.
-    pub(crate) fn projected_field_ids(&self) -> &[i32] {
+    pub fn projected_field_ids(&self) -> &[i32] {
         &self.projected_field_ids
     }
 
     /// Returns names corresponding to [`Self::projected_field_ids`].
-    pub(crate) fn projected_field_names(&self) -> &[String] {
+    pub fn projected_field_names(&self) -> &[String] {
         &self.projected_field_names
     }
 
-    /// Returns the unsanitized selection predicate, including its literal values.
-    pub(crate) fn filter(&self) -> &Predicate {
+    /// Returns the selection predicate with literal values replaced by diagnostic descriptions.
+    ///
+    /// The predicate is for reporting, not evaluation. Hashes and numeric/time descriptions
+    /// retain diagnostic information; sanitization does not provide cryptographic anonymity.
+    pub fn filter(&self) -> &Predicate {
         &self.filter
     }
 
     /// Returns the scan's planning counters.
-    pub(crate) fn metrics(&self) -> &ScanMetrics {
+    pub fn metrics(&self) -> &ScanMetrics {
         &self.metrics
     }
 
     /// Returns elapsed planning, consumption, and worker-teardown time, excluding delivery.
-    pub(crate) fn total_planning_duration(&self) -> Duration {
+    pub fn total_planning_duration(&self) -> Duration {
         self.total_planning_duration
     }
 }
@@ -120,7 +126,7 @@ impl ScanReport {
 /// Immutable scan-planning counters, distinct from Arrow row-reading metrics.
 #[derive(Debug)]
 #[cfg_attr(test, derive(PartialEq))]
-pub(crate) struct ScanMetrics {
+pub struct ScanMetrics {
     pub(crate) total_data_manifests: u64,
     pub(crate) total_delete_manifests: u64,
     pub(crate) scanned_data_manifests: u64,
@@ -141,82 +147,82 @@ pub(crate) struct ScanMetrics {
 
 impl ScanMetrics {
     /// Data manifests listed for the snapshot.
-    pub(crate) fn total_data_manifests(&self) -> u64 {
+    pub fn total_data_manifests(&self) -> u64 {
         self.total_data_manifests
     }
 
     /// Delete manifests listed for the snapshot.
-    pub(crate) fn total_delete_manifests(&self) -> u64 {
+    pub fn total_delete_manifests(&self) -> u64 {
         self.total_delete_manifests
     }
 
     /// Data manifests whose processing started.
-    pub(crate) fn scanned_data_manifests(&self) -> u64 {
+    pub fn scanned_data_manifests(&self) -> u64 {
         self.scanned_data_manifests
     }
 
     /// Delete manifests whose processing started.
-    pub(crate) fn scanned_delete_manifests(&self) -> u64 {
+    pub fn scanned_delete_manifests(&self) -> u64 {
         self.scanned_delete_manifests
     }
 
     /// Data manifests rejected by partition predicates or live-entry counts.
-    pub(crate) fn skipped_data_manifests(&self) -> u64 {
+    pub fn skipped_data_manifests(&self) -> u64 {
         self.skipped_data_manifests
     }
 
     /// Delete manifests rejected by partition predicates or live-entry counts.
-    pub(crate) fn skipped_delete_manifests(&self) -> u64 {
+    pub fn skipped_delete_manifests(&self) -> u64 {
         self.skipped_delete_manifests
     }
 
     /// Data-file tasks planned, including buffered tasks not consumed.
-    pub(crate) fn result_data_files(&self) -> u64 {
+    pub fn result_data_files(&self) -> u64 {
         self.result_data_files
     }
 
     /// Delete attachments across planned data-file tasks, including repeated files.
-    pub(crate) fn result_delete_files(&self) -> u64 {
+    pub fn result_delete_files(&self) -> u64 {
         self.result_delete_files
     }
 
     /// Live data-file entries rejected by predicates, excluding dead entries.
-    pub(crate) fn skipped_data_files(&self) -> u64 {
+    pub fn skipped_data_files(&self) -> u64 {
         self.skipped_data_files
     }
 
     /// Live delete-file entries rejected by predicates, excluding dead entries.
-    pub(crate) fn skipped_delete_files(&self) -> u64 {
+    pub fn skipped_delete_files(&self) -> u64 {
         self.skipped_delete_files
     }
 
     /// Delete files accepted for indexing, including unmatched deletes and DVs.
-    pub(crate) fn indexed_delete_files(&self) -> u64 {
+    pub fn indexed_delete_files(&self) -> u64 {
         self.indexed_delete_files
     }
 
     /// Equality delete files accepted for indexing.
-    pub(crate) fn equality_delete_files(&self) -> u64 {
+    pub fn equality_delete_files(&self) -> u64 {
         self.equality_delete_files
     }
 
     /// Position delete files accepted for indexing, excluding deletion vectors.
-    pub(crate) fn positional_delete_files(&self) -> u64 {
+    pub fn positional_delete_files(&self) -> u64 {
         self.positional_delete_files
     }
 
     /// Deletion vectors accepted for indexing.
-    pub(crate) fn dvs(&self) -> u64 {
+    pub fn dvs(&self) -> u64 {
         self.dvs
     }
 
     /// Sum of physical sizes of planned data files, in bytes.
-    pub(crate) fn total_file_size_in_bytes(&self) -> u64 {
+    pub fn total_file_size_in_bytes(&self) -> u64 {
         self.total_file_size_in_bytes
     }
 
     /// Bytes attached to tasks: physical delete-file sizes or DV content sizes, repeated per attachment.
-    pub(crate) fn total_delete_file_size_in_bytes(&self) -> u64 {
+    pub fn total_delete_file_size_in_bytes(&self) -> u64 {
         self.total_delete_file_size_in_bytes
     }
 

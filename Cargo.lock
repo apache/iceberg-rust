@@ -3109,6 +3109,7 @@ dependencies = [
 name = "iceberg-examples"
 version = "0.10.1"
 dependencies = [
+ "async-trait",
  "futures",
  "iceberg",
  "iceberg-catalog-rest",

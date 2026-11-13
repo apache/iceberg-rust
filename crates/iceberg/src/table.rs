@@ -231,6 +231,16 @@ impl Table {
         self
     }
 
+    /// Sets the reporter for this table instance and its clones.
+    ///
+    /// The default reporter logs at debug level. Scan-level overrides take precedence.
+    /// Configuration is not persisted to the catalog or inherited by independently loaded tables.
+    /// A custom no-op reporter can discard reports; planning counters are still collected.
+    pub fn with_metrics_reporter(mut self, reporter: Arc<dyn MetricsReporter>) -> Self {
+        self.metrics_reporter = reporter;
+        self
+    }
+
     pub(crate) fn metrics_reporter(&self) -> Arc<dyn MetricsReporter> {
         self.metrics_reporter.clone()
     }

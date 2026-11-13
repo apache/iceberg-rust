@@ -179,6 +179,15 @@ impl<'a> TableScanBuilder<'a> {
         }
     }
 
+    /// Overrides the table's reporter for this scan.
+    ///
+    /// With no override, the scan inherits the table's reporter. This does not modify the table
+    /// or other scans. A custom no-op reporter can discard reports for this scan.
+    pub fn with_metrics_reporter(mut self, reporter: Arc<dyn MetricsReporter>) -> Self {
+        self.metrics_reporter = reporter;
+        self
+    }
+
     /// Sets the desired size of batches in the response
     /// to something other than the default
     pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
@@ -3894,6 +3903,93 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_reporter_precedence_and_noop() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        for cow in [false, true] {
+            for mode in [
+                "inherit",
+                "replace",
+                "noop-scan",
+                "noop-table",
+                "replace-noop",
+            ] {
+                let table_reporter = Arc::new(RecordingMetricsReporter::default());
+                let scan_reporter = Arc::new(RecordingMetricsReporter::default());
+                let noop = Arc::new(NoopMetricsReporter::default());
+                let table = fixture
+                    .table
+                    .clone()
+                    .with_metrics_reporter(table_reporter.clone());
+                let table = if matches!(mode, "noop-table" | "replace-noop") {
+                    table.with_metrics_reporter(noop.clone())
+                } else {
+                    table
+                };
+                let table = table.clone().with_runtime(test_runtime());
+                let mut builder = table.scan();
+                if matches!(mode, "replace" | "replace-noop") {
+                    builder = builder.with_metrics_reporter(scan_reporter.clone());
+                } else if mode == "noop-scan" {
+                    builder = builder.with_metrics_reporter(noop.clone());
+                }
+                let scan = builder.build().unwrap();
+                let stream = if cow {
+                    scan.plan_cow_rewrite_files()
+                        .await
+                        .unwrap()
+                        .map_ok(|file| file.scan_task)
+                        .boxed()
+                } else {
+                    scan.plan_files().await.unwrap()
+                };
+                let tasks =
+                    tokio::time::timeout(Duration::from_secs(10), stream.try_collect::<Vec<_>>())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                assert_eq!(tasks.len(), 2);
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    match mode {
+                        "inherit" => table_reporter.wait_for_reports(1).await,
+                        "replace" | "replace-noop" => scan_reporter.wait_for_reports(1).await,
+                        _ => noop.0.notified().await,
+                    }
+                })
+                .await
+                .unwrap();
+                assert_eq!(
+                    (
+                        table_reporter.take_reports().len(),
+                        scan_reporter.take_reports().len()
+                    ),
+                    match mode {
+                        "inherit" => (1, 0),
+                        "replace" | "replace-noop" => (0, 1),
+                        _ => (0, 0),
+                    },
+                    "cow={cow}, mode={mode}"
+                );
+                if matches!(mode, "replace" | "noop-scan") {
+                    table
+                        .scan()
+                        .build()
+                        .unwrap()
+                        .plan_files()
+                        .await
+                        .unwrap()
+                        .try_collect::<Vec<_>>()
+                        .await
+                        .unwrap();
+                    table_reporter.wait_for_reports(1).await;
+                    assert_eq!(table_reporter.take_reports().len(), 1);
+                    assert!(scan_reporter.take_reports().is_empty());
+                }
+            }
+        }
+    }
+
     #[derive(Debug, Default)]
     struct GatedMetricsReporter {
         recording: RecordingMetricsReporter,
@@ -4377,6 +4473,37 @@ mod tests {
         });
     }
 
+    #[tokio::test]
+    async fn test_reports_sanitize_filters_before_delivery() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let scan = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("a").equal_to(Datum::string("secret-customer-id")))
+            .build()
+            .unwrap();
+        for cow in [false, true] {
+            let reporter = Arc::new(RecordingMetricsReporter::default());
+            tokio::time::timeout(Duration::from_secs(10), async {
+                plan_with_reporter(&scan, reporter.clone(), cow)
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap();
+            })
+            .await
+            .unwrap();
+            let report = reporter.wait_report().await;
+            assert!(!format!("{report:?}").contains("secret-customer-id"));
+            assert_eq!(
+                report.filter,
+                Reference::new("a").equal_to(Datum::string("(hash-759e890b)"))
+            );
+        }
+    }
+
     #[test]
     fn test_report_schema_id_tracks_resolved_projection() {
         let fixture = TableTestFixture::new();
@@ -4756,9 +4883,11 @@ mod tests {
         tokio::time::timeout(Duration::from_secs(10), async {
             let mut fixture = TableTestFixture::new();
             fixture.setup_manifest_files().await;
-            for (limit, result_files, skipped_manifests, skipped_files) in
-                [(50, 0, 1, 0), (200, 1, 0, 1), (400, 2, 0, 0)]
-            {
+            for (limit, result_files, skipped_manifests, skipped_files, sanitized) in [
+                (50, 0, 1, 0, "(2-digit-int)"),
+                (200, 1, 0, 1, "(3-digit-int)"),
+                (400, 2, 0, 0, "(3-digit-int)"),
+            ] {
                 let filter = Reference::new("x").less_than(Datum::long(limit));
                 let scan = fixture
                     .table
@@ -4784,7 +4913,7 @@ mod tests {
                     schema_id: 0,
                     projected_field_ids: vec![1],
                     projected_field_names: vec!["x".into()],
-                    filter,
+                    filter: Reference::new("x").less_than(Datum::string(sanitized)),
                     metrics: Metrics {
                         total_data_manifests: 1,
                         scanned_data_manifests: 1 - skipped_manifests,
