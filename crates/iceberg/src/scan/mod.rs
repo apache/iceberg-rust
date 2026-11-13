@@ -4690,7 +4690,8 @@ mod tests {
                 .into_iter()
                 .flat_map(|cow| ["complete", "fail", "drop"].map(|termination| (cow, termination)))
             {
-                let (scan, gate) = gated_manifest_scan(termination == "fail").await;
+                let (scan, gate) =
+                    gated_manifest_scan(termination == "fail", Predicate::AlwaysTrue).await;
                 let reporter = Arc::new(RecordingMetricsReporter::default());
                 let mut stream = plan_with_reporter(&scan, reporter.clone(), cow)
                     .await
@@ -4807,11 +4808,20 @@ mod tests {
             // must see both subscribers even on an uninstrumented worker.
             let scans = (0..2)
                 .map(|_| {
-                    let logs = ScanLogs::default();
+                    let logs = ScanLogs(
+                        Arc::default(),
+                        Arc::default(),
+                        if custom {
+                            tracing::Level::DEBUG
+                        } else {
+                            tracing::Level::INFO
+                        },
+                    );
                     let subscriber =
                         tracing::Dispatch::new(tracing_subscriber::registry().with(logs.clone()));
                     async move {
-                        let (mut scan, gate) = gated_manifest_scan(false).await;
+                        let (mut scan, gate) =
+                            gated_manifest_scan(false, Predicate::AlwaysTrue).await;
                         scan.metrics_reporter = if custom {
                             Arc::new(TracingReporter) as Arc<dyn MetricsReporter>
                         } else {
@@ -4859,7 +4869,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cancelled_manifest_list_read_reports_once() {
-        let (mut scan, gate) = gated_manifest_scan(false).await;
+        let (mut scan, gate) = gated_manifest_scan(false, Predicate::AlwaysTrue).await;
         let context = scan.plan_context.as_mut().unwrap();
         let storage =
             crate::arrow::caching_delete_file_loader::tests::gated_storage::GatedStorageFactory {
@@ -4943,33 +4953,81 @@ mod tests {
 
     #[tokio::test]
     async fn test_reports_sanitize_filters_before_delivery() {
-        let mut fixture = TableTestFixture::new();
-        fixture.setup_manifest_files().await;
-        let scan = fixture
-            .table
-            .scan()
-            .with_filter(Reference::new("a").equal_to(Datum::string("secret-customer-id")))
-            .build()
-            .unwrap();
-        for cow in [false, true] {
-            let reporter = Arc::new(RecordingMetricsReporter::default());
-            tokio::time::timeout(Duration::from_secs(10), async {
-                plan_with_reporter(&scan, reporter.clone(), cow)
-                    .await
-                    .unwrap()
-                    .try_collect::<Vec<_>>()
-                    .await
-                    .unwrap();
-            })
-            .await
-            .unwrap();
-            let report = reporter.wait_report().await;
-            assert!(!format!("{report:?}").contains("secret-customer-id"));
-            assert_eq!(
-                report.filter,
-                Reference::new("a").equal_to(Datum::string("(hash-759e890b)"))
-            );
-        }
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for cow in [false, true] {
+                for termination in ["complete", "fail", "drop"] {
+                    let filter = Reference::new("a")
+                        .equal_to(Datum::string("secret-customer-id"))
+                        .and(Reference::new("x").less_than(Datum::long(123456789)));
+                    let (scan, gate) = gated_manifest_scan(termination == "fail", filter).await;
+                    let reporter = Arc::new(RecordingMetricsReporter::default());
+                    let mut stream = plan_with_reporter(&scan, reporter.clone(), cow)
+                        .await
+                        .unwrap();
+                    gate.started.notified().await;
+                    assert!(futures::poll!(stream.next()).is_pending());
+                    assert!(reporter.take_reports().is_empty());
+                    if termination == "drop" {
+                        drop(stream);
+                    } else {
+                        gate.release();
+                        let result = stream.try_collect::<Vec<_>>().await;
+                        if termination == "fail" {
+                            assert!(
+                                format!("{:?}", result.unwrap_err())
+                                    .contains("injected manifest read failure")
+                            );
+                        } else {
+                            assert_eq!(result.unwrap().len(), 10);
+                        }
+                    }
+                    gate.stopped.notified().await;
+                    let mut report = reporter.wait_report().await;
+                    let debug = format!("{report:?}");
+                    assert!(!debug.contains("secret-customer-id"));
+                    assert!(!debug.contains("123456789"));
+                    report.total_planning_duration = Duration::ZERO;
+                    let mut metrics = Metrics {
+                        total_data_manifests: 1,
+                        total_delete_manifests: 1,
+                        scanned_delete_manifests: 1,
+                        ..Metrics::empty()
+                    };
+                    if termination == "complete" {
+                        metrics.scanned_data_manifests = 1;
+                        metrics.result_data_files = 10;
+                        metrics.result_delete_files = 10;
+                        metrics.indexed_delete_files = 1;
+                        metrics.positional_delete_files = 1;
+                        metrics.total_file_size_in_bytes = 1000;
+                        metrics.total_delete_file_size_in_bytes = 1000;
+                    }
+                    assert_eq!(
+                        report,
+                        ScanReport {
+                            table_ident: TableIdent::from_strs(["db", "table1"]).unwrap(),
+                            snapshot_id: scan.snapshot().unwrap().snapshot_id(),
+                            schema_id: 1,
+                            projected_field_ids: vec![1, 2, 3, 4, 5, 6, 7, 8],
+                            projected_field_names: [
+                                "x", "y", "z", "a", "dbl", "i32", "i64", "bool"
+                            ]
+                            .map(str::to_string)
+                            .to_vec(),
+                            filter: Reference::new("a")
+                                .equal_to(Datum::string("(hash-759e890b)"))
+                                .and(Reference::new("x").less_than(Datum::string("(9-digit-int)"))),
+                            metrics,
+                            total_planning_duration: Duration::ZERO,
+                        },
+                        "cow={cow}, termination={termination}"
+                    );
+                    assert!(reporter.take_reports().is_empty());
+                }
+            }
+        })
+        .await
+        .unwrap();
     }
 
     #[test]
@@ -5476,6 +5534,7 @@ mod tests {
 
     async fn gated_manifest_scan(
         fail: bool,
+        filter: Predicate,
     ) -> (
         TableScan,
         Arc<crate::arrow::caching_delete_file_loader::tests::gated_storage::ReadGate>,
@@ -5485,6 +5544,7 @@ mod tests {
         let mut scan = fixture
             .table
             .scan()
+            .with_filter(filter)
             .with_concurrency_limit(1)
             .build()
             .unwrap();
