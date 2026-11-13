@@ -19,7 +19,7 @@
 //!
 //! Reports describe work performed, including partial or failed scans, without an outcome tag.
 //! Configure delivery with [`crate::table::Table::with_metrics_reporter`] or override it with
-//! [`crate::scan::TableScanBuilder::with_metrics_reporter`]. The default consumer logs at debug level.
+//! [`crate::scan::TableScanBuilder::with_metrics_reporter`]. The default consumer logs at info level.
 
 use std::fmt::Debug;
 use std::time::Duration;
@@ -37,7 +37,7 @@ use crate::expr::Predicate;
 /// without snapshots and unpolled planning futures do not report. Calls may run concurrently.
 ///
 /// Callbacks run on the table's I/O runtime with the originating tracing dispatcher, including
-/// the default debug logging consumer.
+/// the default info logging consumer.
 /// Planning, including successful stream exhaustion, does not wait for the callback. Delivery
 /// requires the runtime to remain alive after planning; runtime shutdown or process termination
 /// can lose reports. Consumers that need delivery confirmation must provide their own signal.
@@ -255,7 +255,7 @@ pub(crate) struct LoggingMetricsReporter;
 impl MetricsReporter for LoggingMetricsReporter {
     async fn report(&self, report: MetricsReport) {
         let MetricsReport::Scan(report) = report;
-        tracing::debug!(target: "iceberg::scan::report",
+        tracing::info!(target: "iceberg::scan::report",
             table_name = %report.table_ident(),
             snapshot_id = report.snapshot_id(),
             schema_id = report.schema_id(),

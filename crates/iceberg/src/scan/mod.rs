@@ -4284,8 +4284,8 @@ mod tests {
         use tracing::instrument::WithSubscriber;
         use tracing_subscriber::layer::SubscriberExt;
 
-        #[derive(Clone, Default)]
-        struct ScanLogs(Arc<AtomicUsize>, Arc<tokio::sync::Notify>);
+        #[derive(Clone)]
+        struct ScanLogs(Arc<AtomicUsize>, Arc<tokio::sync::Notify>, tracing::Level);
 
         impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ScanLogs {
             fn on_event(
@@ -4294,7 +4294,7 @@ mod tests {
                 _context: tracing_subscriber::layer::Context<'_, S>,
             ) {
                 if event.metadata().target() == "iceberg::scan::report" {
-                    assert_eq!(*event.metadata().level(), tracing::Level::DEBUG);
+                    assert_eq!(*event.metadata().level(), self.2);
                     self.0.fetch_add(1, Ordering::Relaxed);
                     self.1.notify_one();
                 }
@@ -4323,7 +4323,12 @@ mod tests {
                 // must see both subscribers even on an uninstrumented worker.
                 let scans = (0..2)
                     .map(|_| {
-                        let logs = ScanLogs::default();
+                        let level = if mode == "custom" {
+                            tracing::Level::DEBUG
+                        } else {
+                            tracing::Level::INFO
+                        };
+                        let logs = ScanLogs(Arc::default(), Arc::default(), level);
                         let subscriber = tracing::Dispatch::new(
                             tracing_subscriber::registry().with(logs.clone()),
                         );
