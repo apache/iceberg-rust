@@ -39,15 +39,16 @@ use itertools::Itertools;
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, {self},
 };
-use reqwest::{Client, Method, StatusCode, Url};
+use reqwest::{Client, IntoUrl, Method, RequestBuilder, StatusCode, Url};
 use tokio::sync::OnceCell;
 use typed_builder::TypedBuilder;
+use uuid::Uuid;
 
 use crate::auth::{
     AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2, AuthManager, AuthSession, NoopAuthManager, OAuth2Manager,
 };
 use crate::client::{
-    HttpClient, deserialize_catalog_response, deserialize_unexpected_catalog_error,
+    HttpClient, IDEMPOTENCY_KEY, deserialize_catalog_response, deserialize_unexpected_catalog_error,
 };
 use crate::endpoint::{Endpoint, V1_NAMESPACE_EXISTS, V1_TABLE_EXISTS};
 use crate::request::HttpRequest;
@@ -203,6 +204,10 @@ pub(crate) struct RestCatalogConfig {
     /// (matching the single-client behavior before the AuthManager refactor).
     #[builder(default)]
     default_client: Arc<OnceLock<Client>>,
+
+    /// Set from the server config when it advertises idempotency keys.
+    #[builder(default)]
+    idempotency_key_lifetime: Option<Duration>,
 }
 
 /// Property keys whose values are secrets, or may embed them (headers,
@@ -411,8 +416,47 @@ impl RestCatalogConfig {
         props.extend(config.overrides);
 
         self.props = props;
+        self.idempotency_key_lifetime = config.idempotency_key_lifetime.and_then(|lifetime| {
+            let parsed = parse_iso8601_duration(&lifetime);
+            if parsed.is_none() {
+                tracing::warn!("Ignoring invalid idempotency-key-lifetime: {lifetime}");
+            }
+            parsed
+        });
         self
     }
+
+    pub(crate) fn idempotency_key_lifetime(&self) -> Option<Duration> {
+        self.idempotency_key_lifetime
+    }
+}
+
+/// Parses an ISO-8601 duration of days and time, e.g. `PT30M` or `P1DT12H`.
+fn parse_iso8601_duration(s: &str) -> Option<Duration> {
+    let s = s.strip_prefix('P')?;
+    let (days, time) = s.split_once('T').unwrap_or((s, ""));
+    let mut secs = 0.0;
+    for (part, units) in [(days, "D"), (time, "HMS")] {
+        let mut rest = part;
+        for unit in units.chars() {
+            if let Some((value, tail)) = rest.split_once(unit) {
+                let scale = match unit {
+                    'D' => 86_400.0,
+                    'H' => 3_600.0,
+                    'M' => 60.0,
+                    _ => 1.0,
+                };
+                secs += value.parse::<f64>().ok()? * scale;
+                rest = tail;
+            }
+        }
+        if !rest.is_empty() {
+            return None;
+        }
+    }
+    Duration::try_from_secs_f64(secs)
+        .ok()
+        .filter(|d| !d.is_zero())
 }
 
 /// Parses the `credential` property.
@@ -595,6 +639,15 @@ impl RestCatalogClient {
     fn invalidate_table(&self, context: &SessionContext, table: &TableIdent) {
         if let Some(cache) = &self.table_cache {
             cache.invalidate(&(context.session_id().to_string(), table.clone()));
+        }
+    }
+
+    fn mutation_request(&self, method: Method, url: impl IntoUrl) -> RequestBuilder {
+        let request = self.http_client.request(method, url);
+        if self.config.idempotency_key_lifetime().is_some() {
+            request.header(IDEMPOTENCY_KEY, Uuid::now_v7().to_string())
+        } else {
+            request
         }
     }
 
@@ -868,9 +921,8 @@ impl RestSessionCatalog {
     ) -> Result<()> {
         let client = self.client().await?;
 
-        let mut request_builder = client
-            .http_client
-            .request(Method::DELETE, client.config.table_endpoint(table));
+        let mut request_builder =
+            client.mutation_request(Method::DELETE, client.config.table_endpoint(table));
 
         if purge {
             request_builder = request_builder.query(&[("purgeRequested", "true")]);
@@ -1100,8 +1152,7 @@ impl SessionCatalog for RestSessionCatalog {
 
         let request = HttpRequest::build(
             client
-                .http_client
-                .request(Method::POST, client.config.namespaces_endpoint())
+                .mutation_request(Method::POST, client.config.namespaces_endpoint())
                 .json(&CreateNamespaceRequest {
                     namespace: namespace.clone(),
                     properties,
@@ -1199,9 +1250,7 @@ impl SessionCatalog for RestSessionCatalog {
         let client = self.client().await?;
 
         let request = HttpRequest::build(
-            client
-                .http_client
-                .request(Method::DELETE, client.config.namespace_endpoint(namespace)),
+            client.mutation_request(Method::DELETE, client.config.namespace_endpoint(namespace)),
         )?;
 
         let http_response = client.query_catalog(context, request).await?;
@@ -1293,8 +1342,7 @@ impl SessionCatalog for RestSessionCatalog {
 
         let request = HttpRequest::build(
             client
-                .http_client
-                .request(Method::POST, client.config.tables_endpoint(namespace))
+                .mutation_request(Method::POST, client.config.tables_endpoint(namespace))
                 .json(&CreateTableRequest {
                     name: creation.name,
                     location: creation.location,
@@ -1508,8 +1556,7 @@ impl SessionCatalog for RestSessionCatalog {
 
         let request = HttpRequest::build(
             client
-                .http_client
-                .request(Method::POST, client.config.rename_table_endpoint())
+                .mutation_request(Method::POST, client.config.rename_table_endpoint())
                 .json(&RenameTableRequest {
                     source: src.clone(),
                     destination: dest.clone(),
@@ -1546,8 +1593,7 @@ impl SessionCatalog for RestSessionCatalog {
 
         let request = HttpRequest::build(
             client
-                .http_client
-                .request(
+                .mutation_request(
                     Method::POST,
                     client
                         .config
@@ -1613,8 +1659,7 @@ impl SessionCatalog for RestSessionCatalog {
 
         let request = HttpRequest::build(
             client
-                .http_client
-                .request(
+                .mutation_request(
                     Method::POST,
                     client.config.table_endpoint(commit.identifier()),
                 )
@@ -1709,6 +1754,7 @@ impl Default for RestSessionCatalogBuilder {
                 props: HashMap::new(),
                 client: None,
                 default_client: Arc::new(OnceLock::new()),
+                idempotency_key_lifetime: None,
             },
             auth_manager: None,
             storage_factory: None,
@@ -3859,6 +3905,141 @@ mod tests {
         create_ns_mock.assert_async().await;
     }
 
+    async fn create_idempotent_config_mock(server: &mut ServerGuard) -> Mock {
+        server
+            .mock("GET", "/v1/config")
+            .with_body(r#"{"overrides": {}, "defaults": {}, "idempotency-key-lifetime": "PT30M"}"#)
+            .create_async()
+            .await
+    }
+
+    /// Mocks `POST /v1/namespaces` answering `status` once, recording each `Idempotency-Key`.
+    async fn create_ns_mock_recording_keys(
+        server: &mut ServerGuard,
+        status: usize,
+        keys: &Arc<Mutex<HashSet<String>>>,
+    ) -> Mock {
+        let keys = Arc::clone(keys);
+        server
+            .mock("POST", "/v1/namespaces")
+            .match_request(move |request| {
+                if let Some(key) = request.header(IDEMPOTENCY_KEY).first() {
+                    keys.lock()
+                        .unwrap()
+                        .insert(key.to_str().unwrap().to_string());
+                }
+                true
+            })
+            .with_status(status)
+            .with_body(r#"{"namespace": ["ns"]}"#)
+            .expect(1)
+            .create_async()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_mutations_carry_idempotency_key_when_advertised() {
+        let mut server = Server::new_async().await;
+        let _config = create_idempotent_config_mock(&mut server).await;
+        let keys = Arc::new(Mutex::new(HashSet::new()));
+        let first = create_ns_mock_recording_keys(&mut server, 200, &keys).await;
+        let second = create_ns_mock_recording_keys(&mut server, 200, &keys).await;
+        let get = server
+            .mock("GET", "/v1/namespaces/ns")
+            .match_header(IDEMPOTENCY_KEY, Matcher::Missing)
+            .with_body(r#"{"namespace": ["ns"]}"#)
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let (context, ns) = (
+            SessionContext::empty(),
+            NamespaceIdent::new("ns".to_string()),
+        );
+
+        catalog
+            .create_namespace(&context, &ns, HashMap::new())
+            .await
+            .unwrap();
+        catalog
+            .create_namespace(&context, &ns, HashMap::new())
+            .await
+            .unwrap();
+        catalog.get_namespace(&context, &ns).await.unwrap();
+
+        first.assert_async().await;
+        second.assert_async().await;
+        get.assert_async().await;
+        let versions: Vec<usize> = keys
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|key| Uuid::parse_str(key).unwrap().get_version_num())
+            .collect();
+        assert_eq!(versions, [7, 7]);
+    }
+
+    #[tokio::test]
+    async fn test_mutations_omit_idempotency_key_when_not_advertised() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let create = server
+            .mock("POST", "/v1/namespaces")
+            .match_header(IDEMPOTENCY_KEY, Matcher::Missing)
+            .with_body(r#"{"namespace": ["ns"]}"#)
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        catalog
+            .create_namespace(
+                &SessionContext::empty(),
+                &NamespaceIdent::new("ns".to_string()),
+                HashMap::new(),
+            )
+            .await
+            .unwrap();
+
+        create.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_keyed_request_retried_with_the_same_key() {
+        let mut server = Server::new_async().await;
+        let _config = create_idempotent_config_mock(&mut server).await;
+        let keys = Arc::new(Mutex::new(HashSet::new()));
+        let unavailable = create_ns_mock_recording_keys(&mut server, 503, &keys).await;
+        let created = create_ns_mock_recording_keys(&mut server, 200, &keys).await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        catalog
+            .create_namespace(
+                &SessionContext::empty(),
+                &NamespaceIdent::new("ns".to_string()),
+                HashMap::new(),
+            )
+            .await
+            .unwrap();
+
+        unavailable.assert_async().await;
+        created.assert_async().await;
+        assert_eq!(keys.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_parse_iso8601_duration() {
+        assert_eq!(
+            parse_iso8601_duration("PT30M"),
+            Some(Duration::from_secs(1_800))
+        );
+        assert_eq!(
+            parse_iso8601_duration("P1DT2H0.5S"),
+            Some(Duration::from_secs_f64(93_600.5))
+        );
+        for invalid in ["", "30M", "PT", "PT0S", "PT-5M", "P1W", "PT5X"] {
+            assert_eq!(parse_iso8601_duration(invalid), None, "{invalid}");
+        }
+    }
+
     #[tokio::test]
     async fn test_get_namespace() {
         let mut server = Server::new_async().await;
@@ -5500,7 +5681,7 @@ mod tests {
         // Without `with_session_context`, the catalog falls back to `SessionContext::empty()`,
         // which assigns a fresh v4 UUID.
         let catalog = result.unwrap();
-        assert!(uuid::Uuid::parse_str(catalog.session_context.session_id()).is_ok());
+        assert!(Uuid::parse_str(catalog.session_context.session_id()).is_ok());
     }
 
     /// Smoke test: a [`Catalog`] trait method delegates through the façade to `RestSessionCatalog`.

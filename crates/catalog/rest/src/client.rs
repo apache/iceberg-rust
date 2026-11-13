@@ -17,16 +17,28 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::time::Duration;
 
+use backon::{BackoffBuilder, ExponentialBuilder};
 use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
-use reqwest::{Client, IntoUrl, Method, RequestBuilder};
+use reqwest::{Client, IntoUrl, Method, RequestBuilder, StatusCode};
 use serde::de::DeserializeOwned;
 
 use crate::RestCatalogConfig;
 use crate::auth::AuthSession;
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
+
+pub(crate) const IDEMPOTENCY_KEY: &str = "idempotency-key";
+
+const RETRYABLE_STATUSES: [StatusCode; 5] = [
+    StatusCode::TOO_MANY_REQUESTS,
+    StatusCode::INTERNAL_SERVER_ERROR,
+    StatusCode::BAD_GATEWAY,
+    StatusCode::SERVICE_UNAVAILABLE,
+    StatusCode::GATEWAY_TIMEOUT,
+];
 
 /// The catalog's HTTP client, handed to an [`AuthManager`] so its own
 /// requests share the catalog's connection pool and configuration.
@@ -40,6 +52,8 @@ pub struct HttpClient {
     extra_headers: HeaderMap,
     /// Whether to disable header redaction in error logs (defaults to false for security).
     disable_header_redaction: bool,
+    /// Bounds retries of requests that carry an `Idempotency-Key`.
+    idempotency_key_lifetime: Option<Duration>,
 }
 
 impl Debug for HttpClient {
@@ -95,6 +109,7 @@ impl HttpClient {
             client: cfg.client(),
             extra_headers: cfg.extra_headers()?,
             disable_header_redaction: cfg.disable_header_redaction(),
+            idempotency_key_lifetime: cfg.idempotency_key_lifetime(),
         })
     }
 
@@ -112,6 +127,7 @@ impl HttpClient {
             client: cfg.client(),
             extra_headers,
             disable_header_redaction: cfg.disable_header_redaction(),
+            idempotency_key_lifetime: cfg.idempotency_key_lifetime(),
         })
     }
 
@@ -157,7 +173,37 @@ impl HttpClient {
 
         let mut request = request.into_inner();
         request.headers_mut().extend(self.extra_headers.clone());
-        HttpResponse::read(self.client.execute(request).await?).await
+
+        let Some(lifetime) = self
+            .idempotency_key_lifetime
+            .filter(|_| request.headers().contains_key(IDEMPOTENCY_KEY))
+        else {
+            return HttpResponse::read(self.client.execute(request).await?).await;
+        };
+        let mut delays = ExponentialBuilder::new()
+            .with_min_delay(Duration::from_secs(1))
+            .with_max_delay(Duration::from_secs(64))
+            .with_max_times(5)
+            .with_jitter()
+            .with_total_delay(Some(lifetime))
+            .build();
+        loop {
+            let attempt = request.try_clone().ok_or_else(|| {
+                Error::new(
+                    ErrorKind::Unexpected,
+                    "Cannot retry a request with a streaming body",
+                )
+            })?;
+            let result = self.client.execute(attempt).await;
+            let retryable = match &result {
+                Ok(response) => RETRYABLE_STATUSES.contains(&response.status()),
+                Err(e) => e.is_connect() || e.is_timeout(),
+            };
+            match delays.next() {
+                Some(delay) if retryable => tokio::time::sleep(delay).await,
+                _ => return HttpResponse::read(result?).await,
+            }
+        }
     }
 
     /// Returns whether header redaction is disabled for this client.
@@ -318,7 +364,7 @@ mod tests {
         headers.insert("authorization", "Bearer leaked".parse().unwrap());
         headers.insert("x-request-id", "abc123".parse().unwrap());
         let response = HttpResponse::new(
-            http::StatusCode::IM_A_TEAPOT,
+            StatusCode::IM_A_TEAPOT,
             headers,
             br#"{"error": "nope"}"#.to_vec(),
         );
