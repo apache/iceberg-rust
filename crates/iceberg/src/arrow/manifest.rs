@@ -18,6 +18,7 @@
 //! Reading manifests and manifest lists into Arrow.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::sync::Arc;
 
 use arrow_arith::boolean::{and, is_null};
@@ -29,10 +30,9 @@ use arrow_array::{
     StructArray, new_null_array,
 };
 use arrow_avro::reader::{Reader, ReaderBuilder};
-use arrow_avro::schema::AvroSchema;
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_ord::cmp::eq;
-use arrow_schema::{ArrowError, DataType, Field, Fields, TimeUnit};
+use arrow_schema::{ArrowError, DataType, Field, Fields, SchemaRef, TimeUnit};
 use arrow_select::zip::zip;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use serde_json::Value as JsonValue;
@@ -40,16 +40,19 @@ use serde_json::Value as JsonValue;
 use crate::arrow::schema_to_arrow_schema;
 use crate::error::invalid_data;
 use crate::spec::{
-    DATA_FILE_CONTENT_FIELD_ID, DATA_FILE_FIELD_ID, DATA_FILE_PARTITION_FIELD_ID,
-    FILE_SEQUENCE_NUMBER_FIELD_ID, FormatVersion, MANIFEST_CONTENT_FIELD_ID,
-    MANIFEST_SEQUENCE_NUMBER_FIELD_ID, MIN_SEQUENCE_NUMBER_FIELD_ID, ManifestContentType,
-    ManifestFile, ManifestMetadata, ManifestStatus, SEQUENCE_NUMBER_FIELD_ID, Schema,
-    manifest_entry_fields, manifest_file_fields,
+    DATA_FILE_CONTENT_FIELD_ID, FILE_SEQUENCE_NUMBER_FIELD_ID, FormatVersion,
+    MANIFEST_CONTENT_FIELD_ID, MANIFEST_SEQUENCE_NUMBER_FIELD_ID, MIN_SEQUENCE_NUMBER_FIELD_ID,
+    ManifestContentType, ManifestFile, ManifestMetadata, ManifestStatus, SEQUENCE_NUMBER_FIELD_ID,
+    Schema, manifest_entry_fields, manifest_file_fields,
 };
 use crate::{Error, Result};
 
-/// Reads the entries of a manifest file into a [`RecordBatch`] with one row
-/// per entry.
+/// Rows per batch. A row's size grows with the table's column count through
+/// the column stats maps. With stats on every column of a 100-column table of
+/// longs, 1024 rows take about 9 MB.
+const BATCH_SIZE: usize = 1024;
+
+/// Reads the entries of a manifest file as batches with one row per entry.
 ///
 /// `bytes` is the manifest file and `manifest_file` is its entry in the
 /// manifest list. The schema is the spec's `manifest_entry` struct for the
@@ -62,6 +65,12 @@ use crate::{Error, Result};
 /// sequence numbers, and first row IDs are inherited from `manifest_file`.
 /// Lower and upper bounds keep the binary single-value serialization they were
 /// written with.
+///
+/// # Errors
+///
+/// Returns an error if the manifest's header can't be read or names an
+/// unsupported format version. Errors in the entries come from the reader,
+/// which yields no batches after one.
 ///
 /// # Example
 ///
@@ -92,73 +101,111 @@ use crate::{Error, Result};
 ///     first_row_id: None,
 /// };
 ///
-/// let batch = read_manifest_entries(&bytes, &manifest_file)?;
-/// assert_eq!(batch.num_rows(), 2);
+/// let mut rows = 0;
+/// for batch in read_manifest_entries(&bytes, &manifest_file)? {
+///     rows += batch?.num_rows();
+/// }
+/// assert_eq!(rows, 2);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub fn read_manifest_entries(bytes: &[u8], manifest_file: &ManifestFile) -> Result<RecordBatch> {
-    // usize::MAX decodes the whole manifest into one batch. First row ID
-    // inheritance is a running sum over every entry in the file, and an empty
-    // manifest still returns its schema. arrow-avro sizes its buffers
-    // independently of the batch size, so this doesn't preallocate.
-    let builder = || ReaderBuilder::new().with_batch_size(usize::MAX);
-    let mut reader = builder().build(bytes).map_err(invalid_manifest)?;
-    let header = reader.avro_header();
-    let metadata: HashMap<String, Vec<u8>> = header
-        .metadata()
-        .map(|(key, value)| (String::from_utf8_lossy(key).into_owned(), value.to_vec()))
-        .collect();
-    let metadata = ManifestMetadata::parse(&metadata)?;
-    let mut avro_schema: JsonValue = serde_json::from_slice(
-        header
-            .get("avro.schema")
-            .ok_or_else(|| invalid_data!("manifest has no avro.schema"))?,
-    )?;
-    let partition_type = metadata
-        .partition_spec()
-        .partition_type(metadata.schema())?;
-    let schema = Arc::new(schema_to_arrow_schema(
-        &Schema::builder()
-            .with_fields(manifest_entry_fields(&partition_type))
-            .build()?,
-    )?);
-
-    // TODO(#3257): arrow-avro 59 can't decode a record with no fields, which
-    // is the partition of every unpartitioned manifest, so project it out and
-    // build it in `missing_field`. arrow-avro 60 fixes this
-    // (apache/arrow-rs#10771).
-    if remove_empty_partition(&mut avro_schema) {
-        reader = builder()
-            .with_reader_schema(AvroSchema::new(avro_schema.to_string()))
-            .build(bytes)
-            .map_err(invalid_manifest)?;
-    }
-
-    let Some(batch) = only_batch(reader, invalid_manifest)? else {
-        return Ok(RecordBatch::new_empty(schema));
-    };
-    // v1 manifests have no content or sequence number columns, which v2+
-    // readers read as 0. A v2+ manifest may lack file_sequence_number (Java
-    // wrote none before 1.1.0), which reads as null and is inherited.
-    let zero_defaults: &[i32] = match metadata.format_version() {
-        FormatVersion::V1 => &[
-            DATA_FILE_CONTENT_FIELD_ID,
-            SEQUENCE_NUMBER_FIELD_ID,
-            FILE_SEQUENCE_NUMBER_FIELD_ID,
-        ],
-        _ => &[DATA_FILE_CONTENT_FIELD_ID],
-    };
-    let entries = project_struct(
-        &StructArray::from(batch),
-        &avro_schema,
-        schema.fields(),
-        zero_defaults,
-    )?;
-    Ok(RecordBatch::from(inherit(entries, manifest_file)?))
+pub fn read_manifest_entries<B: AsRef<[u8]>>(
+    bytes: B,
+    manifest_file: &ManifestFile,
+) -> Result<ManifestEntryBatchReader<B>> {
+    ManifestEntryBatchReader::try_new(bytes, manifest_file, BATCH_SIZE)
 }
 
-/// Reads the entries of a manifest list into a [`RecordBatch`] with one row
-/// per manifest.
+/// Batches of the entries of a manifest file, returned by
+/// [`read_manifest_entries`].
+pub struct ManifestEntryBatchReader<B: AsRef<[u8]>> {
+    inner: ProjectingReader<B>,
+    inheritance: Inheritance,
+}
+
+/// The values that a manifest's entries inherit from the manifest list.
+struct Inheritance {
+    manifest_path: String,
+    added_snapshot_id: i64,
+    sequence_number: i64,
+    content: ManifestContentType,
+    /// The first row ID of the next entry that inherits one, which advances
+    /// across batches. `None` for a manifest without a first row ID.
+    next_row_id: Option<i64>,
+}
+
+impl<B: AsRef<[u8]>> ManifestEntryBatchReader<B> {
+    fn try_new(bytes: B, manifest_file: &ManifestFile, batch_size: usize) -> Result<Self> {
+        let reader = ReaderBuilder::new()
+            .with_batch_size(batch_size)
+            .build(Cursor::new(bytes))
+            .map_err(invalid_manifest)?;
+        let header = reader.avro_header();
+        let metadata: HashMap<String, Vec<u8>> = header
+            .metadata()
+            .map(|(key, value)| (String::from_utf8_lossy(key).into_owned(), value.to_vec()))
+            .collect();
+        let metadata = ManifestMetadata::parse(&metadata)?;
+        let avro_schema: JsonValue = serde_json::from_slice(
+            header
+                .get("avro.schema")
+                .ok_or_else(|| invalid_data!("manifest has no avro.schema"))?,
+        )?;
+        let partition_type = metadata
+            .partition_spec()
+            .partition_type(metadata.schema())?;
+        let schema = Arc::new(schema_to_arrow_schema(
+            &Schema::builder()
+                .with_fields(manifest_entry_fields(&partition_type))
+                .build()?,
+        )?);
+
+        // v1 manifests have no content or sequence number columns, which v2+
+        // readers read as 0. A v2+ manifest may lack file_sequence_number (Java
+        // wrote none before 1.1.0), which reads as null and is inherited.
+        let zero_defaults: &[i32] = match metadata.format_version() {
+            FormatVersion::V1 => &[
+                DATA_FILE_CONTENT_FIELD_ID,
+                SEQUENCE_NUMBER_FIELD_ID,
+                FILE_SEQUENCE_NUMBER_FIELD_ID,
+            ],
+            _ => &[DATA_FILE_CONTENT_FIELD_ID],
+        };
+        Ok(Self {
+            inner: ProjectingReader {
+                reader,
+                schema,
+                avro_schema,
+                zero_defaults,
+                invalid: invalid_manifest,
+                finished: false,
+            },
+            inheritance: Inheritance {
+                manifest_path: manifest_file.manifest_path.clone(),
+                added_snapshot_id: manifest_file.added_snapshot_id,
+                sequence_number: manifest_file.sequence_number,
+                content: manifest_file.content,
+                next_row_id: manifest_file.first_row_id.map(i64::try_from).transpose()?,
+            },
+        })
+    }
+
+    /// Returns the schema of every batch.
+    pub fn schema(&self) -> SchemaRef {
+        self.inner.schema.clone()
+    }
+}
+
+impl<B: AsRef<[u8]>> Iterator for ManifestEntryBatchReader<B> {
+    type Item = Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let inheritance = &mut self.inheritance;
+        self.inner
+            .next_batch(|entries| inherit(entries, inheritance))
+    }
+}
+
+/// Reads the entries of a manifest list as batches with one row per manifest.
 ///
 /// The schema is the spec's `manifest_file` struct for the latest format
 /// version, with field IDs in the Arrow field metadata, so manifest lists of
@@ -169,6 +216,12 @@ pub fn read_manifest_entries(bytes: &[u8], manifest_file: &ManifestFile) -> Resu
 /// v2+ defaults. Partition summary bounds keep the binary single-value
 /// serialization they were written with.
 ///
+/// # Errors
+///
+/// Returns an error if the manifest list's header can't be read or names an
+/// unsupported format version. Errors in the entries come from the reader,
+/// which yields no batches after one.
+///
 /// # Example
 ///
 /// ```
@@ -178,103 +231,119 @@ pub fn read_manifest_entries(bytes: &[u8], manifest_file: &ManifestFile) -> Resu
 ///     env!("CARGO_MANIFEST_DIR"),
 ///     "/testdata/manifests_lists/manifest-list-v2-2.avro"
 /// ))?;
-/// let batch = read_manifest_list(&bytes)?;
-/// assert_eq!(batch.num_rows(), 1);
+/// let mut rows = 0;
+/// for batch in read_manifest_list(&bytes)? {
+///     rows += batch?.num_rows();
+/// }
+/// assert_eq!(rows, 1);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-pub fn read_manifest_list(bytes: &[u8]) -> Result<RecordBatch> {
-    // usize::MAX decodes the whole manifest list into one batch, which
-    // `only_batch` checks.
-    let reader = ReaderBuilder::new()
-        .with_batch_size(usize::MAX)
-        .build(bytes)
-        .map_err(invalid_manifest_list)?;
-    let header = reader.avro_header();
-    let avro_schema: JsonValue = serde_json::from_slice(
-        header
-            .get("avro.schema")
-            .ok_or_else(|| invalid_data!("manifest list has no avro.schema"))?,
-    )?;
-    // The spec doesn't define this key, but Java, PyIceberg, and iceberg-rust
-    // all write it, and rejecting an unknown version keeps a newer manifest
-    // list from reading as an older one.
-    let format_version = match header.get("format-version") {
-        Some(bytes) => serde_json::from_slice::<FormatVersion>(bytes).map_err(|err| {
-            invalid_data!("failed to parse format version in manifest list metadata")
-                .with_source(err)
-        })?,
-        None => FormatVersion::V1,
-    };
-    let schema = Arc::new(schema_to_arrow_schema(
-        &Schema::builder()
-            .with_fields(manifest_file_fields())
-            .build()?,
-    )?);
-    let Some(batch) = only_batch(reader, invalid_manifest_list)? else {
-        return Ok(RecordBatch::new_empty(schema));
-    };
-    // v1 manifest lists have no content or sequence number columns, which v2+
-    // readers read as 0.
-    let zero_defaults: &[i32] = match format_version {
-        FormatVersion::V1 => &[
-            MANIFEST_CONTENT_FIELD_ID,
-            MANIFEST_SEQUENCE_NUMBER_FIELD_ID,
-            MIN_SEQUENCE_NUMBER_FIELD_ID,
-        ],
-        _ => &[],
-    };
-    let manifests = project_struct(
-        &StructArray::from(batch),
-        &avro_schema,
-        schema.fields(),
-        zero_defaults,
-    )?;
-    Ok(RecordBatch::from(manifests))
+pub fn read_manifest_list<B: AsRef<[u8]>>(bytes: B) -> Result<ManifestListBatchReader<B>> {
+    ManifestListBatchReader::try_new(bytes, BATCH_SIZE)
 }
 
-/// Returns the only batch that `reader` decodes, or `None` for a file without
-/// records.
-fn only_batch(
-    mut reader: Reader<&[u8]>,
-    invalid: fn(ArrowError) -> Error,
-) -> Result<Option<RecordBatch>> {
-    let Some(batch) = reader.next() else {
-        return Ok(None);
-    };
-    let batch = batch.map_err(invalid)?;
-    // Taking only the first batch relies on arrow-avro filling it to the batch
-    // size, so fail instead of dropping records if that changes.
-    if reader.next().is_some() {
-        return Err(invalid_data!(
-            "arrow-avro split the file into more than one batch"
-        ));
-    }
-    Ok(Some(batch))
+/// Batches of the entries of a manifest list, returned by
+/// [`read_manifest_list`].
+pub struct ManifestListBatchReader<B: AsRef<[u8]>> {
+    inner: ProjectingReader<B>,
 }
 
-/// Removes `data_file.partition` from a manifest's Avro schema if it has no
-/// fields, and returns whether it did.
-fn remove_empty_partition(avro_schema: &mut JsonValue) -> bool {
-    let has_field_id = |field: &JsonValue, id: i32| field["field-id"].as_i64() == Some(id.into());
-    let Some(data_file_fields) = avro_schema["fields"]
-        .as_array_mut()
-        .and_then(|fields| {
-            fields
-                .iter_mut()
-                .find(|field| has_field_id(field, DATA_FILE_FIELD_ID))
+impl<B: AsRef<[u8]>> ManifestListBatchReader<B> {
+    fn try_new(bytes: B, batch_size: usize) -> Result<Self> {
+        let reader = ReaderBuilder::new()
+            .with_batch_size(batch_size)
+            .build(Cursor::new(bytes))
+            .map_err(invalid_manifest_list)?;
+        let header = reader.avro_header();
+        let avro_schema: JsonValue = serde_json::from_slice(
+            header
+                .get("avro.schema")
+                .ok_or_else(|| invalid_data!("manifest list has no avro.schema"))?,
+        )?;
+        // The spec doesn't define this key, but Java, PyIceberg, and iceberg-rust
+        // all write it, and rejecting an unknown version keeps a newer manifest
+        // list from reading as an older one.
+        let format_version = match header.get("format-version") {
+            Some(bytes) => serde_json::from_slice::<FormatVersion>(bytes).map_err(|err| {
+                invalid_data!("failed to parse format version in manifest list metadata")
+                    .with_source(err)
+            })?,
+            None => FormatVersion::V1,
+        };
+        let schema = Arc::new(schema_to_arrow_schema(
+            &Schema::builder()
+                .with_fields(manifest_file_fields())
+                .build()?,
+        )?);
+        // v1 manifest lists have no content or sequence number columns, which v2+
+        // readers read as 0.
+        let zero_defaults: &[i32] = match format_version {
+            FormatVersion::V1 => &[
+                MANIFEST_CONTENT_FIELD_ID,
+                MANIFEST_SEQUENCE_NUMBER_FIELD_ID,
+                MIN_SEQUENCE_NUMBER_FIELD_ID,
+            ],
+            _ => &[],
+        };
+        Ok(Self {
+            inner: ProjectingReader {
+                reader,
+                schema,
+                avro_schema,
+                zero_defaults,
+                invalid: invalid_manifest_list,
+                finished: false,
+            },
         })
-        .and_then(|data_file| data_file["type"]["fields"].as_array_mut())
-    else {
-        return false;
-    };
-    let len = data_file_fields.len();
-    data_file_fields.retain(|field| {
-        !(has_field_id(field, DATA_FILE_PARTITION_FIELD_ID)
-            && field["type"]["fields"]
-                .as_array()
-                .is_some_and(Vec::is_empty))
-    });
-    data_file_fields.len() != len
+    }
+
+    /// Returns the schema of every batch.
+    pub fn schema(&self) -> SchemaRef {
+        self.inner.schema.clone()
+    }
+}
+
+impl<B: AsRef<[u8]>> Iterator for ManifestListBatchReader<B> {
+    type Item = Result<RecordBatch>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next_batch(Ok)
+    }
+}
+
+/// Decodes an Avro file in batches and projects them onto `schema`.
+struct ProjectingReader<B: AsRef<[u8]>> {
+    reader: Reader<Cursor<B>>,
+    schema: SchemaRef,
+    avro_schema: JsonValue,
+    zero_defaults: &'static [i32],
+    invalid: fn(ArrowError) -> Error,
+    /// Set after an error. First row ID inheritance can stop partway through
+    /// a batch, so the batches after an error would get the wrong row IDs.
+    finished: bool,
+}
+
+impl<B: AsRef<[u8]>> ProjectingReader<B> {
+    /// Returns the next batch with `finish` applied to its projected rows.
+    fn next_batch(
+        &mut self,
+        finish: impl FnOnce(StructArray) -> Result<StructArray>,
+    ) -> Option<Result<RecordBatch>> {
+        if self.finished {
+            return None;
+        }
+        let batch = self.reader.next()?.map_err(self.invalid).and_then(|batch| {
+            let rows = project_struct(
+                &StructArray::from(batch),
+                &self.avro_schema,
+                self.schema.fields(),
+                self.zero_defaults,
+            )?;
+            Ok(RecordBatch::from(finish(rows)?))
+        });
+        self.finished = batch.is_err();
+        Some(batch)
+    }
 }
 
 fn invalid_manifest(err: ArrowError) -> Error {
@@ -350,9 +419,6 @@ fn missing_field(field: &Field, len: usize, zero_defaults: &[i32]) -> Result<Arr
         DataType::Int32 if zero => Ok(Arc::new(Int32Array::from_value(0, len))),
         DataType::Int64 if zero => Ok(Arc::new(Int64Array::from_value(0, len))),
         _ if field.is_nullable() => Ok(new_null_array(field.data_type(), len)),
-        DataType::Struct(fields) if fields.is_empty() => {
-            Ok(Arc::new(StructArray::new_empty_fields(len, None)))
-        }
         _ => Err(invalid_data!(
             "Avro file has no required field {} with field ID {id}",
             field.name()
@@ -452,7 +518,7 @@ fn project(
 
 /// Fills in the values that the spec says entries inherit from the manifest
 /// list.
-fn inherit(entries: StructArray, manifest_file: &ManifestFile) -> Result<StructArray> {
+fn inherit(entries: StructArray, inheritance: &mut Inheritance) -> Result<StructArray> {
     let (fields, mut columns, nulls) = entries.into_parts();
     let index = |name: &str| fields.find(name).unwrap().0;
     let (status, snapshot_id, sequence_number, file_sequence_number, data_file) = (
@@ -463,22 +529,18 @@ fn inherit(entries: StructArray, manifest_file: &ManifestFile) -> Result<StructA
         index("data_file"),
     );
 
-    columns[snapshot_id] =
-        fill_nulls(&columns[snapshot_id], None, manifest_file.added_snapshot_id)?;
+    columns[snapshot_id] = fill_nulls(&columns[snapshot_id], None, inheritance.added_snapshot_id)?;
     if columns[sequence_number].null_count() > 0 || columns[file_sequence_number].null_count() > 0 {
         let added = eq(
             &columns[status],
             &Int32Array::new_scalar(ManifestStatus::Added as i32),
         )?;
         for column in [sequence_number, file_sequence_number] {
-            columns[column] = fill_nulls(
-                &columns[column],
-                Some(&added),
-                manifest_file.sequence_number,
-            )?;
+            columns[column] =
+                fill_nulls(&columns[column], Some(&added), inheritance.sequence_number)?;
         }
     }
-    if manifest_file.content == ManifestContentType::Data {
+    if inheritance.content == ManifestContentType::Data {
         let (data_file_fields, mut data_file_columns, data_file_nulls) =
             columns[data_file].as_struct().clone().into_parts();
         let index = |name: &str| data_file_fields.find(name).unwrap().0;
@@ -487,7 +549,7 @@ fn inherit(entries: StructArray, manifest_file: &ManifestFile) -> Result<StructA
             data_file_columns[first_row_id].as_primitive(),
             columns[status].as_primitive(),
             data_file_columns[index("record_count")].as_primitive(),
-            manifest_file,
+            inheritance,
         )?;
         columns[data_file] = Arc::new(StructArray::new(
             data_file_fields,
@@ -521,15 +583,14 @@ fn inherit_first_row_ids(
     first_row_ids: &Int64Array,
     status: &Int32Array,
     record_counts: &Int64Array,
-    manifest_file: &ManifestFile,
+    inheritance: &mut Inheritance,
 ) -> Result<ArrayRef> {
-    let Some(manifest_first_row_id) = manifest_file.first_row_id else {
+    let Some(next_row_id) = inheritance.next_row_id.as_mut() else {
         return Ok(new_null_array(&DataType::Int64, first_row_ids.len()));
     };
     if first_row_ids.null_count() == 0 {
         return Ok(Arc::new(first_row_ids.clone()));
     }
-    let mut next_row_id = i64::try_from(manifest_first_row_id)?;
     let mut builder = Int64Builder::with_capacity(first_row_ids.len());
     for ((first_row_id, &status), &record_count) in first_row_ids
         .iter()
@@ -541,14 +602,14 @@ fn inherit_first_row_ids(
                 if record_count < 0 {
                     return Err(invalid_data!(
                         "negative record_count {record_count} assigning first row IDs in {}",
-                        manifest_file.manifest_path
+                        inheritance.manifest_path
                     ));
                 }
-                builder.append_value(next_row_id);
-                next_row_id = next_row_id.checked_add(record_count).ok_or_else(|| {
+                builder.append_value(*next_row_id);
+                *next_row_id = next_row_id.checked_add(record_count).ok_or_else(|| {
                     invalid_data!(
                         "row ID overflow assigning first row IDs in {}",
-                        manifest_file.manifest_path
+                        inheritance.manifest_path
                     )
                 })?;
             }
@@ -573,6 +634,8 @@ mod tests {
         Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
     };
     use arrow_buffer::{NullBuffer, OffsetBuffer};
+    use arrow_schema::SchemaRef;
+    use arrow_select::concat::concat_batches;
 
     use super::*;
     use crate::ErrorKind;
@@ -669,6 +732,50 @@ mod tests {
             .unwrap()
             .to_vec();
         (bytes, manifest_file)
+    }
+
+    fn concat(
+        schema: SchemaRef,
+        batches: impl Iterator<Item = Result<RecordBatch>>,
+    ) -> Result<RecordBatch> {
+        let batches = batches.collect::<Result<Vec<_>>>()?;
+        Ok(concat_batches(&schema, &batches)?)
+    }
+
+    fn read_entries(bytes: &[u8], manifest_file: &ManifestFile) -> Result<RecordBatch> {
+        let reader = read_manifest_entries(bytes, manifest_file)?;
+        concat(reader.schema(), reader)
+    }
+
+    fn read_list(bytes: &[u8]) -> Result<RecordBatch> {
+        let reader = read_manifest_list(bytes)?;
+        concat(reader.schema(), reader)
+    }
+
+    /// Checks that reading in batches of 1 to 3 rows gives nonempty batches of
+    /// the reader's schema that concatenate to the file read as one batch.
+    fn assert_batches_match_whole<I: Iterator<Item = Result<RecordBatch>>>(
+        read: impl Fn(usize) -> (SchemaRef, I),
+    ) {
+        let (schema, batches) = read(usize::MAX);
+        let whole = concat(schema.clone(), batches).unwrap();
+        for batch_size in 1..=3 {
+            let (batch_schema, batches) = read(batch_size);
+            assert_eq!(batch_schema, schema);
+            let batches: Vec<_> = batches.map(Result::unwrap).collect();
+            for batch in &batches {
+                assert_eq!(batch.schema(), schema, "batch size {batch_size}");
+                assert!(
+                    (1..=batch_size).contains(&batch.num_rows()),
+                    "batch size {batch_size}"
+                );
+            }
+            assert_eq!(
+                concat_batches(&schema, &batches).unwrap(),
+                whole,
+                "batch size {batch_size}"
+            );
+        }
     }
 
     fn column(batch: &RecordBatch, name: &str) -> ArrayRef {
@@ -843,7 +950,7 @@ mod tests {
         let spec = partition_spec(&[("i", Transform::Identity), ("s", Transform::Truncate(2))]);
         let (bytes, manifest_file) =
             write_manifest(spec, Some(1), |b| b.build_v2_data(), |_| {}).await;
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
         assert_eq!(batch.num_rows(), 0);
 
         let long = || Type::Primitive(PrimitiveType::Long);
@@ -957,7 +1064,7 @@ mod tests {
             },
         )
         .await;
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
         assert_eq!(batch.num_rows(), 2);
 
         assert_eq!(
@@ -1050,7 +1157,7 @@ mod tests {
             },
         )
         .await;
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
 
         let column = |name: &str| data_file_column(&batch, name);
         assert_eq!(
@@ -1139,7 +1246,7 @@ mod tests {
             },
         )
         .await;
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
 
         let partition = data_file_column(&batch, "partition");
         let partition = partition.as_struct();
@@ -1215,7 +1322,7 @@ mod tests {
         // The v1 default must win over inheritance, so give the manifest list
         // entry a sequence number that inheritance would use.
         manifest_file.sequence_number = 9;
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
 
         assert_eq!(
             data_file_column(&batch, "content").as_ref(),
@@ -1272,7 +1379,7 @@ mod tests {
         );
         manifest_file.added_snapshot_id = 42;
         manifest_file.sequence_number = 7;
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
 
         assert_eq!(
             column(&batch, "snapshot_id").as_ref(),
@@ -1322,7 +1429,7 @@ mod tests {
             },
         );
         manifest_file.sequence_number = 7;
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
 
         assert_eq!(
             column(&batch, "file_sequence_number").as_ref(),
@@ -1370,7 +1477,7 @@ mod tests {
     async fn test_first_row_id_inheritance() {
         let (bytes, mut manifest_file) = first_row_id_manifest().await;
         manifest_file.first_row_id = Some(100);
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
         // Deleted entries don't take row IDs, and entries with a first_row_id keep it.
         assert_eq!(
             data_file_column(&batch, "first_row_id").as_ref(),
@@ -1378,16 +1485,25 @@ mod tests {
         );
 
         manifest_file.first_row_id = None;
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
         assert_eq!(data_file_column(&batch, "first_row_id").null_count(), 5);
 
         manifest_file.first_row_id = Some(i64::MAX as u64 - 5);
-        let err = read_manifest_entries(&bytes, &manifest_file).unwrap_err();
+        let err = read_entries(&bytes, &manifest_file).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
 
         // A negative record_count would assign overlapping row IDs.
-        let bytes = rewrite_manifest(
-            &bytes,
+        let bytes = negate_record_count(&bytes, 10);
+        manifest_file.first_row_id = Some(100);
+        let err = read_entries(&bytes, &manifest_file).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    /// Negates the `record_count` of the data files whose count is
+    /// `record_count`.
+    fn negate_record_count(bytes: &[u8], record_count: i64) -> Vec<u8> {
+        rewrite_manifest(
+            bytes,
             Codec::Null,
             |_| {},
             |record| {
@@ -1400,21 +1516,92 @@ mod tests {
                     panic!("manifest entry has no data_file record");
                 };
                 for (name, value) in data_file {
-                    if name == "record_count" && *value == AvroValue::Long(10) {
-                        *value = AvroValue::Long(-10);
+                    if name == "record_count" && *value == AvroValue::Long(record_count) {
+                        *value = AvroValue::Long(-record_count);
                     }
                 }
             },
-        );
-        manifest_file.first_row_id = Some(100);
-        let err = read_manifest_entries(&bytes, &manifest_file).unwrap_err();
+        )
+    }
+
+    #[tokio::test]
+    async fn test_manifest_batches_match_whole_manifest() {
+        let (first_row_id_bytes, mut first_row_id_manifest_file) = first_row_id_manifest().await;
+        first_row_id_manifest_file.first_row_id = Some(100);
+        let v1_files = (0..3).map(|i| {
+            data_file(DataContentType::Data, &format!("s3://b/data/{i}.parquet"))
+                .build()
+                .unwrap()
+        });
+        let v1 = write_manifest(
+            partition_spec(&[]),
+            Some(1),
+            |b| b.build_v1(),
+            |writer| v1_files.for_each(|file| writer.add_file(file, -1).unwrap()),
+        )
+        .await;
+        let empty = write_manifest(
+            partition_spec(&[("i", Transform::Identity)]),
+            Some(1),
+            |b| b.build_v2_data(),
+            |_| {},
+        )
+        .await;
+        let pyiceberg_bytes = std::fs::read(format!(
+            "{}/testdata/manifests/pyiceberg-v2-data.avro",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let pyiceberg_manifest_file = ManifestFile {
+            sequence_number: 1,
+            ..listed_manifest("s3://b/metadata/0.avro", ManifestContentType::Data)
+        };
+
+        for (bytes, manifest_file) in [
+            (first_row_id_bytes, first_row_id_manifest_file),
+            v1,
+            empty,
+            (pyiceberg_bytes, pyiceberg_manifest_file),
+        ] {
+            assert_batches_match_whole(|batch_size| {
+                let reader =
+                    ManifestEntryBatchReader::try_new(&bytes, &manifest_file, batch_size).unwrap();
+                (reader.schema(), reader)
+            });
+        }
+    }
+
+    #[tokio::test]
+    async fn test_unknown_manifest_format_version_is_an_error() {
+        let (bytes, manifest_file) = first_row_id_manifest().await;
+        let bytes = set_avro_metadata(&bytes, "format-version", Some("4"));
+        let Err(err) = read_manifest_entries(&bytes, &manifest_file) else {
+            panic!("a v4 manifest read as an older version");
+        };
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[tokio::test]
+    async fn test_manifest_error_ends_the_batches() {
+        let (bytes, mut manifest_file) = first_row_id_manifest().await;
+        manifest_file.first_row_id = Some(100);
+        // The last of the five entries fails first row ID inheritance, so the
+        // third batch of two is an error.
+        let bytes = negate_record_count(&bytes, 2);
+        let mut reader = ManifestEntryBatchReader::try_new(&bytes, &manifest_file, 2).unwrap();
+        assert_eq!(reader.next().unwrap().unwrap().num_rows(), 2);
+        assert_eq!(reader.next().unwrap().unwrap().num_rows(), 2);
+        assert_eq!(
+            reader.next().unwrap().unwrap_err().kind(),
+            ErrorKind::DataInvalid
+        );
+        assert!(reader.next().is_none());
     }
 
     #[tokio::test]
     async fn test_compressed_manifests() {
         let (bytes, manifest_file) = first_row_id_manifest().await;
-        let expected = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let expected = read_entries(&bytes, &manifest_file).unwrap();
         for codec in [
             Codec::Deflate(DeflateSettings::default()),
             Codec::Snappy,
@@ -1422,7 +1609,7 @@ mod tests {
         ] {
             let bytes = rewrite_manifest(&bytes, codec, |_| {}, |_| {});
             assert_eq!(
-                read_manifest_entries(&bytes, &manifest_file).unwrap(),
+                read_entries(&bytes, &manifest_file).unwrap(),
                 expected,
                 "{codec:?}"
             );
@@ -1448,7 +1635,7 @@ mod tests {
             ("file_path", "path"),
             ("i_identity", "renamed_partition"),
         ]);
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
 
         assert_eq!(
             data_file_column(&batch, "file_path").as_ref(),
@@ -1486,7 +1673,7 @@ mod tests {
             },
             |_| {},
         );
-        let err = read_manifest_entries(&bytes, &manifest_file).unwrap_err();
+        let err = read_entries(&bytes, &manifest_file).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
@@ -1516,7 +1703,7 @@ mod tests {
             key_metadata: None,
             first_row_id: None,
         };
-        let batch = read_manifest_entries(&bytes, &manifest_file).unwrap();
+        let batch = read_entries(&bytes, &manifest_file).unwrap();
 
         assert_eq!(batch.num_rows(), manifest.entries().len());
         let paths = data_file_column(&batch, "file_path");
@@ -1587,7 +1774,7 @@ mod tests {
     #[tokio::test]
     async fn test_schema_is_spec_manifest_file() {
         let bytes = write_manifest_list(FormatVersion::V3, vec![]).await;
-        let batch = read_manifest_list(&bytes).unwrap();
+        let batch = read_list(&bytes).unwrap();
         assert_eq!(batch.num_rows(), 0);
 
         let long = || Type::Primitive(PrimitiveType::Long);
@@ -1656,7 +1843,7 @@ mod tests {
             ..listed_manifest("s3://b/metadata/deletes.avro", ManifestContentType::Deletes)
         };
         let bytes = write_manifest_list(FormatVersion::V3, vec![data, existing_deletes]).await;
-        let batch = read_manifest_list(&bytes).unwrap();
+        let batch = read_list(&bytes).unwrap();
 
         let schema = batch.schema();
         let DataType::List(summary) = schema.field_with_name("partitions").unwrap().data_type()
@@ -1725,7 +1912,7 @@ mod tests {
         // A manifest list without a format version reads as v1.
         let without_format_version = set_avro_metadata(&bytes, "format-version", None);
         for bytes in [bytes, without_format_version] {
-            let batch = read_manifest_list(&bytes).unwrap();
+            let batch = read_list(&bytes).unwrap();
 
             assert_eq!(
                 column(&batch, "content").as_ref(),
@@ -1767,7 +1954,7 @@ mod tests {
             ("added_files_count", "added_data_files_count"),
             ("contains_null", "has_null"),
         ]);
-        let batch = read_manifest_list(&bytes).unwrap();
+        let batch = read_list(&bytes).unwrap();
 
         assert_eq!(
             column(&batch, "manifest_path").as_ref(),
@@ -1791,7 +1978,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_manifest_list_is_an_error() {
-        let err = read_manifest_list(&[]).unwrap_err();
+        let err = read_list(&[]).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
 
         let bytes = write_manifest_list(FormatVersion::V2, vec![listed_manifest(
@@ -1836,7 +2023,7 @@ mod tests {
             without_sequence_number,
             unknown_format_version,
         ] {
-            let err = read_manifest_list(&bytes).unwrap_err();
+            let err = read_list(&bytes).unwrap_err();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
         }
     }
@@ -1852,7 +2039,7 @@ mod tests {
             .unwrap();
             let manifest_list =
                 ManifestList::parse_with_version(&bytes, FormatVersion::V2).unwrap();
-            let batch = read_manifest_list(&bytes).unwrap();
+            let batch = read_list(&bytes).unwrap();
 
             assert_eq!(batch.num_rows(), manifest_list.entries().len(), "{name}");
             let paths = column(&batch, "manifest_path");
@@ -1891,6 +2078,27 @@ mod tests {
                     .map(|summary| summary.lower_bound.as_ref().map(|bound| bound.to_vec()))
                     .collect();
                 assert_eq!(lower_bounds, expected, "{name}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_manifest_list_batches_match_whole_list() {
+        for version in [FormatVersion::V1, FormatVersion::V2, FormatVersion::V3] {
+            for len in [0, 3] {
+                let manifests = (0..len)
+                    .map(|i| {
+                        listed_manifest(
+                            &format!("s3://b/metadata/{i}.avro"),
+                            ManifestContentType::Data,
+                        )
+                    })
+                    .collect();
+                let bytes = write_manifest_list(version, manifests).await;
+                assert_batches_match_whole(|batch_size| {
+                    let reader = ManifestListBatchReader::try_new(&bytes, batch_size).unwrap();
+                    (reader.schema(), reader)
+                });
             }
         }
     }
