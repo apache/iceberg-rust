@@ -152,7 +152,16 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Build
-        run: make build
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # `hdrs`, the libhdfs binding behind `opendal-hdfs`, does not
+            # compile on Windows, so build every other feature there.
+            cargo build --all-targets --all-features --workspace --exclude iceberg-storage-opendal
+            cargo build --all-targets -p iceberg-storage-opendal --features opendal-all,opendal-hdfs-native
+          else
+            make build
+          fi
 
   # Checks each crate individually to catch missing feature declarations that
   # are otherwise masked by Cargo's feature unification across the workspace.
@@ -252,6 +261,19 @@ jobs:
       - name: Start Docker containers
         if: matrix.test-suite.name == 'default'
         run: make docker-up
+
+      # `opendal-hdfs` links libjvm into every test binary. Its tests run
+      # Hadoop's Java client from the HDFS fixture's jars.
+      - name: Set up the JVM for libhdfs
+        shell: bash
+        run: |
+          echo "LD_LIBRARY_PATH=$JAVA_HOME/lib/server${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          if [ "${{ matrix.test-suite.name }}" = "default" ]; then
+            docker compose -f dev/docker-compose.yaml cp hdfs-namenode:/opt/hadoop/share/hadoop "$RUNNER_TEMP/hadoop"
+            # libhdfs does not expand wildcards, so list each jar.
+            jars=$(find "$RUNNER_TEMP/hadoop/common" "$RUNNER_TEMP/hadoop/hdfs" -name '*.jar' ! -name '*-tests.jar' ! -name '*-sources.jar' | sort | paste -sd: -)
+            echo "CLASSPATH=$PWD/dev/hdfs/client:$jars" >> "$GITHUB_ENV"
+          fi
 
       - name: Run tests
         shell: bash

@@ -79,6 +79,14 @@ cfg_if! {
 }
 
 cfg_if! {
+    if #[cfg(feature = "opendal-hdfs")] {
+        mod hdfs;
+        use hdfs::*;
+        pub use hdfs::HdfsStorage;
+    }
+}
+
+cfg_if! {
     if #[cfg(feature = "opendal-hdfs-native")] {
         mod hdfs_native;
         use hdfs_native::*;
@@ -248,6 +256,9 @@ pub enum OpenDalStorageFactory {
     /// GCS storage factory.
     #[cfg(feature = "opendal-gcs")]
     Gcs,
+    /// HDFS storage factory through libhdfs.
+    #[cfg(feature = "opendal-hdfs")]
+    Hdfs,
     /// HDFS storage factory.
     #[cfg(feature = "opendal-hdfs-native")]
     HdfsNative,
@@ -302,6 +313,10 @@ impl StorageFactory for OpenDalStorageFactory {
                 config: gcs_config_parse(config.props().clone())?.into(),
                 client_config,
             })),
+            #[cfg(feature = "opendal-hdfs")]
+            OpenDalStorageFactory::Hdfs => Ok(Arc::new(OpenDalStorage::Hdfs(HdfsStorage::new(
+                client_config,
+            )))),
             #[cfg(feature = "opendal-hdfs-native")]
             OpenDalStorageFactory::HdfsNative => Ok(Arc::new(OpenDalStorage::HdfsNative(
                 HdfsNativeStorage::new(
@@ -332,6 +347,7 @@ impl StorageFactory for OpenDalStorageFactory {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs"),
                 not(feature = "opendal-hdfs-native"),
             ))]
             _ => Err(Error::new(
@@ -398,6 +414,9 @@ pub enum OpenDalStorage {
         #[serde(default)]
         client_config: OpenDalClientConfig,
     },
+    /// HDFS storage variant through libhdfs; see [`HdfsStorage`].
+    #[cfg(feature = "opendal-hdfs")]
+    Hdfs(HdfsStorage),
     /// HDFS storage variant; see [`HdfsNativeStorage`].
     #[cfg(feature = "opendal-hdfs-native")]
     HdfsNative(HdfsNativeStorage),
@@ -516,6 +535,8 @@ impl OpenDalStorage {
                     ));
                 }
             }
+            #[cfg(feature = "opendal-hdfs")]
+            OpenDalStorage::Hdfs(storage) => hdfs_create_operator(path, &storage.operators)?,
             #[cfg(feature = "opendal-hdfs-native")]
             OpenDalStorage::HdfsNative(storage) => {
                 hdfs_native_create_operator(path, &storage.config, &storage.operators)?
@@ -544,6 +565,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs"),
                 not(feature = "opendal-hdfs-native"),
             ))]
             _ => {
@@ -586,6 +608,8 @@ impl OpenDalStorage {
             OpenDalStorage::Azdls { client_config, .. } => client_config,
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { client_config, .. } => client_config,
+            #[cfg(feature = "opendal-hdfs")]
+            OpenDalStorage::Hdfs(storage) => &storage.client_config,
             #[cfg(feature = "opendal-hdfs-native")]
             OpenDalStorage::HdfsNative(storage) => &storage.client_config,
             #[cfg(all(
@@ -596,6 +620,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs"),
                 not(feature = "opendal-hdfs-native"),
             ))]
             _ => unreachable!(),
@@ -630,6 +655,10 @@ impl OpenDalStorage {
             OpenDalStorage::Hf { .. } => hf_batch_key(path),
             // The URL host alone would merge distinct NameNodes that differ
             // only by port; key by the effective NameNode instead.
+            #[cfg(feature = "opendal-hdfs")]
+            OpenDalStorage::Hdfs(_) => hdfs_name_node(path)
+                .map(|(name_node, _)| name_node)
+                .unwrap_or_default(),
             #[cfg(feature = "opendal-hdfs-native")]
             OpenDalStorage::HdfsNative(storage) => hdfs_native_batch_key(&storage.config, path),
             _ => url::Url::parse(path)
@@ -691,6 +720,8 @@ impl OpenDalStorage {
                     ))
                 }
             }
+            #[cfg(feature = "opendal-hdfs")]
+            OpenDalStorage::Hdfs(_) => Ok(hdfs_name_node(path)?.1),
             #[cfg(feature = "opendal-hdfs-native")]
             OpenDalStorage::HdfsNative(storage) => {
                 let (_, relative_path) = hdfs_native_effective_name_node(&storage.config, path)?;
@@ -735,6 +766,7 @@ impl OpenDalStorage {
                 not(feature = "opendal-oss"),
                 not(feature = "opendal-azdls"),
                 not(feature = "opendal-hf"),
+                not(feature = "opendal-hdfs"),
                 not(feature = "opendal-hdfs-native"),
             ))]
             _ => Err(Error::new(
@@ -1115,6 +1147,8 @@ mod tests {
             OpenDalStorageFactory::Azdls,
             #[cfg(feature = "opendal-hf")]
             OpenDalStorageFactory::Hf,
+            #[cfg(feature = "opendal-hdfs")]
+            OpenDalStorageFactory::Hdfs,
             #[cfg(feature = "opendal-hdfs-native")]
             OpenDalStorageFactory::HdfsNative,
         ];
