@@ -32,7 +32,8 @@ use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
 use arrow_schema::{DataType, Field as ArrowField};
 use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt};
+use futures::stream::iter as output_batches;
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use vortex::VortexSessionDefault;
 use vortex::array::VortexSessionExecute;
@@ -50,7 +51,6 @@ use vortex::expr::{
 use vortex::extension::datetime::{AnyTemporal, TimeUnit};
 use vortex::file::OpenOptionsSessionExt;
 use vortex::io::VortexReadAt;
-use vortex::layout::scan::split_by::SplitBy;
 use vortex::scalar::{DecimalValue, Scalar};
 use vortex::scan::selection::Selection;
 use vortex::session::VortexSession;
@@ -81,6 +81,12 @@ pub(super) async fn read_vortex_task(
     delete_file_loader: &CachingDeleteFileLoader,
     bytes_read_counter: Arc<AtomicU64>,
 ) -> Result<ArrowRecordBatchStream> {
+    if batch_size == Some(0) {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            "Vortex output batch size must be greater than zero",
+        ));
+    }
     // Start loading the delete files concurrently with opening the data file.
     let delete_filter_rx = delete_file_loader.load_deletes(task.deletes(), task.schema_ref());
 
@@ -212,10 +218,6 @@ pub(super) async fn read_vortex_task(
         )
         .with_some_filter(filter)
         .with_row_range(row_range);
-    if let Some(batch_size) = batch_size {
-        scan_builder = scan_builder.with_split_by(SplitBy::RowCount(batch_size));
-    }
-
     // Positional deletes are applied by excluding the deleted row ordinals
     // from the scan. Vortex selections compose with the filter expression.
     if let Some(positional_deletes) = delete_filter.get_delete_vector(&task) {
@@ -369,7 +371,21 @@ pub(super) async fn read_vortex_task(
         )?)
     });
 
-    Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
+    if let Some(batch_size) = batch_size {
+        let record_batch_stream = record_batch_stream
+            .map_ok(move |batch| {
+                let rows = batch.num_rows();
+                let slices = rows.div_ceil(batch_size).max(1);
+                output_batches((0..slices).map(move |index| {
+                    let offset = index * batch_size;
+                    Ok::<_, Error>(batch.slice(offset, (rows - offset).min(batch_size)))
+                }))
+            })
+            .try_flatten();
+        Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
+    } else {
+        Ok(Box::pin(record_batch_stream) as ArrowRecordBatchStream)
+    }
 }
 
 /// Open Vortex files through the same counted FileIO used by data and delete scans.
@@ -916,8 +932,11 @@ mod tests {
         Array, Date32Array, Decimal128Array, Float64Array, Int64Array, RecordBatch, StringArray,
         StructArray, TimestampMicrosecondArray,
     };
+    use arrow_cast::cast as cast_column;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use arrow_select::concat::concat_batches as concat_output_batches;
     use futures::TryStreamExt;
+    use futures::stream::iter as task_stream;
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use tempfile::TempDir;
     use vortex::VortexSessionDefault;
@@ -1578,6 +1597,150 @@ mod tests {
             .try_collect()
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_vortex_layout_batches_preserve_filtered_output_batches() {
+        use crate::metadata_columns::{
+            RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+            RESERVED_COL_NAME_POS, RESERVED_COL_NAME_ROW_ID, RESERVED_FIELD_ID_FILE,
+            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER, RESERVED_FIELD_ID_POS,
+            RESERVED_FIELD_ID_ROW_ID,
+        };
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("data.vortex").to_str().unwrap().to_string();
+        let delete_path = tmp
+            .path()
+            .join("delete.parquet")
+            .to_str()
+            .unwrap()
+            .to_string();
+        let io = FileIO::new_with_fs();
+        let batch = test_batch(vec![1, 2, 3, 4, 5], vec![
+            Some("a"),
+            Some("b"),
+            None,
+            Some("d"),
+            Some("e"),
+        ]);
+        let file = write_batch_file(&path, &io, test_schema(), &batch).await;
+        write_positional_delete_file(&delete_path, &path, &[3]);
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "label", Type::Primitive(PrimitiveType::String))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let projected = vec![
+            2,
+            RESERVED_FIELD_ID_POS,
+            RESERVED_FIELD_ID_ROW_ID,
+            RESERVED_FIELD_ID_LAST_UPDATED_SEQUENCE_NUMBER,
+            RESERVED_FIELD_ID_FILE,
+        ];
+        for (projection, minimum_id) in
+            [(projected.clone(), 1), (vec![], 1), (projected.clone(), 5)]
+        {
+            let task = FileScanTask::builder()
+                .with_file_size_in_bytes(file.file_size_in_bytes())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(path.clone())
+                .with_data_file_format(DataFileFormat::Vortex)
+                .with_schema(Arc::clone(&schema))
+                .with_case_sensitive(true)
+                .with_project_field_ids(projection.clone())
+                .with_first_row_id(Some(100))
+                .with_data_sequence_number(Some(7))
+                .with_predicate(Some(
+                    Reference::new("id")
+                        .greater_than(Datum::long(minimum_id))
+                        .bind(Arc::clone(&schema), true)
+                        .unwrap(),
+                ))
+                .with_deletes(vec![delete_file_entry(
+                    &delete_path,
+                    DataContentType::PositionDeletes,
+                )])
+                .build()
+                .unwrap();
+            let batches: Vec<RecordBatch> = ArrowReaderBuilder::new(io.clone(), Runtime::current())
+                .with_batch_size(2)
+                .build()
+                .read(Box::pin(task_stream([Ok(task)])))
+                .unwrap()
+                .stream()
+                .try_collect()
+                .await
+                .unwrap();
+            if minimum_id == 5 {
+                assert!(batches.is_empty());
+                continue;
+            }
+            let sizes = batches
+                .iter()
+                .map(RecordBatch::num_rows)
+                .collect::<Vec<_>>();
+            assert_eq!(sizes, vec![2, 1]);
+            if projection.is_empty() {
+                assert!(batches.iter().all(|batch| batch.num_columns() == 0));
+                continue;
+            }
+            let actual = concat_output_batches(&batches[0].schema(), &batches).unwrap();
+            let expected_names = [
+                "label",
+                RESERVED_COL_NAME_POS,
+                RESERVED_COL_NAME_ROW_ID,
+                RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
+                RESERVED_COL_NAME_FILE,
+            ];
+            let fields = actual
+                .schema()
+                .fields()
+                .iter()
+                .zip(expected_names)
+                .zip([
+                    DataType::Utf8,
+                    DataType::Int64,
+                    DataType::Int64,
+                    DataType::Int64,
+                    DataType::Utf8,
+                ])
+                .map(|((field, name), data_type)| {
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_name(name)
+                        .with_data_type(data_type)
+                })
+                .collect::<Vec<_>>();
+            let schema = Arc::new(ArrowSchema::new(fields));
+            let actual = RecordBatch::try_new(
+                Arc::clone(&schema),
+                actual
+                    .columns()
+                    .iter()
+                    .zip(schema.fields())
+                    .map(|(column, field)| cast_column(column, field.data_type()))
+                    .collect::<Result<Vec<_>, _>>()
+                    .unwrap(),
+            )
+            .unwrap();
+            let expected = RecordBatch::try_new(schema, vec![
+                Arc::new(StringArray::from(vec![Some("b"), None, Some("e")])),
+                Arc::new(Int64Array::from(vec![1, 2, 4])),
+                Arc::new(Int64Array::from(vec![101, 102, 104])),
+                Arc::new(Int64Array::from(vec![7, 7, 7])),
+                Arc::new(StringArray::from(vec![path.as_str(); 3])),
+            ])
+            .unwrap();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[tokio::test]
