@@ -30,7 +30,6 @@ use arrow_array::{
     StructArray, new_null_array,
 };
 use arrow_avro::reader::{Reader, ReaderBuilder};
-use arrow_avro::schema::AvroSchema;
 use arrow_cast::{CastOptions, cast_with_options};
 use arrow_ord::cmp::eq;
 use arrow_schema::{ArrowError, DataType, Field, Fields, SchemaRef, TimeUnit};
@@ -41,11 +40,10 @@ use serde_json::Value as JsonValue;
 use crate::arrow::schema_to_arrow_schema;
 use crate::error::invalid_data;
 use crate::spec::{
-    DATA_FILE_CONTENT_FIELD_ID, DATA_FILE_FIELD_ID, DATA_FILE_PARTITION_FIELD_ID,
-    FILE_SEQUENCE_NUMBER_FIELD_ID, FormatVersion, MANIFEST_CONTENT_FIELD_ID,
-    MANIFEST_SEQUENCE_NUMBER_FIELD_ID, MIN_SEQUENCE_NUMBER_FIELD_ID, ManifestContentType,
-    ManifestFile, ManifestMetadata, ManifestStatus, SEQUENCE_NUMBER_FIELD_ID, Schema,
-    manifest_entry_fields, manifest_file_fields,
+    DATA_FILE_CONTENT_FIELD_ID, FILE_SEQUENCE_NUMBER_FIELD_ID, FormatVersion,
+    MANIFEST_CONTENT_FIELD_ID, MANIFEST_SEQUENCE_NUMBER_FIELD_ID, MIN_SEQUENCE_NUMBER_FIELD_ID,
+    ManifestContentType, ManifestFile, ManifestMetadata, ManifestStatus, SEQUENCE_NUMBER_FIELD_ID,
+    Schema, manifest_entry_fields, manifest_file_fields,
 };
 use crate::{Error, Result};
 
@@ -137,25 +135,21 @@ struct Inheritance {
 
 impl<B: AsRef<[u8]>> ManifestEntryBatchReader<B> {
     fn try_new(bytes: B, manifest_file: &ManifestFile, batch_size: usize) -> Result<Self> {
-        // TODO(#3257): read the header from the reader below once the
-        // workaround for empty partitions is gone. The reader can't give
-        // `bytes` back, so the header is read from a borrowing reader first.
-        let (metadata, mut avro_schema) = {
-            let header_reader = ReaderBuilder::new()
-                .build(bytes.as_ref())
-                .map_err(invalid_manifest)?;
-            let header = header_reader.avro_header();
-            let metadata: HashMap<String, Vec<u8>> = header
-                .metadata()
-                .map(|(key, value)| (String::from_utf8_lossy(key).into_owned(), value.to_vec()))
-                .collect();
-            let avro_schema: JsonValue = serde_json::from_slice(
-                header
-                    .get("avro.schema")
-                    .ok_or_else(|| invalid_data!("manifest has no avro.schema"))?,
-            )?;
-            (ManifestMetadata::parse(&metadata)?, avro_schema)
-        };
+        let reader = ReaderBuilder::new()
+            .with_batch_size(batch_size)
+            .build(Cursor::new(bytes))
+            .map_err(invalid_manifest)?;
+        let header = reader.avro_header();
+        let metadata: HashMap<String, Vec<u8>> = header
+            .metadata()
+            .map(|(key, value)| (String::from_utf8_lossy(key).into_owned(), value.to_vec()))
+            .collect();
+        let metadata = ManifestMetadata::parse(&metadata)?;
+        let avro_schema: JsonValue = serde_json::from_slice(
+            header
+                .get("avro.schema")
+                .ok_or_else(|| invalid_data!("manifest has no avro.schema"))?,
+        )?;
         let partition_type = metadata
             .partition_spec()
             .partition_type(metadata.schema())?;
@@ -164,18 +158,6 @@ impl<B: AsRef<[u8]>> ManifestEntryBatchReader<B> {
                 .with_fields(manifest_entry_fields(&partition_type))
                 .build()?,
         )?);
-
-        // TODO(#3257): arrow-avro 59 can't decode a record with no fields, which
-        // is the partition of every unpartitioned manifest, so project it out and
-        // build it in `missing_field`. arrow-avro 60 fixes this
-        // (apache/arrow-rs#10771).
-        let mut builder = ReaderBuilder::new().with_batch_size(batch_size);
-        if remove_empty_partition(&mut avro_schema) {
-            builder = builder.with_reader_schema(AvroSchema::new(avro_schema.to_string()));
-        }
-        let reader = builder
-            .build(Cursor::new(bytes))
-            .map_err(invalid_manifest)?;
 
         // v1 manifests have no content or sequence number columns, which v2+
         // readers read as 0. A v2+ manifest may lack file_sequence_number (Java
@@ -364,31 +346,6 @@ impl<B: AsRef<[u8]>> ProjectingReader<B> {
     }
 }
 
-/// Removes `data_file.partition` from a manifest's Avro schema if it has no
-/// fields, and returns whether it did.
-fn remove_empty_partition(avro_schema: &mut JsonValue) -> bool {
-    let has_field_id = |field: &JsonValue, id: i32| field["field-id"].as_i64() == Some(id.into());
-    let Some(data_file_fields) = avro_schema["fields"]
-        .as_array_mut()
-        .and_then(|fields| {
-            fields
-                .iter_mut()
-                .find(|field| has_field_id(field, DATA_FILE_FIELD_ID))
-        })
-        .and_then(|data_file| data_file["type"]["fields"].as_array_mut())
-    else {
-        return false;
-    };
-    let len = data_file_fields.len();
-    data_file_fields.retain(|field| {
-        !(has_field_id(field, DATA_FILE_PARTITION_FIELD_ID)
-            && field["type"]["fields"]
-                .as_array()
-                .is_some_and(Vec::is_empty))
-    });
-    data_file_fields.len() != len
-}
-
 fn invalid_manifest(err: ArrowError) -> Error {
     invalid_data!("failed to read manifest").with_source(err)
 }
@@ -462,9 +419,6 @@ fn missing_field(field: &Field, len: usize, zero_defaults: &[i32]) -> Result<Arr
         DataType::Int32 if zero => Ok(Arc::new(Int32Array::from_value(0, len))),
         DataType::Int64 if zero => Ok(Arc::new(Int64Array::from_value(0, len))),
         _ if field.is_nullable() => Ok(new_null_array(field.data_type(), len)),
-        DataType::Struct(fields) if fields.is_empty() => {
-            Ok(Arc::new(StructArray::new_empty_fields(len, None)))
-        }
         _ => Err(invalid_data!(
             "Avro file has no required field {} with field ID {id}",
             field.name()
