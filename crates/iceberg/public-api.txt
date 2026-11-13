@@ -1253,6 +1253,45 @@ pub fn iceberg::metadata_columns::partition_field(partition_fields: alloc::vec::
 pub fn iceberg::metadata_columns::pos_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::row_id_field() -> &'static iceberg::spec::NestedFieldRef
 pub fn iceberg::metadata_columns::spec_id_field() -> &'static iceberg::spec::NestedFieldRef
+pub mod iceberg::metrics
+#[non_exhaustive] pub enum iceberg::metrics::MetricsReport
+pub iceberg::metrics::MetricsReport::Scan(alloc::boxed::Box<iceberg::metrics::ScanReport>)
+impl core::fmt::Debug for iceberg::metrics::MetricsReport
+pub fn iceberg::metrics::MetricsReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::metrics::ScanMetrics
+impl iceberg::metrics::ScanMetrics
+pub fn iceberg::metrics::ScanMetrics::dvs(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::equality_delete_files(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::indexed_delete_files(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::positional_delete_files(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::result_data_files(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::result_delete_files(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::scanned_data_manifests(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::scanned_delete_manifests(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::skipped_data_files(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::skipped_data_manifests(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::skipped_delete_files(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::skipped_delete_manifests(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::total_data_manifests(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::total_delete_file_size_in_bytes(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::total_delete_manifests(&self) -> u64
+pub fn iceberg::metrics::ScanMetrics::total_file_size_in_bytes(&self) -> u64
+impl core::fmt::Debug for iceberg::metrics::ScanMetrics
+pub fn iceberg::metrics::ScanMetrics::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::metrics::ScanReport
+impl iceberg::metrics::ScanReport
+pub fn iceberg::metrics::ScanReport::filter(&self) -> &iceberg::expr::Predicate
+pub fn iceberg::metrics::ScanReport::metrics(&self) -> &iceberg::metrics::ScanMetrics
+pub fn iceberg::metrics::ScanReport::projected_field_ids(&self) -> &[i32]
+pub fn iceberg::metrics::ScanReport::projected_field_names(&self) -> &[alloc::string::String]
+pub fn iceberg::metrics::ScanReport::schema_id(&self) -> i32
+pub fn iceberg::metrics::ScanReport::snapshot_id(&self) -> i64
+pub fn iceberg::metrics::ScanReport::table_ident(&self) -> &iceberg::TableIdent
+pub fn iceberg::metrics::ScanReport::total_planning_duration(&self) -> core::time::Duration
+impl core::fmt::Debug for iceberg::metrics::ScanReport
+pub fn iceberg::metrics::ScanReport::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub trait iceberg::metrics::MetricsReporter: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn iceberg::metrics::MetricsReporter::report<'life0, 'async_trait>(&'life0 self, report: iceberg::metrics::MetricsReport) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub mod iceberg::partitioning
 pub fn iceberg::partitioning::compute_unified_partition_type<'a>(partition_specs: impl core::iter::traits::iterator::Iterator<Item = &'a iceberg::spec::PartitionSpec>, schema: &iceberg::spec::Schema) -> iceberg::Result<iceberg::spec::StructType>
 pub mod iceberg::puffin
@@ -1461,6 +1500,7 @@ pub fn iceberg::scan::TableScanBuilder<'a>::with_concurrency_limit(self, limit: 
 pub fn iceberg::scan::TableScanBuilder<'a>::with_data_file_concurrency_limit(self, limit: usize) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_filter(self, predicate: iceberg::expr::Predicate) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_manifest_entry_concurrency_limit(self, limit: usize) -> Self
+pub fn iceberg::scan::TableScanBuilder<'a>::with_metrics_reporter(self, reporter: alloc::sync::Arc<dyn iceberg::metrics::MetricsReporter>) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_row_group_filtering_enabled(self, row_group_filtering_enabled: bool) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_row_selection_enabled(self, row_selection_enabled: bool) -> Self
 pub type iceberg::scan::ArrowRecordBatchStream = futures_core::stream::BoxStream<'static, iceberg::Result<arrow_array::record_batch::RecordBatch>>
@@ -3420,6 +3460,7 @@ pub fn iceberg::table::Table::metadata_ref(&self) -> iceberg::spec::TableMetadat
 pub fn iceberg::table::Table::reader_builder(&self) -> iceberg::arrow::ArrowReaderBuilder
 pub fn iceberg::table::Table::readonly(&self) -> bool
 pub fn iceberg::table::Table::scan(&self) -> iceberg::scan::TableScanBuilder<'_>
+pub fn iceberg::table::Table::with_metrics_reporter(self, reporter: alloc::sync::Arc<dyn iceberg::metrics::MetricsReporter>) -> Self
 pub fn iceberg::table::Table::with_runtime(self, runtime: iceberg::Runtime) -> Self
 impl core::clone::Clone for iceberg::table::Table
 pub fn iceberg::table::Table::clone(&self) -> iceberg::table::Table

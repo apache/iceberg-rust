@@ -1,0 +1,823 @@
+{
+  "java_revision" : "4e61757dcf568051a13bb8d4c00ef57c9f248947",
+  "now_micros" : 1700000000000000,
+  "normalization" : "IN members are compared as sets; Rust deduplicates equal sanitized descriptions.",
+  "unsupported" : [ "Java rejects NaN equality literals; is-nan and not-nan predicates are covered." ],
+  "cases" : [ {
+    "name" : "int-0",
+    "type" : "int",
+    "value" : 0,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(1-digit-int)"
+    }
+  }, {
+    "name" : "int-1",
+    "type" : "int",
+    "value" : -1,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(1-digit-int)"
+    }
+  }, {
+    "name" : "int-2",
+    "type" : "int",
+    "value" : 9,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(1-digit-int)"
+    }
+  }, {
+    "name" : "int-3",
+    "type" : "int",
+    "value" : 10,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(2-digit-int)"
+    }
+  }, {
+    "name" : "int-4",
+    "type" : "int",
+    "value" : -99,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(2-digit-int)"
+    }
+  }, {
+    "name" : "int-5",
+    "type" : "int",
+    "value" : 100,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(3-digit-int)"
+    }
+  }, {
+    "name" : "int-6",
+    "type" : "int",
+    "value" : -2147483648,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(10-digit-int)"
+    }
+  }, {
+    "name" : "int-7",
+    "type" : "int",
+    "value" : 2147483647,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(10-digit-int)"
+    }
+  }, {
+    "name" : "long-0",
+    "type" : "long",
+    "value" : -9223372036854775808,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(19-digit-int)"
+    }
+  }, {
+    "name" : "long-1",
+    "type" : "long",
+    "value" : 9223372036854775807,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(19-digit-int)"
+    }
+  }, {
+    "name" : "float-0",
+    "type" : "float",
+    "value" : 0,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(1-digit-float)"
+    }
+  }, {
+    "name" : "float-1",
+    "type" : "float",
+    "value" : -0.01,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(-1-digit-float)"
+    }
+  }, {
+    "name" : "float-2",
+    "type" : "float",
+    "value" : 0.5,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(1-digit-float)"
+    }
+  }, {
+    "name" : "float-3",
+    "type" : "float",
+    "value" : 1.5,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(1-digit-float)"
+    }
+  }, {
+    "name" : "float-4",
+    "type" : "float",
+    "value" : 100,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(3-digit-float)"
+    }
+  }, {
+    "name" : "float-5",
+    "type" : "float",
+    "value" : "Infinity",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(-2147483648-digit-float)"
+    }
+  }, {
+    "name" : "float-6",
+    "type" : "float",
+    "value" : "-Infinity",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(-2147483648-digit-float)"
+    }
+  }, {
+    "name" : "double-0",
+    "type" : "double",
+    "value" : -0.0,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(1-digit-float)"
+    }
+  }, {
+    "name" : "double-1",
+    "type" : "double",
+    "value" : 0.001,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(-2-digit-float)"
+    }
+  }, {
+    "name" : "double-2",
+    "type" : "double",
+    "value" : 0.1,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(0-digit-float)"
+    }
+  }, {
+    "name" : "double-3",
+    "type" : "double",
+    "value" : 99999.9,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(5-digit-float)"
+    }
+  }, {
+    "name" : "double-4",
+    "type" : "double",
+    "value" : "Infinity",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(-2147483648-digit-float)"
+    }
+  }, {
+    "name" : "boolean-0",
+    "type" : "boolean",
+    "value" : true,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-34edcf72)"
+    }
+  }, {
+    "name" : "boolean-1",
+    "type" : "boolean",
+    "value" : false,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-55619e17)"
+    }
+  }, {
+    "name" : "string-0",
+    "type" : "string",
+    "value" : "secret-customer-id",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-759e890b)"
+    }
+  }, {
+    "name" : "string-1",
+    "type" : "string",
+    "value" : "iceberg",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-481f22d9)"
+    }
+  }, {
+    "name" : "string-2",
+    "type" : "string",
+    "value" : "",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-00000000)"
+    }
+  }, {
+    "name" : "string-3",
+    "type" : "string",
+    "value" : "straße\uD83D\uDE80",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-7fd965a6)"
+    }
+  }, {
+    "name" : "string-4",
+    "type" : "string",
+    "value" : "2020-01-01",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(date)"
+    }
+  }, {
+    "name" : "string-5",
+    "type" : "string",
+    "value" : "2020-99-99",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-05508026)"
+    }
+  }, {
+    "name" : "string-6",
+    "type" : "string",
+    "value" : "12:34",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(time)"
+    }
+  }, {
+    "name" : "string-7",
+    "type" : "string",
+    "value" : "99:99:99",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(time)"
+    }
+  }, {
+    "name" : "string-8",
+    "type" : "string",
+    "value" : "2020-01-01T12:34",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp)"
+    }
+  }, {
+    "name" : "string-9",
+    "type" : "string",
+    "value" : "2020-01-01T12:34Z",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp)"
+    }
+  }, {
+    "name" : "string-10",
+    "type" : "string",
+    "value" : "2020-01-01T12:34:56.123456789",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp)"
+    }
+  }, {
+    "name" : "string-11",
+    "type" : "string",
+    "value" : "2020-01-01T12:34:56.123456789+08:00",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp)"
+    }
+  }, {
+    "name" : "string-12",
+    "type" : "string",
+    "value" : "2020-99-99T12:34:00",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-4db7253d)"
+    }
+  }, {
+    "name" : "string-13",
+    "type" : "string",
+    "value" : "-0010-01-01",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-5c36fbe2)"
+    }
+  }, {
+    "name" : "string-14",
+    "type" : "string",
+    "value" : "١٢:٣٤",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-38711c3c)"
+    }
+  }, {
+    "name" : "date-0",
+    "type" : "date",
+    "value" : 19675,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(date-today)"
+    }
+  }, {
+    "name" : "date-1",
+    "type" : "date",
+    "value" : 19674,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(date-1-days-ago)"
+    }
+  }, {
+    "name" : "date-2",
+    "type" : "date",
+    "value" : 19764,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(date-89-days-from-now)"
+    }
+  }, {
+    "name" : "date-3",
+    "type" : "date",
+    "value" : 19585,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(date)"
+    }
+  }, {
+    "name" : "date-4",
+    "type" : "date",
+    "value" : -2147483648,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(date)"
+    }
+  }, {
+    "name" : "date-5",
+    "type" : "date",
+    "value" : 2147483647,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(date)"
+    }
+  }, {
+    "name" : "time",
+    "type" : "time",
+    "value" : 123456789,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(time)"
+    }
+  }, {
+    "name" : "date-int",
+    "type" : "int",
+    "value" : 19672,
+    "field_type" : "date",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(date-3-days-ago)"
+    }
+  }, {
+    "name" : "timestamp-0",
+    "type" : "timestamp",
+    "value" : 1700000000000000,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-about-now)"
+    }
+  }, {
+    "name" : "timestamp-1",
+    "type" : "timestamp",
+    "value" : 1699999700000001,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-about-now)"
+    }
+  }, {
+    "name" : "timestamp-2",
+    "type" : "timestamp",
+    "value" : 1700000300000000,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-0-hours-from-now)"
+    }
+  }, {
+    "name" : "timestamp-3",
+    "type" : "timestamp",
+    "value" : 1699996400000000,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-1-hours-ago)"
+    }
+  }, {
+    "name" : "timestamp-4",
+    "type" : "timestamp",
+    "value" : 1700259200000000,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-72-hours-from-now)"
+    }
+  }, {
+    "name" : "timestamp-5",
+    "type" : "timestamp",
+    "value" : 1700262800000000,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-3-days-from-now)"
+    }
+  }, {
+    "name" : "timestamp-6",
+    "type" : "timestamp",
+    "value" : 1692310400000000,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-89-days-ago)"
+    }
+  }, {
+    "name" : "timestamp-7",
+    "type" : "timestamp",
+    "value" : 1707776000000000,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp)"
+    }
+  }, {
+    "name" : "timestamp-long",
+    "type" : "long",
+    "value" : 1699395200000000,
+    "field_type" : "timestamp",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-7-days-ago)"
+    }
+  }, {
+    "name" : "timestamp-tz-long",
+    "type" : "long",
+    "value" : 1700604800000000,
+    "field_type" : "timestamptz",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-7-days-from-now)"
+    }
+  }, {
+    "name" : "timestamptz",
+    "type" : "timestamptz",
+    "value" : 1699989200000000,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-3-hours-ago)"
+    }
+  }, {
+    "name" : "timestamp-ns",
+    "type" : "timestamp_ns",
+    "value" : 1700000000000000123,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp-about-now)"
+    }
+  }, {
+    "name" : "timestamptz-ns-negative",
+    "type" : "timestamptz_ns",
+    "value" : -1,
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(timestamp)"
+    }
+  }, {
+    "name" : "decimal-0",
+    "type" : "decimal(38, 2)",
+    "value" : "12.30",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-291a54f7)"
+    }
+  }, {
+    "name" : "decimal-1",
+    "type" : "decimal(38, 7)",
+    "value" : "-0.0000001",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-21be7dc8)"
+    }
+  }, {
+    "name" : "decimal-2",
+    "type" : "decimal(38, 7)",
+    "value" : "0.0000000",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-6445981e)"
+    }
+  }, {
+    "name" : "decimal-3",
+    "type" : "decimal(38, 2)",
+    "value" : "1234567890123456789012345678.90",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-47da74af)"
+    }
+  }, {
+    "name" : "uuid",
+    "type" : "uuid",
+    "value" : "00112233-4455-6677-8899-aabbccddeeff",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-746c8416)"
+    }
+  }, {
+    "name" : "binary",
+    "type" : "binary",
+    "value" : "00ff12",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-11f17a21)"
+    }
+  }, {
+    "name" : "fixed",
+    "type" : "fixed[3]",
+    "value" : "00ff12",
+    "expected" : {
+      "type" : "eq",
+      "term" : "value",
+      "value" : "(hash-11f17a21)"
+    }
+  }, {
+    "name" : "operator-lt",
+    "type" : "int",
+    "value" : 42,
+    "op" : "lt",
+    "expected" : {
+      "type" : "lt",
+      "term" : "value",
+      "value" : "(2-digit-int)"
+    }
+  }, {
+    "name" : "operator-lt-eq",
+    "type" : "int",
+    "value" : 42,
+    "op" : "lt-eq",
+    "expected" : {
+      "type" : "lt-eq",
+      "term" : "value",
+      "value" : "(2-digit-int)"
+    }
+  }, {
+    "name" : "operator-gt",
+    "type" : "int",
+    "value" : 42,
+    "op" : "gt",
+    "expected" : {
+      "type" : "gt",
+      "term" : "value",
+      "value" : "(2-digit-int)"
+    }
+  }, {
+    "name" : "operator-gt-eq",
+    "type" : "int",
+    "value" : 42,
+    "op" : "gt-eq",
+    "expected" : {
+      "type" : "gt-eq",
+      "term" : "value",
+      "value" : "(2-digit-int)"
+    }
+  }, {
+    "name" : "operator-not-eq",
+    "type" : "int",
+    "value" : 42,
+    "op" : "not-eq",
+    "expected" : {
+      "type" : "not-eq",
+      "term" : "value",
+      "value" : "(2-digit-int)"
+    }
+  }, {
+    "name" : "operator-starts-with",
+    "type" : "string",
+    "value" : "secret",
+    "op" : "starts-with",
+    "expected" : {
+      "type" : "starts-with",
+      "term" : "value",
+      "value" : "(hash-0066eca0)"
+    }
+  }, {
+    "name" : "operator-not-starts-with",
+    "type" : "string",
+    "value" : "secret",
+    "op" : "not-starts-with",
+    "expected" : {
+      "type" : "not-starts-with",
+      "term" : "value",
+      "value" : "(hash-0066eca0)"
+    }
+  }, {
+    "name" : "operator-in",
+    "type" : "int",
+    "value" : [ 1, 2, 10, 99, 100 ],
+    "op" : "in",
+    "binding_fallback" : "ClassCastException",
+    "expected" : {
+      "type" : "in",
+      "term" : "value",
+      "values" : [ "(1-digit-int)", "(1-digit-int)", "(2-digit-int)", "(2-digit-int)", "(3-digit-int)" ]
+    }
+  }, {
+    "name" : "operator-not-in",
+    "type" : "int",
+    "value" : [ 1, 2, 10, 99, 100 ],
+    "op" : "not-in",
+    "binding_fallback" : "ClassCastException",
+    "expected" : {
+      "type" : "not-in",
+      "term" : "value",
+      "values" : [ "(1-digit-int)", "(1-digit-int)", "(2-digit-int)", "(2-digit-int)", "(3-digit-int)" ]
+    }
+  }, {
+    "name" : "operator-is-null",
+    "type" : "int",
+    "value" : null,
+    "op" : "is-null",
+    "expected" : {
+      "type" : "is-null",
+      "term" : "value"
+    }
+  }, {
+    "name" : "operator-not-null",
+    "type" : "int",
+    "value" : null,
+    "op" : "not-null",
+    "expected" : {
+      "type" : "not-null",
+      "term" : "value"
+    }
+  }, {
+    "name" : "operator-is-nan",
+    "type" : "double",
+    "value" : null,
+    "op" : "is-nan",
+    "expected" : {
+      "type" : "is-nan",
+      "term" : "value"
+    }
+  }, {
+    "name" : "operator-not-nan",
+    "type" : "double",
+    "value" : null,
+    "op" : "not-nan",
+    "expected" : {
+      "type" : "not-nan",
+      "term" : "value"
+    }
+  }, {
+    "name" : "case-insensitive",
+    "type" : "long",
+    "value" : 1700000000000000,
+    "field_type" : "timestamp",
+    "reference" : "VaLuE",
+    "case_sensitive" : false,
+    "expected" : {
+      "type" : "eq",
+      "term" : "VaLuE",
+      "value" : "(timestamp-about-now)"
+    }
+  }, {
+    "name" : "compound",
+    "type" : "int",
+    "value" : null,
+    "op" : "compound",
+    "lower" : 12,
+    "upper" : 34,
+    "expected" : {
+      "type" : "or",
+      "left" : {
+        "type" : "and",
+        "left" : {
+          "type" : "lt",
+          "term" : "value",
+          "value" : "(2-digit-int)"
+        },
+        "right" : {
+          "type" : "not",
+          "child" : {
+            "type" : "gt-eq",
+            "term" : "value",
+            "value" : "(2-digit-int)"
+          }
+        }
+      },
+      "right" : {
+        "type" : "is-null",
+        "term" : "value"
+      }
+    }
+  }, {
+    "name" : "date-set",
+    "type" : "date",
+    "value" : [ 19668, 19667 ],
+    "op" : "in",
+    "binding_fallback" : "ClassCastException",
+    "expected" : {
+      "type" : "in",
+      "term" : "value",
+      "values" : [ "(date-7-days-ago)", "(date-8-days-ago)" ]
+    }
+  }, {
+    "name" : "timestamp-set",
+    "type" : "timestamp",
+    "value" : [ 1699395200000000, 1699308800000000 ],
+    "op" : "in",
+    "binding_fallback" : "ClassCastException",
+    "expected" : {
+      "type" : "in",
+      "term" : "value",
+      "values" : [ "(timestamp-7-days-ago)", "(timestamp-8-days-ago)" ]
+    }
+  }, {
+    "name" : "timestamp-long-set",
+    "type" : "long",
+    "value" : [ 1699395200000000, 1699308800000000 ],
+    "op" : "in",
+    "field_type" : "timestamp",
+    "rust_expected" : {
+      "type" : "in",
+      "term" : "value",
+      "values" : [ "(timestamp-7-days-ago)", "(timestamp-8-days-ago)" ]
+    },
+    "known_difference" : "Java 45d2ed0e (#15224) casts bound set values to Literal and throws ClassCastException. ExpressionUtil.sanitize falls back to unbound longs. Rust retains schema-bound timestamp descriptions, matching the earlier intended behavior.",
+    "binding_fallback" : "ClassCastException",
+    "expected" : {
+      "type" : "in",
+      "term" : "value",
+      "values" : [ "(16-digit-int)", "(16-digit-int)" ]
+    }
+  } ]
+}

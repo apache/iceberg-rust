@@ -26,6 +26,7 @@ rust-version = { workspace = true }
 version = { workspace = true }
 
 [dependencies]
+async-trait = { workspace = true }
 futures = { workspace = true }
 iceberg = { workspace = true }
 iceberg-catalog-rest = { workspace = true }
@@ -43,6 +44,10 @@ path = "src/rest_catalog_table.rs"
 [[example]]
 name = "rest-session-catalog-namespace"
 path = "src/rest_session_catalog_namespace.rs"
+
+[[example]]
+name = "scan-metrics"
+path = "src/scan_metrics.rs"
 
 [[example]]
 name = "oss-backend"

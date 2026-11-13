@@ -26,6 +26,7 @@ use crate::error::invalid_data;
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
+use crate::metrics::{LoggingMetricsReporter, MetricsReporter};
 use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
 use crate::spec::{
@@ -189,6 +190,7 @@ impl TableBuilder {
             object_cache,
             runtime,
             encryption_manager,
+            metrics_reporter: Arc::new(LoggingMetricsReporter),
         })
     }
 }
@@ -204,6 +206,7 @@ pub struct Table {
     object_cache: Arc<ObjectCache>,
     runtime: Runtime,
     encryption_manager: Option<Arc<EncryptionManager>>,
+    metrics_reporter: Arc<dyn MetricsReporter>,
 }
 
 impl Table {
@@ -226,6 +229,20 @@ impl Table {
     pub fn with_runtime(mut self, runtime: Runtime) -> Self {
         self.runtime = runtime;
         self
+    }
+
+    /// Sets the reporter for this table instance and its clones.
+    ///
+    /// The default reporter logs at info level. Scan-level overrides take precedence.
+    /// Configuration is not persisted to the catalog or inherited by independently loaded tables.
+    /// A custom no-op reporter can discard reports; planning counters are still collected.
+    pub fn with_metrics_reporter(mut self, reporter: Arc<dyn MetricsReporter>) -> Self {
+        self.metrics_reporter = reporter;
+        self
+    }
+
+    pub(crate) fn metrics_reporter(&self) -> Arc<dyn MetricsReporter> {
+        self.metrics_reporter.clone()
     }
 
     /// Returns a TableBuilder to build a table
