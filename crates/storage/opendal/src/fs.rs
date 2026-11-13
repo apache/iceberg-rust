@@ -28,3 +28,26 @@ pub(crate) fn fs_config_build() -> Result<Operator> {
 
     Operator::from_config(cfg).map_err(from_opendal_error)
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{OpenDalClientConfig, OpenDalStorage};
+
+    #[test]
+    fn test_relativize_path_fs() {
+        let storage = OpenDalStorage::LocalFs {
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        assert_eq!(
+            storage
+                .relativize_path("file:/tmp/data/file.parquet")
+                .unwrap(),
+            "tmp/data/file.parquet"
+        );
+        assert_eq!(
+            storage.relativize_path("/tmp/data/file.parquet").unwrap(),
+            "tmp/data/file.parquet"
+        );
+    }
+}

@@ -55,3 +55,41 @@ pub(crate) fn oss_config_build(cfg: &OssConfig, path: &str) -> Result<Operator> 
 
     Operator::new(builder).map_err(from_opendal_error)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use opendal::services::OssConfig;
+
+    use crate::{OpenDalClientConfig, OpenDalStorage};
+
+    #[test]
+    fn test_relativize_path_oss() {
+        let storage = OpenDalStorage::Oss {
+            config: Arc::new(OssConfig::default()),
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        assert_eq!(
+            storage
+                .relativize_path("oss://my-bucket/path/to/file.parquet")
+                .unwrap(),
+            "path/to/file.parquet"
+        );
+    }
+
+    #[test]
+    fn test_relativize_path_oss_invalid_scheme() {
+        let storage = OpenDalStorage::Oss {
+            config: Arc::new(OssConfig::default()),
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        assert!(
+            storage
+                .relativize_path("s3://my-bucket/path/to/file.parquet")
+                .is_err()
+        );
+    }
+}
