@@ -71,6 +71,9 @@ const MULTIPART_PART_SIZE_MAX: u64 = i32::MAX as u64;
 /// Matches Java `S3FileIOProperties.MULTIPART_SIZE_DEFAULT`.
 const MULTIPART_PART_SIZE_DEFAULT: u64 = 32 * 1024 * 1024;
 
+/// Default part size, also the serde default for `OpenDalStorage::S3::multipart_part_size`.
+/// A bare `#[serde(default)]` would read payloads without the field as 0, which OpenDAL
+/// raises to 5 MiB instead of 32 MiB.
 pub(crate) fn default_multipart_part_size() -> u64 {
     MULTIPART_PART_SIZE_DEFAULT
 }

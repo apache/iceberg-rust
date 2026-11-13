@@ -613,6 +613,7 @@ impl OpenDalStorage {
                 multipart_part_size,
                 ..
             } => WriteOptions {
+                // The parser caps this at `i32::MAX`, so the cast can't fail for parsed values.
                 chunk: Some(usize::try_from(*multipart_part_size).unwrap_or(usize::MAX)),
                 ..WriteOptions::default()
             },
