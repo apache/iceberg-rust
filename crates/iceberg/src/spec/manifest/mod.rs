@@ -122,9 +122,18 @@ impl Manifest {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?,
-            // Manifest Schema & Manifest Entry did not change between V2 and V3
-            FormatVersion::V2 | FormatVersion::V3 => reader
+            FormatVersion::V2 => reader
                 .into_deser_iter::<Resolved<_serde::ManifestEntryV2>>()
+                .map(|entry| {
+                    entry?.0.try_into(
+                        metadata.partition_spec.spec_id(),
+                        &partition_struct_type,
+                        &metadata.schema,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
+            FormatVersion::V3 => reader
+                .into_deser_iter::<Resolved<_serde::ManifestEntryV3>>()
                 .map(|entry| {
                     entry?.0.try_into(
                         metadata.partition_spec.spec_id(),
@@ -1409,9 +1418,9 @@ mod tests {
         assert_eq!(deserialized_data_file2, original_data_file2);
     }
 
-    /// Metadata for the writer schema tests: a V2 data manifest whose spec has
-    /// identity partitions on a long, a string, and a double column.
-    fn writer_schema_test_metadata() -> ManifestMetadata {
+    /// Metadata for the writer schema tests: a data manifest of `format_version`
+    /// whose spec has identity partitions on a long, a string, and a double column.
+    fn writer_schema_test_metadata(format_version: FormatVersion) -> ManifestMetadata {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
@@ -1438,7 +1447,7 @@ mod tests {
             schema,
             partition_spec,
             content: ManifestContentType::Data,
-            format_version: FormatVersion::V2,
+            format_version,
         }
     }
 
@@ -1653,16 +1662,16 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_manifest_without_each_field() {
+    fn test_parse_manifest_v3_without_each_field() {
         // Fields that the spec doesn't require in every version must read as
         // their default when the writer omits them.
-        let metadata = writer_schema_test_metadata();
+        let metadata = writer_schema_test_metadata(FormatVersion::V3);
         let partition_type = metadata
             .partition_spec
             .partition_type(&metadata.schema)
             .unwrap();
         let full_schema =
-            serde_json::to_value(manifest_schema_v2(&partition_type).unwrap()).unwrap();
+            serde_json::to_value(manifest_schema_v3(&partition_type).unwrap()).unwrap();
         let mut full_entry = expected_entry(Struct::from_iter([
             Some(Literal::long(5)),
             Some(Literal::string("a")),
@@ -1687,7 +1696,7 @@ mod tests {
         data_file.content_offset = Some(4);
         data_file.content_size_in_bytes = Some(8);
         let full_value = to_value(
-            _serde::ManifestEntryV2::try_from(
+            _serde::ManifestEntryV3::try_from(
                 full_entry.clone(),
                 &Type::Struct(partition_type.clone()),
             )
@@ -1766,8 +1775,7 @@ mod tests {
 
     #[test]
     fn test_parse_v1_manifest_without_each_field() {
-        let mut metadata = writer_schema_test_metadata();
-        metadata.format_version = FormatVersion::V1;
+        let metadata = writer_schema_test_metadata(FormatVersion::V1);
         let partition_type = metadata
             .partition_spec
             .partition_type(&metadata.schema)
@@ -1856,7 +1864,7 @@ mod tests {
     fn test_parse_manifest_matches_partition_fields_by_name() {
         // The writer orders the partition fields differently from the spec, omits
         // `name`, and adds a field the spec doesn't have.
-        let metadata = writer_schema_test_metadata();
+        let metadata = writer_schema_test_metadata(FormatVersion::V2);
         let writer_schema = v2_writer_schema(serde_json::json!([
             {"name": "score", "type": ["null", "double"], "default": null, "field-id": 1002},
             {"name": "extra", "type": ["null", "int"], "default": null, "field-id": 1003},
@@ -1879,7 +1887,7 @@ mod tests {
     #[test]
     fn test_parse_manifest_promotes_writer_types() {
         // Avro promotes int to long and float to double.
-        let metadata = writer_schema_test_metadata();
+        let metadata = writer_schema_test_metadata(FormatVersion::V2);
         let mut writer_schema = v2_writer_schema(serde_json::json!([
             {"name": "id", "type": ["null", "int"], "default": null, "field-id": 1000},
             {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
@@ -1910,7 +1918,7 @@ mod tests {
     fn test_parse_manifest_reads_required_writer_fields_as_optional() {
         // Fields that are optional in the reader schema are written without a
         // union.
-        let metadata = writer_schema_test_metadata();
+        let metadata = writer_schema_test_metadata(FormatVersion::V2);
         let mut writer_schema = v2_writer_schema(serde_json::json!([
             {"name": "id", "type": "long", "field-id": 1000},
             {"name": "name", "type": "string", "field-id": 1001},
@@ -1941,7 +1949,7 @@ mod tests {
     fn test_parse_manifest_reads_union_writer_fields_as_required() {
         // A field that is required in the reader schema is written as a union with
         // null.
-        let metadata = writer_schema_test_metadata();
+        let metadata = writer_schema_test_metadata(FormatVersion::V2);
         let mut writer_schema = v2_writer_schema(serde_json::json!([
             {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
             {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
@@ -2026,7 +2034,7 @@ mod tests {
     fn test_parse_manifest_ignores_record_names_and_unknown_fields() {
         // Record names differ from the ones Java writes, and the writer has fields
         // the reader schema doesn't.
-        let metadata = writer_schema_test_metadata();
+        let metadata = writer_schema_test_metadata(FormatVersion::V2);
         let mut writer_schema = v2_writer_schema(serde_json::json!([
             {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
             {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
@@ -2082,7 +2090,7 @@ mod tests {
     fn test_parse_manifest_equality_ids_written_as_long() {
         // PyIceberg wrote `equality_ids` as `array<long>` before
         // apache/iceberg-python#3842.
-        let metadata = writer_schema_test_metadata();
+        let metadata = writer_schema_test_metadata(FormatVersion::V2);
         let mut writer_schema = v2_writer_schema(serde_json::json!([
             {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
             {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
@@ -2114,7 +2122,7 @@ mod tests {
 
     #[test]
     fn test_parse_manifest_rejects_equality_id_above_int_range() {
-        let metadata = writer_schema_test_metadata();
+        let metadata = writer_schema_test_metadata(FormatVersion::V2);
         let mut writer_schema = v2_writer_schema(serde_json::json!([
             {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
             {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
