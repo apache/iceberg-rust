@@ -18,10 +18,13 @@
 //! Operation-scoped planning reports and asynchronous consumers.
 //!
 //! Reports describe work performed, including partial or failed scans, without an outcome tag.
-//! The default consumer logs at debug level.
+//! Configure delivery with [`crate::table::Table::with_metrics_reporter`] or override it with
+//! [`crate::scan::TableScanBuilder::with_metrics_reporter`]. The default consumer logs at debug level.
 
 use std::fmt::Debug;
 use std::time::Duration;
+
+pub(crate) mod filter;
 
 use crate::TableIdent;
 use crate::expr::Predicate;
@@ -45,15 +48,17 @@ use crate::expr::Predicate;
 /// yield during I/O, bound their own waits, and avoid blocking or aborting the process.
 /// Reporter time is excluded from the report's planning duration.
 #[async_trait::async_trait]
-pub(crate) trait MetricsReporter: Debug + Send + Sync {
+pub trait MetricsReporter: Debug + Send + Sync {
     /// Observes one finalized report without taking ownership.
+    ///
+    /// The reference is valid for this callback. Clone the report to retain it afterward.
     async fn report(&self, report: &MetricsReport);
 }
 
 /// A finalized operation report, extensible to additional operation types.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[non_exhaustive]
-pub(crate) enum MetricsReport {
+pub enum MetricsReport {
     /// Metrics from one scan-planning invocation, including COW planning.
     Scan(Box<ScanReport>),
 }
@@ -62,9 +67,9 @@ pub(crate) enum MetricsReport {
 ///
 /// Reports include work planned ahead of consumption and have no success or cancellation tag.
 /// Iceberg constructs reports; consumers receive them through [`MetricsReporter`].
-#[derive(Debug)]
-#[cfg_attr(test, derive(Clone, PartialEq))]
-pub(crate) struct ScanReport {
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
+pub struct ScanReport {
     pub(crate) table_ident: TableIdent,
     pub(crate) snapshot_id: i64,
     pub(crate) schema_id: i32,
@@ -75,10 +80,55 @@ pub(crate) struct ScanReport {
     pub(crate) total_planning_duration: Duration,
 }
 
+impl ScanReport {
+    /// Returns the scanned table's identifier.
+    pub fn table_ident(&self) -> &TableIdent {
+        &self.table_ident
+    }
+
+    /// Returns the selected snapshot ID.
+    pub fn snapshot_id(&self) -> i64 {
+        self.snapshot_id
+    }
+
+    /// Returns the source schema ID for a full projection, or 0 for a reduced schema.
+    pub fn schema_id(&self) -> i32 {
+        self.schema_id
+    }
+
+    /// Returns resolved projected IDs, including nested and filter-required fields.
+    pub fn projected_field_ids(&self) -> &[i32] {
+        &self.projected_field_ids
+    }
+
+    /// Returns names corresponding to [`Self::projected_field_ids`].
+    pub fn projected_field_names(&self) -> &[String] {
+        &self.projected_field_names
+    }
+
+    /// Returns the selection predicate with literal values replaced by diagnostic descriptions.
+    ///
+    /// The predicate is for reporting, not evaluation. Hashes and numeric/time descriptions
+    /// retain diagnostic information; sanitization does not provide cryptographic anonymity.
+    pub fn filter(&self) -> &Predicate {
+        &self.filter
+    }
+
+    /// Returns the scan's planning counters.
+    pub fn metrics(&self) -> &ScanMetrics {
+        &self.metrics
+    }
+
+    /// Returns elapsed planning, consumption, and worker-teardown time, excluding delivery.
+    pub fn total_planning_duration(&self) -> Duration {
+        self.total_planning_duration
+    }
+}
+
 /// Immutable scan-planning counters, distinct from Arrow row-reading metrics.
-#[derive(Debug)]
-#[cfg_attr(test, derive(Clone, PartialEq))]
-pub(crate) struct ScanMetrics {
+#[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
+pub struct ScanMetrics {
     pub(crate) total_data_manifests: u64,
     pub(crate) total_delete_manifests: u64,
     pub(crate) scanned_data_manifests: u64,
@@ -98,6 +148,86 @@ pub(crate) struct ScanMetrics {
 }
 
 impl ScanMetrics {
+    /// Data manifests listed for the snapshot.
+    pub fn total_data_manifests(&self) -> u64 {
+        self.total_data_manifests
+    }
+
+    /// Delete manifests listed for the snapshot.
+    pub fn total_delete_manifests(&self) -> u64 {
+        self.total_delete_manifests
+    }
+
+    /// Data manifests whose processing started.
+    pub fn scanned_data_manifests(&self) -> u64 {
+        self.scanned_data_manifests
+    }
+
+    /// Delete manifests whose processing started.
+    pub fn scanned_delete_manifests(&self) -> u64 {
+        self.scanned_delete_manifests
+    }
+
+    /// Data manifests rejected by partition predicates or live-entry counts.
+    pub fn skipped_data_manifests(&self) -> u64 {
+        self.skipped_data_manifests
+    }
+
+    /// Delete manifests rejected by partition predicates or live-entry counts.
+    pub fn skipped_delete_manifests(&self) -> u64 {
+        self.skipped_delete_manifests
+    }
+
+    /// Data-file tasks planned, including buffered tasks not consumed.
+    pub fn result_data_files(&self) -> u64 {
+        self.result_data_files
+    }
+
+    /// Delete attachments across planned data-file tasks, including repeated files.
+    pub fn result_delete_files(&self) -> u64 {
+        self.result_delete_files
+    }
+
+    /// Live data-file entries rejected by predicates, excluding dead entries.
+    pub fn skipped_data_files(&self) -> u64 {
+        self.skipped_data_files
+    }
+
+    /// Live delete-file entries rejected by predicates, excluding dead entries.
+    pub fn skipped_delete_files(&self) -> u64 {
+        self.skipped_delete_files
+    }
+
+    /// Delete files accepted for indexing, including unmatched deletes and DVs.
+    pub fn indexed_delete_files(&self) -> u64 {
+        self.indexed_delete_files
+    }
+
+    /// Equality delete files accepted for indexing.
+    pub fn equality_delete_files(&self) -> u64 {
+        self.equality_delete_files
+    }
+
+    /// Position delete files accepted for indexing, excluding deletion vectors.
+    pub fn positional_delete_files(&self) -> u64 {
+        self.positional_delete_files
+    }
+
+    /// Deletion vectors accepted for indexing.
+    pub fn dvs(&self) -> u64 {
+        self.dvs
+    }
+
+    /// Sum of physical sizes of planned data files, in bytes.
+    pub fn total_file_size_in_bytes(&self) -> u64 {
+        self.total_file_size_in_bytes
+    }
+
+    /// Bytes attached to tasks: physical delete-file sizes or DV content sizes, repeated per attachment.
+    pub fn total_delete_file_size_in_bytes(&self) -> u64 {
+        self.total_delete_file_size_in_bytes
+    }
+
     pub(crate) fn empty() -> Self {
         Self {
             total_data_manifests: 0,
@@ -128,29 +258,29 @@ impl MetricsReporter for LoggingMetricsReporter {
     async fn report(&self, report: &MetricsReport) {
         let MetricsReport::Scan(report) = report;
         tracing::debug!(target: "iceberg::scan::report",
-            table_name = %report.table_ident,
-            snapshot_id = report.snapshot_id,
-            schema_id = report.schema_id,
-            projected_field_ids = ?report.projected_field_ids,
-            projected_field_names = ?report.projected_field_names,
-            has_filter = report.filter != Predicate::AlwaysTrue,
-            total_planning_duration_ns = report.total_planning_duration.as_nanos() as u64,
-            total_data_manifests = report.metrics.total_data_manifests,
-            total_delete_manifests = report.metrics.total_delete_manifests,
-            scanned_data_manifests = report.metrics.scanned_data_manifests,
-            scanned_delete_manifests = report.metrics.scanned_delete_manifests,
-            skipped_data_manifests = report.metrics.skipped_data_manifests,
-            skipped_delete_manifests = report.metrics.skipped_delete_manifests,
-            result_data_files = report.metrics.result_data_files,
-            result_delete_files = report.metrics.result_delete_files,
-            skipped_data_files = report.metrics.skipped_data_files,
-            skipped_delete_files = report.metrics.skipped_delete_files,
-            indexed_delete_files = report.metrics.indexed_delete_files,
-            equality_delete_files = report.metrics.equality_delete_files,
-            positional_delete_files = report.metrics.positional_delete_files,
-            dvs = report.metrics.dvs,
-            total_file_size_in_bytes = report.metrics.total_file_size_in_bytes,
-            total_delete_file_size_in_bytes = report.metrics.total_delete_file_size_in_bytes,
+            table_name = %report.table_ident(),
+            snapshot_id = report.snapshot_id(),
+            schema_id = report.schema_id(),
+            projected_field_ids = ?report.projected_field_ids(),
+            projected_field_names = ?report.projected_field_names(),
+            has_filter = report.filter() != &Predicate::AlwaysTrue,
+            total_planning_duration_ns = report.total_planning_duration().as_nanos() as u64,
+            total_data_manifests = report.metrics().total_data_manifests(),
+            total_delete_manifests = report.metrics().total_delete_manifests(),
+            scanned_data_manifests = report.metrics().scanned_data_manifests(),
+            scanned_delete_manifests = report.metrics().scanned_delete_manifests(),
+            skipped_data_manifests = report.metrics().skipped_data_manifests(),
+            skipped_delete_manifests = report.metrics().skipped_delete_manifests(),
+            result_data_files = report.metrics().result_data_files(),
+            result_delete_files = report.metrics().result_delete_files(),
+            skipped_data_files = report.metrics().skipped_data_files(),
+            skipped_delete_files = report.metrics().skipped_delete_files(),
+            indexed_delete_files = report.metrics().indexed_delete_files(),
+            equality_delete_files = report.metrics().equality_delete_files(),
+            positional_delete_files = report.metrics().positional_delete_files(),
+            dvs = report.metrics().dvs(),
+            total_file_size_in_bytes = report.metrics().total_file_size_in_bytes(),
+            total_delete_file_size_in_bytes = report.metrics().total_delete_file_size_in_bytes(),
             "Scan planning terminated"
         );
     }

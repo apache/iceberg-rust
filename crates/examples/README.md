@@ -17,5 +17,22 @@
   ~ under the License.
 -->
 
-Example usage codes for `iceberg-rust`. Currently, these examples can't run directly since it requires setting up of 
-environments for catalogs, for example, rest catalog server.  
+Example usage code for `iceberg-rust`. Catalog examples require the corresponding
+services, such as a REST catalog server.
+
+The `scan-metrics` example captures reports in memory while planning an existing
+local table, without reading data rows or requiring a catalog server:
+
+```sh
+cargo run -p iceberg-examples --example scan-metrics -- /path/to/metadata.json
+```
+
+The metadata, manifest lists, and manifests must be locally accessible at their
+recorded locations. Tables without a snapshot produce no scan report. The example
+uses a table-level reporter; a scan can replace it with
+`.with_metrics_reporter(other_reporter)` before `.build()`. To discard reports,
+install a custom no-op implementation of `MetricsReporter`. Custom reporting
+replaces the default debug logging consumer. Planning does not wait for delivery,
+including at successful EOF. The example keeps the runtime alive and waits on its
+reporter's signal, with a timeout, before reading the reports. Tables without a
+snapshot skip that wait.

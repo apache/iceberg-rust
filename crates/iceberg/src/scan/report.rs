@@ -68,10 +68,16 @@ impl ScanReport {
             projected_field_ids,
             projected_field_names,
             filter: context
-                .predicate
+                .snapshot_bound_predicate
                 .as_deref()
-                .cloned()
-                .unwrap_or(Predicate::AlwaysTrue),
+                .map(crate::metrics::filter::unbind)
+                .unwrap_or_else(|| {
+                    context
+                        .predicate
+                        .as_deref()
+                        .cloned()
+                        .unwrap_or(Predicate::AlwaysTrue)
+                }),
             metrics: Metrics::empty(),
             total_planning_duration: Duration::ZERO,
         }
@@ -79,6 +85,8 @@ impl ScanReport {
 
     pub(super) fn finish(mut self, counters: &Counters, elapsed: Duration) -> Self {
         self.metrics = self.metrics.finish(counters);
+        self.filter =
+            crate::metrics::filter::sanitize(&self.filter, chrono::Utc::now().timestamp_micros());
         self.total_planning_duration = elapsed;
         self
     }
