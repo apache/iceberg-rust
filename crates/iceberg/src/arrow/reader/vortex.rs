@@ -46,8 +46,8 @@ use vortex::dtype::{DType, DecimalDType, Nullability, PType};
 use vortex::encodings::uuid::Uuid;
 use vortex::error::{VortexResult, vortex_err};
 use vortex::expr::{
-    Expression, and, eq, get_item, gt, gt_eq, is_not_null, is_null, like, lit, lt, lt_eq, not,
-    not_eq, not_like, or, or_collect, root, select,
+    Expression, and, cast as cast_column, eq, get_item, gt, gt_eq, is_not_null, is_null, like, lit,
+    lt, lt_eq, not, not_eq, not_like, or, or_collect, root, select,
 };
 use vortex::extension::datetime::{AnyTemporal, TimeUnit};
 use vortex::file::OpenOptionsSessionExt;
@@ -706,9 +706,17 @@ fn column_expr(
     // Promote the column instead of narrowing the literal: out-of-range literals
     // must remain valid filters after int/float/decimal schema evolution.
     let promoted = match (&dtype, reference.field().field_type.as_ref()) {
-        (DType::Primitive(PType::I32, nullability), Type::Primitive(PrimitiveType::Long)) => {
-            Some(DType::Primitive(PType::I64, *nullability))
-        }
+        (
+            DType::Primitive(PType::I8 | PType::I16 | PType::U8 | PType::U16, nullability),
+            Type::Primitive(PrimitiveType::Int),
+        ) => Some(DType::Primitive(PType::I32, *nullability)),
+        (
+            DType::Primitive(
+                PType::I8 | PType::I16 | PType::I32 | PType::U8 | PType::U16 | PType::U32,
+                nullability,
+            ),
+            Type::Primitive(PrimitiveType::Long),
+        ) => Some(DType::Primitive(PType::I64, *nullability)),
         (DType::Primitive(PType::F32, nullability), Type::Primitive(PrimitiveType::Double)) => {
             Some(DType::Primitive(PType::F64, *nullability))
         }
@@ -724,7 +732,7 @@ fn column_expr(
     if let Some(promoted) = promoted
         && promoted != dtype
     {
-        expr = vortex::expr::cast(expr, promoted.clone());
+        expr = cast_column(expr, promoted.clone());
         dtype = promoted;
     }
     Ok(Some(FileColumn { expr, dtype }))
@@ -2718,6 +2726,75 @@ mod tests {
             assert_eq!(batches[0].schema().field(0).name(), "renamed");
         }
     }
+    #[tokio::test]
+    async fn test_vortex_uint16_predicate_above_max_excludes_null() {
+        use std::fs::metadata;
+
+        use arrow_array::{Int32Array, UInt16Array};
+        use futures::stream::iter;
+        use tokio::fs::File;
+        use vortex::array::stream::ArrayStreamAdapter;
+        use vortex::arrow::ArrowSessionExt;
+        use vortex::file::{OpenOptionsSessionExt, WriteOptionsSessionExt};
+
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("uint16.vortex");
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "x",
+                DataType::UInt16,
+                true,
+            )])),
+            vec![Arc::new(UInt16Array::from(vec![
+                Some(0),
+                Some(u16::MAX),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let session = VortexSession::default();
+        let array = session
+            .arrow()
+            .from_arrow_record_batch(batch.clone(), batch.schema_ref())
+            .unwrap();
+        let stream = ArrayStreamAdapter::new(array.dtype().clone(), iter([Ok(array)]));
+        session
+            .write_options()
+            .write(File::create(&path).await.unwrap(), stream)
+            .await
+            .unwrap();
+        let file = session.open_options().open_path(&path).await.unwrap();
+        let physical_schema = session.arrow().to_arrow_schema(file.dtype()).unwrap();
+        assert_eq!(physical_schema.field(0).data_type(), &DataType::UInt16);
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "x", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let predicate = Reference::new("x")
+            .less_than(Datum::int(i32::from(u16::MAX) + 1))
+            .bind(schema.clone(), true)
+            .unwrap();
+        let task = test_scan_task_filtered(
+            path.to_str().unwrap(),
+            schema.clone(),
+            metadata(&path).unwrap().len(),
+            Some(predicate),
+            vec![],
+        );
+        let expected = RecordBatch::try_new(Arc::new(schema.as_ref().try_into().unwrap()), vec![
+            Arc::new(Int32Array::from(vec![0, i32::from(u16::MAX)])),
+        ])
+        .unwrap();
+        assert_eq!(scan_batches(FileIO::new_with_fs(), task).await, vec![
+            expected
+        ]);
+    }
+
     #[tokio::test]
     async fn test_vortex_promoted_predicate_and_partition_metadata() {
         use crate::metadata_columns::*;
