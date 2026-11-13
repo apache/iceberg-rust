@@ -31,7 +31,8 @@ use vortex::array::stats::TypedStatsSetRef;
 use vortex::array::stream::ArrayStreamAdapter;
 use vortex::arrow::ArrowSessionExt;
 use vortex::dtype::extension::Matcher;
-use vortex::dtype::{DType, PType};
+use vortex::dtype::{DType, FieldPath, PType};
+use vortex::encodings::uuid::Uuid;
 use vortex::expr::stats::{Stat, StatsProvider, StatsProviderExt};
 use vortex::extension::datetime::{AnyTemporal, TimeUnit};
 use vortex::file::{WriteOptionsSessionExt, WriteStrategyBuilder, WriteSummary};
@@ -157,7 +158,7 @@ impl VortexWriter {
             .map_err(to_iceberg_error)?;
         let file = self.output_file.writer().await?;
         let bytes_written = Arc::new(AtomicU64::new(0));
-        let strategy = WriteStrategyBuilder::default().build();
+        let strategy = WriteStrategyBuilder::from_session(&self.session).build();
 
         let (batches, receiver) = mpsc::channel::<ArrayRef>(1);
         let stream = ArrayStreamAdapter::new(dtype, receiver.map(Ok));
@@ -210,7 +211,7 @@ impl VortexWriter {
         let mut lower_bounds: HashMap<i32, Datum> = HashMap::new();
         let mut upper_bounds: HashMap<i32, Datum> = HashMap::new();
         let file_stats = summary.footer().statistics();
-        for (index, field) in arrow_schema.fields().iter().enumerate() {
+        for field in arrow_schema.fields() {
             let Some(iceberg_field) = self.schema.field_by_name(field.name()) else {
                 continue;
             };
@@ -221,10 +222,12 @@ impl VortexWriter {
             };
             // Top-level columns hold exactly one value per row.
             value_counts.insert(iceberg_field.id, record_count);
-            let Some(stats) = file_stats.filter(|stats| index < stats.stats_sets().len()) else {
+            let Some((stats, field_dtype)) = file_stats
+                .and_then(|stats| stats.get_by_path(&FieldPath::from_name(field.name().as_str())))
+            else {
                 continue;
             };
-            let (stats_set, field_dtype) = stats.get(index);
+            let stats_set = stats.to_stats_set();
             let typed_stats = stats_set.as_typed_ref(field_dtype);
             if let Some(null_count) = typed_stats.get_as::<u64>(Stat::NullCount).as_exact() {
                 null_value_counts.insert(iceberg_field.id, null_count);
@@ -253,7 +256,7 @@ impl VortexWriter {
         let mut column_sizes = HashMap::new();
         fn collect_sizes(
             fields: &[crate::spec::NestedFieldRef],
-            path: vortex::dtype::FieldPath,
+            path: FieldPath,
             sizes: &vortex::file::CompressedFieldSizes,
             output: &mut HashMap<i32, u64>,
         ) {
@@ -271,7 +274,7 @@ impl VortexWriter {
         }
         collect_sizes(
             self.schema.as_struct().fields(),
-            vortex::dtype::FieldPath::root(),
+            FieldPath::root(),
             &sizes,
             &mut column_sizes,
         );
@@ -366,7 +369,7 @@ fn vortex_scalar_to_datum(scalar: Scalar, primitive_type: &PrimitiveType) -> Opt
         }
         PrimitiveType::Uuid => {
             let ext = scalar.as_extension_opt()?;
-            if !ext.ext_dtype().is::<vortex::extension::uuid::Uuid>() {
+            if !ext.ext_dtype().is::<Uuid>() {
                 return None;
             }
             let storage = ext.to_storage_scalar();
