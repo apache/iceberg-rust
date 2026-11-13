@@ -45,12 +45,13 @@ use crate::io::FileIO;
 use crate::metadata_columns::{
     RESERVED_FIELD_ID_PARTITION, get_metadata_field_id, is_metadata_column_name,
 };
+use crate::metrics::MetricsReporter;
 use crate::runtime::Runtime;
 use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, SortOrderRef, StructType};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::util::snapshot::snapshot_id_as_of_time;
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
@@ -142,6 +143,7 @@ enum SnapshotSelection {
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
     table: &'a Table,
+    metrics_reporter: Arc<dyn MetricsReporter>,
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
     snapshot_selection: Option<SnapshotSelection>,
@@ -162,6 +164,7 @@ impl<'a> TableScanBuilder<'a> {
 
         Self {
             table,
+            metrics_reporter: table.metrics_reporter(),
             column_names: None,
             snapshot_selection: None,
             batch_size: None,
@@ -356,6 +359,9 @@ impl<'a> TableScanBuilder<'a> {
                         column_names: self.column_names,
                         file_io: self.table.file_io().clone(),
                         plan_context: None,
+                        table_ident: self.table.identifier().clone(),
+                        metrics_reporter: self.metrics_reporter,
+
                         concurrency_limit_data_files: self.concurrency_limit_data_files,
                         concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
@@ -420,6 +426,9 @@ impl<'a> TableScanBuilder<'a> {
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
             plan_context: Some(plan_context),
+            table_ident: self.table.identifier().clone(),
+            metrics_reporter: self.metrics_reporter,
+
             concurrency_limit_data_files: self.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
@@ -434,6 +443,9 @@ impl<'a> TableScanBuilder<'a> {
 /// Table scan.
 #[derive(Debug)]
 pub struct TableScan {
+    table_ident: TableIdent,
+    metrics_reporter: Arc<dyn MetricsReporter>,
+
     /// A [PlanContext], if this table has at least one snapshot, otherwise None.
     ///
     /// If this is None, then the scan contains no rows.
@@ -463,20 +475,42 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
-        self.plan_data_files(Arc::default(), |ctx| ctx.into_file_scan_task())
+        self.plan_data_files(self.metrics_reporter.clone(), |ctx| {
+            ctx.into_file_scan_task()
+        })
+        .await
+    }
+
+    #[cfg(test)]
+    async fn plan_files_with_reporter(
+        &self,
+        reporter: Arc<dyn MetricsReporter>,
+    ) -> Result<FileScanTaskStream> {
+        self.plan_data_files(reporter, |ctx| ctx.into_file_scan_task())
             .await
     }
 
     pub(crate) async fn plan_cow_rewrite_files(
         &self,
     ) -> Result<BoxStream<'static, Result<crate::cow_rewrite::CowRewriteFile>>> {
-        self.plan_data_files(Arc::default(), |ctx| ctx.into_cow_rewrite_file())
+        self.plan_data_files(self.metrics_reporter.clone(), |ctx| {
+            ctx.into_cow_rewrite_file()
+        })
+        .await
+    }
+
+    #[cfg(test)]
+    async fn plan_cow_rewrite_files_with_reporter(
+        &self,
+        reporter: Arc<dyn MetricsReporter>,
+    ) -> Result<BoxStream<'static, Result<crate::cow_rewrite::CowRewriteFile>>> {
+        self.plan_data_files(reporter, |ctx| ctx.into_cow_rewrite_file())
             .await
     }
 
     async fn plan_data_files<T, F, Fut>(
         &self,
-        counters: Arc<report::Counters>,
+        reporter: Arc<dyn MetricsReporter>,
         build_result: F,
     ) -> Result<BoxStream<'static, Result<T>>>
     where
@@ -488,7 +522,12 @@ impl TableScan {
             return Ok(Box::pin(futures::stream::empty()));
         };
 
-        let mut metrics = report::Metrics::default();
+        let mut reporting = report::ScanReportState::new(
+            self.table_ident.clone(),
+            plan_context,
+            reporter,
+            self.runtime.clone(),
+        );
         let mut workers = Vec::new();
         let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
         let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
@@ -514,83 +553,91 @@ impl TableScan {
             manifest_entry_data_ctx_tx,
             delete_file_idx.clone(),
             manifest_entry_delete_ctx_tx,
-            counters.clone(),
-            &mut metrics,
+            reporting.counters.clone(),
+            reporting.metrics_mut(),
         )?;
-        let worker = self.runtime.io().spawn(index_completion);
+        let reporting = Arc::new(reporting);
+        let worker = self
+            .runtime
+            .io()
+            .spawn(report::track(reporting.clone(), index_completion));
         workers.push(worker.abort_on_drop());
 
         let rt = self.runtime.clone();
 
         // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
-        let worker = rt.io().spawn(async move {
+        let worker = rt.io().spawn(report::track(reporting.clone(), async move {
             futures::stream::iter(manifest_file_contexts)
                 .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| async move {
                     ctx.fetch_manifest_and_stream_manifest_entries().await
                 })
                 .await
-        });
+        }));
         workers.push(worker.abort_on_drop());
 
         // Process the delete file [`ManifestEntry`] stream in parallel
         {
             let rt = rt.clone();
             let rt_inner = rt.clone();
-            let worker = rt.cpu().spawn(async move {
+            let worker_reporting = reporting.clone();
+            let worker = rt.cpu().spawn(report::track(reporting.clone(), async move {
                 manifest_entry_delete_ctx_rx
                     .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
                     .try_for_each_concurrent(
                         concurrency_limit_manifest_entries,
                         |(manifest_entry_context, tx)| {
                             let rt_inner = rt_inner.clone();
+                            let reporting = worker_reporting.clone();
                             async move {
                                 rt_inner
                                     .cpu()
-                                    .spawn(async move {
+                                    .spawn(report::track(reporting, async move {
                                         Self::process_delete_manifest_entry(
                                             manifest_entry_context,
                                             tx,
                                         )
                                         .await
-                                    })
+                                    }))
                                     .abort_on_drop()
                                     .await?
                             }
                         },
                     )
                     .await
-            });
+            }));
             workers.push(worker.abort_on_drop());
         }
 
         // Process the data file [`ManifestEntry`] stream in parallel
         {
             let rt_inner = rt.clone();
-            let worker = rt.cpu().spawn(async move {
+            let worker_reporting = reporting.clone();
+            let worker = rt.cpu().spawn(report::track(reporting.clone(), async move {
                 manifest_entry_data_ctx_rx
                     .map(|me_ctx| Ok((me_ctx, planned_file_tx.clone())))
                     .try_for_each_concurrent(
                         concurrency_limit_manifest_entries,
                         |(manifest_entry_context, tx)| {
                             let rt_inner = rt_inner.clone();
+                            let reporting = worker_reporting.clone();
                             async move {
                                 rt_inner
                                     .cpu()
-                                    .spawn(async move {
+                                    .spawn(report::track(reporting, async move {
                                         Self::process_data_manifest_entry(
                                             manifest_entry_context,
                                             tx,
                                             build_result,
                                         )
                                         .await
-                                    })
+                                    }))
                                     .abort_on_drop()
                                     .await?
                             }
                         },
                     )
                     .await
-            });
+            }));
             workers.push(worker.abort_on_drop());
         }
 
@@ -603,19 +650,7 @@ impl TableScan {
             .filter_map(|result| std::future::ready(result.err().map(Err)));
         // Bounded output channels must be drained while joining the workers.
         let tasks = futures::stream::select(planned_file_rx.map(Ok), worker_errors).boxed();
-        Ok(futures::stream::try_unfold(
-            (tasks, metrics, counters),
-            |(mut tasks, metrics, counters)| async move {
-                match tasks.next().await {
-                    Some(task) => task.map(|task| Some((task, (tasks, metrics, counters)))),
-                    None => {
-                        let _metrics = metrics.finish(&counters);
-                        Ok(None)
-                    }
-                }
-            },
-        )
-        .boxed())
+        Ok(reporting.report_on_termination(tasks))
     }
 
     /// Returns an [`ArrowRecordBatchStream`].
@@ -792,15 +827,16 @@ mod tests {
     use parquet::arrow::ArrowWriter;
     use uuid::Uuid;
 
-    use super::report::{Counters, Metrics};
+    use super::report::{Metrics, ScanReport};
     use super::{TableScan, resolve_field_id};
     use crate::arrow::ArrowReaderBuilder;
-    use crate::expr::{BoundPredicate, Reference};
+    use crate::expr::{BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
     use crate::metadata_columns::{
         RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_POS,
     };
+    use crate::metrics::{LoggingMetricsReporter, MetricsReporter};
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, MAIN_BRANCH,
@@ -3758,6 +3794,1144 @@ mod tests {
         assert_eq!(y, (1100..1200).collect::<Vec<i64>>());
     }
 
+    #[derive(Debug, Default)]
+    struct RecordingMetricsReporter(std::sync::Mutex<Vec<ScanReport>>, tokio::sync::Notify);
+
+    #[async_trait::async_trait]
+    impl MetricsReporter for RecordingMetricsReporter {
+        async fn report(&self, report: crate::metrics::MetricsReport) {
+            let crate::metrics::MetricsReport::Scan(report) = report;
+            self.0.lock().unwrap().push(*report);
+            self.1.notify_one();
+        }
+    }
+
+    impl RecordingMetricsReporter {
+        fn take_reports(&self) -> Vec<ScanReport> {
+            std::mem::take(&mut *self.0.lock().unwrap())
+        }
+
+        async fn wait_for_reports(&self, count: usize) {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let notified = self.1.notified();
+                    if self.0.lock().unwrap().len() >= count {
+                        return;
+                    }
+                    notified.await;
+                }
+            })
+            .await
+            .expect("report delivery");
+        }
+
+        async fn wait_report(&self) -> ScanReport {
+            self.wait_for_reports(1).await;
+            self.take_report()
+        }
+
+        fn take_report(&self) -> ScanReport {
+            let [report]: [ScanReport; 1] = self
+                .take_reports()
+                .try_into()
+                .expect("one finalized report");
+            report
+        }
+    }
+
+    #[derive(Debug)]
+    struct PanickingMetricsReporter(Arc<RecordingMetricsReporter>);
+
+    #[async_trait::async_trait]
+    impl MetricsReporter for PanickingMetricsReporter {
+        async fn report(&self, report: crate::metrics::MetricsReport) {
+            self.0.report(report).await;
+            struct Payload;
+            impl Drop for Payload {
+                fn drop(&mut self) {
+                    panic!("reporter panic payload dropped");
+                }
+            }
+            std::panic::panic_any(Payload);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reporter_panics_do_not_fail_planning() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let scan = fixture.table.scan().build().unwrap();
+        for cow in [false, true] {
+            let recording = Arc::new(RecordingMetricsReporter::default());
+            let reporter: Arc<dyn MetricsReporter> =
+                Arc::new(PanickingMetricsReporter(recording.clone()));
+            let tasks = tokio::time::timeout(Duration::from_secs(10), async {
+                let stream = if cow {
+                    scan.plan_cow_rewrite_files_with_reporter(reporter)
+                        .await
+                        .unwrap()
+                        .map_ok(|file| file.scan_task)
+                        .boxed()
+                } else {
+                    scan.plan_files_with_reporter(reporter).await.unwrap()
+                };
+                stream.try_collect::<Vec<_>>().await.unwrap()
+            })
+            .await
+            .unwrap();
+            assert_eq!(tasks.len(), 2);
+            assert_eq!(recording.wait_report().await.metrics.result_data_files, 2);
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct NoopMetricsReporter(tokio::sync::Notify);
+
+    #[async_trait::async_trait]
+    impl MetricsReporter for NoopMetricsReporter {
+        async fn report(&self, _report: crate::metrics::MetricsReport) {
+            self.0.notify_one();
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct GatedMetricsReporter {
+        recording: RecordingMetricsReporter,
+        started: tokio::sync::Notify,
+        released: tokio::sync::Notify,
+    }
+
+    #[async_trait::async_trait]
+    impl MetricsReporter for GatedMetricsReporter {
+        async fn report(&self, report: crate::metrics::MetricsReport) {
+            self.started.notify_one();
+            self.released.notified().await;
+            self.recording.report(report).await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_async_delivery_does_not_block_eof_or_consumer_drop() {
+        for (cow, drop_consumer) in [false, true]
+            .into_iter()
+            .flat_map(|cow| [false, true].map(move |drop_consumer| (cow, drop_consumer)))
+        {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let mut fixture = TableTestFixture::new();
+                fixture.setup_manifest_files().await;
+                let reporter = Arc::new(GatedMetricsReporter::default());
+                let scan = fixture.table.scan().build().unwrap();
+                let mut stream = if cow {
+                    scan.plan_cow_rewrite_files_with_reporter(reporter.clone())
+                        .await
+                        .unwrap()
+                        .map_ok(|file| file.scan_task)
+                        .boxed()
+                } else {
+                    scan.plan_files_with_reporter(reporter.clone())
+                        .await
+                        .unwrap()
+                };
+                assert!(stream.next().await.unwrap().is_ok());
+                assert!(stream.next().await.unwrap().is_ok());
+                if !drop_consumer {
+                    assert!(stream.next().await.is_none());
+                }
+                drop(stream);
+                reporter.started.notified().await;
+                assert!(reporter.recording.take_reports().is_empty());
+                reporter.released.notify_one();
+                assert_eq!(
+                    reporter
+                        .recording
+                        .wait_report()
+                        .await
+                        .metrics
+                        .result_data_files,
+                    2
+                );
+            })
+            .await
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_report_delivery_without_live_runtime_does_not_block_eof() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let delivery_runtime = crate::Runtime::new(&runtime);
+        drop(runtime);
+        let driver = tokio::runtime::Runtime::new().unwrap();
+        driver.block_on(async {
+            let scan = TableTestFixture::new().table.scan().build().unwrap();
+            let reporter = Arc::new(RecordingMetricsReporter::default());
+            for configured in [
+                Arc::new(LoggingMetricsReporter),
+                reporter.clone() as Arc<dyn MetricsReporter>,
+            ] {
+                let reporting = super::report::ScanReportState::new(
+                    scan.table_ident.clone(),
+                    scan.plan_context.as_ref().unwrap(),
+                    configured,
+                    delivery_runtime.clone(),
+                );
+                let mut stream = Arc::new(reporting)
+                    .report_on_termination(stream::empty::<crate::Result<FileScanTask>>().boxed());
+                assert!(
+                    tokio::time::timeout(Duration::from_secs(10), stream.next())
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
+            }
+            assert!(reporter.take_reports().is_empty());
+        });
+    }
+
+    #[tokio::test]
+    async fn test_failed_planning_does_not_wait_for_report_delivery() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let fixture = TableTestFixture::new();
+            let reporter = Arc::new(GatedMetricsReporter::default());
+            let scan = fixture.table.scan().build().unwrap();
+            assert!(
+                scan.plan_files_with_reporter(reporter.clone())
+                    .await
+                    .is_err()
+            );
+            reporter.started.notified().await;
+            assert!(reporter.recording.take_reports().is_empty());
+            reporter.released.notify_one();
+            assert_eq!(
+                reporter.recording.wait_report().await.metrics,
+                Metrics::empty()
+            );
+        })
+        .await
+        .unwrap();
+    }
+
+    async fn consume_plan(
+        scan: &TableScan,
+        reporter: &Arc<RecordingMetricsReporter>,
+    ) -> Vec<FileScanTask> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            scan.plan_files_with_reporter(reporter.clone())
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    async fn plan_with_reporter(
+        scan: &TableScan,
+        reporter: Arc<RecordingMetricsReporter>,
+        cow: bool,
+    ) -> crate::Result<super::FileScanTaskStream> {
+        if cow {
+            Ok(scan
+                .plan_cow_rewrite_files_with_reporter(reporter)
+                .await?
+                .map_ok(|file| file.scan_task)
+                .boxed())
+        } else {
+            scan.plan_files_with_reporter(reporter).await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_delayed_manifest_reports_after_termination() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for (cow, termination) in [false, true]
+                .into_iter()
+                .flat_map(|cow| ["complete", "fail", "drop"].map(|termination| (cow, termination)))
+            {
+                let (scan, gate) = gated_manifest_scan(termination == "fail").await;
+                let reporter = Arc::new(RecordingMetricsReporter::default());
+                let mut stream = plan_with_reporter(&scan, reporter.clone(), cow)
+                    .await
+                    .unwrap();
+                gate.started.notified().await;
+                assert!(futures::poll!(stream.next()).is_pending());
+                assert!(reporter.take_reports().is_empty());
+                if termination == "drop" {
+                    drop(stream);
+                    gate.stopped.notified().await;
+                    let report = reporter.wait_report().await;
+                    assert_eq!(report.metrics, Metrics {
+                        total_data_manifests: 1,
+                        total_delete_manifests: 1,
+                        scanned_delete_manifests: 1,
+                        ..Metrics::empty()
+                    });
+                    continue;
+                }
+                gate.release();
+                if termination == "fail" {
+                    assert!(stream.try_collect::<Vec<_>>().await.is_err());
+                    assert_eq!(reporter.wait_report().await.table_ident, scan.table_ident);
+                    continue;
+                }
+                let first = stream.next().await.unwrap().unwrap();
+                assert!(reporter.take_reports().is_empty());
+                let remaining = stream.try_collect::<Vec<_>>().await.unwrap();
+                assert_eq!(remaining.len() + 1, 10);
+                let mut report = reporter.wait_report().await;
+                assert!(report.total_planning_duration > Duration::ZERO);
+                report.total_planning_duration = Duration::ZERO;
+                assert_eq!(report, ScanReport {
+                    table_ident: TableIdent::from_strs(["db", "table1"]).unwrap(),
+                    snapshot_id: scan.snapshot().unwrap().snapshot_id(),
+                    schema_id: scan
+                        .plan_context
+                        .as_ref()
+                        .unwrap()
+                        .snapshot_schema
+                        .schema_id(),
+                    projected_field_ids: vec![1, 2, 3, 4, 5, 6, 7, 8],
+                    projected_field_names: ["x", "y", "z", "a", "dbl", "i32", "i64", "bool"]
+                        .map(str::to_string)
+                        .to_vec(),
+                    filter: Predicate::AlwaysTrue,
+                    metrics: Metrics {
+                        total_data_manifests: 1,
+                        scanned_data_manifests: 1,
+                        total_delete_manifests: 1,
+                        scanned_delete_manifests: 1,
+                        result_data_files: 10,
+                        result_delete_files: 10,
+                        indexed_delete_files: 1,
+                        positional_delete_files: 1,
+                        total_file_size_in_bytes: first.file_size_in_bytes()
+                            + remaining
+                                .iter()
+                                .map(|f| f.file_size_in_bytes())
+                                .sum::<u64>(),
+                        total_delete_file_size_in_bytes: 1000,
+                        ..Metrics::empty()
+                    },
+                    total_planning_duration: Duration::ZERO,
+                });
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_invalid_unused_delete_index_still_reports() {
+        let scan = all_pruned_scan_with_duplicate_dvs().await;
+        for cow in [false, true] {
+            let reporter = Arc::new(RecordingMetricsReporter::default());
+            let result = tokio::time::timeout(Duration::from_secs(10), async {
+                plan_with_reporter(&scan, reporter.clone(), cow)
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>()
+                    .await
+            })
+            .await
+            .unwrap();
+            assert!(result.is_err());
+            assert_eq!(reporter.wait_report().await.table_ident, scan.table_ident);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_dropped_stream_report_waits_for_running_worker() {
+        let scan = TableTestFixture::new().table.scan().build().unwrap();
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        let reporting = super::report::ScanReportState::new(
+            TableIdent::from_strs(["db", "table1"]).unwrap(),
+            scan.plan_context.as_ref().unwrap(),
+            reporter.clone() as Arc<dyn MetricsReporter>,
+            scan.runtime.clone(),
+        );
+        let reporting = Arc::new(reporting);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let worker_started = started.clone();
+        let counters = reporting.counters.clone();
+        let (release, wait) = std::sync::mpsc::channel();
+        let worker = test_runtime()
+            .cpu()
+            .spawn(super::report::track(reporting.clone(), async move {
+                worker_started.notify_one();
+                wait.recv_timeout(Duration::from_secs(10)).unwrap();
+                counters
+                    .result_data_files
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }))
+            .abort_on_drop();
+        tokio::time::timeout(Duration::from_secs(10), started.notified())
+            .await
+            .unwrap();
+        drop(worker);
+        drop(reporting);
+        assert!(reporter.take_reports().is_empty());
+        release.send(()).unwrap();
+        let report = reporter.wait_report().await;
+        assert_eq!(report.metrics, Metrics {
+            result_data_files: 1,
+            ..Metrics::empty()
+        });
+        assert!(reporter.take_reports().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_scan_logs_use_callers_scoped_subscriber() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use tracing::instrument::WithSubscriber;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        #[derive(Clone, Default)]
+        struct ScanLogs(Arc<AtomicUsize>, Arc<tokio::sync::Notify>);
+
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ScanLogs {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _context: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                if event.metadata().target() == "iceberg::scan::report" {
+                    assert_eq!(*event.metadata().level(), tracing::Level::DEBUG);
+                    self.0.fetch_add(1, Ordering::Relaxed);
+                    self.1.notify_one();
+                }
+            }
+        }
+
+        #[derive(Debug)]
+        struct TracingReporter;
+        #[async_trait::async_trait]
+        impl MetricsReporter for TracingReporter {
+            async fn report(&self, _report: crate::metrics::MetricsReport) {
+                tokio::task::yield_now().await;
+                tracing::debug!(target: "iceberg::scan::report", "Custom scan report");
+            }
+        }
+
+        for cow in [false, true] {
+            for (mode, cancel) in ["logging", "custom", "noop"]
+                .into_iter()
+                .flat_map(|mode| [false, true].map(|cancel| (mode, cancel)))
+            {
+                if mode == "noop" && cancel {
+                    continue;
+                }
+                // Register both dispatchers before planning: first-use callsite interest
+                // must see both subscribers even on an uninstrumented worker.
+                let scans = (0..2)
+                    .map(|_| {
+                        let logs = ScanLogs::default();
+                        let subscriber = tracing::Dispatch::new(
+                            tracing_subscriber::registry().with(logs.clone()),
+                        );
+                        async move {
+                            let (mut scan, gate) = gated_manifest_scan(false).await;
+                            let noop = Arc::new(NoopMetricsReporter::default());
+                            scan.metrics_reporter = match mode {
+                                "custom" => Arc::new(TracingReporter) as Arc<dyn MetricsReporter>,
+                                "noop" => noop.clone(),
+                                _ => Arc::new(LoggingMetricsReporter),
+                            };
+                            let mut phase = "planning";
+                            tokio::time::timeout(Duration::from_secs(10), async {
+                                async {
+                                    let mut stream = if cow {
+                                        scan.plan_cow_rewrite_files()
+                                            .await
+                                            .unwrap()
+                                            .map_ok(|file| file.scan_task)
+                                            .boxed()
+                                    } else {
+                                        scan.plan_files().await.unwrap()
+                                    };
+                                    phase = "manifest read start";
+                                    gate.started.notified().await;
+                                    assert!(futures::poll!(stream.next()).is_pending());
+                                    phase = "consumption";
+                                    if cancel {
+                                        drop(stream);
+                                    } else {
+                                        gate.release();
+                                        assert_eq!(
+                                            stream.try_collect::<Vec<_>>().await.unwrap().len(),
+                                            10
+                                        );
+                                    }
+                                }
+                                .with_subscriber(subscriber)
+                                .await;
+
+                                // Cancellation may release the last owner outside the caller's scope.
+                                phase = "manifest read teardown";
+                                gate.stopped.notified().await;
+                                phase = "log delivery";
+                                if mode == "noop" {
+                                    noop.0.notified().await;
+                                } else {
+                                    logs.1.notified().await;
+                                }
+                            })
+                            .await
+                            .unwrap_or_else(|_| {
+                                panic!(
+                                    "scan log delivery: cow={cow}, cancel={cancel}, mode={mode}, phase={phase}"
+                                )
+                            });
+                            assert_eq!(logs.0.load(Ordering::Relaxed), usize::from(mode != "noop"));
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                futures::future::join_all(scans).await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_manifest_list_read_reports_once() {
+        let (mut scan, gate) = gated_manifest_scan(false).await;
+        let context = scan.plan_context.as_mut().unwrap();
+        let storage =
+            crate::arrow::caching_delete_file_loader::tests::gated_storage::GatedStorageFactory {
+                path: context.snapshot.manifest_list().to_owned(),
+                fail: false,
+                gate: gate.clone(),
+            };
+        context.object_cache = Arc::new(crate::io::object_cache::ObjectCache::new(
+            crate::io::FileIOBuilder::new(Arc::new(storage)).build(),
+            None,
+        ));
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        let mut planning = Box::pin(scan.plan_files_with_reporter(reporter.clone()));
+        assert!(futures::poll!(&mut planning).is_pending());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::select! {
+                _ = gate.started.notified() => {},
+                _ = &mut planning => panic!("manifest list read should be blocked"),
+            }
+        })
+        .await
+        .unwrap();
+        drop(planning);
+        tokio::time::timeout(Duration::from_secs(10), gate.stopped.notified())
+            .await
+            .unwrap();
+        let report = reporter.wait_report().await;
+        assert_eq!(report.metrics, Metrics::empty());
+        assert!(reporter.take_reports().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_manifest_selection_panic_reports_all_manifest_totals() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let mut scan = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").less_than(Datum::long(200)))
+            .build()
+            .unwrap();
+        let context = scan.plan_context.as_mut().unwrap();
+        let list = context.get_manifest_list().await.unwrap();
+        let mut invalid = list.entries()[0].clone();
+        invalid.partitions.as_mut().unwrap()[0].lower_bound = Some(vec![0].into());
+        let snapshot = &context.snapshot;
+        let output = fixture
+            .table
+            .file_io()
+            .new_output(snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut writer = ManifestListWriter::v2(
+            output,
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+        );
+        writer
+            .add_manifests([invalid, list.entries()[0].clone()].into_iter())
+            .unwrap();
+        writer.close().await.unwrap();
+        context.object_cache = Arc::new(crate::io::object_cache::ObjectCache::new(
+            fixture.table.file_io().clone(),
+            None,
+        ));
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        let result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(
+            scan.plan_files_with_reporter(Arc::new(PanickingMetricsReporter(reporter.clone()))),
+        ))
+        .await;
+        assert!(result.is_err());
+        let report = reporter.wait_report().await;
+        assert_eq!(report.metrics, Metrics {
+            total_data_manifests: 2,
+            ..Metrics::empty()
+        });
+    }
+
+    #[test]
+    fn test_report_schema_id_tracks_resolved_projection() {
+        let fixture = TableTestFixture::new();
+        let cases = [
+            (
+                None::<&[&str]>,
+                Predicate::AlwaysTrue,
+                vec![1, 2, 3, 4, 5, 6, 7, 8],
+                1,
+            ),
+            (Some(&[]), Predicate::AlwaysTrue, vec![], 0),
+            (Some(&["X"]), Predicate::AlwaysTrue, vec![1], 0),
+            (
+                Some(&["BOOL", "I64", "I32", "DBL", "A", "Z", "Y", "X"]),
+                Predicate::AlwaysTrue,
+                vec![1, 2, 3, 4, 5, 6, 7, 8],
+                1,
+            ),
+            (
+                Some(&["X", "Z"]),
+                Reference::new("Y").less_than(Datum::long(20)),
+                vec![1, 2, 3],
+                0,
+            ),
+            (
+                Some(&["X", "Z", "A", "DBL", "I32", "I64", "BOOL"]),
+                Reference::new("Y").less_than(Datum::long(20)),
+                vec![1, 2, 3, 4, 5, 6, 7, 8],
+                1,
+            ),
+            (
+                Some(&[]),
+                Reference::new("Y").less_than(Datum::long(20)),
+                vec![2],
+                0,
+            ),
+        ];
+        for time_travel in [false, true] {
+            for (columns, filter, expected_ids, schema_id) in &cases {
+                let mut builder = fixture
+                    .table
+                    .scan()
+                    .with_case_sensitive(false)
+                    .with_filter(filter.clone());
+                if let Some(columns) = columns {
+                    builder = builder.select(columns.iter().copied());
+                }
+                if time_travel {
+                    builder = builder.snapshot_id(3055729675574597004);
+                }
+                let scan = builder.build().unwrap();
+                let context = scan.plan_context.as_ref().unwrap();
+                assert_eq!(context.snapshot_schema.schema_id(), 1);
+                assert_eq!(
+                    ScanReport::new(scan.table_ident.clone(), context),
+                    ScanReport {
+                        table_ident: scan.table_ident.clone(),
+                        snapshot_id: 3055729675574597004,
+                        schema_id: *schema_id,
+                        projected_field_ids: expected_ids.clone(),
+                        projected_field_names: expected_ids
+                            .iter()
+                            .map(|id| {
+                                ["x", "y", "z", "a", "dbl", "i32", "i64", "bool"]
+                                    [(*id - 1) as usize]
+                                    .to_owned()
+                            })
+                            .collect(),
+                        filter: filter.clone(),
+                        metrics: Metrics::empty(),
+                        total_planning_duration: Duration::ZERO,
+                    },
+                    "time_travel={time_travel}, columns={columns:?}, filter={filter:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_report_resolves_metadata_and_schema_field_names() {
+        use crate::metadata_columns::{
+            RESERVED_COL_NAME_PARTITION, RESERVED_FIELD_ID_FILE, RESERVED_FIELD_ID_PARTITION,
+            RESERVED_FIELD_ID_SPEC_ID,
+        };
+        let fixture = TableTestFixture::new();
+        let scan = fixture
+            .table
+            .scan()
+            .with_case_sensitive(false)
+            .select([
+                "X",
+                RESERVED_COL_NAME_PARTITION,
+                RESERVED_COL_NAME_FILE,
+                RESERVED_COL_NAME_POS,
+                RESERVED_COL_NAME_SPEC_ID,
+            ])
+            .build()
+            .unwrap();
+        let report = ScanReport::new(
+            TableIdent::from_strs(["db", "table1"]).unwrap(),
+            scan.plan_context.as_ref().unwrap(),
+        );
+        assert_eq!(report, ScanReport {
+            table_ident: TableIdent::from_strs(["db", "table1"]).unwrap(),
+            snapshot_id: 3055729675574597004,
+            schema_id: 0,
+            projected_field_ids: vec![
+                1,
+                RESERVED_FIELD_ID_PARTITION,
+                RESERVED_FIELD_ID_FILE,
+                RESERVED_FIELD_ID_POS,
+                RESERVED_FIELD_ID_SPEC_ID
+            ],
+            projected_field_names: [
+                "x",
+                RESERVED_COL_NAME_PARTITION,
+                RESERVED_COL_NAME_FILE,
+                RESERVED_COL_NAME_POS,
+                RESERVED_COL_NAME_SPEC_ID
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            filter: Predicate::AlwaysTrue,
+            metrics: Metrics::empty(),
+            total_planning_duration: Duration::ZERO,
+        });
+    }
+
+    #[test]
+    fn test_report_projection_expands_nested_types_and_filter_fields() {
+        let fixture = TableTestFixture::new_with_nested_schema();
+        let filter = Reference::new("Y").less_than(Datum::long(20));
+        let scan = fixture
+            .table
+            .scan()
+            .select(["DETAILS", "NUMBERS", "RECORDS", "LOOKUP", "OBJECTS"])
+            .with_case_sensitive(false)
+            .with_filter(filter.clone())
+            .build()
+            .unwrap();
+        let context = scan.plan_context.as_ref().unwrap();
+        assert_eq!(*context.field_ids, [9, 11, 13, 16, 19]);
+        assert_eq!(
+            ScanReport::new(scan.table_ident.clone(), context),
+            ScanReport {
+                table_ident: scan.table_ident.clone(),
+                snapshot_id: 3055729675574597004,
+                schema_id: 0,
+                projected_field_ids: vec![2, 9, 10, 12, 15, 17, 18, 22],
+                projected_field_names: [
+                    "y",
+                    "details",
+                    "details.value",
+                    "numbers.element",
+                    "records.element.value",
+                    "lookup.key",
+                    "lookup.value",
+                    "objects.value.value"
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+                filter,
+                metrics: Metrics::empty(),
+                total_planning_duration: Duration::ZERO,
+            }
+        );
+    }
+
+    #[test]
+    fn test_report_projection_includes_nested_filter_ancestors() {
+        let fixture = TableTestFixture::new_with_nested_schema();
+        let filter = Reference::new("details.value")
+            .less_than(Datum::long(20))
+            .or(Reference::new("z").is_null())
+            .and(Reference::new("y").is_in([Datum::long(10), Datum::long(20)]));
+        let scan = fixture
+            .table
+            .scan()
+            .select_empty()
+            .with_filter(filter.clone())
+            .build()
+            .unwrap();
+        assert_eq!(
+            ScanReport::new(
+                scan.table_ident.clone(),
+                scan.plan_context.as_ref().unwrap()
+            ),
+            ScanReport {
+                table_ident: scan.table_ident.clone(),
+                snapshot_id: 3055729675574597004,
+                schema_id: 0,
+                projected_field_ids: vec![2, 3, 9, 10],
+                projected_field_names: ["y", "z", "details", "details.value"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                filter,
+                metrics: Metrics::empty(),
+                total_planning_duration: Duration::ZERO,
+            }
+        );
+    }
+
+    #[test]
+    fn test_report_projection_handles_variant_collections() {
+        use crate::spec::{FormatVersion, ListType, MapType, VariantType};
+
+        let fixture = TableTestFixture::new();
+        let mut metadata = fixture.table.metadata().clone();
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "x", PrimitiveType::Long).into(),
+                NestedField::optional(
+                    2,
+                    "variants",
+                    Type::List(ListType::new(
+                        NestedField::optional(3, "element", Type::Variant(VariantType)).into(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    4,
+                    "lookup",
+                    Type::Map(MapType::new(
+                        NestedField::required(5, "key", PrimitiveType::String).into(),
+                        NestedField::optional(6, "value", Type::Variant(VariantType)).into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        metadata.schemas.insert(1, Arc::new(schema));
+        metadata.format_version = FormatVersion::V3;
+        let table = fixture.table.with_metadata(Arc::new(metadata));
+        let filter = Reference::new("x").less_than(Datum::long(200));
+        let scan = table
+            .scan()
+            .select(["variants", "lookup"])
+            .with_filter(filter.clone())
+            .build()
+            .unwrap();
+        assert_eq!(
+            ScanReport::new(
+                scan.table_ident.clone(),
+                scan.plan_context.as_ref().unwrap()
+            ),
+            ScanReport {
+                table_ident: scan.table_ident.clone(),
+                snapshot_id: 3055729675574597004,
+                schema_id: 1,
+                projected_field_ids: vec![1, 3, 5, 6],
+                projected_field_names: ["x", "variants.element", "lookup.key", "lookup.value"]
+                    .map(str::to_owned)
+                    .to_vec(),
+                filter,
+                metrics: Metrics::empty(),
+                total_planning_duration: Duration::ZERO,
+            }
+        );
+    }
+
+    #[test]
+    fn test_unknown_report_field_has_a_release_fallback() {
+        let mut scan = TableTestFixture::new().table.scan().build().unwrap();
+        let context = scan.plan_context.as_mut().unwrap();
+        context.field_ids = Arc::new(vec![i32::MAX]);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ScanReport::new(scan.table_ident.clone(), context)
+        }));
+        if cfg!(debug_assertions) {
+            assert!(result.is_err());
+        } else {
+            let report = result.unwrap();
+            assert_eq!(report.projected_field_names, [i32::MAX.to_string()]);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reports_are_operation_scoped() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let scan = fixture
+            .table
+            .scan()
+            .select(["X"])
+            .with_case_sensitive(false)
+            .build()
+            .unwrap();
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        let (left, right) = tokio::join!(
+            consume_plan(&scan, &reporter),
+            consume_plan(&scan, &reporter)
+        );
+        assert_eq!((left.len(), right.len()), (2, 2));
+        consume_plan(&scan, &reporter).await;
+        reporter.wait_for_reports(3).await;
+        let reports = reporter.take_reports();
+        assert_eq!(reports.len(), 3);
+        for mut report in reports {
+            assert!(report.total_planning_duration > Duration::ZERO);
+            report.total_planning_duration = Duration::ZERO;
+            assert_eq!(report, ScanReport {
+                table_ident: TableIdent::from_strs(["db", "table1"]).unwrap(),
+                snapshot_id: 3055729675574597004,
+                schema_id: 0,
+                projected_field_ids: vec![1],
+                projected_field_names: vec!["x".into()],
+                filter: Predicate::AlwaysTrue,
+                metrics: Metrics {
+                    total_data_manifests: 1,
+                    scanned_data_manifests: 1,
+                    result_data_files: 2,
+                    total_file_size_in_bytes: left.iter().map(|f| f.file_size_in_bytes()).sum(),
+                    ..Metrics::empty()
+                },
+                total_planning_duration: Duration::ZERO,
+            });
+        }
+        assert!(reporter.take_reports().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_incomplete_plans_report_once() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        for take in [0, 1, 2] {
+            let scan = fixture.table.scan().build().unwrap();
+            let reporter = Arc::new(RecordingMetricsReporter::default());
+            let mut stream = scan
+                .plan_files_with_reporter(reporter.clone())
+                .await
+                .unwrap();
+            for _ in 0..take {
+                stream.next().await.unwrap().unwrap();
+            }
+            drop(stream);
+            drop(scan);
+            assert_eq!(
+                reporter.wait_report().await.table_ident,
+                TableIdent::from_strs(["db", "table1"]).unwrap()
+            );
+            assert!(reporter.take_reports().is_empty());
+        }
+        let scan = TableTestFixture::new().table.scan().build().unwrap();
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        assert!(
+            scan.plan_files_with_reporter(reporter.clone())
+                .await
+                .is_err()
+        );
+        drop(scan);
+        assert_eq!(
+            reporter.wait_report().await.table_ident,
+            TableIdent::from_strs(["db", "table1"]).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_empty_tables_do_not_report() {
+        let scan = TableTestFixture::new_empty().table.scan().build().unwrap();
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        for cow in [false, true] {
+            let tasks = plan_with_reporter(&scan, reporter.clone(), cow)
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap();
+            assert!(tasks.is_empty());
+            assert!(reporter.take_reports().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cow_reports_selection_filter_and_whole_file_tasks() {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut fixture = TableTestFixture::new();
+            fixture.setup_manifest_files().await;
+            for (limit, result_files, skipped_manifests, skipped_files) in
+                [(50, 0, 1, 0), (200, 1, 0, 1), (400, 2, 0, 0)]
+            {
+                let filter = Reference::new("x").less_than(Datum::long(limit));
+                let scan = fixture
+                    .table
+                    .scan()
+                    .select(["x"])
+                    .with_filter(filter.clone())
+                    .build()
+                    .unwrap();
+                let reporter = Arc::new(RecordingMetricsReporter::default());
+                let tasks = plan_with_reporter(&scan, reporter.clone(), true)
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap();
+                assert_eq!(tasks.len() as u64, result_files);
+                assert!(tasks.iter().all(|task| task.predicate().is_none()));
+                let mut report = reporter.wait_report().await;
+                report.total_planning_duration = Duration::ZERO;
+                assert_eq!(report, ScanReport {
+                    table_ident: TableIdent::from_strs(["db", "table1"]).unwrap(),
+                    snapshot_id: 3055729675574597004,
+                    schema_id: 0,
+                    projected_field_ids: vec![1],
+                    projected_field_names: vec!["x".into()],
+                    filter,
+                    metrics: Metrics {
+                        total_data_manifests: 1,
+                        scanned_data_manifests: 1 - skipped_manifests,
+                        skipped_data_manifests: skipped_manifests,
+                        result_data_files: result_files,
+                        skipped_data_files: skipped_files,
+                        total_file_size_in_bytes: tasks
+                            .iter()
+                            .map(|task| task.file_size_in_bytes())
+                            .sum(),
+                        ..Metrics::empty()
+                    },
+                    total_planning_duration: Duration::ZERO,
+                });
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_worker_errors_and_panics_still_report() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        for panic in [false, true] {
+            let scan = fixture.table.scan().build().unwrap();
+            let reporter = Arc::new(RecordingMetricsReporter::default());
+            let stream = scan
+                .plan_data_files(
+                    reporter.clone() as Arc<dyn MetricsReporter>,
+                    move |_| async move {
+                        assert!(!panic, "injected worker panic");
+                        Err::<FileScanTask, _>(crate::Error::new(
+                            ErrorKind::Unexpected,
+                            "injected error",
+                        ))
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(
+                tokio::time::timeout(Duration::from_secs(10), stream.try_collect::<Vec<_>>())
+                    .await
+                    .unwrap()
+                    .is_err()
+            );
+            drop(scan);
+            assert_eq!(
+                reporter.wait_report().await.table_ident,
+                TableIdent::from_strs(["db", "table1"]).unwrap()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_deletion_vector_bytes_are_content_bytes() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_dv().await;
+        let scan = fixture.table.scan().build().unwrap();
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        let tasks = consume_plan(&scan, &reporter).await;
+        assert_eq!(reporter.wait_report().await.metrics, Metrics {
+            total_data_manifests: 1,
+            scanned_data_manifests: 1,
+            total_delete_manifests: 1,
+            scanned_delete_manifests: 1,
+            result_data_files: 1,
+            result_delete_files: 1,
+            indexed_delete_files: 1,
+            dvs: 1,
+            total_file_size_in_bytes: tasks[0].file_size_in_bytes(),
+            total_delete_file_size_in_bytes: 40,
+            ..Metrics::empty()
+        });
+    }
+
+    #[test]
+    fn test_cancelled_workers_still_report() {
+        let driver = tokio::runtime::Runtime::new().unwrap();
+        let cpu = tokio::runtime::Runtime::new().unwrap();
+        let runtime = crate::runtime::Runtime::new_with_split(&driver, &cpu);
+        let mut scan = driver.block_on(async {
+            let mut fixture = TableTestFixture::new();
+            fixture.setup_manifest_files().await;
+            fixture.table.scan().build().unwrap()
+        });
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        scan.runtime = runtime;
+        drop(cpu);
+        driver.block_on(async {
+            let result = tokio::time::timeout(Duration::from_secs(10), async {
+                scan.plan_files_with_reporter(Arc::new(PanickingMetricsReporter(reporter.clone())))
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>()
+                    .await
+            })
+            .await
+            .unwrap();
+            assert!(result.is_err());
+            drop(scan);
+            assert_eq!(
+                reporter.wait_report().await.table_ident,
+                TableIdent::from_strs(["db", "table1"]).unwrap()
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn test_duration_includes_consumption_before_eof() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let scan = fixture.table.scan().build().unwrap();
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        let mut stream = scan
+            .plan_files_with_reporter(reporter.clone())
+            .await
+            .unwrap();
+        let before_consumption = std::time::Instant::now();
+        stream.next().await.unwrap().unwrap();
+        stream.next().await.unwrap().unwrap();
+        assert!(reporter.take_reports().is_empty());
+        let consumed = before_consumption.elapsed();
+        assert!(stream.next().await.is_none());
+        assert!(reporter.wait_report().await.total_planning_duration >= consumed);
+    }
+
+    #[tokio::test]
+    async fn test_all_live_files_rejected_still_completes() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let scan = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").equal_to(Datum::long(200)))
+            .build()
+            .unwrap();
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        assert!(consume_plan(&scan, &reporter).await.is_empty());
+        assert_eq!(reporter.wait_report().await.metrics, Metrics {
+            total_data_manifests: 1,
+            scanned_data_manifests: 1,
+            skipped_data_files: 2,
+            ..Metrics::empty()
+        });
+    }
+
     #[tokio::test]
     async fn test_dead_only_manifests_are_skipped() {
         let mut fixture = TableTestFixture::new();
@@ -3826,15 +5000,13 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(
-            scan.plan_files()
-                .await
-                .unwrap()
-                .try_collect::<Vec<_>>()
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        assert!(consume_plan(&scan, &reporter).await.is_empty());
+        assert_eq!(reporter.wait_report().await.metrics, Metrics {
+            total_data_manifests: 1,
+            skipped_data_manifests: 1,
+            ..Metrics::empty()
+        });
     }
 
     async fn gated_manifest_scan(
@@ -4070,7 +5242,7 @@ mod tests {
         let scan = fixture.table.scan().build().unwrap();
         for panic in [false, true] {
             let stream = scan
-                .plan_data_files(Arc::default(), move |_| async move {
+                .plan_data_files(Arc::new(LoggingMetricsReporter), move |_| async move {
                     assert!(!panic, "injected worker panic");
                     Err::<FileScanTask, _>(
                         crate::Error::new(ErrorKind::DataInvalid, "injected error")
@@ -4135,27 +5307,30 @@ mod tests {
     async fn test_planning_counts_live_files_and_predicate_rejections() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
-        let scan = fixture
-            .table
-            .scan()
-            .with_filter(Reference::new("x").less_than(Datum::long(200)))
-            .build()
-            .unwrap();
-        let counters = Arc::new(Counters::default());
-        let tasks = scan
-            .plan_data_files(counters.clone(), |ctx| ctx.into_file_scan_task())
-            .await
-            .unwrap()
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-        assert_eq!(Metrics::default().finish(&counters), Metrics {
-            scanned_data_manifests: 1,
-            result_data_files: 1,
-            skipped_data_files: 1,
-            total_file_size_in_bytes: tasks[0].file_size_in_bytes(),
-            ..Default::default()
-        });
+        for (limit, scanned, skipped, files, rejected) in
+            [(50, 0, 1, 0, 0), (200, 1, 0, 1, 1), (250, 1, 0, 1, 1)]
+        {
+            let scan = fixture
+                .table
+                .scan()
+                .with_filter(Reference::new("x").less_than(Datum::long(limit)))
+                .build()
+                .unwrap();
+            let reporter = Arc::new(RecordingMetricsReporter::default());
+            let files_planned = consume_plan(&scan, &reporter).await;
+            assert_eq!(reporter.wait_report().await.metrics, Metrics {
+                total_data_manifests: 1,
+                scanned_data_manifests: scanned,
+                skipped_data_manifests: skipped,
+                result_data_files: files,
+                skipped_data_files: rejected,
+                total_file_size_in_bytes: files_planned
+                    .iter()
+                    .map(|f| f.file_size_in_bytes())
+                    .sum(),
+                ..Metrics::empty()
+            });
+        }
     }
 
     #[tokio::test]
@@ -4163,15 +5338,12 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_deadlock_manifests().await;
         let scan = fixture.table.scan().build().unwrap();
-        let counters = Arc::new(Counters::default());
-        scan.plan_data_files(counters.clone(), |ctx| ctx.into_file_scan_task())
-            .await
-            .unwrap()
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-        assert_eq!(Metrics::default().finish(&counters), Metrics {
+        let reporter = Arc::new(RecordingMetricsReporter::default());
+        assert_eq!(consume_plan(&scan, &reporter).await.len(), 10);
+        assert_eq!(reporter.wait_report().await.metrics, Metrics {
+            total_data_manifests: 1,
             scanned_data_manifests: 1,
+            total_delete_manifests: 1,
             scanned_delete_manifests: 1,
             result_data_files: 10,
             result_delete_files: 10,
@@ -4179,7 +5351,7 @@ mod tests {
             positional_delete_files: 1,
             total_file_size_in_bytes: 1000,
             total_delete_file_size_in_bytes: 1000,
-            ..Default::default()
+            ..Metrics::empty()
         });
     }
 
@@ -4200,7 +5372,7 @@ mod tests {
             let (delete_tx, _delete_rx) = futures::channel::mpsc::channel(1);
             let (index, index_tx, completion) = crate::delete_file_index::DeleteFileIndex::new();
             let completion = test_runtime().io().spawn(completion).abort_on_drop();
-            let mut metrics = Metrics::default();
+            let mut metrics = Metrics::empty();
             let contexts = context
                 .build_manifest_file_contexts(
                     list,
@@ -4217,7 +5389,7 @@ mod tests {
             assert_eq!(metrics, Metrics {
                 total_data_manifests: 1,
                 skipped_data_manifests: skipped,
-                ..Default::default()
+                ..Metrics::empty()
             });
         }
     }

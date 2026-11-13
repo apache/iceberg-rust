@@ -88,6 +88,7 @@ pub mod io;
 pub mod spec;
 
 pub mod inspect;
+pub(crate) mod metrics;
 pub mod scan;
 
 pub mod expr;

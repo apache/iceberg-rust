@@ -123,6 +123,66 @@ impl TableTestFixture {
         }
     }
 
+    pub(crate) fn new_with_nested_schema() -> Self {
+        use crate::spec::{ListType, MapType};
+
+        let mut fixture = Self::new();
+        let value_struct = |id| {
+            Type::Struct(StructType::new(vec![
+                NestedField::optional(id, "value", PrimitiveType::Long).into(),
+            ]))
+        };
+        let schema = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::required(1, "x", PrimitiveType::Long).into(),
+                NestedField::required(2, "y", PrimitiveType::Long).into(),
+                NestedField::optional(3, "z", PrimitiveType::Long).into(),
+                NestedField::optional(9, "details", value_struct(10)).into(),
+                NestedField::optional(
+                    11,
+                    "numbers",
+                    Type::List(ListType::new(
+                        NestedField::optional(12, "element", PrimitiveType::Long).into(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    13,
+                    "records",
+                    Type::List(ListType::new(
+                        NestedField::optional(14, "element", value_struct(15)).into(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    16,
+                    "lookup",
+                    Type::Map(MapType::new(
+                        NestedField::required(17, "key", PrimitiveType::String).into(),
+                        NestedField::optional(18, "value", PrimitiveType::Long).into(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    19,
+                    "objects",
+                    Type::Map(MapType::new(
+                        NestedField::required(20, "key", PrimitiveType::String).into(),
+                        NestedField::optional(21, "value", value_struct(22)).into(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let mut metadata = fixture.table.metadata().clone();
+        metadata.schemas.insert(1, Arc::new(schema));
+        metadata.last_column_id = 22;
+        fixture.table = fixture.table.with_metadata(Arc::new(metadata));
+        fixture
+    }
+
     #[allow(clippy::new_without_default)]
     pub(crate) fn new_empty() -> Self {
         let tmp_dir = TempDir::new().unwrap();
