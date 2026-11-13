@@ -17,10 +17,12 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
+use futures::SinkExt;
 use futures::channel::mpsc::Sender;
-use futures::{SinkExt, TryFutureExt};
 
+use super::report::{Counters, Metrics};
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
@@ -39,6 +41,7 @@ use crate::{Error, ErrorKind, Result};
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestFileContext {
     manifest_file: ManifestFile,
+    counters: Arc<Counters>,
 
     sender: Sender<ManifestEntryContext>,
 
@@ -59,6 +62,7 @@ pub(crate) struct ManifestFileContext {
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestEntryContext {
     pub manifest_entry: ManifestEntryRef,
+    pub counters: Arc<Counters>,
 
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     pub field_ids: Arc<Vec<i32>>,
@@ -100,6 +104,7 @@ impl ManifestFileContext {
     /// Fetches the manifest and streams its live entries to the context's channel.
     pub(crate) async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
         let ManifestFileContext {
+            counters,
             object_cache,
             manifest_file,
             bound_predicates,
@@ -115,6 +120,11 @@ impl ManifestFileContext {
             sort_orders,
         } = self;
 
+        let scanned = match manifest_file.content {
+            ManifestContentType::Data => &counters.scanned_data_manifests,
+            ManifestContentType::Deletes => &counters.scanned_delete_manifests,
+        };
+        scanned.fetch_add(1, Ordering::Relaxed);
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
         // A manifest written under an older schema stores partition values in that
@@ -161,6 +171,7 @@ impl ManifestFileContext {
 
             let manifest_entry_context = ManifestEntryContext {
                 manifest_entry,
+                counters: counters.clone(),
                 expression_evaluator_cache: expression_evaluator_cache.clone(),
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
@@ -175,10 +186,11 @@ impl ManifestFileContext {
                 sort_order,
             };
 
-            sender
-                .send(manifest_entry_context)
-                .map_err(|_| Error::new(ErrorKind::Unexpected, "mpsc channel SendError"))
-                .await?;
+            // The receiving worker's joined result carries its failure. Channel
+            // closure only cancels production; it must not mask that failure.
+            if sender.send(manifest_entry_context).await.is_err() {
+                return Ok(());
+            }
         }
 
         Ok(())
@@ -196,6 +208,25 @@ impl ManifestEntryContext {
                 self.manifest_entry.sequence_number(),
             )
             .await?;
+
+        let counters = &self.counters;
+        counters.result_data_files.fetch_add(1, Ordering::Relaxed);
+        counters
+            .total_file_size_in_bytes
+            .fetch_add(self.manifest_entry.file_size_in_bytes(), Ordering::Relaxed);
+        counters
+            .result_delete_files
+            .fetch_add(deletes.len() as u64, Ordering::Relaxed);
+        for delete in &deletes {
+            let size = if delete.file_format() == crate::spec::DataFileFormat::Puffin {
+                delete.content_size_in_bytes().unwrap_or(0)
+            } else {
+                delete.file_size_in_bytes()
+            };
+            counters
+                .total_delete_file_size_in_bytes
+                .fetch_add(size, Ordering::Relaxed);
+        }
 
         FileScanTask::builder()
             .with_file_size_in_bytes(self.manifest_entry.file_size_in_bytes())
@@ -309,6 +340,8 @@ impl PlanContext {
         tx_data: Sender<ManifestEntryContext>,
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
+        counters: Arc<Counters>,
+        metrics: &mut Metrics,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
         let mut manifest_files = manifest_list.entries().iter().collect::<Vec<_>>();
         // Sort manifest files to process delete manifests first.
@@ -322,10 +355,18 @@ impl PlanContext {
             ManifestContentType::Data => 1,
         });
 
+        metrics.total_delete_manifests = manifest_files
+            .iter()
+            .filter(|m| m.content == ManifestContentType::Deletes)
+            .count() as u64;
+        metrics.total_data_manifests = manifest_files.len() as u64 - metrics.total_delete_manifests;
+
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in manifest_files {
-            let tx = if manifest_file.content == ManifestContentType::Deletes {
+            let is_delete = manifest_file.content == ManifestContentType::Deletes;
+            let mut skipped = false;
+            let tx = if is_delete {
                 delete_file_tx.clone()
             } else {
                 tx_data.clone()
@@ -344,7 +385,7 @@ impl PlanContext {
                     )
                     .eval(manifest_file)?
                 {
-                    continue;
+                    skipped = true;
                 }
 
                 Some(partition_bound_predicate)
@@ -352,13 +393,22 @@ impl PlanContext {
                 None
             };
 
+            skipped |= !manifest_file.has_added_files() && !manifest_file.has_existing_files();
+            if skipped {
+                if is_delete {
+                    metrics.skipped_delete_manifests += 1;
+                } else {
+                    metrics.skipped_data_manifests += 1;
+                }
+                continue;
+            }
             let mfc = self.create_manifest_file_context(
                 manifest_file,
                 partition_bound_predicate,
                 tx,
                 delete_file_idx.clone(),
+                counters.clone(),
             );
-
             filtered_mfcs.push(Ok(mfc));
         }
 
@@ -371,6 +421,7 @@ impl PlanContext {
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
         delete_file_index: DeleteFileIndex,
+        counters: Arc<Counters>,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
@@ -385,6 +436,7 @@ impl PlanContext {
             };
 
         ManifestFileContext {
+            counters,
             manifest_file: manifest_file.clone(),
             bound_predicates,
             sender,
