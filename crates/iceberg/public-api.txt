@@ -3943,11 +3943,41 @@ impl core::fmt::Debug for iceberg::Error
 pub fn iceberg::Error::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::fmt::Display for iceberg::Error
 pub fn iceberg::Error::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg::FieldLabels
+pub iceberg::FieldLabels::field_id: i32
+pub iceberg::FieldLabels::labels: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+impl core::clone::Clone for iceberg::FieldLabels
+pub fn iceberg::FieldLabels::clone(&self) -> iceberg::FieldLabels
+impl core::cmp::Eq for iceberg::FieldLabels
+impl core::cmp::PartialEq for iceberg::FieldLabels
+pub fn iceberg::FieldLabels::eq(&self, other: &iceberg::FieldLabels) -> bool
+impl core::fmt::Debug for iceberg::FieldLabels
+pub fn iceberg::FieldLabels::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::FieldLabels
+impl serde_core::ser::Serialize for iceberg::FieldLabels
+pub fn iceberg::FieldLabels::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::FieldLabels
+pub fn iceberg::FieldLabels::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::JoinHandle<T>(_)
 impl<T: core::marker::Send + 'static> core::future::future::Future for iceberg::JoinHandle<T>
 pub type iceberg::JoinHandle<T>::Output = core::result::Result<T, iceberg::Error>
 pub fn iceberg::JoinHandle<T>::poll(self: core::pin::Pin<&mut Self>, cx: &mut core::task::wake::Context<'_>) -> core::task::poll::Poll<Self::Output>
 impl<T> core::marker::Unpin for iceberg::JoinHandle<T>
+pub struct iceberg::Labels
+pub iceberg::Labels::fields: alloc::vec::Vec<iceberg::FieldLabels>
+pub iceberg::Labels::object_labels: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+impl core::clone::Clone for iceberg::Labels
+pub fn iceberg::Labels::clone(&self) -> iceberg::Labels
+impl core::cmp::Eq for iceberg::Labels
+impl core::cmp::PartialEq for iceberg::Labels
+pub fn iceberg::Labels::eq(&self, other: &iceberg::Labels) -> bool
+impl core::fmt::Debug for iceberg::Labels
+pub fn iceberg::Labels::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::Labels
+impl serde_core::ser::Serialize for iceberg::Labels
+pub fn iceberg::Labels::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::Labels
+pub fn iceberg::Labels::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::MemoryCatalog
 impl core::fmt::Debug for iceberg::memory::MemoryCatalog
 pub fn iceberg::memory::MemoryCatalog::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
