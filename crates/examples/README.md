@@ -32,7 +32,7 @@ recorded locations. Tables without a snapshot produce no scan report. The exampl
 uses a table-level reporter; a scan can replace it with
 `.with_metrics_reporter(other_reporter)` before `.build()`. To discard reports,
 install a custom no-op implementation of `MetricsReporter`. Custom reporting
-replaces the default debug logging consumer. Planning does not wait for delivery,
+replaces the default info logging consumer. Planning does not wait for delivery,
 including at successful EOF. The example keeps the runtime alive and waits on its
 reporter's signal, with a timeout, before reading the reports. Tables without a
 snapshot skip that wait.

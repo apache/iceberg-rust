@@ -4771,8 +4771,8 @@ mod tests {
         use tracing::instrument::WithSubscriber;
         use tracing_subscriber::layer::SubscriberExt;
 
-        #[derive(Clone, Default)]
-        struct ScanLogs(Arc<AtomicUsize>, Arc<tokio::sync::Notify>);
+        #[derive(Clone)]
+        struct ScanLogs(Arc<AtomicUsize>, Arc<tokio::sync::Notify>, tracing::Level);
 
         impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ScanLogs {
             fn on_event(
@@ -4781,7 +4781,7 @@ mod tests {
                 _context: tracing_subscriber::layer::Context<'_, S>,
             ) {
                 if event.metadata().target() == "iceberg::scan::report" {
-                    assert_eq!(*event.metadata().level(), tracing::Level::DEBUG);
+                    assert_eq!(*event.metadata().level(), self.2);
                     self.0.fetch_add(1, Ordering::Relaxed);
                     self.1.notify_one();
                 }
