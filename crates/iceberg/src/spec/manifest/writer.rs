@@ -584,8 +584,8 @@ mod tests {
     use crate::avro::{assert_deflate_codec, define_named_types_repeatedly};
     use crate::io::FileIO;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Manifest, NestedField,
-        PrimitiveType, Schema, Struct, Transform, Type,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, Manifest, ManifestReader,
+        NestedField, PrimitiveType, Schema, Struct, Transform, Type,
     };
 
     #[tokio::test]
@@ -922,5 +922,190 @@ mod tests {
             Literal::fixed(vec![5, 6, 7, 8]),
         ])
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_manifest_v1_roundtrips_uuid_partition() {
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("memory:///table/data/00000.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::uuid(
+                uuid::Uuid::from_u128(0xf79c3e09_677c_4bbd_a479_3f349cb785e7),
+            ))]))
+            .record_count(123)
+            .file_size_in_bytes(456)
+            .build()
+            .unwrap();
+
+        let output = write_and_read_data_file(
+            FormatVersion::V1,
+            Type::Primitive(PrimitiveType::Uuid),
+            data_file.clone(),
+        )
+        .await;
+
+        assert_eq!(output, data_file);
+    }
+
+    #[tokio::test]
+    async fn test_manifest_v2_roundtrips_uuid_partition() {
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("memory:///table/data/00000.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::uuid(
+                uuid::Uuid::from_u128(0xf79c3e09_677c_4bbd_a479_3f349cb785e7),
+            ))]))
+            .record_count(123)
+            .file_size_in_bytes(456)
+            .build()
+            .unwrap();
+
+        let output = write_and_read_data_file(
+            FormatVersion::V2,
+            Type::Primitive(PrimitiveType::Uuid),
+            data_file.clone(),
+        )
+        .await;
+
+        assert_eq!(output, data_file);
+    }
+
+    #[tokio::test]
+    async fn test_manifest_v3_roundtrips_uuid_partition() {
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("memory:///table/data/00000.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::uuid(
+                uuid::Uuid::from_u128(0xf79c3e09_677c_4bbd_a479_3f349cb785e7),
+            ))]))
+            .record_count(123)
+            .file_size_in_bytes(456)
+            .build()
+            .unwrap();
+
+        let output = write_and_read_data_file(
+            FormatVersion::V3,
+            Type::Primitive(PrimitiveType::Uuid),
+            data_file.clone(),
+        )
+        .await;
+
+        assert_eq!(output, data_file);
+    }
+
+    #[tokio::test]
+    async fn test_manifest_v1_roundtrips_16_byte_fixed_partition() {
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("memory:///table/data/00000.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::fixed(
+                0xf79c3e09_677c_4bbd_a479_3f349cb785e7_u128.to_be_bytes(),
+            ))]))
+            .record_count(123)
+            .file_size_in_bytes(456)
+            .build()
+            .unwrap();
+
+        let output = write_and_read_data_file(
+            FormatVersion::V1,
+            Type::Primitive(PrimitiveType::Fixed(16)),
+            data_file.clone(),
+        )
+        .await;
+
+        assert_eq!(output, data_file);
+    }
+
+    #[tokio::test]
+    async fn test_manifest_v2_roundtrips_16_byte_fixed_partition() {
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("memory:///table/data/00000.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::fixed(
+                0xf79c3e09_677c_4bbd_a479_3f349cb785e7_u128.to_be_bytes(),
+            ))]))
+            .record_count(123)
+            .file_size_in_bytes(456)
+            .build()
+            .unwrap();
+
+        let output = write_and_read_data_file(
+            FormatVersion::V2,
+            Type::Primitive(PrimitiveType::Fixed(16)),
+            data_file.clone(),
+        )
+        .await;
+
+        assert_eq!(output, data_file);
+    }
+
+    #[tokio::test]
+    async fn test_manifest_v3_roundtrips_16_byte_fixed_partition() {
+        let data_file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("memory:///table/data/00000.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .partition(Struct::from_iter([Some(Literal::fixed(
+                0xf79c3e09_677c_4bbd_a479_3f349cb785e7_u128.to_be_bytes(),
+            ))]))
+            .record_count(123)
+            .file_size_in_bytes(456)
+            .build()
+            .unwrap();
+
+        let output = write_and_read_data_file(
+            FormatVersion::V3,
+            Type::Primitive(PrimitiveType::Fixed(16)),
+            data_file.clone(),
+        )
+        .await;
+
+        assert_eq!(output, data_file);
+    }
+
+    /// Writes `data_file` to a manifest partitioned by identity on one column
+    /// of `partition_field_type`, then reads it back with [`ManifestReader`].
+    async fn write_and_read_data_file(
+        format_version: FormatVersion,
+        partition_field_type: Type,
+        data_file: DataFile,
+    ) -> DataFile {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", partition_field_type).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("id", "id", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let io = FileIO::new_with_memory();
+        let builder = ManifestWriterBuilder::new(
+            io.new_output("memory:///table/metadata/manifest.avro")
+                .unwrap(),
+            Some(1),
+            schema,
+            partition_spec,
+        );
+        let mut writer = match format_version {
+            FormatVersion::V1 => builder.build_v1(),
+            FormatVersion::V2 => builder.build_v2_data(),
+            FormatVersion::V3 => builder.build_v3_data(),
+        };
+        writer.add_file(data_file, 1).unwrap();
+        let manifest_file = writer.write_manifest_file().await.unwrap();
+
+        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        manifest.entries()[0].data_file().clone()
     }
 }
