@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["FileScanTask","FileScanTaskDeleteFile","TableScan","TableScanBuilder"],"type":["ArrowRecordBatchStream","FileScanTaskStream"]};
+window.SIDEBAR_ITEMS = {"struct":["FileScanTask","FileScanTaskColumnStats","FileScanTaskDeleteFile","TableScan","TableScanBuilder"],"type":["ArrowRecordBatchStream","FileScanTaskStream"]};
