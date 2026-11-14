@@ -871,7 +871,9 @@ fn bound_as_column_type(bound: &Datum, column_type: &PrimitiveType) -> Option<Da
     if bound.data_type() == column_type {
         return Some(bound.clone());
     }
-    if let Some(promoted) = bound.promote_to(column_type) {
+    // A date bound that overflows the promoted timestamp type is dropped, which
+    // only loses pruning for that column.
+    if let Ok(Some(promoted)) = bound.promote_to(column_type) {
         return Some(promoted);
     }
     match (bound.data_type(), column_type) {
