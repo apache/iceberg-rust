@@ -1972,6 +1972,47 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_v1_manifest_with_null_snapshot_id() {
+        // Java writes a V1 `snapshot_id` as a union with null, and writes null
+        // when the table enables snapshot ID inheritance.
+        let mut metadata = writer_schema_test_metadata();
+        metadata.format_version = FormatVersion::V1;
+        let mut writer_schema = v2_writer_schema(serde_json::json!([
+            {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+            {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
+            {"name": "score", "type": ["null", "double"], "default": null, "field-id": 1002},
+        ]));
+        writer_schema["fields"]
+            .as_array_mut()
+            .unwrap()
+            .retain(|field| !field["name"].as_str().unwrap().ends_with("sequence_number"));
+        let mut entry = v2_entry(serde_json::json!({"id": 5, "name": "a", "score": 2.5}));
+        let entry_fields = entry.as_object_mut().unwrap();
+        entry_fields.remove("sequence_number");
+        entry_fields.remove("file_sequence_number");
+        let mut expected = expected_entry(Struct::from_iter([
+            Some(Literal::long(5)),
+            Some(Literal::string("a")),
+            Some(Literal::double(2.5)),
+        ]));
+        expected.sequence_number = Some(0);
+        expected.file_sequence_number = Some(0);
+
+        let bs = write_with_writer_schema(&metadata, &writer_schema, vec![entry.clone()]);
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+        assert_eq!(
+            manifest,
+            Manifest::new(metadata.clone(), vec![expected.clone()])
+        );
+
+        entry["snapshot_id"] = Value::Null;
+        let bs = write_with_writer_schema(&metadata, &writer_schema, vec![entry]);
+        let manifest = Manifest::parse_avro(&bs).unwrap();
+        expected.snapshot_id = None;
+        assert_eq!(manifest, Manifest::new(metadata, vec![expected]));
+    }
+
+    #[test]
     fn test_parse_manifest_with_fixed_uuid_partition() {
         // The spec stores a uuid in Avro as a 16-byte fixed with logical type uuid.
         let schema = Arc::new(
