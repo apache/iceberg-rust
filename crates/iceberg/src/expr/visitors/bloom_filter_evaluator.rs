@@ -20,6 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use arrow_schema::TimeUnit;
 use fnv::FnvHashSet;
 use parquet::basic::Type as PhysicalType;
 use parquet::bloom_filter::Sbbf;
@@ -43,6 +44,7 @@ pub(crate) struct ColumnBloomFilter {
     /// `type_length` from the file's column descriptor. Only meaningful for
     /// `FIXED_LEN_BYTE_ARRAY`.
     type_length: i32,
+    timestamp_unit: Option<TimeUnit>,
 }
 
 impl ColumnBloomFilter {
@@ -51,7 +53,13 @@ impl ColumnBloomFilter {
             sbbf,
             physical_type,
             type_length,
+            timestamp_unit: None,
         }
+    }
+
+    pub(crate) fn with_timestamp_unit(mut self, timestamp_unit: Option<TimeUnit>) -> Self {
+        self.timestamp_unit = timestamp_unit;
+        self
     }
 }
 
@@ -251,6 +259,7 @@ fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
         sbbf,
         physical_type,
         type_length,
+        timestamp_unit,
     } = column;
     let physical_type = *physical_type;
 
@@ -269,7 +278,17 @@ fn check_in_bloom_filter(column: &ColumnBloomFilter, datum: &Datum) -> bool {
             _ => true,
         },
         PrimitiveLiteral::Long(v) => match physical_type {
-            PhysicalType::INT64 => sbbf.check(v),
+            PhysicalType::INT64 => match (datum.data_type(), timestamp_unit) {
+                (
+                    PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
+                    Some(TimeUnit::Millisecond),
+                ) => v % 1_000 == 0 && sbbf.check(&(v / 1_000)),
+                (
+                    PrimitiveType::Timestamp | PrimitiveType::Timestamptz,
+                    Some(TimeUnit::Nanosecond),
+                ) => true,
+                _ => sbbf.check(v),
+            },
             PhysicalType::INT32 => match i32::try_from(*v) {
                 Ok(narrowed) => sbbf.check(&narrowed),
                 // Too wide for an INT32 column to hold, so the value is provably
@@ -513,7 +532,9 @@ impl BoundPredicateVisitor for BloomFilterEvaluator<'_> {
 mod tests {
     use std::collections::HashMap;
     use std::ops::Not;
+    use std::sync::Arc;
 
+    use arrow_schema::TimeUnit;
     use parquet::basic::Type as PhysicalType;
     use parquet::bloom_filter::Sbbf;
     use parquet::data_type::ByteArray;
@@ -1611,5 +1632,40 @@ mod tests {
 
         let result = BloomFilterEvaluator::eval(&predicate, &bloom_filters).unwrap();
         assert!(result, "non-representable double must not prune");
+    }
+
+    #[test]
+    fn test_eq_probes_timestamp_in_column_unit() {
+        let schema = Arc::new(single_field_schema("ts", PrimitiveType::Timestamp));
+        let filter = |unit, values: &[i64]| {
+            let mut sbbf = Sbbf::new_with_ndv_fpp(values.len() as u64, 0.01).unwrap();
+            for v in values {
+                sbbf.insert(v);
+            }
+            HashMap::from([(
+                1,
+                ColumnBloomFilter::new(sbbf, PhysicalType::INT64, 0)
+                    .with_timestamp_unit(Some(unit)),
+            )])
+        };
+        let millis = filter(TimeUnit::Millisecond, &[-1_500, 2_000]);
+        let nanos = filter(TimeUnit::Nanosecond, &[2_000_000_000]);
+
+        for (filters, micros, expected) in [
+            (&millis, 2_000_000, true),
+            (&millis, 2_000_500, false),
+            (&millis, -1_500_000, true),
+            (&nanos, 2_000_000, true),
+        ] {
+            let predicate = Reference::new("ts")
+                .equal_to(Datum::timestamp_micros(micros))
+                .bind(schema.clone(), true)
+                .unwrap();
+            assert_eq!(
+                BloomFilterEvaluator::eval(&predicate, filters).unwrap(),
+                expected,
+                "ts = {micros}"
+            );
+        }
     }
 }
