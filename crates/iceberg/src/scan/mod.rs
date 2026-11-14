@@ -44,7 +44,9 @@ use crate::metadata_columns::{
     RESERVED_FIELD_ID_PARTITION, get_metadata_field_id, is_metadata_column_name,
 };
 use crate::runtime::Runtime;
-use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, SortOrderRef, StructType};
+use crate::spec::{
+    DataContentType, MAIN_BRANCH, Schema, SchemaRef, SnapshotRef, SortOrderRef, StructType,
+};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::util::snapshot::snapshot_id_as_of_time;
@@ -143,6 +145,7 @@ pub struct TableScanBuilder<'a> {
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
     snapshot_selection: Option<SnapshotSelection>,
+    ref_name: Option<String>,
     batch_size: Option<usize>,
     case_sensitive: bool,
     filter: Option<Predicate>,
@@ -162,6 +165,7 @@ impl<'a> TableScanBuilder<'a> {
             table,
             column_names: None,
             snapshot_selection: None,
+            ref_name: None,
             batch_size: None,
             case_sensitive: true,
             filter: None,
@@ -254,6 +258,18 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
+    /// Set the branch or tag to scan.
+    ///
+    /// A tag projects the schema its snapshot was written with. A branch, including
+    /// `main`, projects the table's current schema. The last call to this takes precedence.
+    ///
+    /// [`Self::build`] returns an error if the ref does not exist, or if
+    /// [`Self::snapshot_id`] or [`Self::as_of_time`] is also set.
+    pub fn use_ref(mut self, ref_name: impl Into<String>) -> Self {
+        self.ref_name = Some(ref_name.into());
+        self
+    }
+
     /// Sets the concurrency limit for both manifest files and manifest
     /// entries for this scan
     pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
@@ -323,11 +339,32 @@ impl<'a> TableScanBuilder<'a> {
 
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
-        let selected_snapshot = match self.snapshot_selection {
-            Some(SnapshotSelection::SnapshotId(id)) => {
-                Some((id, format!("Snapshot with id {id} not found")))
+        // Each selection carries whether to project the schema its snapshot was written with.
+        let selected_snapshot = match (self.ref_name, self.snapshot_selection) {
+            (Some(ref_name), Some(_)) => {
+                return Err(invalid_data!(
+                    "Cannot scan ref {ref_name} together with a snapshot id or timestamp"
+                ));
             }
-            Some(SnapshotSelection::AsOfTime(timestamp_ms)) => {
+            (Some(ref_name), None) if ref_name == MAIN_BRANCH => None,
+            (Some(ref_name), None) => {
+                let snapshot_ref = self
+                    .table
+                    .metadata()
+                    .refs
+                    .get(&ref_name)
+                    .ok_or_else(|| invalid_data!("Ref {ref_name} not found"))?;
+                let id = snapshot_ref.snapshot_id;
+                Some((
+                    id,
+                    format!("Snapshot with id {id} of ref {ref_name} not found"),
+                    !snapshot_ref.is_branch(),
+                ))
+            }
+            (None, Some(SnapshotSelection::SnapshotId(id))) => {
+                Some((id, format!("Snapshot with id {id} not found"), true))
+            }
+            (None, Some(SnapshotSelection::AsOfTime(timestamp_ms))) => {
                 let id = snapshot_id_as_of_time(&self.table.metadata_ref(), timestamp_ms)?;
                 // History outlives expired snapshots; name the timestamp that resolved to `id`.
                 Some((
@@ -335,13 +372,16 @@ impl<'a> TableScanBuilder<'a> {
                     format!(
                         "Snapshot with id {id} resolved from timestamp {timestamp_ms} ms not found; it may have expired"
                     ),
+                    true,
                 ))
             }
-            None => None,
+            (None, None) => None,
         };
-        let is_time_travel = selected_snapshot.is_some();
+        let use_snapshot_schema = selected_snapshot
+            .as_ref()
+            .is_some_and(|(_, _, use_snapshot_schema)| *use_snapshot_schema);
         let snapshot = match selected_snapshot {
-            Some((snapshot_id, not_found_message)) => self
+            Some((snapshot_id, not_found_message, _)) => self
                 .table
                 .metadata()
                 .snapshot_by_id(snapshot_id)
@@ -367,9 +407,9 @@ impl<'a> TableScanBuilder<'a> {
             }
         };
 
-        // A scan of the current state uses the table's current schema; time travel uses the
-        // schema its snapshot was written with.
-        let schema = if is_time_travel {
+        // A scan of the current state or a branch uses the table's current schema; a tag or
+        // other time travel uses the schema its snapshot was written with.
+        let schema = if use_snapshot_schema {
             snapshot.schema(self.table.metadata())?
         } else {
             self.table.metadata().current_schema().clone()
@@ -757,13 +797,14 @@ mod tests {
         RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_POS,
     };
-    use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
+    use crate::scan::{FileScanTask, FileScanTaskDeleteFile, TableScan};
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Datum, Literal, MAIN_BRANCH,
         ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, MappedField,
         NameMapping, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
-        Snapshot, SortDirection, SortField, SortOrder, Struct, Summary, TableMetadataBuilder,
-        TableProperties, Transform, Type, UnboundPartitionSpec,
+        SchemaRef, Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField,
+        SortOrder, Struct, Summary, TableMetadataBuilder, TableProperties, Transform, Type,
+        UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::scan::{
@@ -1151,6 +1192,121 @@ mod tests {
                     .with_filter(Reference::new("y").greater_than(Datum::long(0)))
                     .build()
                     .is_err()
+            );
+        }
+    }
+
+    /// Returns the fixture table with a branch `audit` on the tagged snapshot, which is
+    /// written with schema 0 while the current schema is 1.
+    fn table_with_refs_on_older_schema() -> Table {
+        let table = TableTestFixture::new().table;
+        let mut metadata = table.metadata().clone();
+        let tagged_snapshot_id = metadata.refs["test"].snapshot_id;
+        Arc::make_mut(metadata.snapshots.get_mut(&tagged_snapshot_id).unwrap()).schema_id = Some(0);
+        metadata.refs.insert(
+            "audit".to_string(),
+            SnapshotReference::new(
+                tagged_snapshot_id,
+                SnapshotRetention::branch(None, None, None),
+            ),
+        );
+        table.with_metadata(Arc::new(metadata))
+    }
+
+    fn scanned_snapshot_and_schema(scan: &TableScan) -> (i64, SchemaRef) {
+        let context = scan.plan_context.as_ref().unwrap();
+        (
+            context.snapshot.snapshot_id(),
+            context.snapshot_schema.clone(),
+        )
+    }
+
+    #[test]
+    fn test_table_scan_use_ref_branch_uses_current_schema() {
+        let table = table_with_refs_on_older_schema();
+        let metadata = table.metadata();
+        let current_schema = metadata.current_schema().clone();
+        let cases = [
+            ("audit", metadata.refs["test"].snapshot_id),
+            (MAIN_BRANCH, metadata.current_snapshot_id().unwrap()),
+        ];
+        for (ref_name, snapshot_id) in cases {
+            let scan = table.scan().use_ref(ref_name).build().unwrap();
+            assert_eq!(
+                scanned_snapshot_and_schema(&scan),
+                (snapshot_id, current_schema.clone()),
+                "{ref_name}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_scan_use_ref_tag_uses_snapshot_schema() {
+        let table = table_with_refs_on_older_schema();
+        let metadata = table.metadata();
+        let scan = table.scan().use_ref("test").select(["x"]).build().unwrap();
+        assert_eq!(
+            scanned_snapshot_and_schema(&scan),
+            (
+                metadata.refs["test"].snapshot_id,
+                metadata.schema_by_id(0).unwrap().clone()
+            )
+        );
+        let err = table
+            .scan()
+            .use_ref("test")
+            .select(["y"])
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn test_table_scan_use_main_branch_on_empty_table() {
+        let table = TableTestFixture::new_empty().table;
+        let scan = table.scan().use_ref(MAIN_BRANCH).build().unwrap();
+        assert!(scan.snapshot().is_none());
+    }
+
+    #[test]
+    fn test_table_scan_use_ref_rejects_unknown_ref() {
+        let table = TableTestFixture::new().table;
+        let err = table.scan().use_ref("missing").build().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(err.message(), "Ref missing not found");
+    }
+
+    #[test]
+    fn test_table_scan_use_ref_rejects_snapshot_id_or_as_of_time() {
+        let table = TableTestFixture::new().table;
+        let entry = table.metadata().history()[0].clone();
+        let cases = [
+            (
+                "test",
+                table.scan().use_ref("test").snapshot_id(entry.snapshot_id),
+            ),
+            (
+                "test",
+                table.scan().snapshot_id(entry.snapshot_id).use_ref("test"),
+            ),
+            (
+                "test",
+                table.scan().use_ref("test").as_of_time(entry.timestamp_ms),
+            ),
+            (
+                MAIN_BRANCH,
+                table
+                    .scan()
+                    .as_of_time(entry.timestamp_ms)
+                    .use_ref(MAIN_BRANCH),
+            ),
+        ];
+        for (ref_name, builder) in cases {
+            let err = builder.build().unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert_eq!(
+                err.message(),
+                format!("Cannot scan ref {ref_name} together with a snapshot id or timestamp")
             );
         }
     }
