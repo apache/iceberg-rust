@@ -205,6 +205,42 @@ impl Transaction {
         .1
     }
 
+    /// Applies the transaction's actions to its table and returns the resulting [`TableCommit`]
+    /// (the requirements and updates of a REST `CommitTableRequest`) instead of sending it to a catalog.
+    ///
+    /// Actions that write files (a fast append's manifests and manifest list) write them here. The
+    /// caller sends the commit through a catalog client of its own, for example from another
+    /// language; there is no refresh and no retry: a conflict is the caller's to handle, by building
+    /// the commit again from a fresh table.
+    pub async fn build_commit(mut self) -> Result<TableCommit> {
+        if self.table.readonly() {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "Cannot modify a read-only table",
+            )
+            .with_context("table", self.table.identifier().to_string()));
+        }
+
+        let mut current_table = self.table.clone();
+        let mut updates: Vec<TableUpdate> = vec![];
+        let mut requirements: Vec<TableRequirement> = vec![];
+        for entry in self.actions.iter_mut() {
+            let action_commit = entry.commit(&current_table).await?;
+            current_table = Self::apply(
+                current_table,
+                action_commit,
+                &mut updates,
+                &mut requirements,
+            )?;
+        }
+
+        Ok(TableCommit::builder()
+            .ident(self.table.identifier().to_owned())
+            .updates(updates)
+            .requirements(requirements)
+            .build())
+    }
+
     fn build_backoff(props: TableProperties<'_>) -> Result<ExponentialBackoff> {
         Ok(ExponentialBuilder::new()
             .with_min_delay(Duration::from_millis(props.commit_min_retry_wait_ms()?))
@@ -738,12 +774,49 @@ mod tests {
 
 #[cfg(test)]
 mod test_row_lineage {
+    use crate::Catalog;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, Struct,
     };
     use crate::transaction::tests::make_v3_minimal_table_in_catalog;
     use crate::transaction::{ApplyTransactionAction, Transaction};
+
+    #[tokio::test]
+    async fn test_build_commit_sends_through_another_catalog_client() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let file = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/30.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(30)
+            .partition(Struct::from_iter([Some(Literal::long(0))]))
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![file])
+            .apply(tx)
+            .unwrap();
+        let commit = tx.build_commit().await.unwrap();
+
+        // nothing is committed until the caller sends it
+        let unchanged = catalog.load_table(table.identifier()).await.unwrap();
+        assert!(unchanged.metadata().current_snapshot().is_none());
+
+        let table = catalog.update_table(commit).await.unwrap();
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        assert_eq!(snapshot.first_row_id(), Some(0));
+        assert_eq!(table.metadata().next_row_id(), 30);
+        let manifest_list = table.manifest_list_reader(snapshot).load().await.unwrap();
+        assert_eq!(manifest_list.entries().len(), 1);
+        assert_eq!(manifest_list.entries()[0].added_files_count, Some(1));
+    }
 
     #[tokio::test]
     async fn test_fast_append_with_row_lineage() {
