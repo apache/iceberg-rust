@@ -119,10 +119,6 @@ impl AsyncFileReader for ArrowFileReader {
         async move {
             let reader = ParquetMetaDataReader::new()
                 .with_prefetch_hint(self.parquet_read_options.metadata_size_hint())
-                // Set the page policy first because it updates both column and offset policies.
-                .with_page_index_policy(PageIndexPolicy::from(
-                    self.parquet_read_options.preload_page_index(),
-                ))
                 .with_column_index_policy(PageIndexPolicy::from(
                     self.parquet_read_options.preload_column_index(),
                 ))

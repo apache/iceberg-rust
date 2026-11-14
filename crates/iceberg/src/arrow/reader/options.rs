@@ -52,9 +52,6 @@ pub(crate) struct ParquetReadOptions {
     /// Whether to preload the offset index when reading Parquet metadata.
     #[builder(default = true)]
     pub(crate) preload_offset_index: bool,
-    /// Whether to preload the page index when reading Parquet metadata.
-    #[builder(default = false)]
-    pub(crate) preload_page_index: bool,
 }
 
 impl ParquetReadOptions {
@@ -76,9 +73,5 @@ impl ParquetReadOptions {
 
     pub(crate) fn preload_offset_index(&self) -> bool {
         self.preload_offset_index
-    }
-
-    pub(crate) fn preload_page_index(&self) -> bool {
-        self.preload_page_index
     }
 }
