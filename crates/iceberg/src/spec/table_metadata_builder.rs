@@ -1127,12 +1127,13 @@ impl TableMetadataBuilder {
             .build(&schema)?;
 
         self.update_snapshot_log()?;
-        self.metadata.try_normalize()?;
 
+        // Validate the metadata log with the entry for the previous file, as every reader does.
         if let Some(hist_entry) = self.previous_history_entry.take() {
             self.metadata.metadata_log.push(hist_entry);
         }
         let expired_metadata_logs = self.expire_metadata_log();
+        self.metadata.try_normalize()?;
 
         Ok(TableMetadataBuildResult {
             metadata: self.metadata,
@@ -2876,6 +2877,49 @@ mod tests {
 
         let expected = added_spec.with_spec_id(1).bind(schema).unwrap();
         assert_eq!(metadata.default_partition_spec().as_ref(), &expected);
+    }
+
+    #[test]
+    fn test_metadata_change_after_a_fast_branch_snapshot_is_refused_in_build() {
+        let builder = builder_without_changes(FormatVersion::V2);
+        // A branch snapshot from a writer whose clock is two hours ahead.
+        let fast = builder.metadata.last_updated_ms + 2 * 60 * 60_000;
+        let snapshot = Snapshot::builder()
+            .with_snapshot_id(2)
+            .with_timestamp_ms(fast)
+            .with_sequence_number(1)
+            .with_schema_id(0)
+            .with_manifest_list("/snap-2.avro")
+            .with_summary(Summary {
+                operation: Operation::Append,
+                additional_properties: HashMap::new(),
+            })
+            .build();
+        let on_branch = builder
+            .set_branch_snapshot(snapshot, "b")
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        assert_eq!(on_branch.last_updated_ms, fast);
+
+        // The next change takes the current time, two hours before the entry for the previous
+        // file. No reader could load the result, so the build fails.
+        let err = on_branch
+            .into_builder(Some(
+                "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+            ))
+            .set_properties(HashMap::from([("k".to_string(), "v".to_string())]))
+            .unwrap()
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message()
+                .ends_with(&format!(": before last metadata log entry at {fast}")),
+            "{}",
+            err.message()
+        );
     }
 
     #[test]
