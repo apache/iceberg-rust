@@ -497,7 +497,7 @@ impl Transform {
                         self.truncate_number_strict(name, expr, &func)
                     } else if expr.op() == PredicateOperator::StartsWith {
                         let len = match expr.literal().literal() {
-                            PrimitiveLiteral::String(s) => s.len(),
+                            PrimitiveLiteral::String(s) => s.chars().count(),
                             PrimitiveLiteral::Binary(b) => b.len(),
                             _ => {
                                 return Err(invalid_data!(
@@ -521,7 +521,7 @@ impl Transform {
                         }
                     } else if expr.op() == PredicateOperator::NotStartsWith {
                         let len = match expr.literal().literal() {
-                            PrimitiveLiteral::String(s) => s.len(),
+                            PrimitiveLiteral::String(s) => s.chars().count(),
                             PrimitiveLiteral::Binary(b) => b.len(),
                             _ => {
                                 return Err(invalid_data!(
@@ -848,7 +848,7 @@ impl Transform {
             PredicateOperator::StartsWith => match datum.literal() {
                 PrimitiveLiteral::String(s) => {
                     if let Some(w) = width
-                        && s.len() == w as usize
+                        && s.chars().count() == w as usize
                     {
                         return Some(PredicateOperator::Eq);
                     };
@@ -860,12 +860,13 @@ impl Transform {
                 PrimitiveLiteral::String(s) => {
                     if let Some(w) = width {
                         let w = w as usize;
+                        let len = s.chars().count();
 
-                        if s.len() == w {
+                        if len == w {
                             return Some(PredicateOperator::NotEq);
                         }
 
-                        if s.len() < w {
+                        if len < w {
                             return Some(*op);
                         }
 
