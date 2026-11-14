@@ -151,6 +151,11 @@ fn candidate_row_groups(
 
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
+        // A known-empty data file contributes no rows, regardless of predicates or deletes.
+        if task.record_count() == Some(0) {
+            return Ok(Box::pin(futures::stream::empty()));
+        }
+
         let should_load_page_index = (self.row_selection_enabled && task.predicate().is_some())
             || !task.deletes().is_empty();
         let mut parquet_read_options = self.parquet_read_options;
@@ -914,6 +919,105 @@ mod tests {
     };
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, SchemaRef, Type};
+
+    fn record_count_task(path: &str, file_size: u64, record_count: Option<u64>) -> FileScanTask {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        FileScanTask::builder()
+            .with_data_file_path(path.to_string())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_file_size_in_bytes(file_size)
+            .with_start(0)
+            .with_length(file_size)
+            .with_record_count(record_count)
+            .with_schema(Arc::new(schema))
+            .with_project_field_ids(vec![1])
+            .with_case_sensitive(true)
+            .build()
+            .unwrap()
+    }
+
+    async fn read_tasks(
+        tasks: Vec<FileScanTask>,
+        concurrency: usize,
+    ) -> crate::Result<Vec<RecordBatch>> {
+        let tasks = futures::stream::iter(tasks.into_iter().map(Ok));
+        ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+            .with_data_file_concurrency_limit(concurrency)
+            .build()
+            .read(Box::pin(tasks))?
+            .stream()
+            .try_collect()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_read_zero_record_files_without_opening_them() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing_path = temp_dir
+            .path()
+            .join("missing.parquet")
+            .display()
+            .to_string();
+
+        for concurrency in [1, 2] {
+            // The record count, not the byte size, determines whether the file is empty.
+            let tasks = vec![
+                record_count_task(&missing_path, 0, Some(0)),
+                record_count_task(&missing_path, 128, Some(0)),
+            ];
+            let batches = read_tasks(tasks, concurrency).await.unwrap();
+            assert!(batches.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_zero_size_files_with_nonzero_or_unknown_record_count() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("empty.parquet").display().to_string();
+        File::create(&path).unwrap();
+
+        for concurrency in [1, 2] {
+            for record_count in [Some(1), None] {
+                let task = record_count_task(&path, 0, record_count);
+                let error = read_tasks(vec![task], concurrency).await.unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("file size of 0 is less than footer"),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_nonempty_files_alongside_zero_record_files() {
+        use arrow_array::types::Int32Type;
+
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().to_str().unwrap();
+        let path = write_plain_parquet(dir, "data.parquet", vec![], vec![]);
+        let file_size = std::fs::metadata(&path).unwrap().len();
+        let missing_path = format!("{dir}/missing.parquet");
+
+        for concurrency in [1, 2] {
+            for record_count in [Some(3), None] {
+                let empty_task = record_count_task(&missing_path, 0, Some(0));
+                let data_task = record_count_task(&path, file_size, record_count);
+                let tasks = vec![empty_task.clone(), data_task, empty_task];
+                let batches = read_tasks(tasks, concurrency).await.unwrap();
+
+                assert_eq!(batches.len(), 1);
+                let ids = batches[0].column(0).as_primitive::<Int32Type>();
+                assert_eq!(ids.values(), &[1, 2, 3]);
+            }
+        }
+    }
 
     // INT96 encoding: [nanos_low_u32, nanos_high_u32, julian_day_u32]
     // Julian day 2_440_588 = Unix epoch (1970-01-01)
