@@ -21,6 +21,7 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod partition_filter;
 mod task;
 
 use std::collections::HashMap;
@@ -31,6 +32,7 @@ use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
+pub use partition_filter::PartitionFilter;
 pub use task::*;
 
 use crate::arrow::ArrowReaderBuilder;
