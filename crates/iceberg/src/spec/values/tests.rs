@@ -1996,6 +1996,92 @@ fn test_decimal_constructors_accept_finite_values() {
 }
 
 #[test]
+fn test_decimal_positive_exponents() {
+    for (input, mantissa, scale) in [
+        ("1e3", 1000, 0),
+        ("-1.25e3", -1250, 0),
+        ("1.2300e2", 12300, 2),
+        ("1e-3", 1, 3),
+        ("-0e1000", 0, 0),
+        ("9e37", 9 * 10i128.pow(37), 0),
+    ] {
+        let expected = Datum::new(
+            PrimitiveType::Decimal {
+                precision: 38,
+                scale,
+            },
+            PrimitiveLiteral::Int128(mantissa),
+        );
+        let value = Decimal::from_str(input, fastnum::decimal::Context::default()).unwrap();
+        assert_eq!(Datum::decimal_from_str(input).unwrap(), expected, "{input}");
+        assert_eq!(Datum::decimal(value).unwrap(), expected, "{input}");
+        assert_eq!(
+            Literal::decimal_from_str(input).unwrap(),
+            Literal::decimal(mantissa),
+            "{input}"
+        );
+    }
+
+    let value = Decimal::from_str("1e3", fastnum::decimal::Context::default()).unwrap();
+    assert_eq!(
+        Datum::decimal_with_precision(value, 4).unwrap(),
+        Datum::new(
+            PrimitiveType::Decimal {
+                precision: 4,
+                scale: 0,
+            },
+            PrimitiveLiteral::Int128(1000),
+        )
+    );
+    assert_eq!(
+        Datum::decimal_with_precision(value, 3).unwrap_err().kind(),
+        ErrorKind::DataInvalid
+    );
+}
+
+#[test]
+fn test_decimal_rejects_oversized_mantissa() {
+    for input in [
+        "1e38",
+        "-1e1000",
+        "100000000000000000000000000000000000000",
+        "170141183460469231731687303715884105729",
+        "-170141183460469231731687303715884105728",
+    ] {
+        let value = Decimal::from_str(input, fastnum::decimal::Context::default()).unwrap();
+        for kind in [
+            Datum::decimal_from_str(input).unwrap_err().kind(),
+            Datum::decimal(value).unwrap_err().kind(),
+            Datum::decimal_with_precision(value, 38).unwrap_err().kind(),
+            Literal::decimal_from_str(input).unwrap_err().kind(),
+        ] {
+            assert_eq!(kind, ErrorKind::DataInvalid, "{input}");
+        }
+    }
+}
+
+#[test]
+fn test_decimal_from_json_validates_precision_at_target_scale() {
+    let decimal_type = Type::decimal(6, 2).unwrap();
+    for (input, mantissa) in [("1e3", 100000), ("1.234", 123), ("-0e1000", 0)] {
+        assert_eq!(
+            Literal::try_from_json(JsonValue::String(input.to_string()), &decimal_type).unwrap(),
+            Some(Literal::decimal(mantissa)),
+            "{input}"
+        );
+    }
+    for input in ["1e4", "9999.999", "1e1000"] {
+        assert_eq!(
+            Literal::try_from_json(JsonValue::String(input.to_string()), &decimal_type)
+                .unwrap_err()
+                .kind(),
+            ErrorKind::DataInvalid,
+            "{input}"
+        );
+    }
+}
+
+#[test]
 fn test_datum_to_decimal_narrows_precision_when_scale_matches() {
     let target_type = Primitive(PrimitiveType::Decimal {
         precision: 9,

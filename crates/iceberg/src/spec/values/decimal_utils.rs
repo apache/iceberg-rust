@@ -24,6 +24,7 @@ use fastnum::D128;
 use fastnum::decimal::Context;
 
 use crate::error::invalid_data;
+use crate::spec::MAX_DECIMAL_PRECISION;
 use crate::{Result, ensure_data_valid};
 
 /// Re-export D128 as the Decimal type for use throughout the crate.
@@ -103,28 +104,49 @@ pub fn decimal_from_str_exact(s: &str) -> Result<Decimal> {
     Ok(decimal)
 }
 
-/// Get the mantissa (unscaled coefficient) as i128.
-///
-/// This is equivalent to rust_decimal's `decimal.mantissa()`.
-///
-/// The mantissa is signed: negative decimals return negative mantissa.
-pub fn decimal_mantissa(d: &Decimal) -> i128 {
-    // digits() returns unsigned coefficient as UInt<N>
-    // For Iceberg decimals (max 38 digits), this always fits in u128/i128
-    let digits = d.digits();
+/// Returns the signed coefficient at the value's non-negative scale.
+pub(crate) fn decimal_mantissa(value: Decimal) -> Result<i128> {
+    decimal_mantissa_at_scale(value, decimal_scale(&value), MAX_DECIMAL_PRECISION)
+}
 
-    // Convert UInt<2> to u128 - this always succeeds for Iceberg-compliant decimals
-    // since 38 digits requires ~127 bits and u128 has 128 bits
-    let unsigned: u128 = digits
-        .to_u128()
-        .expect("Iceberg decimals (max 38 digits) always fit in u128");
+/// Returns the signed coefficient at the requested scale and precision.
+pub(super) fn decimal_mantissa_at_scale(
+    mut value: Decimal,
+    scale: u32,
+    precision: u32,
+) -> Result<i128> {
+    ensure_data_valid!(value.is_finite(), "Decimal value must be finite: {}", value);
 
-    let signed = unsigned as i128;
-    if d.is_sign_negative() {
-        -signed
-    } else {
-        signed
+    let shift = i64::from(scale) - i64::from(value.fractional_digits_count());
+    if shift < 0 {
+        value = value.rescale(scale as i16);
     }
+    if value.is_zero() {
+        return Ok(0);
+    }
+
+    let appended_digits = shift.max(0);
+    // Check before multiplying so the expanded coefficient fits in i128.
+    ensure_data_valid!(
+        value.digits_count() as i64 + appended_digits
+            <= i64::from(precision.min(MAX_DECIMAL_PRECISION)),
+        "Decimal value is too large for precision {} at scale {}",
+        precision,
+        scale
+    );
+    let coefficient = value
+        .digits()
+        .to_u128()
+        .ok()
+        .and_then(|digits| i128::try_from(digits).ok())
+        .ok_or_else(|| invalid_data!("Decimal coefficient does not fit in i128"))?;
+    let mantissa = coefficient * 10i128.pow(appended_digits as u32);
+
+    Ok(if value.is_sign_negative() {
+        -mantissa
+    } else {
+        mantissa
+    })
 }
 
 /// Get the decimal digit precision of a mantissa.
@@ -143,13 +165,6 @@ pub fn decimal_precision(mantissa: i128) -> u32 {
 pub fn decimal_scale(d: &Decimal) -> u32 {
     let frac = d.fractional_digits_count();
     if frac < 0 { 0 } else { frac as u32 }
-}
-
-/// Rescale a decimal to the given scale, returning the rescaled value.
-///
-/// This is equivalent to rust_decimal's `decimal.rescale(scale)`.
-pub fn decimal_rescale(d: Decimal, scale: u32) -> Decimal {
-    d.rescale(scale as i16)
 }
 
 /// Convert big-endian signed bytes to i128.
@@ -270,10 +285,10 @@ mod tests {
     #[test]
     fn test_decimal_mantissa() {
         let d = decimal_from_i128_with_scale(12345, 2);
-        assert_eq!(decimal_mantissa(&d), 12345);
+        assert_eq!(decimal_mantissa(d).unwrap(), 12345);
 
         let d = decimal_from_i128_with_scale(-12345, 2);
-        assert_eq!(decimal_mantissa(&d), -12345);
+        assert_eq!(decimal_mantissa(d).unwrap(), -12345);
     }
 
     #[test]
@@ -315,9 +330,7 @@ mod tests {
     #[test]
     fn test_decimal_rescale() {
         let d = decimal_from_str_exact("123.45").unwrap();
-        let rescaled = decimal_rescale(d, 4);
-        assert_eq!(decimal_scale(&rescaled), 4);
-        assert_eq!(decimal_mantissa(&rescaled), 1234500);
+        assert_eq!(decimal_mantissa_at_scale(d, 4, 7).unwrap(), 1234500);
     }
 
     #[test]
