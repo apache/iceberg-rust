@@ -42,6 +42,19 @@ const MICROSECONDS_PER_DAY: i64 = 86_400_000_000;
 /// Nanoseconds in one day.
 const NANOSECONDS_PER_DAY: i64 = 86_400_000_000_000;
 
+/// Re-tag timestamp arrays as UTC so calendar fields match Iceberg's
+/// epoch-based computation. `date_part` converts into the array's timezone
+/// tag before reading year/month; Iceberg always uses UTC.
+fn timestamp_array_in_utc(input: ArrayRef) -> ArrayRef {
+    match input.data_type() {
+        DataType::Timestamp(unit, Some(_)) => {
+            let utc = DataType::Timestamp(*unit, Some(crate::arrow::UTC_TIME_ZONE.into()));
+            arrow_cast::cast(&input, &utc).expect("timezone-only timestamp cast")
+        }
+        _ => input,
+    }
+}
+
 /// Extract a date or timestamp year, as years from 1970
 #[derive(Debug)]
 pub struct Year;
@@ -63,7 +76,8 @@ impl Year {
 
 impl TransformFunction for Year {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        let array = date_part(&input, DatePart::Year)
+        let utc_input = timestamp_array_in_utc(input);
+        let array = date_part(&utc_input, DatePart::Year)
             .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         Ok(Arc::<Int32Array>::new(
             array
@@ -147,14 +161,15 @@ impl Month {
 
 impl TransformFunction for Month {
     fn transform(&self, input: ArrayRef) -> Result<ArrayRef> {
-        let year_array = date_part(&input, DatePart::Year)
+        let utc_input = timestamp_array_in_utc(input);
+        let year_array = date_part(&utc_input, DatePart::Year)
             .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         let year_array: Int32Array = year_array
             .as_any()
             .downcast_ref::<Int32Array>()
             .unwrap()
             .unary(|v| 12 * (v - UNIX_EPOCH_YEAR));
-        let month_array = date_part(&input, DatePart::Month)
+        let month_array = date_part(&utc_input, DatePart::Month)
             .map_err(|err| Error::new(ErrorKind::Unexpected, format!("{err}")))?;
         Ok(Arc::<Int32Array>::new(
             binary(
@@ -2359,6 +2374,43 @@ mod test {
         assert_eq!(res.value(2), 60);
         assert_eq!(res.value(3), 90);
         assert_eq!(res.value(4), -1);
+    }
+
+    #[test]
+    fn test_year_and_month_ignore_non_utc_timezone_tag() {
+        use arrow_array::{TimestampMillisecondArray, TimestampSecondArray};
+
+        for timezone in [Some("+05:45"), Some("-05:00"), Some("+00:00"), None] {
+            let values = vec![Some(-1i64), None, Some(0)];
+            let inputs: [ArrayRef; 4] = [
+                Arc::new(TimestampSecondArray::from(values.clone()).with_timezone_opt(timezone)),
+                Arc::new(
+                    TimestampMillisecondArray::from(values.clone()).with_timezone_opt(timezone),
+                ),
+                Arc::new(
+                    TimestampMicrosecondArray::from(values.clone()).with_timezone_opt(timezone),
+                ),
+                Arc::new(TimestampNanosecondArray::from(values).with_timezone_opt(timezone)),
+            ];
+            for input in inputs {
+                let data_type = input.data_type().clone();
+                let years = super::Year.transform(input.clone()).unwrap();
+                let years = years.as_any().downcast_ref::<Int32Array>().unwrap();
+                assert_eq!(
+                    years.iter().collect::<Vec<_>>(),
+                    vec![Some(-1), None, Some(0)],
+                    "year, {data_type:?}"
+                );
+
+                let months = super::Month.transform(input).unwrap();
+                let months = months.as_any().downcast_ref::<Int32Array>().unwrap();
+                assert_eq!(
+                    months.iter().collect::<Vec<_>>(),
+                    vec![Some(-1), None, Some(0)],
+                    "month, {data_type:?}"
+                );
+            }
+        }
     }
 
     fn test_timestamp_and_tz_transform(
