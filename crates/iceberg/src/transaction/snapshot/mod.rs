@@ -438,14 +438,17 @@ pub(crate) async fn write_snapshot_commit(
         })
         .unwrap_or_default();
 
+    // `SetSnapshotRef` replaces the whole reference, so keep the retention of `main`, as Java does.
+    let main_retention = match metadata.refs.get(MAIN_BRANCH) {
+        Some(main) if main.is_branch() => main.retention.clone(),
+        _ => SnapshotRetention::branch(None, None, None),
+    };
+
     updates.extend([
         TableUpdate::AddSnapshot { snapshot },
         TableUpdate::SetSnapshotRef {
             ref_name: MAIN_BRANCH.to_string(),
-            reference: SnapshotReference::new(
-                snapshot_id,
-                SnapshotRetention::branch(None, None, None),
-            ),
+            reference: SnapshotReference::new(snapshot_id, main_retention),
         },
     ]);
 
@@ -471,12 +474,13 @@ mod tests {
 
     use super::simple::{AppendIntent, SimpleSnapshotProducer};
     use super::*;
+    use crate::ErrorKind;
     use crate::spec::{
         DataContentType, DataFileBuilder, Literal, Manifest, NestedField, PartitionSpec,
-        PrimitiveType, Schema, SnapshotRef, SortOrder, TableMetadataBuilder, Transform, Type,
+        PrimitiveType, Schema, SortOrder, TableMetadataBuilder, Transform, Type,
     };
+    use crate::transaction::Transaction;
     use crate::transaction::tests::make_v2_minimal_table;
-    use crate::{ErrorKind, TableUpdate};
 
     fn data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
         DataFileBuilder::default()
@@ -503,35 +507,34 @@ mod tests {
             snapshot_properties: HashMap::new(),
             data_files,
         });
-        let snapshot = producer
-            .apply(table)
-            .await
-            .unwrap()
-            .take_updates()
-            .into_iter()
-            .find_map(|u| match u {
-                TableUpdate::AddSnapshot { snapshot } => Some(SnapshotRef::new(snapshot)),
-                _ => None,
-            })
-            .expect("append should add a snapshot");
+        let updates = producer.apply(table).await.unwrap().take_updates();
+        Transaction::update_table_metadata(table.clone(), &updates).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_commit_keeps_main_branch_retention() {
+        let table = make_v2_minimal_table();
+        let table = append_to(&table, vec![data_file(&table, "test/1.parquet", 1)]).await;
+        let retention =
+            SnapshotRetention::branch(Some(9), Some(3_456_000_000), Some(2_592_000_000));
+        let main = SnapshotReference::new(
+            table.metadata().current_snapshot_id().unwrap(),
+            retention.clone(),
+        );
         let metadata = table
             .metadata()
             .clone()
             .into_builder(None)
-            .add_snapshot(snapshot.as_ref().clone())
-            .unwrap()
-            .set_ref(
-                MAIN_BRANCH,
-                SnapshotReference::new(
-                    snapshot.snapshot_id(),
-                    SnapshotRetention::branch(None, None, None),
-                ),
-            )
+            .set_ref(MAIN_BRANCH, main)
             .unwrap()
             .build()
             .unwrap()
             .metadata;
-        table.clone().with_metadata(Arc::new(metadata))
+        let table = table.with_metadata(Arc::new(metadata));
+
+        let table = append_to(&table, vec![data_file(&table, "test/2.parquet", 1)]).await;
+
+        assert_eq!(table.metadata().refs[MAIN_BRANCH].retention, retention);
     }
 
     #[tokio::test]
