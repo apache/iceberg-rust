@@ -204,6 +204,7 @@ mod test {
         ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema,
         SchemaRef, Type,
     };
+    use crate::test_utils::test_runtime;
 
     #[test]
     fn test_manifest_content_type_default() {
@@ -296,7 +297,10 @@ mod test {
             key_metadata.with_file_length(size)
         );
 
-        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        let manifest = ManifestReader::new(io, test_runtime())
+            .read(&manifest_file)
+            .await
+            .unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
             manifest.entries()[0].file_path(),
@@ -325,7 +329,7 @@ mod test {
             .with_file_length(manifest_file.manifest_length as u64);
         manifest_file.key_metadata = Some(wrong_key_metadata.encode().unwrap().to_vec());
 
-        let err = ManifestReader::new(io)
+        let err = ManifestReader::new(io, test_runtime())
             .read(&manifest_file)
             .await
             .expect_err("read must fail when decrypting with the wrong key");
@@ -351,7 +355,7 @@ mod test {
             .with_file_length(manifest_file.manifest_length as u64);
         manifest_file.key_metadata = Some(wrong_aad_metadata.encode().unwrap().to_vec());
 
-        let err = ManifestReader::new(io)
+        let err = ManifestReader::new(io, test_runtime())
             .read(&manifest_file)
             .await
             .expect_err("read must fail when decrypting with the wrong AAD prefix");
@@ -388,7 +392,10 @@ mod test {
         let manifest_file = write_manifest(&io, path).await;
         assert_eq!(manifest_file.key_metadata, None);
 
-        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        let manifest = ManifestReader::new(io, test_runtime())
+            .read(&manifest_file)
+            .await
+            .unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
             manifest.entries()[0].file_path(),
@@ -410,7 +417,10 @@ mod test {
         // Stamp a manifest-level first_row_id, as the manifest-list writer would.
         manifest_file.first_row_id = Some(1000);
 
-        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        let manifest = ManifestReader::new(io, test_runtime())
+            .read(&manifest_file)
+            .await
+            .unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(manifest.entries()[0].data_file().first_row_id(), Some(1000));
     }
