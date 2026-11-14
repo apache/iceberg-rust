@@ -21,8 +21,6 @@ use std::cmp::Ordering;
 
 use ordered_float::{FloatCore, OrderedFloat};
 
-use crate::Result;
-use crate::error::invalid_data;
 use crate::spec::PrimitiveType;
 
 /// Values present in iceberg type
@@ -125,6 +123,11 @@ impl PrimitiveLiteral {
 
     /// Widens this literal to `target` for the value promotions `int` -> `long`
     /// and `float` -> `double`, returning `None` when `target` does not promote it.
+    ///
+    /// A bare literal does not know its source type, so this does not cover
+    /// `date` -> `timestamp` / `timestamp_ns` (an `int` literal may or may not be a
+    /// date). Use [`Datum::promote_to`](crate::spec::Datum::promote_to), which
+    /// matches on the source type as well and adds that promotion.
     pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Option<PrimitiveLiteral> {
         match (self, target) {
             (PrimitiveLiteral::Int(_), PrimitiveType::Long)
@@ -160,19 +163,4 @@ impl PrimitiveLiteral {
             _ => false,
         }
     }
-}
-
-pub(crate) const MICROSECONDS_PER_DAY: i64 = 86_400_000_000;
-pub(crate) const NANOSECONDS_PER_DAY: i64 = 86_400_000_000_000;
-
-/// Converts `days` from the epoch to a timestamp literal in units of `units_per_day`.
-pub(crate) fn date_to_timestamp(
-    days: i32,
-    units_per_day: i64,
-    target: &PrimitiveType,
-) -> Result<PrimitiveLiteral> {
-    i64::from(days)
-        .checked_mul(units_per_day)
-        .map(PrimitiveLiteral::Long)
-        .ok_or_else(|| invalid_data!("Date {days} (days from epoch) is out of range for {target}"))
 }

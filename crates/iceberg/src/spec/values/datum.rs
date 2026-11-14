@@ -33,9 +33,7 @@ use super::decimal_utils::{
     decimal_precision, decimal_scale, i128_from_be_bytes, i128_to_be_bytes_min,
 };
 use super::literal::Literal;
-use super::primitive::{
-    MICROSECONDS_PER_DAY, NANOSECONDS_PER_DAY, PrimitiveLiteral, date_to_timestamp,
-};
+use super::primitive::PrimitiveLiteral;
 use super::serde::_serde::RawLiteral;
 use super::temporal::{date, time, timestamp, timestamptz};
 use crate::ensure_data_valid;
@@ -428,11 +426,7 @@ impl Datum {
             PrimitiveType::Timestamp => {
                 if bytes.len() == 4 {
                     // Bound written as a date under a later timestamp schema.
-                    date_to_timestamp(
-                        i32::from_le_bytes(bytes.try_into()?),
-                        MICROSECONDS_PER_DAY,
-                        &data_type,
-                    )?
+                    date_to_timestamp(i32::from_le_bytes(bytes.try_into()?), &data_type)?
                 } else {
                     PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
                 }
@@ -443,11 +437,7 @@ impl Datum {
             PrimitiveType::TimestampNs => {
                 if bytes.len() == 4 {
                     // Bound written as a date under a later timestamp_ns schema.
-                    date_to_timestamp(
-                        i32::from_le_bytes(bytes.try_into()?),
-                        NANOSECONDS_PER_DAY,
-                        &data_type,
-                    )?
+                    date_to_timestamp(i32::from_le_bytes(bytes.try_into()?), &data_type)?
                 } else {
                     PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
                 }
@@ -1275,22 +1265,13 @@ impl Datum {
                 .literal
                 .widen()
                 .map(|literal| Datum::new(target.clone(), literal))),
-            (PrimitiveType::Date, PrimitiveType::Timestamp) => {
+            (PrimitiveType::Date, PrimitiveType::Timestamp | PrimitiveType::TimestampNs) => {
                 let PrimitiveLiteral::Int(days) = self.literal else {
                     return Ok(None);
                 };
                 Ok(Some(Datum::new(
                     target.clone(),
-                    date_to_timestamp(days, MICROSECONDS_PER_DAY, target)?,
-                )))
-            }
-            (PrimitiveType::Date, PrimitiveType::TimestampNs) => {
-                let PrimitiveLiteral::Int(days) = self.literal else {
-                    return Ok(None);
-                };
-                Ok(Some(Datum::new(
-                    target.clone(),
-                    date_to_timestamp(days, NANOSECONDS_PER_DAY, target)?,
+                    date_to_timestamp(days, target)?,
                 )))
             }
             _ => Ok(None),
@@ -1372,4 +1353,21 @@ fn human_float<T: Float + LowerExp + FromStr>(value: T) -> String {
         let fraction = if digits.len() > 1 { &digits[1..] } else { "0" };
         format!("{sign}{}.{fraction}E{exponent}", &digits[..1])
     }
+}
+
+/// Converts `days` since the epoch to a `timestamp` (microseconds) or `timestamp_ns`
+/// (nanoseconds) literal at midnight of that day.
+///
+/// # Errors
+/// Returns `DataInvalid` if the result overflows `target`, or if `target` is not
+/// `timestamp` / `timestamp_ns`.
+fn date_to_timestamp(days: i32, target: &PrimitiveType) -> Result<PrimitiveLiteral> {
+    let value = match target {
+        PrimitiveType::Timestamp => date::days_to_microseconds(days),
+        PrimitiveType::TimestampNs => date::days_to_nanoseconds(days),
+        _ => return Err(invalid_data!("Cannot convert a date to {target}")),
+    };
+    value
+        .map(PrimitiveLiteral::Long)
+        .ok_or_else(|| invalid_data!("Date {days} (days from epoch) is out of range for {target}"))
 }
