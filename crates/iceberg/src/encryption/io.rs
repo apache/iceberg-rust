@@ -74,8 +74,22 @@ impl EncryptedInputFile {
 
     /// Creates a reader that transparently decrypts on each read.
     pub async fn reader(&self) -> Result<Box<dyn FileRead>> {
+        // Identity just returns the file reader it was given.
+        self.reader_with_wrapper(std::convert::identity).await
+    }
+
+    /// Creates a decrypting reader, letting the caller wrap the file reader first.
+    ///
+    /// Calls `wrap` once with the file reader and uses the result for decryption.
+    /// This lets callers add behavior such as logging reads or counting bytes
+    /// without changing the decryption code.
+    pub(crate) async fn reader_with_wrapper<F, R>(&self, wrap: F) -> Result<Box<dyn FileRead>>
+    where
+        F: FnOnce(Box<dyn FileRead>) -> R,
+        R: FileRead,
+    {
         let encrypted_length = self.encrypted_length()?;
-        let raw_reader = self.inner.reader().await?;
+        let raw_reader = Box::new(wrap(self.inner.reader().await?));
         let cipher = build_cipher(&self.key_metadata)?;
         let aad_prefix: Box<[u8]> = self.key_metadata.aad_prefix().unwrap_or_default().into();
         let decrypting = AesGcmFileRead::new(raw_reader, cipher, aad_prefix, encrypted_length)?;
