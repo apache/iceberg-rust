@@ -1454,6 +1454,7 @@ pub fn iceberg::scan::TableScanBuilder<'a>::select(self, column_names: impl core
 pub fn iceberg::scan::TableScanBuilder<'a>::select_all(self) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::select_empty(self) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::snapshot_id(self, snapshot_id: i64) -> Self
+pub fn iceberg::scan::TableScanBuilder<'a>::use_ref(self, ref_name: impl core::convert::Into<alloc::string::String>) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_batch_size(self, batch_size: core::option::Option<usize>) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_bloom_filter_enabled(self, bloom_filter_enabled: bool) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_case_sensitive(self, case_sensitive: bool) -> Self
