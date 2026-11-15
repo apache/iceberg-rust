@@ -2879,11 +2879,11 @@ mod tests {
         assert_eq!(metadata.default_partition_spec().as_ref(), &expected);
     }
 
-    #[test]
-    fn test_metadata_change_after_a_fast_branch_snapshot_is_refused_in_build() {
+    /// Adds a branch snapshot from a writer whose clock is `skew_ms` ahead, then changes a
+    /// property, which takes the current time. Returns the snapshot time and the second build.
+    fn build_after_fast_branch_snapshot(skew_ms: i64) -> (i64, Result<TableMetadataBuildResult>) {
         let builder = builder_without_changes(FormatVersion::V2);
-        // A branch snapshot from a writer whose clock is two hours ahead.
-        let fast = builder.metadata.last_updated_ms + 2 * 60 * 60_000;
+        let fast = builder.metadata.last_updated_ms + skew_ms;
         let snapshot = Snapshot::builder()
             .with_snapshot_id(2)
             .with_timestamp_ms(fast)
@@ -2903,22 +2903,41 @@ mod tests {
             .metadata;
         assert_eq!(on_branch.last_updated_ms, fast);
 
-        // The next change takes the current time, two hours before the entry for the previous
-        // file. No reader could load the result, so the build fails.
-        let err = on_branch
+        let result = on_branch
             .into_builder(Some(
                 "s3://bucket/test/location/metadata/metadata2.json".to_string(),
             ))
             .set_properties(HashMap::from([("k".to_string(), "v".to_string())]))
             .unwrap()
-            .build()
-            .unwrap_err();
+            .build();
+        (fast, result)
+    }
+
+    #[test]
+    fn test_metadata_change_after_a_fast_branch_snapshot_is_refused_in_build() {
+        // The change is two hours before the entry for the previous file. No reader could load
+        // the result, so the build fails.
+        let (fast, result) = build_after_fast_branch_snapshot(2 * 60 * 60_000);
+        let err = result.unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(
             err.message()
                 .ends_with(&format!(": before last metadata log entry at {fast}")),
             "{}",
             err.message()
+        );
+    }
+
+    #[test]
+    fn test_metadata_change_after_a_slightly_fast_branch_snapshot_builds() {
+        // 30 seconds of clock skew is within the one-minute tolerance.
+        let (fast, result) = build_after_fast_branch_snapshot(30_000);
+        assert_eq!(
+            result.unwrap().metadata.metadata_log.last(),
+            Some(&MetadataLog {
+                metadata_file: "s3://bucket/test/location/metadata/metadata2.json".to_string(),
+                timestamp_ms: fast,
+            })
         );
     }
 
