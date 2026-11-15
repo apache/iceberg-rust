@@ -46,3 +46,7 @@ make build
 ```shell
 make test
 ```
+
+## LICENSE and NOTICE
+
+The wheels bundle the licenses and notices of their Rust dependencies. See [LICENSING.md](LICENSING.md) for how they are generated and how to keep them up to date.
