@@ -237,7 +237,9 @@ pub fn read_manifest_list(bs: &[u8]) -> PyResult<PyManifestList> {
 ///
 /// The other arguments come from the manifest's entry in the manifest list,
 /// which the entries inherit snapshot IDs, sequence numbers, and first row IDs
-/// from. Raises `ValueError` for an invalid manifest header. An error while
+/// from. `bs` must be decrypted if the manifest list entry has key metadata.
+/// Raises `ValueError` for an invalid manifest header, which includes
+/// encrypted bytes. An error while
 /// reading raises `pyarrow.ArrowInvalid`, which subclasses `ValueError`. The
 /// reader holds a reference to `bs` until it's closed or collected, and the
 /// next call into `pyiceberg_core` releases it.
@@ -285,7 +287,9 @@ pub fn read_manifest_entries_as_arrow(
 
 /// Reads the entries of a manifest list as a `pyarrow.RecordBatchReader`.
 ///
-/// Raises `ValueError` for an invalid manifest list header. An error while
+/// `bs` must be decrypted if the snapshot has an encryption key ID. Raises
+/// `ValueError` for an invalid manifest list header, which includes encrypted
+/// bytes. An error while
 /// reading raises `pyarrow.ArrowInvalid`, which subclasses `ValueError`. The
 /// reader holds a reference to `bs` until it's closed or collected, and the
 /// next call into `pyiceberg_core` releases it.

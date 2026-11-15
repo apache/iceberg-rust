@@ -66,11 +66,16 @@ const BATCH_SIZE: usize = 1024;
 /// Lower and upper bounds keep the binary single-value serialization they were
 /// written with.
 ///
+/// If `manifest_file.key_metadata` is set, the manifest is encrypted and
+/// `bytes` must be decrypted first.
+/// [`Table::manifest_reader`](crate::table::Table::manifest_reader) returns a
+/// reader that decrypts.
+///
 /// # Errors
 ///
 /// Returns an error if the manifest's header can't be read or names an
-/// unsupported format version. Errors in the entries come from the reader,
-/// which yields no batches after one.
+/// unsupported format version. Encrypted bytes fail at the header. Errors in
+/// the entries come from the reader, which yields no batches after one.
 ///
 /// # Example
 ///
@@ -216,11 +221,16 @@ impl<B: AsRef<[u8]>> Iterator for ManifestEntryBatchReader<B> {
 /// v2+ defaults. Partition summary bounds keep the binary single-value
 /// serialization they were written with.
 ///
+/// If the snapshot has an `encryption_key_id`, the manifest list is encrypted
+/// and `bytes` must be decrypted first.
+/// [`Table::manifest_list_reader`](crate::table::Table::manifest_list_reader)
+/// returns a reader that decrypts.
+///
 /// # Errors
 ///
 /// Returns an error if the manifest list's header can't be read or names an
-/// unsupported format version. Errors in the entries come from the reader,
-/// which yields no batches after one.
+/// unsupported format version. Encrypted bytes fail at the header. Errors in
+/// the entries come from the reader, which yields no batches after one.
 ///
 /// # Example
 ///
@@ -2026,6 +2036,25 @@ mod tests {
             let err = read_list(&bytes).unwrap_err();
             assert_eq!(err.kind(), ErrorKind::DataInvalid);
         }
+    }
+
+    #[test]
+    fn test_encrypted_bytes_are_an_error() {
+        // An AES GCM stream, which starts with AGS1 instead of Avro's magic.
+        let bytes = std::fs::read(format!(
+            "{}/testdata/manifests_lists/manifest-list-v3-encrypted.avro",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let manifest_file = listed_manifest("s3://b/metadata/0.avro", ManifestContentType::Data);
+        let Err(err) = read_manifest_entries(&bytes, &manifest_file) else {
+            panic!("an encrypted manifest read as plaintext");
+        };
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        let Err(err) = read_manifest_list(&bytes) else {
+            panic!("an encrypted manifest list read as plaintext");
+        };
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[test]
