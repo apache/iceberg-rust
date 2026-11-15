@@ -339,20 +339,14 @@ impl DeleteFilter {
         *entry.lock().unwrap() |= delete_vector;
     }
 
+    /// Stores the equality delete predicate that `eq_del` delivers, and wakes the tasks
+    /// waiting on `notify`, the notifier from [`Self::try_start_eq_del_load`].
     pub(crate) fn insert_equality_delete(
         &self,
         delete_file_path: &str,
+        notify: Arc<Notify>,
         eq_del: Receiver<Predicate>,
     ) {
-        let notify = Arc::new(Notify::new());
-        {
-            let mut state = self.state.write().unwrap();
-            state.equality_deletes.insert(
-                delete_file_path.to_string(),
-                EqDelState::Loading(notify.clone()),
-            );
-        }
-
         let state = self.state.clone();
         let delete_file_path = delete_file_path.to_string();
         self.runtime.cpu().spawn(async move {
@@ -490,6 +484,29 @@ pub(crate) mod tests {
             filter.try_start_pos_del_load(path),
             PosDelLoadAction::Load(_)
         ));
+    }
+
+    // A task that finds the load started before the loader calls `insert_equality_delete`
+    // must be woken when the predicate arrives.
+    #[tokio::test]
+    async fn test_eq_del_waiter_registered_before_insert_is_woken() {
+        let filter = DeleteFilter::new(Runtime::current());
+        let path = "s3://bucket/eq-delete.parquet";
+        let notify = filter.try_start_eq_del_load(path).unwrap();
+
+        let mut waiter = Box::pin(filter.get_equality_delete_predicate_for_delete_file_path(path));
+        // Registers the waiter on the notifier that `try_start_eq_del_load` stored.
+        assert!(futures::poll!(&mut waiter).is_pending());
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        filter.insert_equality_delete(path, notify, rx);
+        let predicate = Reference::new("id").equal_to(Datum::long(1));
+        tx.send(predicate.clone()).unwrap();
+
+        let loaded = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("waiter did not wake after the predicate arrived");
+        assert_eq!(loaded, Some(predicate));
     }
 
     #[tokio::test]
@@ -730,8 +747,9 @@ pub(crate) mod tests {
         // ---------- insert equality delete predicate ----------
         let pred = Reference::new("id").equal_to(Datum::long(10));
 
+        let notify = filter.try_start_eq_del_load("eq-del.parquet").unwrap();
         let (tx, rx) = tokio::sync::oneshot::channel();
-        filter.insert_equality_delete("eq-del.parquet", rx);
+        filter.insert_equality_delete("eq-del.parquet", notify, rx);
 
         tx.send(pred).unwrap();
 
