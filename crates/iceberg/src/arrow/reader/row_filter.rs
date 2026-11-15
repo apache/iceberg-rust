@@ -118,15 +118,20 @@ impl ArrowReader {
         field_id_map: &HashMap<i32, usize>,
         snapshot_schema: &Schema,
     ) -> Result<Option<RowSelection>> {
-        let Some(column_index) = parquet_metadata.column_index() else {
-            tracing::debug!("ColumnIndex was absent while reading this file");
+        let Some(page_index) = parquet_metadata.page_index() else {
+            tracing::debug!("PageIndex was absent while reading this file");
             return Ok(None);
         };
 
-        let Some(offset_index) = parquet_metadata.offset_index() else {
+        if !page_index.has_column_indexes() {
+            tracing::debug!("ColumnIndex was absent while reading this file");
+            return Ok(None);
+        }
+
+        if !page_index.has_offset_indexes() {
             tracing::debug!("OffsetIndex was absent while reading this file");
             return Ok(None);
-        };
+        }
 
         // If all row groups were filtered out, return an empty RowSelection (select no rows)
         //
@@ -138,14 +143,8 @@ impl ArrowReader {
 
         let mut selected_row_groups_idx = 0;
 
-        let page_index = column_index
-            .iter()
-            .enumerate()
-            .zip(offset_index)
-            .zip(parquet_metadata.row_groups());
-
         let mut results = Vec::new();
-        for (((idx, column_index), offset_index), row_group_metadata) in page_index {
+        for (idx, row_group_metadata) in parquet_metadata.row_groups().iter().enumerate() {
             if let Some(selected_row_groups) = selected_row_groups {
                 // skip row groups that aren't present in selected_row_groups
                 if idx == selected_row_groups[selected_row_groups_idx] {
@@ -157,8 +156,7 @@ impl ArrowReader {
 
             let selections_for_page = PageIndexEvaluator::eval(
                 predicate,
-                column_index,
-                offset_index,
+                &parquet_metadata.page_index_for_row_group(idx),
                 row_group_metadata,
                 field_id_map,
                 snapshot_schema,
@@ -237,6 +235,7 @@ mod tests {
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
+    use parquet::file::metadata::page_index::PageIndexProvider;
     use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use parquet::schema::parser::parse_message_type;
@@ -244,7 +243,9 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::Runtime;
-    use crate::arrow::{ArrowReader, ArrowReaderBuilder};
+    use crate::arrow::{
+        ArrowReader, ArrowReaderBuilder, ArrowReaderOptions as ReaderOptions, ParquetReadOptions,
+    };
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
@@ -689,7 +690,11 @@ mod tests {
             .unwrap();
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_group_filtering_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(true)
+                    .build(),
+            )
             .build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
@@ -955,13 +960,52 @@ mod tests {
         Arc::new(ParquetMetaDataBuilder::new(file_meta).build())
     }
 
+    #[derive(Debug)]
+    struct TestPageIndexProvider {
+        has_column_indexes: bool,
+        has_offset_indexes: bool,
+    }
+
+    impl PageIndexProvider for TestPageIndexProvider {
+        fn has_offset_indexes(&self) -> bool {
+            self.has_offset_indexes
+        }
+
+        fn has_column_indexes(&self) -> bool {
+            self.has_column_indexes
+        }
+
+        fn column_index(
+            &self,
+            _: usize,
+            _: usize,
+        ) -> Option<&parquet::file::page_index::column_index::ColumnIndexMetaData> {
+            None
+        }
+
+        fn offset_index(
+            &self,
+            _: usize,
+            _: usize,
+        ) -> Option<&parquet::file::page_index::offset_index::OffsetIndexMetaData> {
+            None
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
     fn metadata_column_index_only() -> Arc<ParquetMetaData> {
         let msg_type = parse_message_type("message schema { REQUIRED INT32 x; }").unwrap();
         let schema_desc = Arc::new(SchemaDescriptor::new(Arc::new(msg_type)));
         let file_meta = FileMetaData::new(2, 0, None, None, schema_desc, None);
         Arc::new(
             ParquetMetaDataBuilder::new(file_meta)
-                .set_column_index(Some(vec![]))
+                .set_page_index(Some(Arc::new(TestPageIndexProvider {
+                    has_column_indexes: true,
+                    has_offset_indexes: false,
+                })))
                 .build(),
         )
     }
@@ -972,8 +1016,10 @@ mod tests {
         let file_meta = FileMetaData::new(2, 0, None, None, schema_desc, None);
         Arc::new(
             ParquetMetaDataBuilder::new(file_meta)
-                .set_column_index(Some(vec![]))
-                .set_offset_index(Some(vec![]))
+                .set_page_index(Some(Arc::new(TestPageIndexProvider {
+                    has_column_indexes: true,
+                    has_offset_indexes: true,
+                })))
                 .build(),
         )
     }
@@ -1016,7 +1062,11 @@ mod tests {
         );
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_group_filtering_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(true)
+                    .build(),
+            )
             .build();
 
         let task = FileScanTask::builder()
@@ -1084,7 +1134,9 @@ mod tests {
             let opts = ReadOptionsBuilder::new().with_page_index().build();
             let rdr = SerializedFileReader::new_with_options(f, opts).unwrap();
             assert!(
-                rdr.metadata().column_index().is_some(),
+                rdr.metadata()
+                    .page_index()
+                    .is_some_and(|page_index| page_index.has_column_indexes()),
                 "fixture must carry a column index so the page-index path runs"
             );
         }
@@ -1096,8 +1148,12 @@ mod tests {
         assert!(matches!(predicate, BoundPredicate::Not(_)));
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_group_filtering_enabled(false)
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(false)
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let task = FileScanTask::builder()
@@ -1365,13 +1421,9 @@ mod tests {
             let f = File::open(&file_path).unwrap();
             let rdr = SerializedFileReader::new(f).unwrap();
             assert!(
-                rdr.metadata().column_index().is_none(),
+                rdr.metadata().page_index().is_none(),
                 "test fixture must produce a file without a column index"
             );
-            assert!(
-                rdr.metadata().offset_index().is_none(),
-                "test fixture must a product a file without offset index"
-            )
         }
 
         // Predicate: id > 2
@@ -1383,7 +1435,11 @@ mod tests {
         let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
             // Enabling row selection ()
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let file_size = std::fs::metadata(&file_path).unwrap().len();
@@ -1471,7 +1527,11 @@ mod tests {
             .unwrap();
 
         let reader_sub2 = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let task_sub2 = FileScanTask::builder()
@@ -1585,10 +1645,18 @@ mod tests {
     ) -> (Vec<RecordBatch>, u64) {
         let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-            .with_bloom_filter_enabled(bloom_enabled)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_bloom_filter_enabled(bloom_enabled)
+                    .build(),
+            )
             // Keep the fixed footer prefetch small so the byte measurement reflects
             // row group I/O rather than a constant metadata read.
-            .with_metadata_size_hint(8 * 1024)
+            .with_parquet_options(
+                ParquetReadOptions::builder()
+                    .with_metadata_size_hint(8 * 1024)
+                    .build(),
+            )
             .build();
 
         let task = FileScanTask::builder()
