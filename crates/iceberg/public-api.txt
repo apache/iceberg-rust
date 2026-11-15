@@ -1118,6 +1118,9 @@ pub const iceberg::io::S3_ENDPOINT: &str
 pub const iceberg::io::S3_MULTIPART_PART_SIZE_BYTES: &str
 pub const iceberg::io::S3_PATH_STYLE_ACCESS: &str
 pub const iceberg::io::S3_REGION: &str
+pub const iceberg::io::S3_RETRY_MAX_WAIT_MS: &str
+pub const iceberg::io::S3_RETRY_MIN_WAIT_MS: &str
+pub const iceberg::io::S3_RETRY_NUM_RETRIES: &str
 pub const iceberg::io::S3_SECRET_ACCESS_KEY: &str
 pub const iceberg::io::S3_SESSION_TOKEN: &str
 pub const iceberg::io::S3_SSE_KEY: &str
@@ -1361,6 +1364,7 @@ pub mod iceberg::scan
 pub struct iceberg::scan::FileScanTask
 impl iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::case_sensitive(&self) -> bool
+pub fn iceberg::scan::FileScanTask::column_stats(&self) -> core::option::Option<&iceberg::scan::FileScanTaskColumnStats>
 pub fn iceberg::scan::FileScanTask::data_file_format(&self) -> iceberg::spec::DataFileFormat
 pub fn iceberg::scan::FileScanTask::data_file_path(&self) -> &str
 pub fn iceberg::scan::FileScanTask::data_sequence_number(&self) -> core::option::Option<i64>
@@ -1391,11 +1395,34 @@ impl core::fmt::Debug for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTask
 impl iceberg::scan::FileScanTask
-pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
+pub fn iceberg::scan::FileScanTask::builder() -> FileScanTaskBuilder<((), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), (), ())>
 impl serde_core::ser::Serialize for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::serialize<S>(&self, serializer: S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTask
 pub fn iceberg::scan::FileScanTask::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::scan::FileScanTaskColumnStats
+impl iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::column_sizes(&self) -> &std::collections::hash::map::HashMap<i32, u64>
+pub fn iceberg::scan::FileScanTaskColumnStats::lower_bounds(&self) -> &std::collections::hash::map::HashMap<i32, iceberg::spec::Datum>
+pub fn iceberg::scan::FileScanTaskColumnStats::nan_value_counts(&self) -> &std::collections::hash::map::HashMap<i32, u64>
+pub fn iceberg::scan::FileScanTaskColumnStats::null_value_counts(&self) -> &std::collections::hash::map::HashMap<i32, u64>
+pub fn iceberg::scan::FileScanTaskColumnStats::upper_bounds(&self) -> &std::collections::hash::map::HashMap<i32, iceberg::spec::Datum>
+pub fn iceberg::scan::FileScanTaskColumnStats::value_counts(&self) -> &std::collections::hash::map::HashMap<i32, u64>
+impl core::clone::Clone for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::clone(&self) -> iceberg::scan::FileScanTaskColumnStats
+impl core::cmp::PartialEq for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::eq(&self, other: &iceberg::scan::FileScanTaskColumnStats) -> bool
+impl core::default::Default for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::default() -> iceberg::scan::FileScanTaskColumnStats
+impl core::fmt::Debug for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for iceberg::scan::FileScanTaskColumnStats
+impl iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::builder() -> FileScanTaskColumnStatsBuilder<((), (), (), (), (), ())>
+impl serde_core::ser::Serialize for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for iceberg::scan::FileScanTaskColumnStats
+pub fn iceberg::scan::FileScanTaskColumnStats::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg::scan::FileScanTaskDeleteFile
 impl iceberg::scan::FileScanTaskDeleteFile
 pub fn iceberg::scan::FileScanTaskDeleteFile::content_offset(&self) -> core::option::Option<u64>
@@ -1454,6 +1481,7 @@ pub fn iceberg::scan::TableScanBuilder<'a>::snapshot_id(self, snapshot_id: i64) 
 pub fn iceberg::scan::TableScanBuilder<'a>::with_batch_size(self, batch_size: core::option::Option<usize>) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_bloom_filter_enabled(self, bloom_filter_enabled: bool) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_case_sensitive(self, case_sensitive: bool) -> Self
+pub fn iceberg::scan::TableScanBuilder<'a>::with_column_stats(self, column_names: impl core::iter::traits::collect::IntoIterator<Item = impl alloc::string::ToString>) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_concurrency_limit(self, limit: usize) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_data_file_concurrency_limit(self, limit: usize) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_filter(self, predicate: iceberg::expr::Predicate) -> Self
@@ -3038,6 +3066,8 @@ pub const iceberg::spec::TableProperties<'_>::PROPERTY_MAX_SNAPSHOT_AGE_MS: &'st
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_MAX_SNAPSHOT_AGE_MS_DEFAULT: i64
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_COMPRESSION_CODEC: &'static str
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_COMPRESSION_CODEC_DEFAULT: &'static str
+pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED: &'static str
+pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED_DEFAULT: bool
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX: &'static str
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize
 pub const iceberg::spec::TableProperties<'_>::PROPERTY_MIN_SNAPSHOTS_TO_KEEP: &'static str
@@ -3093,6 +3123,7 @@ pub fn iceberg::spec::TableProperties<'properties>::gc_enabled(&self) -> iceberg
 pub fn iceberg::spec::TableProperties<'properties>::max_ref_age_ms(&self) -> iceberg::Result<i64>
 pub fn iceberg::spec::TableProperties<'properties>::max_snapshot_age_ms(&self) -> iceberg::Result<i64>
 pub fn iceberg::spec::TableProperties<'properties>::metadata_compression_codec(&self) -> iceberg::Result<iceberg::compression::CompressionCodec>
+pub fn iceberg::spec::TableProperties<'properties>::metadata_delete_after_commit_enabled(&self) -> iceberg::Result<bool>
 pub fn iceberg::spec::TableProperties<'properties>::min_snapshots_to_keep(&self) -> iceberg::Result<usize>
 pub fn iceberg::spec::TableProperties<'properties>::new(properties: &'properties std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
 pub fn iceberg::spec::TableProperties<'properties>::parquet_compression_codec(&self) -> iceberg::Result<iceberg::compression::CompressionCodec>
@@ -4182,5 +4213,6 @@ pub fn iceberg::SessionCatalog::rename_table<'life0, 'life1, 'life2, 'life3, 'as
 pub fn iceberg::SessionCatalog::table_exists<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, context: &'life1 iceberg::SessionContext, table: &'life2 iceberg::TableIdent) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<bool>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::SessionCatalog::update_namespace<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, context: &'life1 iceberg::SessionContext, namespace: &'life2 iceberg::NamespaceIdent, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg::SessionCatalog::update_table<'life0, 'life1, 'async_trait>(&'life0 self, context: &'life1 iceberg::SessionContext, commit: iceberg::TableCommit) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::Result<iceberg::table::Table>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub async fn iceberg::delete_removed_metadata_files(io: &iceberg::io::FileIO, base: &iceberg::spec::TableMetadata, new: &iceberg::spec::TableMetadata)
 pub async fn iceberg::drop_table_data(table_info: &iceberg::table::Table) -> iceberg::Result<()>
 pub type iceberg::Result<T> = core::result::Result<T, iceberg::Error>

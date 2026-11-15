@@ -75,6 +75,13 @@ pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
 ///
 /// Only `iceberg-storage-opendal` reads this property, so [`S3Config`] has no matching field.
 pub const S3_MULTIPART_PART_SIZE_BYTES: &str = "s3.multipart.part-size-bytes";
+/// Number of times to retry an S3 operation, `0` to disable retrying. Retries back off exponentially,
+/// with jitter, between [`S3_RETRY_MIN_WAIT_MS`] and [`S3_RETRY_MAX_WAIT_MS`].
+pub const S3_RETRY_NUM_RETRIES: &str = "s3.retry.num-retries";
+/// Minimum wait in milliseconds before retrying an S3 operation.
+pub const S3_RETRY_MIN_WAIT_MS: &str = "s3.retry.min-wait-ms";
+/// Maximum wait in milliseconds between two retries of an S3 operation.
+pub const S3_RETRY_MAX_WAIT_MS: &str = "s3.retry.max-wait-ms";
 
 /// Amazon S3 storage configuration.
 ///
