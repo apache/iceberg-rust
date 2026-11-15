@@ -2826,6 +2826,9 @@ mod tests {
                     required int64 utc (TIMESTAMP(MILLIS,true));
                     required int64 local (TIMESTAMP(MILLIS,false));
                     required int64 legacy (TIMESTAMP_MILLIS);
+                    required int64 micros (TIMESTAMP(MICROS,true));
+                    required int64 nanos (TIMESTAMP(NANOS,false));
+                    required int64 legacy_micros (TIMESTAMP_MICROS);
                     required int64 plain;
                 }
                 ",
@@ -2843,6 +2846,9 @@ mod tests {
             Some(TimeUnit::Millisecond),
             Some(TimeUnit::Millisecond),
             Some(TimeUnit::Millisecond),
+            Some(TimeUnit::Microsecond),
+            Some(TimeUnit::Nanosecond),
+            Some(TimeUnit::Microsecond),
             None,
         ]);
     }

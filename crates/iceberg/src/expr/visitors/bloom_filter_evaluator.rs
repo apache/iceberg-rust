@@ -1655,6 +1655,7 @@ mod tests {
             (&millis, 2_000_000, true),
             (&millis, 2_000_500, false),
             (&millis, -1_500_000, true),
+            (&millis, 3_000_000, false),
             (&nanos, 2_000_000, true),
         ] {
             let predicate = Reference::new("ts")
