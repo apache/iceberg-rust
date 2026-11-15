@@ -3430,6 +3430,34 @@ mod tests {
     }
 
     #[test]
+    fn test_table_metadata_v1_invalid_refs_fail_to_load() {
+        let json =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1WithRefs.json").unwrap();
+        let load_error = |edit: fn(&mut serde_json::Value)| {
+            let mut value = serde_json::from_str::<serde_json::Value>(&json).unwrap();
+            edit(&mut value);
+            serde_json::from_value::<TableMetadata>(value)
+                .unwrap_err()
+                .to_string()
+        };
+
+        assert_eq!(
+            load_error(|value| value["refs"]["t1"]["snapshot-id"] = 1.into()),
+            "DataInvalid => Snapshot for reference t1 does not exist in the existing snapshots list"
+        );
+        assert_eq!(
+            load_error(
+                |value| value["refs"]["main"]["snapshot-id"] = 7825560978372493301_i64.into()
+            ),
+            "DataInvalid => Current snapshot id does not match main branch (6278926806555018392 != 7825560978372493301)"
+        );
+        assert_eq!(
+            load_error(|value| value["current-snapshot-id"] = (-1).into()),
+            "DataInvalid => Current snapshot is not set, but main branch exists"
+        );
+    }
+
+    #[test]
     fn test_table_metadata_v1_schemas_without_current_id() {
         let metadata = fs::read_to_string(
             "testdata/table_metadata/TableMetadataV1SchemasWithoutCurrentId.json",
