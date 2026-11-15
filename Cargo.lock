@@ -2955,6 +2955,7 @@ dependencies = [
  "regex",
  "reqwest",
  "roaring",
+ "rstest",
  "serde",
  "serde_arrow",
  "serde_bytes",
