@@ -118,7 +118,7 @@
 <a href=#118 id=118 data-nosnippet>118</a>
 <a href=#119 id=119 data-nosnippet>119</a>        <span class="kw">async move </span>{
 <a href=#120 id=120 data-nosnippet>120</a>            <span class="kw">let </span>reader = ParquetMetaDataReader::new()
-<a href=#121 id=121 data-nosnippet>121</a>                .with_prefetch_hint(<span class="self">self</span>.parquet_read_options.metadata_size_hint())
+<a href=#121 id=121 data-nosnippet>121</a>                .with_prefetch_hint(<span class="prelude-val">Some</span>(<span class="self">self</span>.parquet_read_options.metadata_size_hint()))
 <a href=#122 id=122 data-nosnippet>122</a>                <span class="comment">// Set the page policy first because it updates both column and offset policies.
 <a href=#123 id=123 data-nosnippet>123</a>                </span>.with_page_index_policy(PageIndexPolicy::from(
 <a href=#124 id=124 data-nosnippet>124</a>                    <span class="self">self</span>.parquet_read_options.preload_page_index(),

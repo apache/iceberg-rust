@@ -29,7 +29,7 @@
         .scan()
         .select([<span class="string">"name"</span>, <span class="string">"id"</span>])
         .build()<span class="question-mark">?
-        </span>.to_arrow()
+        </span>.to_arrow(Default::default())
         .<span class="kw">await</span><span class="question-mark">?</span>;
 
     <span class="comment">// Consume this stream like arrow record batch stream.

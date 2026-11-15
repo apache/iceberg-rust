@@ -1345,7 +1345,7 @@
 <a href=#1345 id=1345 data-nosnippet>1345</a>            .select_all()
 <a href=#1346 id=1346 data-nosnippet>1346</a>            .build()
 <a href=#1347 id=1347 data-nosnippet>1347</a>            .expect(<span class="string">"scan to be valid (snapshot exists, schema is OK)"</span>)
-<a href=#1348 id=1348 data-nosnippet>1348</a>            .to_arrow()
+<a href=#1348 id=1348 data-nosnippet>1348</a>            .to_arrow(Default::default())
 <a href=#1349 id=1349 data-nosnippet>1349</a>            .<span class="kw">await
 <a href=#1350 id=1350 data-nosnippet>1350</a>            </span>.expect(<span class="string">"scan tasks should be OK"</span>)
 <a href=#1351 id=1351 data-nosnippet>1351</a>            .try_collect()
