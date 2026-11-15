@@ -454,14 +454,19 @@ impl PromotePlan {
     fn apply(&self, array: &ArrayRef) -> Result<ArrayRef> {
         match self {
             PromotePlan::PassThrough => Ok(Arc::clone(array)),
-            PromotePlan::Cast(target_type) => Ok(cast_with_options(
-                array.as_ref(),
-                target_type,
-                &CastOptions {
+            PromotePlan::Cast(target_type) => {
+                cast_with_options(array.as_ref(), target_type, &CastOptions {
                     safe: false,
                     ..Default::default()
-                },
-            )?),
+                })
+                .map_err(|e| {
+                    invalid_data!(
+                        "cannot promote a value from {} to {target_type}",
+                        array.data_type()
+                    )
+                    .with_source(e)
+                })
+            }
             PromotePlan::Struct { fields, children } => {
                 let source = array
                     .as_struct_opt()
@@ -1603,7 +1608,18 @@ mod test {
         let column = NestedField::optional(2, "ts", Type::Primitive(PrimitiveType::Timestamp));
         let file_column = Arc::new(TimestampMillisecondArray::from(vec![i64::MAX])) as ArrayRef;
 
-        assert!(transform_top_level(column, file_column).is_err());
+        let err = transform_top_level(column, file_column).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[test]
+    fn promote_date_beyond_timestamp_ns_range_errors() {
+        // Day 200000 is in the year 2517, after the last `timestamp_ns`.
+        let column = NestedField::optional(2, "d", Type::Primitive(PrimitiveType::TimestampNs));
+        let file_column = Arc::new(Date32Array::from(vec![18000, 200000])) as ArrayRef;
+
+        let err = transform_top_level(column, file_column).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[test]
