@@ -124,16 +124,16 @@ impl DeleteFileLoader for BasicDeleteFileLoader {
     ) -> Result<ArrowRecordBatchStream> {
         let raw_batch_stream = self
             .parquet_to_batch_stream(
-                &task.file_path,
-                task.file_size_in_bytes,
-                task.key_metadata.as_deref(),
+                task.file_path(),
+                task.file_size_in_bytes(),
+                task.key_metadata(),
             )
             .await?;
 
         // For equality deletes, only evolve the equality_ids columns.
         // For positional deletes (equality_ids is None), use all field IDs.
-        let field_ids = match &task.equality_ids {
-            Some(ids) => ids.clone(),
+        let field_ids = match task.equality_ids() {
+            Some(ids) => ids.to_vec(),
             None => schema.field_id_to_name_map().keys().cloned().collect(),
         };
 
@@ -230,19 +230,15 @@ mod tests {
                 .unwrap(),
         );
 
-        let task = FileScanTaskDeleteFile {
-            file_path: del_path.clone(),
-            file_size_in_bytes: std::fs::metadata(&del_path).unwrap().len(),
-            file_type: DataContentType::PositionDeletes,
-            file_format: DataFileFormat::Parquet,
-            partition_spec_id: 0,
-            equality_ids: None,
-            key_metadata: Some(Box::from(key_metadata.as_ref())),
-            referenced_data_file: None,
-            content_offset: None,
-            content_size_in_bytes: None,
-            record_count: None,
-        };
+        let task = FileScanTaskDeleteFile::builder()
+            .with_file_path(del_path.clone())
+            .with_file_size_in_bytes(std::fs::metadata(&del_path).unwrap().len())
+            .with_file_type(DataContentType::PositionDeletes)
+            .with_file_format(DataFileFormat::Parquet)
+            .with_partition_spec_id(0)
+            .with_key_metadata(Some(Box::from(key_metadata.as_ref())))
+            .build()
+            .unwrap();
 
         let scan_metrics = ScanMetrics::new();
         let delete_file_loader = BasicDeleteFileLoader::new(file_io, scan_metrics);
@@ -309,19 +305,16 @@ mod tests {
                 .unwrap(),
         );
 
-        let task = FileScanTaskDeleteFile {
-            file_path: del_path.clone(),
-            file_size_in_bytes: std::fs::metadata(&del_path).unwrap().len(),
-            file_type: DataContentType::EqualityDeletes,
-            file_format: DataFileFormat::Parquet,
-            partition_spec_id: 0,
-            equality_ids: Some(vec![1]),
-            key_metadata: Some(Box::from(key_metadata.as_ref())),
-            referenced_data_file: None,
-            content_offset: None,
-            content_size_in_bytes: None,
-            record_count: None,
-        };
+        let task = FileScanTaskDeleteFile::builder()
+            .with_file_path(del_path.clone())
+            .with_file_size_in_bytes(std::fs::metadata(&del_path).unwrap().len())
+            .with_file_type(DataContentType::EqualityDeletes)
+            .with_file_format(DataFileFormat::Parquet)
+            .with_partition_spec_id(0)
+            .with_equality_ids(Some(vec![1]))
+            .with_key_metadata(Some(Box::from(key_metadata.as_ref())))
+            .build()
+            .unwrap();
 
         let scan_metrics = ScanMetrics::new();
         let delete_file_loader = BasicDeleteFileLoader::new(file_io, scan_metrics);

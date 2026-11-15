@@ -124,6 +124,12 @@ impl SchemaVisitor for HiveSchemaBuilder {
                 "string".to_string()
             }
             PrimitiveType::Binary | PrimitiveType::Fixed(_) => "binary".to_string(),
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!("Conversion from {p:?} is not supported"),
+                ));
+            }
             PrimitiveType::Decimal { precision, scale } => {
                 format!("decimal({precision},{scale})")
             }
@@ -142,7 +148,7 @@ impl SchemaVisitor for HiveSchemaBuilder {
 #[cfg(test)]
 mod tests {
     use iceberg::Result;
-    use iceberg::spec::Schema;
+    use iceberg::spec::{GeometryType, NestedField, PrimitiveType, Schema, Type};
 
     use super::*;
 
@@ -485,5 +491,23 @@ mod tests {
         assert_eq!(result, expected);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_schema_with_geospatial_type_is_unsupported() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(GeometryType::default())),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+
+        let err = HiveSchemaBuilder::from_iceberg(&schema).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
     }
 }

@@ -316,6 +316,14 @@ pub struct TableProperties {
         getter
     )]
     write_object_storage_location: Option<String>,
+    /// Whether new data files use the object storage location layout, which
+    /// injects hash entropy into file paths to spread object-store prefixes.
+    #[property(
+        key = Self::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED,
+        default = Self::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED_DEFAULT,
+        getter
+    )]
+    write_object_storage_enabled: bool,
     /// Whether partition values are included in object storage paths.
     #[property(
         key = Self::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS,
@@ -323,6 +331,13 @@ pub struct TableProperties {
         getter
     )]
     write_object_storage_partitioned_paths: bool,
+    /// Whether to delete the oldest tracked metadata files after each commit.
+    #[property(
+        key = Self::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED,
+        default = Self::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED_DEFAULT,
+        getter
+    )]
+    metadata_delete_after_commit_enabled: bool,
     /// The table's default name mapping, used to assign field ids when reading data files
     /// that carry no field id metadata. `None` if `schema.name-mapping.default` is not set.
     #[property(
@@ -367,6 +382,13 @@ impl TableProperties<'_> {
         "write.metadata.previous-versions-max";
     /// Default value for max number of previous versions to keep.
     pub const PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX_DEFAULT: usize = 100;
+
+    /// Property key for deleting the previous metadata files that fall out of the metadata log
+    /// (bounded by [`TableProperties::PROPERTY_METADATA_PREVIOUS_VERSIONS_MAX`]) after a commit.
+    pub const PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED: &'static str =
+        "write.metadata.delete-after-commit.enabled";
+    /// Default value for [`TableProperties::PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED`].
+    pub const PROPERTY_METADATA_DELETE_AFTER_COMMIT_ENABLED_DEFAULT: bool = false;
 
     /// Property key for max number of partitions to keep summary stats for.
     pub const PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT: &'static str =
@@ -530,6 +552,10 @@ impl TableProperties<'_> {
     pub const PROPERTY_WRITE_FOLDER_STORAGE_LOCATION: &'static str = "write.folder-storage.path";
     /// Property key for deprecated object storage path, kept as a fallback for compatibility.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_LOCATION: &'static str = "write.object-storage.path";
+    /// Property key for enabling the object storage location layout for new data files.
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_ENABLED: &'static str = "write.object-storage.enabled";
+    /// Default value for [`TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED`]
+    pub const PROPERTY_WRITE_OBJECT_STORAGE_ENABLED_DEFAULT: bool = false;
     /// Property key for controlling whether partition values are included in object storage paths.
     pub const PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS: &'static str =
         "write.object-storage.partitioned-paths";

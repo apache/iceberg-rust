@@ -15,6 +15,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+[graph]
+# Include dependencies from optional features.
+all-features = true
+
 [licenses]
 allow = [
   "Apache-2.0",
@@ -25,14 +29,16 @@ allow = [
   "ISC",
   "CC0-1.0",
   "Zlib",
+  # Category-A: https://issues.apache.org/jira/browse/LEGAL-732
   "CDLA-Permissive-2.0",
-  "bzip2-1.0.6",
   # Category-A: https://issues.apache.org/jira/browse/LEGAL-660
   "Unicode-3.0",
   # Boost Software License Version 1.0 is allowed (Category-A):
   # https://www.apache.org/legal/resolved.html#category-a
   "BSL-1.0",
 ]
+unused-allowed-license = "deny"
+unused-license-exception = "deny"
 
 exceptions = [
   # The MPL license is allowed (binary-only):
