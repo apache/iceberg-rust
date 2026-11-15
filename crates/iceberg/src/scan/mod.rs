@@ -33,7 +33,7 @@ use futures::stream::BoxStream;
 use futures::{SinkExt, StreamExt, TryStreamExt};
 pub use task::*;
 
-use crate::arrow::ArrowReaderBuilder;
+use crate::arrow::{ArrowReaderBuilder, ArrowReaderOptions};
 pub use crate::arrow::{ScanMetrics, ScanResult};
 use crate::delete_file_index::DeleteFileIndex;
 use crate::error::invalid_data;
@@ -47,6 +47,7 @@ use crate::runtime::Runtime;
 use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, SortOrderRef, StructType};
 use crate::table::Table;
 use crate::util::available_parallelism;
+use crate::util::snapshot::snapshot_id_as_of_time;
 use crate::{Error, ErrorKind, Result};
 
 /// A stream of arrow [`RecordBatch`]es.
@@ -66,6 +67,12 @@ fn resolve_field_id(
     }
 }
 
+/// Resolves a column name to its field ID, failing if no field matches.
+fn require_field_id(schema: &Schema, column_name: &str, case_sensitive: bool) -> Result<i32> {
+    resolve_field_id(schema, column_name, case_sensitive)?
+        .ok_or_else(|| invalid_data!("Column {column_name} not found in table. Schema: {schema}"))
+}
+
 fn collect_scan_field_ids(
     schema: &Schema,
     column_names: Option<&[String]>,
@@ -82,9 +89,7 @@ fn collect_scan_field_ids(
                 return get_metadata_field_id(column_name);
             }
 
-            let field_id = resolve_field_id(schema, column_name, case_sensitive)?.ok_or_else(|| {
-                invalid_data!("Column {column_name} not found in table. Schema: {schema}")
-            })?;
+            let field_id = require_field_id(schema, column_name, case_sensitive)?;
 
             schema
                 .as_struct()
@@ -101,6 +106,38 @@ fn collect_scan_field_ids(
             Ok(field_id)
         })
         .collect()
+}
+
+/// Resolves the columns to keep statistics for into their field ids and types.
+fn resolve_column_stats_columns(
+    schema: &Schema,
+    column_names: Option<&[String]>,
+    case_sensitive: bool,
+) -> Result<Option<ColumnStatsColumns>> {
+    column_names
+        .map(|column_names| {
+            column_names
+                .iter()
+                .map(|column_name| {
+                    if is_metadata_column_name(column_name) {
+                        return Err(invalid_data!(
+                            "Metadata column {column_name} has no column statistics"
+                        ));
+                    }
+                    let field_id = require_field_id(schema, column_name, case_sensitive)?;
+                    let column_type = schema
+                        .field_by_id(field_id)
+                        .and_then(|field| field.field_type.as_primitive_type())
+                        .ok_or_else(|| {
+                            invalid_data!(
+                                "Column {column_name} is not a primitive field and has no column statistics"
+                            )
+                        })?;
+                    Ok((field_id, column_type.clone()))
+                })
+                .collect()
+        })
+        .transpose()
 }
 
 fn bind_scan_predicate(
@@ -130,21 +167,23 @@ fn projected_partition_type(
         .map(Some)
 }
 
+/// Selects a snapshot by ID or timestamp.
+enum SnapshotSelection {
+    SnapshotId(i64),
+    AsOfTime(i64),
+}
+
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
     table: &'a Table,
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
-    snapshot_id: Option<i64>,
-    batch_size: Option<usize>,
+    column_stats_names: Option<Vec<String>>,
+    snapshot_selection: Option<SnapshotSelection>,
     case_sensitive: bool,
     filter: Option<Predicate>,
-    concurrency_limit_data_files: usize,
     concurrency_limit_manifest_entries: usize,
     concurrency_limit_manifest_files: usize,
-    row_group_filtering_enabled: bool,
-    row_selection_enabled: bool,
-    bloom_filter_enabled: bool,
 }
 
 impl<'a> TableScanBuilder<'a> {
@@ -154,24 +193,13 @@ impl<'a> TableScanBuilder<'a> {
         Self {
             table,
             column_names: None,
-            snapshot_id: None,
-            batch_size: None,
+            column_stats_names: None,
+            snapshot_selection: None,
             case_sensitive: true,
             filter: None,
-            concurrency_limit_data_files: num_cpus,
             concurrency_limit_manifest_entries: num_cpus,
             concurrency_limit_manifest_files: num_cpus,
-            row_group_filtering_enabled: true,
-            row_selection_enabled: false,
-            bloom_filter_enabled: false,
         }
-    }
-
-    /// Sets the desired size of batches in the response
-    /// to something other than the default
-    pub fn with_batch_size(mut self, batch_size: Option<usize>) -> Self {
-        self.batch_size = batch_size;
-        self
     }
 
     /// Sets the scan's case sensitivity
@@ -211,24 +239,84 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Set the snapshot to scan. When not set, it uses current snapshot.
-    pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
-        self.snapshot_id = Some(snapshot_id);
+    /// Retains the data file's column statistics for the named columns on each planned
+    /// [`FileScanTask`], exposed as [`FileScanTask::column_stats`].
+    ///
+    /// Names resolve against the scan's schema with the scan's case sensitivity and must name
+    /// primitive fields, such as `s.f` for a field of struct `s`. By default, tasks carry no
+    /// statistics.
+    ///
+    /// [`build`](Self::build) fails if a name matches no field, matches more than one field when
+    /// the scan is case-insensitive, or names a struct, list, map or metadata column.
+    ///
+    /// ```
+    /// # use futures::TryStreamExt;
+    /// # use iceberg::table::Table;
+    /// # async fn example(table: &Table) -> iceberg::Result<()> {
+    /// let scan = table.scan().with_column_stats(["x"]).build()?;
+    /// let mut tasks = scan.plan_files().await?;
+    /// while let Some(task) = tasks.try_next().await? {
+    ///     let x = task.schema().field_id_by_name("x").unwrap();
+    ///     let lower_bound = task
+    ///         .column_stats()
+    ///         .and_then(|stats| stats.lower_bounds().get(&x));
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_column_stats(
+        mut self,
+        column_names: impl IntoIterator<Item = impl ToString>,
+    ) -> Self {
+        self.column_stats_names = Some(
+            column_names
+                .into_iter()
+                .map(|item| item.to_string())
+                .collect(),
+        );
         self
     }
 
-    /// Sets the concurrency limit for both manifest files and manifest
-    /// entries for this scan
+    /// Set the snapshot to scan. The scan projects the schema that snapshot was
+    /// written with.
+    ///
+    /// The last call to this or [`Self::as_of_time`] takes precedence.
+    /// If neither is set, the scan reads the current snapshot with the table's
+    /// current schema.
+    pub fn snapshot_id(mut self, snapshot_id: i64) -> Self {
+        self.snapshot_selection = Some(SnapshotSelection::SnapshotId(snapshot_id));
+        self
+    }
+
+    /// Select a snapshot at or before a timestamp in milliseconds since the Unix epoch.
+    ///
+    /// Uses the table's main history, and projects the schema the selected snapshot
+    /// was written with. The last call to this or [`Self::snapshot_id`] takes precedence.
+    ///
+    /// ```
+    /// # use iceberg::TableIdent;
+    /// # use iceberg::io::FileIO;
+    /// # use iceberg::table::StaticTable;
+    /// # #[tokio::main]
+    /// # async fn main() -> iceberg::Result<()> {
+    /// # let location = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/example_table_metadata_v2.json");
+    /// # let ident = TableIdent::from_strs(["ns", "t"])?;
+    /// # let table = StaticTable::from_metadata_file(location, ident, FileIO::new_with_fs()).await?;
+    /// // The snapshot log has entries at 1515100955770 and 1555100955770.
+    /// let scan = table.scan().as_of_time(1_555_100_955_769).build()?;
+    /// assert_eq!(scan.snapshot().unwrap().snapshot_id(), 3051729675574597004);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn as_of_time(mut self, timestamp_ms: i64) -> Self {
+        self.snapshot_selection = Some(SnapshotSelection::AsOfTime(timestamp_ms));
+        self
+    }
+
+    /// Sets manifest file and manifest entry concurrency for file planning.
     pub fn with_concurrency_limit(mut self, limit: usize) -> Self {
         self.concurrency_limit_manifest_files = limit;
         self.concurrency_limit_manifest_entries = limit;
-        self.concurrency_limit_data_files = limit;
-        self
-    }
-
-    /// Sets the data file concurrency limit for this scan
-    pub fn with_data_file_concurrency_limit(mut self, limit: usize) -> Self {
-        self.concurrency_limit_data_files = limit;
         self
     }
 
@@ -238,74 +326,40 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Determines whether to enable row group filtering.
-    /// When enabled, if a read is performed with a filter predicate,
-    /// then the metadata for each row group in the parquet file is
-    /// evaluated against the filter predicate and row groups
-    /// that cant contain matching rows will be skipped entirely.
-    ///
-    /// Defaults to enabled, as it generally improves performance or
-    /// keeps it the same, with performance degradation unlikely.
-    pub fn with_row_group_filtering_enabled(mut self, row_group_filtering_enabled: bool) -> Self {
-        self.row_group_filtering_enabled = row_group_filtering_enabled;
-        self
-    }
-
-    /// Determines whether to enable row selection.
-    /// When enabled, if a read is performed with a filter predicate,
-    /// then (for row groups that have not been skipped) the page index
-    /// for each row group in a parquet file is parsed and evaluated
-    /// against the filter predicate to determine if ranges of rows
-    /// within a row group can be skipped, based upon the page-level
-    /// statistics for each column.
-    ///
-    /// Defaults to being disabled. Enabling requires parsing the parquet page
-    /// index, which can be slow enough that parsing the page index outweighs any
-    /// gains from the reduced number of rows that need scanning.
-    /// It is recommended to experiment with partitioning, sorting, row group size,
-    /// page size, and page row limit Iceberg settings on the table being scanned in
-    /// order to get the best performance from using row selection.
-    pub fn with_row_selection_enabled(mut self, row_selection_enabled: bool) -> Self {
-        self.row_selection_enabled = row_selection_enabled;
-        self
-    }
-
-    /// Determines whether to enable bloom filter-based row group filtering.
-    ///
-    /// When enabled, if a read is performed with an equality or IN predicate,
-    /// the bloom filter for relevant columns in each row group is read and
-    /// checked. Row groups where the bloom filter proves the value is absent
-    /// are skipped entirely.
-    ///
-    /// Defaults to disabled, as reading bloom filters requires additional I/O
-    /// per column per row group.
-    pub fn with_bloom_filter_enabled(mut self, bloom_filter_enabled: bool) -> Self {
-        self.bloom_filter_enabled = bloom_filter_enabled;
-        self
-    }
-
     /// Build the table scan.
     pub fn build(self) -> Result<TableScan> {
-        let snapshot = match self.snapshot_id {
-            Some(snapshot_id) => self
+        let selected_snapshot = match self.snapshot_selection {
+            Some(SnapshotSelection::SnapshotId(id)) => {
+                Some((id, format!("Snapshot with id {id} not found")))
+            }
+            Some(SnapshotSelection::AsOfTime(timestamp_ms)) => {
+                let id = snapshot_id_as_of_time(&self.table.metadata_ref(), timestamp_ms)?;
+                // History outlives expired snapshots; name the timestamp that resolved to `id`.
+                Some((
+                    id,
+                    format!(
+                        "Snapshot with id {id} resolved from timestamp {timestamp_ms} ms not found; it may have expired"
+                    ),
+                ))
+            }
+            None => None,
+        };
+        let is_time_travel = selected_snapshot.is_some();
+        let snapshot = match selected_snapshot {
+            Some((snapshot_id, not_found_message)) => self
                 .table
                 .metadata()
                 .snapshot_by_id(snapshot_id)
-                .ok_or_else(|| invalid_data!("Snapshot with id {snapshot_id} not found"))?
+                .ok_or_else(|| invalid_data!(not_found_message))?
                 .clone(),
             None => {
                 let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
                     return Ok(TableScan {
-                        batch_size: self.batch_size,
                         column_names: self.column_names,
                         file_io: self.table.file_io().clone(),
                         plan_context: None,
-                        concurrency_limit_data_files: self.concurrency_limit_data_files,
                         concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
                         concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
-                        row_group_filtering_enabled: self.row_group_filtering_enabled,
-                        row_selection_enabled: self.row_selection_enabled,
-                        bloom_filter_enabled: self.bloom_filter_enabled,
                         runtime: self.table.runtime().clone(),
                     });
                 };
@@ -313,9 +367,20 @@ impl<'a> TableScanBuilder<'a> {
             }
         };
 
-        let schema = snapshot.schema(self.table.metadata())?;
+        // A scan of the current state uses the table's current schema; time travel uses the
+        // schema its snapshot was written with.
+        let schema = if is_time_travel {
+            snapshot.schema(self.table.metadata())?
+        } else {
+            self.table.metadata().current_schema().clone()
+        };
         let field_ids =
             collect_scan_field_ids(&schema, self.column_names.as_deref(), self.case_sensitive)?;
+        let column_stats_columns = resolve_column_stats_columns(
+            &schema,
+            self.column_stats_names.as_deref(),
+            self.case_sensitive,
+        )?;
         let snapshot_bound_predicate =
             bind_scan_predicate(&schema, self.filter.as_ref(), self.case_sensitive)?;
         let name_mapping = self
@@ -351,19 +416,15 @@ impl<'a> TableScanBuilder<'a> {
             expression_evaluator_cache: Arc::new(ExpressionEvaluatorCache::new()),
             unified_partition_type,
             sort_orders,
+            column_stats_columns,
         };
 
         Ok(TableScan {
-            batch_size: self.batch_size,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
             plan_context: Some(plan_context),
-            concurrency_limit_data_files: self.concurrency_limit_data_files,
             concurrency_limit_manifest_entries: self.concurrency_limit_manifest_entries,
             concurrency_limit_manifest_files: self.concurrency_limit_manifest_files,
-            row_group_filtering_enabled: self.row_group_filtering_enabled,
-            row_selection_enabled: self.row_selection_enabled,
-            bloom_filter_enabled: self.bloom_filter_enabled,
             runtime: self.table.runtime().clone(),
         })
     }
@@ -376,7 +437,6 @@ pub struct TableScan {
     ///
     /// If this is None, then the scan contains no rows.
     plan_context: Option<PlanContext>,
-    batch_size: Option<usize>,
     file_io: FileIO,
     column_names: Option<Vec<String>>,
     /// The maximum number of manifest files that will be
@@ -386,14 +446,6 @@ pub struct TableScan {
     /// The maximum number of [`ManifestEntry`]s that will
     /// be processed in parallel
     concurrency_limit_manifest_entries: usize,
-
-    /// The maximum number of [`ManifestEntry`]s that will
-    /// be processed in parallel
-    concurrency_limit_data_files: usize,
-
-    row_group_filtering_enabled: bool,
-    row_selection_enabled: bool,
-    bloom_filter_enabled: bool,
 
     runtime: Runtime,
 }
@@ -540,20 +592,44 @@ impl TableScan {
         Ok(planned_file_rx.boxed())
     }
 
-    /// Returns an [`ArrowRecordBatchStream`].
-    pub async fn to_arrow(&self) -> Result<ArrowRecordBatchStream> {
-        let mut arrow_reader_builder =
-            ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
-                .with_data_file_concurrency_limit(self.concurrency_limit_data_files)
-                .with_row_group_filtering_enabled(self.row_group_filtering_enabled)
-                .with_row_selection_enabled(self.row_selection_enabled)
-                .with_bloom_filter_enabled(self.bloom_filter_enabled);
-
-        if let Some(batch_size) = self.batch_size {
-            arrow_reader_builder = arrow_reader_builder.with_batch_size(batch_size);
-        }
-
-        arrow_reader_builder
+    /// Returns an [`ArrowRecordBatchStream`] using the supplied reader settings.
+    ///
+    /// Reader settings are independent of file planning. Unset data-file concurrency
+    /// uses execution-host parallelism; zero is treated as one.
+    /// [`TableScanBuilder::with_concurrency_limit`] only controls manifest planning.
+    ///
+    /// ```no_run
+    /// # use iceberg::{Result, arrow::{ArrowReaderOptions, ParquetReadOptions}, table::Table};
+    /// # async fn read(table: &Table) -> Result<()> {
+    /// let options = ArrowReaderOptions::builder()
+    ///     .with_batch_size(1024)
+    ///     .with_row_selection_enabled(true)
+    ///     .with_parquet_options(
+    ///         ParquetReadOptions::builder()
+    ///             .with_metadata_size_hint(512 * 1024)
+    ///             .build(),
+    ///     )
+    ///     .build();
+    /// let stream = table.scan().build()?.to_arrow(options).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// When upgrading, move reader-setting calls from `TableScanBuilder` to
+    /// `ArrowReaderOptions::builder()` and pass the result to `to_arrow(options)`.
+    /// Use `to_arrow(Default::default())` for default settings. To preserve a
+    /// data-file concurrency bound previously set through the scan, set
+    /// `with_data_file_concurrency_limit(limit)` on the reader options explicitly.
+    ///
+    /// Locally constructed readers accept the same options through
+    /// [`ArrowReaderBuilder::with_options`], including Parquet I/O tuning.
+    /// This replaces the complete configuration. Configure individual settings
+    /// through the options builders; per-field setters on `ArrowReaderBuilder`
+    /// have been removed. [`ArrowReaderBuilder::with_parquet_options`] replaces
+    /// only the nested Parquet configuration.
+    pub async fn to_arrow(&self, options: ArrowReaderOptions) -> Result<ArrowRecordBatchStream> {
+        ArrowReaderBuilder::new(self.file_io.clone(), self.runtime.clone())
+            .with_options(options)
             .build()
             .read(self.plan_files().await?)
             .map(|result| result.stream())
@@ -578,11 +654,6 @@ impl TableScan {
         F: Fn(ManifestEntryContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
-        }
-
         // abort the plan if we encounter a manifest entry for a delete file
         if manifest_entry_context.manifest_entry.content_type() != DataContentType::Data {
             return Err(Error::new(
@@ -635,11 +706,6 @@ impl TableScan {
         manifest_entry_context: ManifestEntryContext,
         mut delete_file_ctx_tx: Sender<DeleteFileContext>,
     ) -> Result<()> {
-        // skip processing this manifest entry if it has been marked as deleted
-        if !manifest_entry_context.manifest_entry.is_alive() {
-            return Ok(());
-        }
-
         // abort the plan if we encounter a manifest entry that is not for a delete file
         if manifest_entry_context.manifest_entry.content_type() == DataContentType::Data {
             return Err(Error::new(
@@ -685,35 +751,43 @@ mod tests {
     //! shared tests for the table scan API
 
     use std::collections::HashMap;
+    use std::fs;
+    use std::fs::File;
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RunArray, StringArray,
+        Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, RunArray,
+        StringArray,
     };
     use futures::{TryStreamExt, stream};
+    use parquet::arrow::ArrowWriter;
     use uuid::Uuid;
 
-    use super::resolve_field_id;
-    use crate::arrow::ArrowReaderBuilder;
+    use super::{resolve_column_stats_columns, resolve_field_id};
+    use crate::arrow::{ArrowReaderBuilder, ArrowReaderOptions, ParquetReadOptions};
     use crate::expr::{BoundPredicate, Reference};
     use crate::io::FileIO;
     use crate::metadata_columns::{
         RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER,
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_SPEC_ID, RESERVED_FIELD_ID_POS,
     };
-    use crate::scan::{FileScanTask, FileScanTaskDeleteFile};
+    use crate::scan::{FileScanTask, FileScanTaskColumnStats, FileScanTaskDeleteFile, TableScan};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, Literal, MAIN_BRANCH, MappedField, NameMapping,
-        NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema, Snapshot,
-        SortDirection, SortField, SortOrder, Struct, Summary, TableMetadataBuilder,
-        TableProperties, Transform, Type, UnboundPartitionSpec,
+        DataContentType, DataFileBuilder, DataFileFormat, Datum, ListType, Literal, MAIN_BRANCH,
+        ManifestEntry, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, MappedField,
+        NameMapping, NestedField, NullOrder, Operation, PartitionSpec, PrimitiveType, Schema,
+        Snapshot, SortDirection, SortField, SortOrder, Struct, StructType, Summary,
+        TableMetadataBuilder, TableProperties, Transform, Type, UnboundPartitionSpec,
     };
     use crate::table::Table;
-    use crate::test_utils::scan::{TableTestFixture, assert_last_updated_seq_all};
+    use crate::test_utils::scan::{
+        ROWS_PER_FIXTURE_FILE, TableTestFixture, assert_last_updated_seq_all,
+    };
     use crate::test_utils::test_runtime;
-    use crate::{ErrorKind, TableIdent};
+    use crate::util::snapshot::snapshot_id_as_of_time;
+    use crate::{ErrorKind, Runtime, TableIdent};
 
     #[tokio::test]
     async fn test_table_scan_columns() {
@@ -765,13 +839,91 @@ mod tests {
         );
     }
 
+    /// A schema with a struct `s`, a list `l` and a long `n`, whose field ids are 1 to 5.
+    fn nested_schema() -> Schema {
+        Schema::builder()
+            .with_fields(vec![
+                NestedField::required(
+                    1,
+                    "s",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::optional(2, "f", PrimitiveType::Long).into(),
+                    ])),
+                )
+                .into(),
+                NestedField::required(
+                    3,
+                    "l",
+                    Type::List(ListType::new(
+                        NestedField::list_element(4, PrimitiveType::Long, true).into(),
+                    )),
+                )
+                .into(),
+                NestedField::required(5, "n", PrimitiveType::Long).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    fn column_names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn test_resolve_column_stats_columns_resolves_primitive_names() {
+        let schema = nested_schema();
+        let long = PrimitiveType::Long;
+
+        assert_eq!(
+            resolve_column_stats_columns(&schema, Some(&column_names(&["s.f", "n"])), true)
+                .unwrap(),
+            Some(Arc::<[_]>::from([(2, long.clone()), (5, long.clone())]))
+        );
+        assert_eq!(
+            resolve_column_stats_columns(&schema, Some(&column_names(&["N"])), false).unwrap(),
+            Some(Arc::<[_]>::from([(5, long)]))
+        );
+        assert_eq!(
+            resolve_column_stats_columns(&schema, None, true).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_resolve_column_stats_columns_rejects_names_without_statistics() {
+        let schema = nested_schema();
+        let cases = [
+            (
+                "s",
+                "Column s is not a primitive field and has no column statistics",
+            ),
+            (
+                "l",
+                "Column l is not a primitive field and has no column statistics",
+            ),
+            (
+                RESERVED_COL_NAME_FILE,
+                "Metadata column _file has no column statistics",
+            ),
+            ("missing", "Column missing not found in table"),
+            ("N", "Column N not found in table"),
+        ];
+
+        for (name, expected) in cases {
+            let err = resolve_column_stats_columns(&schema, Some(&column_names(&[name])), true)
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "{name}");
+            assert!(err.message().starts_with(expected), "{name}: {err}");
+        }
+    }
+
     #[test]
     fn test_resolve_field_id_case_insensitive_rejects_ambiguous_name() {
         let schema = Schema::builder()
             .with_fields(vec![
-                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
-                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
-                NestedField::optional(3, "data", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "id", PrimitiveType::Int).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int).into(),
             ])
             .build()
             .unwrap();
@@ -790,9 +942,9 @@ mod tests {
         let schema = Schema::builder()
             .with_schema_id(metadata.current_schema_id())
             .with_fields(vec![
-                NestedField::optional(1, "id", PrimitiveType::Int.into()).into(),
-                NestedField::optional(2, "ID", PrimitiveType::Int.into()).into(),
-                NestedField::optional(3, "data", PrimitiveType::Int.into()).into(),
+                NestedField::optional(1, "id", PrimitiveType::Int).into(),
+                NestedField::optional(2, "ID", PrimitiveType::Int).into(),
+                NestedField::optional(3, "data", PrimitiveType::Int).into(),
             ])
             .build()
             .unwrap();
@@ -834,7 +986,7 @@ mod tests {
             .unwrap();
 
         let batches: Vec<_> = table_scan
-            .to_arrow()
+            .to_arrow(ArrowReaderOptions::default())
             .await
             .unwrap()
             .try_collect()
@@ -890,12 +1042,413 @@ mod tests {
         let table_scan = table
             .scan()
             .snapshot_id(3051729675574597004)
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
         assert_eq!(
             table_scan.snapshot().unwrap().snapshot_id(),
             3051729675574597004
+        );
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_after_rollback() {
+        for elapsed_ms in [0, 1000] {
+            let table = TableTestFixture::new().table;
+            let mut metadata = table.metadata().clone();
+            let original = metadata.history()[0].snapshot_id;
+            let previous = metadata.history()[1].clone();
+            let rollback_time = previous.timestamp_ms + elapsed_ms;
+            metadata.snapshot_log.push(crate::spec::SnapshotLog {
+                timestamp_ms: rollback_time,
+                snapshot_id: original,
+            });
+            metadata.current_snapshot_id = Some(original);
+            metadata.refs.get_mut(MAIN_BRANCH).unwrap().snapshot_id = original;
+            let table = table.with_metadata(Arc::new(metadata));
+            let scan = table.scan().as_of_time(rollback_time).build().unwrap();
+            // A rollback at the same timestamp keeps the earlier history entry.
+            let expected = if elapsed_ms == 0 {
+                previous.snapshot_id
+            } else {
+                original
+            };
+            assert_eq!(scan.snapshot().unwrap().snapshot_id(), expected);
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_empty_history() {
+        let table = TableTestFixture::new_empty().table;
+        assert!(table.scan().build().unwrap().snapshot().is_none());
+        let err = table.scan().as_of_time(0).build().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("No snapshot history"));
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_before_history() {
+        let table = TableTestFixture::new().table;
+        let before = table.metadata().history()[0].timestamp_ms - 1;
+        let err = table.scan().as_of_time(before).build().unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains(&before.to_string()));
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_rejects_all_qualifying_snapshots_expired() {
+        let table = TableTestFixture::new_with_deep_history().table;
+        let mut metadata = table.metadata().clone();
+        let entry = metadata.history()[3].clone();
+        let expired_ids: Vec<_> = metadata
+            .history()
+            .iter()
+            .filter(|log| log.timestamp_ms <= entry.timestamp_ms)
+            .map(|log| log.snapshot_id)
+            .collect();
+        assert_eq!(expired_ids.len(), 4);
+        for snapshot_id in expired_ids {
+            metadata.snapshots.remove(&snapshot_id);
+        }
+        let table = table.with_metadata(Arc::new(metadata));
+        // History resolution succeeds even though every qualifying snapshot expired.
+        assert_eq!(
+            snapshot_id_as_of_time(&table.metadata_ref(), entry.timestamp_ms).unwrap(),
+            entry.snapshot_id
+        );
+        assert!(table.scan().build().unwrap().snapshot().is_some());
+        let err = table
+            .scan()
+            .as_of_time(entry.timestamp_ms)
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(
+            err.message(),
+            format!(
+                "Snapshot with id {} resolved from timestamp {} ms not found; it may have expired",
+                entry.snapshot_id, entry.timestamp_ms
+            )
+        );
+    }
+
+    #[test]
+    fn test_table_scan_last_snapshot_selection_wins() {
+        let table = TableTestFixture::new().table;
+        let first = &table.metadata().history()[0];
+        let last = &table.metadata().history()[1];
+        let cases = [
+            (
+                table
+                    .scan()
+                    .snapshot_id(last.snapshot_id)
+                    .as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(first.timestamp_ms)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            // An overwritten selector is not resolved or validated.
+            (
+                table.scan().snapshot_id(-1).as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(i64::MIN)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .snapshot_id(first.snapshot_id)
+                    .snapshot_id(last.snapshot_id),
+                last.snapshot_id,
+            ),
+            (
+                table
+                    .scan()
+                    .as_of_time(i64::MAX)
+                    .as_of_time(first.timestamp_ms),
+                first.snapshot_id,
+            ),
+        ];
+        for (builder, expected) in cases {
+            let scan = builder.build().unwrap();
+            assert_eq!(scan.snapshot().unwrap().snapshot_id(), expected);
+        }
+    }
+
+    #[test]
+    fn test_table_scan_invalid_last_snapshot_selection() {
+        let table = TableTestFixture::new().table;
+        let first = &table.metadata().history()[0];
+        let cases = [
+            (
+                table
+                    .scan()
+                    .snapshot_id(first.snapshot_id)
+                    .as_of_time(first.timestamp_ms - 1),
+                "No snapshot history",
+            ),
+            (
+                table.scan().as_of_time(first.timestamp_ms).snapshot_id(-1),
+                "Snapshot with id -1 not found",
+            ),
+        ];
+        for (builder, expected) in cases {
+            let err = builder.build().unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains(expected));
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_uses_snapshot_schema() {
+        for select_current in [false, true] {
+            let table = TableTestFixture::new().table;
+            let mut metadata = table.metadata().clone();
+            let entry = metadata.history()[usize::from(select_current)].clone();
+            // Simulate a schema-only update after this snapshot: schema 0 has x only,
+            // while the current table schema also contains y and other columns.
+            Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id =
+                Some(0);
+            let table = table.with_metadata(Arc::new(metadata));
+            let scan = table
+                .scan()
+                .as_of_time(entry.timestamp_ms)
+                .select(["x"])
+                .with_filter(Reference::new("x").greater_than(Datum::long(0)))
+                .build()
+                .unwrap();
+            let context = scan.plan_context.as_ref().unwrap();
+            assert_eq!(context.snapshot_schema.schema_id(), 0);
+            assert!(context.snapshot_bound_predicate.is_some());
+            assert!(
+                table
+                    .scan()
+                    .as_of_time(entry.timestamp_ms)
+                    .select(["y"])
+                    .build()
+                    .is_err()
+            );
+            assert!(
+                table
+                    .scan()
+                    .as_of_time(entry.timestamp_ms)
+                    .with_filter(Reference::new("y").greater_than(Datum::long(0)))
+                    .build()
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_scan_as_of_time_schema_compatibility() {
+        let table = TableTestFixture::new().table;
+        let entry = table.metadata().history()[0].clone();
+        // Older snapshots may omit schema-id and use the current-schema fallback.
+        assert!(
+            table
+                .metadata()
+                .snapshot_by_id(entry.snapshot_id)
+                .unwrap()
+                .schema_id()
+                .is_none()
+        );
+        let scan = table.scan().as_of_time(entry.timestamp_ms).build().unwrap();
+        assert_eq!(
+            scan.plan_context.as_ref().unwrap().snapshot_schema,
+            *table.metadata().current_schema()
+        );
+
+        let mut metadata = table.metadata().clone();
+        Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id =
+            Some(1234);
+        let table = table.with_metadata(Arc::new(metadata));
+        let err = table
+            .scan()
+            .as_of_time(entry.timestamp_ms)
+            .build()
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("Schema with id 1234 not found"));
+    }
+
+    #[tokio::test]
+    async fn test_table_scan_as_of_time_reads_historical_rows() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let entry = fixture.table.metadata().history()[0].clone();
+
+        // The older snapshot has only x, while the current snapshot has eight columns.
+        let mut metadata = fixture.table.metadata().clone();
+        Arc::make_mut(metadata.snapshots.get_mut(&entry.snapshot_id).unwrap()).schema_id = Some(0);
+        fixture.table = fixture.table.with_metadata(Arc::new(metadata));
+        let snapshot = fixture
+            .table
+            .metadata()
+            .snapshot_by_id(entry.snapshot_id)
+            .unwrap();
+        let schema = snapshot.schema(fixture.table.metadata()).unwrap();
+        let arrow_schema = Arc::new(crate::arrow::schema_to_arrow_schema(&schema).unwrap());
+
+        // Write distinct historical data: x = 100, versus x = 1 in the current files.
+        let path = format!("{}/historical.parquet", fixture.table_location);
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int64Array::from(
+            vec![100],
+        ))])
+        .unwrap();
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), arrow_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let mut manifest_writer = ManifestWriterBuilder::new(
+            fixture.next_manifest_file(),
+            Some(snapshot.snapshot_id()),
+            schema,
+            fixture
+                .table
+                .metadata()
+                .default_partition_spec()
+                .as_ref()
+                .clone(),
+        )
+        .build_v2_data();
+        manifest_writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .partition_spec_id(0)
+                            .content(DataContentType::Data)
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(fs::metadata(&path).unwrap().len())
+                            .file_path(path)
+                            .record_count(1)
+                            .partition(Struct::from_iter([Some(Literal::long(100))]))
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let manifest = manifest_writer.write_manifest_file().await.unwrap();
+        let output = fixture
+            .table
+            .file_io()
+            .new_output(snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut list_writer = ManifestListWriter::v2(
+            output,
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+        );
+        list_writer.add_manifests([manifest].into_iter()).unwrap();
+        list_writer.close().await.unwrap();
+
+        let table = fixture.table;
+        let [by_time, by_id] = [
+            table.scan().as_of_time(entry.timestamp_ms),
+            table.scan().snapshot_id(entry.snapshot_id),
+        ]
+        .map(|scan| {
+            scan.with_filter(Reference::new("x").greater_than_or_equal_to(Datum::long(100)))
+                .build()
+                .unwrap()
+        });
+        let current = table.scan().build().unwrap();
+        let mut planned_files = Vec::new();
+        let mut rows = Vec::new();
+        let mut schemas = Vec::new();
+        for scan in [by_time, by_id, current] {
+            let mut tasks: Vec<_> = scan
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            tasks.sort_by_key(|task| task.data_file_path().to_string());
+            planned_files.push(tasks);
+            let batches: Vec<_> = scan
+                .to_arrow(ArrowReaderOptions::default())
+                .await
+                .unwrap()
+                .try_collect()
+                .await
+                .unwrap();
+            assert!(!batches.is_empty());
+            schemas.push(batches[0].schema());
+            let mut values: Vec<i64> = batches
+                .iter()
+                .flat_map(|batch| {
+                    batch
+                        .column_by_name("x")
+                        .unwrap()
+                        .as_any()
+                        .downcast_ref::<Int64Array>()
+                        .unwrap()
+                        .values()
+                        .iter()
+                        .copied()
+                })
+                .collect();
+            values.sort_unstable();
+            rows.push(values);
+        }
+        assert!(!planned_files[0].is_empty());
+        assert_eq!(planned_files[0], planned_files[1]);
+        assert_eq!(rows[0], vec![100]);
+        assert_eq!(rows[0], rows[1]);
+        // The current snapshot contains two live fixture files.
+        assert_eq!(rows[2], vec![1; 2 * ROWS_PER_FIXTURE_FILE]);
+        assert_eq!(schemas[0], schemas[1]);
+        assert_eq!(schemas[0].fields().len(), 1);
+        assert_eq!(schemas[2].fields().len(), 8);
+    }
+
+    /// A scan of the current state reads the current snapshot with the table's
+    /// current schema, not the older one that snapshot was written with.
+    #[test]
+    fn test_scan_of_current_state_uses_current_schema() {
+        let table = TableTestFixture::new_with_column_added_after_last_write().table;
+
+        let table_scan = table.scan().build().unwrap();
+        assert_eq!(table_scan.snapshot(), table.metadata().current_snapshot());
+        assert_eq!(
+            table_scan.plan_context.as_ref().unwrap().snapshot_schema,
+            *table.metadata().current_schema()
+        );
+    }
+
+    /// A scan pinned to a snapshot uses the schema that snapshot was written
+    /// with, even when it is the current snapshot.
+    #[test]
+    fn test_time_travel_scan_uses_snapshot_schema() {
+        let table = TableTestFixture::new_with_column_added_after_last_write().table;
+        let snapshot = table.metadata().current_snapshot().unwrap();
+
+        let table_scan = table
+            .scan()
+            .snapshot_id(snapshot.snapshot_id())
+            .build()
+            .unwrap();
+        assert_eq!(table_scan.snapshot(), Some(snapshot));
+        assert_eq!(
+            table_scan.plan_context.as_ref().unwrap().snapshot_schema,
+            snapshot.schema(table.metadata()).unwrap()
         );
     }
 
@@ -1106,10 +1659,178 @@ mod tests {
         );
     }
 
+    /// Statistics for long columns `field_ids`, with values derived from each id so that a
+    /// column's statistics do not depend on which other columns are present.
+    fn column_stats(field_ids: &[i32]) -> FileScanTaskColumnStats {
+        let counts = |count: fn(u64) -> u64| -> HashMap<i32, u64> {
+            field_ids.iter().map(|&id| (id, count(id as u64))).collect()
+        };
+        let bounds = |offset: i64| -> HashMap<i32, Datum> {
+            field_ids
+                .iter()
+                .map(|&id| (id, Datum::long(offset + i64::from(id))))
+                .collect()
+        };
+        FileScanTaskColumnStats::builder()
+            .with_column_sizes(counts(|id| 8 * id))
+            .with_value_counts(counts(|id| 10 + id))
+            .with_null_value_counts(counts(|id| id))
+            .with_nan_value_counts(counts(|id| 2 * id))
+            .with_lower_bounds(bounds(0))
+            .with_upper_bounds(bounds(100))
+            .build()
+    }
+
+    async fn column_stats_by_file(scan: TableScan) -> Vec<Option<FileScanTaskColumnStats>> {
+        let mut tasks: Vec<_> = scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        tasks.sort_by(|a, b| a.data_file_path().cmp(b.data_file_path()));
+        tasks
+            .into_iter()
+            .map(|task| task.column_stats().cloned())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_retains_only_requested_column_stats() {
+        let mut fixture = TableTestFixture::new();
+        // The second file has no statistics for `x` (field id 1).
+        fixture
+            .setup_manifest_files_with_column_stats(&[(None, vec![
+                column_stats(&[1, 2, 7]),
+                column_stats(&[2, 7]),
+            ])])
+            .await;
+
+        let scan = fixture
+            .table
+            .scan()
+            .with_column_stats(["x", "i64"])
+            .build()
+            .unwrap();
+
+        assert_eq!(column_stats_by_file(scan).await, vec![
+            Some(column_stats(&[1, 7])),
+            Some(column_stats(&[7]))
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_carries_column_stats_only_when_requested() {
+        let mut fixture = TableTestFixture::new();
+        fixture
+            .setup_manifest_files_with_column_stats(&[(None, vec![column_stats(&[1])])])
+            .await;
+        let table = &fixture.table;
+
+        assert_eq!(
+            column_stats_by_file(table.scan().build().unwrap()).await,
+            vec![None]
+        );
+        assert_eq!(
+            column_stats_by_file(
+                table
+                    .scan()
+                    .with_column_stats(Vec::<String>::new())
+                    .build()
+                    .unwrap()
+            )
+            .await,
+            vec![Some(FileScanTaskColumnStats::default())]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_resolves_column_stats_names_with_scan_case_sensitivity() {
+        let mut fixture = TableTestFixture::new();
+        fixture
+            .setup_manifest_files_with_column_stats(&[(None, vec![column_stats(&[1, 2])])])
+            .await;
+
+        let scan = fixture
+            .table
+            .scan()
+            .with_case_sensitive(false)
+            .with_column_stats(["X"])
+            .build()
+            .unwrap();
+
+        assert_eq!(column_stats_by_file(scan).await, vec![Some(column_stats(
+            &[1]
+        ))]);
+    }
+
+    #[test]
+    fn test_build_rejects_unknown_column_stats_name() {
+        let table = TableTestFixture::new().table;
+
+        let err = table
+            .scan()
+            .with_column_stats(["unknown"])
+            .build()
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_promotes_bounds_to_scan_schema_type() {
+        let mut fixture = TableTestFixture::new();
+        let y_bounds = |lower: Datum, upper: Datum| {
+            FileScanTaskColumnStats::builder()
+                .with_lower_bounds(HashMap::from([(2, lower)]))
+                .with_upper_bounds(HashMap::from([(2, upper)]))
+                .build()
+        };
+        // `y` is a `long` in the table schema. The first manifest was written when it was an `int`.
+        let int_schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "x", PrimitiveType::Long).into(),
+                    NestedField::required(2, "y", PrimitiveType::Int).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let written_as_long = y_bounds(Datum::long(6), Datum::long(9));
+        fixture
+            .setup_manifest_files_with_column_stats(&[
+                (Some(int_schema), vec![y_bounds(
+                    Datum::int(5),
+                    Datum::int(7),
+                )]),
+                (None, vec![written_as_long.clone()]),
+            ])
+            .await;
+
+        let scan = fixture
+            .table
+            .scan()
+            .with_column_stats(["y"])
+            .build()
+            .unwrap();
+
+        assert_eq!(column_stats_by_file(scan).await, vec![
+            Some(y_bounds(Datum::long(5), Datum::long(7))),
+            Some(written_as_long)
+        ]);
+    }
+
     #[tokio::test]
     async fn test_plan_files_on_table_without_any_snapshots() {
         let table = TableTestFixture::new_empty().table;
-        let batch_stream = table.scan().build().unwrap().to_arrow().await.unwrap();
+        let batch_stream = table
+            .scan()
+            .build()
+            .unwrap()
+            .to_arrow(ArrowReaderOptions::default())
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
         assert!(batches.is_empty());
     }
@@ -1120,12 +1841,7 @@ mod tests {
         fixture.setup_manifest_files().await;
 
         // Create table scan for current snapshot and plan files
-        let table_scan = fixture
-            .table
-            .scan()
-            .with_row_selection_enabled(true)
-            .build()
-            .unwrap();
+        let table_scan = fixture.table.scan().build().unwrap();
 
         let mut tasks = table_scan
             .plan_files()
@@ -1153,6 +1869,196 @@ mod tests {
             tasks[1].data_file_path(),
             format!("{}/3.parquet", &fixture.table_location)
         );
+    }
+
+    #[tokio::test]
+    async fn test_scan_widens_old_partition_so_pruning_and_deletes_match() {
+        // Guards the reader-side normalization through a real scan: a data manifest
+        // written when the partition source `x` was `int` must have its `int(7)`
+        // partition widened to `long(7)` during planning, so (a) a `x = 7` (long)
+        // filter keeps the file and (b) the equality delete keyed by `long(7)`
+        // attaches. Without the normalization the int/long mismatch drops the delete
+        // (and prunes the file under the filter).
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete(false).await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(
+            tasks[0].deletes().len(),
+            1,
+            "equality delete must attach after widening the old int partition to long"
+        );
+        assert_eq!(
+            tasks[0].partition(),
+            Some(&Struct::from_iter([Some(Literal::long(7))])),
+            "the widened long(7) tuple must reach FileScanTask::partition()"
+        );
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").equal_to(Datum::long(7)))
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(
+            tasks.len(),
+            1,
+            "filter on the promoted type must not prune the file"
+        );
+        assert_eq!(tasks[0].deletes().len(), 1);
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("x").equal_to(Datum::long(8)))
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(
+            tasks.is_empty(),
+            "a file in partition x=7 must be pruned by an x=8 filter"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_scan_widens_old_partition_with_pre_promotion_delete() {
+        // Data file and equality delete both written before the promotion (int
+        // partition). They matched on main; after both sides widen to long they must
+        // still match, so the delete stays attached.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete(true).await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_widens_old_partition_so_deletion_vector_matches() {
+        // A v3 deletion vector written after the promotion (long partition) references
+        // an older data file (int partition). The widening must make the partitions
+        // agree so the DV attaches, instead of failing the DV partition check.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_dv().await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_eq_delete_after_dropping_promoted_source() {
+        // Partition source `x` promoted int -> long, then dropped. The data file (int)
+        // and its equality delete (long) must still normalize to the same long partition
+        // so the delete stays attached; otherwise it silently detaches.
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_eq_delete(false).await;
+        fixture.drop_partition_source(1);
+        let table = fixture.table;
+
+        let tasks: Vec<FileScanTask> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_deletion_vector_after_dropping_promoted_source() {
+        // Same as above for a deletion vector: without widening the dropped numeric
+        // source the DV partition check errors (long(7) vs int(7)).
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_promoted_partition_with_dv().await;
+        fixture.drop_partition_source(1);
+        let table = fixture.table;
+
+        let tasks: Vec<FileScanTask> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_scan_keeps_eq_delete_when_dropped_source_is_date() {
+        // A promoted numeric source `x` sits beside a dropped `date` source `d`. The gate
+        // fires on `x`'s int -> long widening, but `d` (stored as an int) must be copied
+        // through, not widened to long, or the data file's partition diverges from the
+        // equality delete's and detaches it.
+        let mut fixture = TableTestFixture::new();
+        fixture
+            .setup_promoted_partition_with_eq_delete_and_dropped_date()
+            .await;
+
+        let tasks: Vec<FileScanTask> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].deletes().len(), 1);
     }
 
     #[tokio::test]
@@ -1292,7 +2198,7 @@ mod tests {
             .build()
             .unwrap();
         let batches: Vec<_> = table_scan
-            .to_arrow()
+            .to_arrow(ArrowReaderOptions::default())
             .await
             .unwrap()
             .try_collect()
@@ -1317,14 +2223,16 @@ mod tests {
         fixture.setup_manifest_files().await;
 
         // Create table scan for current snapshot and plan files
-        let table_scan = fixture
-            .table
-            .scan()
-            .with_row_selection_enabled(true)
-            .build()
-            .unwrap();
+        let table_scan = fixture.table.scan().build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1335,17 +2243,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reader_options_preserve_reads_after_dropping_scan() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_multi_row_group_manifest(&[150, 299]).await;
+        let scan = fixture
+            .table
+            .scan()
+            .select(["y"])
+            .with_filter(Reference::new("y").greater_than(Datum::long(1100)))
+            .build()
+            .unwrap();
+        let options = ArrowReaderOptions::builder()
+            .with_batch_size(17)
+            .with_data_file_concurrency_limit(1)
+            .with_parquet_options(
+                ParquetReadOptions::builder()
+                    .with_metadata_size_hint(4096)
+                    .with_range_fetch_concurrency(2)
+                    .build(),
+            )
+            .with_row_selection_enabled(true)
+            .with_bloom_filter_enabled(true)
+            .build();
+        let expected: Vec<_> = scan
+            .to_arrow(options.clone())
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let tasks: Vec<_> = scan
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        let serialized = serde_json::to_value(&options).unwrap();
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "batch_size": 17, "data_file_concurrency_limit": 1,
+                "row_group_filtering_enabled": true, "row_selection_enabled": true,
+                "bloom_filter_enabled": true,
+                "parquet_options": {
+                    "metadata_size_hint": 4096, "range_coalesce_bytes": 1048576, "range_fetch_concurrency": 2,
+                    "preload_column_index": true, "preload_offset_index": true, "preload_page_index": false,
+                },
+            })
+        );
+        let deserialized: ArrowReaderOptions = serde_json::from_value(serialized).unwrap();
+        assert_eq!(deserialized, options);
+        let options = deserialized;
+        drop(scan);
+        let reader =
+            ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::try_current().unwrap())
+                .with_options(options)
+                .build();
+        let actual: Vec<_> = reader
+            .read(Box::pin(stream::iter(tasks.into_iter().map(Ok))))
+            .unwrap()
+            .stream()
+            .try_collect()
+            .await
+            .unwrap();
+        assert!(!actual.is_empty());
+        assert!(actual.iter().all(|batch| batch.num_rows() <= 17));
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
     async fn test_open_parquet_no_deletions_by_separate_reader() {
         let mut fixture = TableTestFixture::new();
         fixture.setup_manifest_files().await;
 
         // Create table scan for current snapshot and plan files
-        let table_scan = fixture
-            .table
-            .scan()
-            .with_row_selection_enabled(true)
-            .build()
-            .unwrap();
+        let table_scan = fixture.table.scan().build().unwrap();
 
         let mut plan_task: Vec<_> = table_scan
             .plan_files()
@@ -1388,15 +2361,16 @@ mod tests {
         fixture.setup_manifest_files().await;
 
         // Create table scan for current snapshot and plan files
-        let table_scan = fixture
-            .table
-            .scan()
-            .select(["x", "z"])
-            .with_row_selection_enabled(true)
-            .build()
-            .unwrap();
+        let table_scan = fixture.table.scan().select(["x", "z"]).build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1412,7 +2386,14 @@ mod tests {
 
         // test empty scan
         let table_scan = fixture.table.scan().select_empty().build().unwrap();
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         assert_eq!(batches[0].num_columns(), 0);
@@ -1427,12 +2408,17 @@ mod tests {
         // Filter: y < 3
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").less_than(Datum::long(3));
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1455,12 +2441,17 @@ mod tests {
         // Filter: y >= 5
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").greater_than_or_equal_to(Datum::long(5));
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1483,12 +2474,17 @@ mod tests {
         // Filter: dbl == 150.0
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("dbl").equal_to(Datum::double(150.0f64));
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1508,12 +2504,17 @@ mod tests {
         // Filter: i32 == 150
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("i32").equal_to(Datum::int(150i32));
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1533,12 +2534,17 @@ mod tests {
         // Filter: i64 == 150
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("i64").equal_to(Datum::long(150i64));
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1558,12 +2564,17 @@ mod tests {
         // Filter: bool == true
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("bool").equal_to(Datum::bool(true));
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1583,12 +2594,17 @@ mod tests {
         // Filter: y is null
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").is_null();
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
         assert_eq!(batches.len(), 0);
@@ -1602,12 +2618,17 @@ mod tests {
         // Filter: y is not null
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("y").is_not_null();
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
         assert_eq!(batches[0].num_rows(), 1024);
@@ -1623,12 +2644,17 @@ mod tests {
         let predicate = Reference::new("y")
             .less_than(Datum::long(5))
             .and(Reference::new("z").greater_than_or_equal_to(Datum::long(4)));
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
         assert_eq!(batches[0].num_rows(), 500);
@@ -1659,12 +2685,17 @@ mod tests {
         let predicate = Reference::new("y")
             .less_than(Datum::long(5))
             .or(Reference::new("z").greater_than_or_equal_to(Datum::long(4)));
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
         assert_eq!(batches[0].num_rows(), 1024);
@@ -1696,12 +2727,17 @@ mod tests {
         // Filter: a STARTSWITH "Ice"
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("a").starts_with(Datum::string("Ice"));
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1720,12 +2756,17 @@ mod tests {
         // Filter: a NOT STARTSWITH "Ice"
         let mut builder = fixture.table.scan();
         let predicate = Reference::new("a").not_starts_with(Datum::string("Ice"));
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1745,12 +2786,17 @@ mod tests {
         let mut builder = fixture.table.scan();
         let predicate =
             Reference::new("a").is_in([Datum::string("Sioux"), Datum::string("Iceberg")]);
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1770,12 +2816,17 @@ mod tests {
         let mut builder = fixture.table.scan();
         let predicate =
             Reference::new("a").is_not_in([Datum::string("Sioux"), Datum::string("Iceberg")]);
-        builder = builder
-            .with_filter(predicate)
-            .with_row_selection_enabled(true);
+        builder = builder.with_filter(predicate);
         let table_scan = builder.build().unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -1950,11 +3001,46 @@ mod tests {
             .with_unified_partition_type(Some(unified_partition_type))
             .with_sort_order_id(Some(1))
             .with_sort_order(Some(sort_order))
+            .with_column_stats(Some(
+                FileScanTaskColumnStats::builder()
+                    .with_column_sizes(HashMap::from([(1, 80), (2, 96)]))
+                    .with_value_counts(HashMap::from([(1, 10), (2, 10)]))
+                    .with_null_value_counts(HashMap::from([(1, 0), (2, 1)]))
+                    .with_nan_value_counts(HashMap::from([(3, 2)]))
+                    .with_lower_bounds(HashMap::from([
+                        (1, Datum::string("apple")),
+                        (2, Datum::decimal_from_str("-12.34").unwrap()),
+                        (3, Datum::float(100.1_f32)),
+                        (4, Datum::double(f64::NEG_INFINITY)),
+                    ]))
+                    .with_upper_bounds(HashMap::from([
+                        (1, Datum::string("pear")),
+                        (2, Datum::decimal_from_str("56.78").unwrap()),
+                        (3, Datum::float(f32::INFINITY)),
+                        (4, Datum::double(f64::INFINITY)),
+                    ]))
+                    .build(),
+            ))
             .with_case_sensitive(true)
             .with_key_metadata(Some(vec![1, 2, 3].into_boxed_slice()))
             .build()
             .unwrap();
         assert_file_scan_task_serde_round_trip(task);
+    }
+
+    #[test]
+    fn test_file_scan_task_serde_omits_absent_column_stats() {
+        let task = file_scan_task_with_partition(
+            PrimitiveType::Long,
+            Transform::Identity,
+            Literal::long(42),
+        );
+
+        let serialized = serde_json::to_value(&task).unwrap();
+        assert!(serialized.get("column_stats").is_none());
+
+        let deserialized: FileScanTask = serde_json::from_value(serialized).unwrap();
+        assert_eq!(deserialized.column_stats(), None);
     }
 
     #[test]
@@ -2040,11 +3126,17 @@ mod tests {
             .table
             .scan()
             .select(["x", RESERVED_COL_NAME_FILE])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         // Verify we have 2 columns: x and _file
@@ -2099,11 +3191,17 @@ mod tests {
             .table
             .scan()
             .select(["x", RESERVED_COL_NAME_FILE, "z"])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         assert_eq!(batches[0].num_columns(), 3);
@@ -2130,11 +3228,17 @@ mod tests {
             .table
             .scan()
             .select([RESERVED_COL_NAME_FILE])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         // Should have exactly 1 column
@@ -2163,11 +3267,17 @@ mod tests {
             .table
             .scan()
             .select(["x", RESERVED_COL_NAME_FILE])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         // Collect all unique file paths from the batches
@@ -2208,11 +3318,17 @@ mod tests {
             .table
             .scan()
             .select([RESERVED_COL_NAME_FILE, "x", "y"])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         assert_eq!(batches[0].num_columns(), 3);
@@ -2234,11 +3350,17 @@ mod tests {
             .table
             .scan()
             .select(["x", "y", RESERVED_COL_NAME_FILE])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         assert_eq!(batches[0].num_columns(), 3);
@@ -2268,11 +3390,17 @@ mod tests {
                 RESERVED_COL_NAME_FILE, // _file repeated
                 "y",                    // y repeated
             ])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         // Verify we have exactly 6 columns (duplicates are allowed and preserved)
@@ -2502,11 +3630,17 @@ mod tests {
             .table
             .scan()
             .select(["x", RESERVED_COL_NAME_SPEC_ID, "z"])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         // Verify we have 3 columns: x, _spec_id, and z
@@ -2564,12 +3698,15 @@ mod tests {
             .table
             .scan()
             .select(["x", RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
         let batches: Vec<_> = table_scan
-            .to_arrow()
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .await
             .unwrap()
             .try_collect()
@@ -2603,12 +3740,15 @@ mod tests {
             .table
             .scan()
             .select(["x", RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
         let batches: Vec<_> = table_scan
-            .to_arrow()
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .await
             .unwrap()
             .try_collect()
@@ -2628,11 +3768,17 @@ mod tests {
             .table
             .scan()
             .select(["x", RESERVED_COL_NAME_SPEC_ID])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         // Verify we have 2 columns: x and _spec_id
@@ -2681,11 +3827,17 @@ mod tests {
             .table
             .scan()
             .select(["x", RESERVED_COL_NAME_SPEC_ID, "z"])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
         // Verify the x column exists and has correct data
@@ -2736,11 +3888,17 @@ mod tests {
             .table
             .scan()
             .select(["x", RESERVED_COL_NAME_POS, RESERVED_COL_NAME_FILE])
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
         assert_eq!(batches.len(), 2);
 
@@ -2786,11 +3944,17 @@ mod tests {
             .scan()
             .select([RESERVED_COL_NAME_POS, "x", "y"])
             .with_filter(predicate)
-            .with_row_selection_enabled(true)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
         assert_eq!(batches.len(), 2);
 
@@ -2826,12 +3990,18 @@ mod tests {
             .table
             .scan()
             .select([RESERVED_COL_NAME_POS, "a", RESERVED_COL_NAME_POS, "x"])
-            .with_row_selection_enabled(true)
             .with_filter(predicate)
             .build()
             .unwrap();
 
-        let batch_stream = table_scan.to_arrow().await.unwrap();
+        let batch_stream = table_scan
+            .to_arrow(
+                ArrowReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
+            .await
+            .unwrap();
 
         let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
         assert_eq!(batches.len(), 2);
@@ -2899,7 +4069,7 @@ mod tests {
             .select(["x", RESERVED_COL_NAME_POS])
             .build()
             .unwrap()
-            .to_arrow()
+            .to_arrow(ArrowReaderOptions::default())
             .await
             .unwrap()
             .try_collect()
@@ -2973,7 +4143,7 @@ mod tests {
             .select(["x", RESERVED_COL_NAME_POS])
             .build()
             .unwrap()
-            .to_arrow()
+            .to_arrow(ArrowReaderOptions::default())
             .await
             .unwrap()
             .try_collect()
@@ -3025,10 +4195,9 @@ mod tests {
             .scan()
             .select(["y", RESERVED_COL_NAME_POS])
             .with_filter(predicate)
-            .with_row_group_filtering_enabled(true)
             .build()
             .unwrap()
-            .to_arrow()
+            .to_arrow(ArrowReaderOptions::default())
             .await
             .unwrap()
             .try_collect()
