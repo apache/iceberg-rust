@@ -31,7 +31,7 @@ use crate::scan::TableScanBuilder;
 use crate::spec::{
     ManifestListReader, ManifestReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef,
 };
-use crate::{Result, TableIdent};
+use crate::{Labels, Result, TableIdent};
 
 /// Builder to create table scan.
 pub struct TableBuilder {
@@ -44,6 +44,7 @@ pub struct TableBuilder {
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
     runtime: Option<Runtime>,
+    labels: Option<Labels>,
 }
 
 impl TableBuilder {
@@ -58,6 +59,7 @@ impl TableBuilder {
             disable_cache: false,
             cache_size_bytes: None,
             runtime: None,
+            labels: None,
         }
     }
 
@@ -121,6 +123,12 @@ impl TableBuilder {
         self
     }
 
+    /// optional - sets the labels the catalog returned with the table
+    pub fn labels(mut self, labels: Labels) -> Self {
+        self.labels = Some(labels);
+        self
+    }
+
     /// build the Table
     pub fn build(self) -> Result<Table> {
         let Self {
@@ -133,6 +141,7 @@ impl TableBuilder {
             disable_cache,
             cache_size_bytes,
             runtime,
+            labels,
         } = self;
 
         let Some(file_io) = file_io else {
@@ -189,6 +198,7 @@ impl TableBuilder {
             object_cache,
             runtime,
             encryption_manager,
+            labels,
         })
     }
 }
@@ -204,6 +214,7 @@ pub struct Table {
     object_cache: Arc<ObjectCache>,
     runtime: Runtime,
     encryption_manager: Option<Arc<EncryptionManager>>,
+    labels: Option<Labels>,
 }
 
 impl Table {
@@ -299,6 +310,11 @@ impl Table {
     /// Returns the flag indicating whether the `Table` is readonly or not
     pub fn readonly(&self) -> bool {
         self.readonly
+    }
+
+    /// Returns the labels the catalog returned with the table, if any.
+    pub fn labels(&self) -> Option<&Labels> {
+        self.labels.as_ref()
     }
 
     /// Returns the current schema as a shared reference.
