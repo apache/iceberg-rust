@@ -253,7 +253,7 @@ pub fn read_manifest_list(bs: &[u8]) -> PyResult<PyManifestList> {
     added_snapshot_id,
     first_row_id = None,
 ))]
-pub fn read_manifest_entries_as_arrow(
+pub fn read_manifest_entries_as_arrow_reader(
     py: Python<'_>,
     bs: PyBackedBytes,
     manifest_path: String,
@@ -294,7 +294,7 @@ pub fn read_manifest_entries_as_arrow(
 /// reader holds a reference to `bs` until it's closed or collected, and the
 /// next call into `pyiceberg_core` releases it.
 #[pyfunction]
-pub fn read_manifest_list_as_arrow(
+pub fn read_manifest_list_as_arrow_reader(
     py: Python<'_>,
     bs: PyBackedBytes,
 ) -> PyResult<Bound<'_, PyAny>> {
@@ -320,8 +320,11 @@ pub fn register_module(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
 
     this.add_function(wrap_pyfunction!(read_manifest_entries, &this)?)?;
     this.add_function(wrap_pyfunction!(read_manifest_list, &this)?)?;
-    this.add_function(wrap_pyfunction!(read_manifest_entries_as_arrow, &this)?)?;
-    this.add_function(wrap_pyfunction!(read_manifest_list_as_arrow, &this)?)?;
+    this.add_function(wrap_pyfunction!(
+        read_manifest_entries_as_arrow_reader,
+        &this
+    )?)?;
+    this.add_function(wrap_pyfunction!(read_manifest_list_as_arrow_reader, &this)?)?;
 
     m.add_submodule(&this)?;
     py.import("sys")?

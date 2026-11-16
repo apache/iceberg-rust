@@ -313,7 +313,7 @@ def _read_entries(
 ) -> pa.RecordBatchReader:
     from pyiceberg_core import manifest
 
-    return manifest.read_manifest_entries_as_arrow(
+    return manifest.read_manifest_entries_as_arrow_reader(
         bs,
         manifest_path=manifest_file.manifest_path,
         content=manifest_file.content.value,
@@ -323,7 +323,9 @@ def _read_entries(
     )
 
 
-def test_read_manifest_entries_as_arrow_matches_pyiceberg(tmp_path: Path) -> None:
+def test_read_manifest_entries_as_arrow_reader_matches_pyiceberg(
+    tmp_path: Path,
+) -> None:
     bs, manifest_file = _write_manifest(tmp_path, 3)
     reader = _read_entries(bs, manifest_file)
     assert isinstance(reader, pa.RecordBatchReader)
@@ -361,7 +363,7 @@ def test_read_manifest_entries_as_arrow_matches_pyiceberg(tmp_path: Path) -> Non
     ]
 
 
-def test_read_manifest_entries_as_arrow_yields_multiple_batches(
+def test_read_manifest_entries_as_arrow_reader_yields_multiple_batches(
     tmp_path: Path,
 ) -> None:
     bs, manifest_file = _write_manifest(tmp_path, 2500)
@@ -370,7 +372,7 @@ def test_read_manifest_entries_as_arrow_yields_multiple_batches(
     assert sum(batch.num_rows for batch in batches) == 2500
 
 
-def test_read_manifest_entries_as_arrow_releases_input_on_close(
+def test_read_manifest_entries_as_arrow_reader_releases_input_on_close(
     tmp_path: Path,
 ) -> None:
     from pyiceberg_core import transform
@@ -387,7 +389,7 @@ def test_read_manifest_entries_as_arrow_releases_input_on_close(
     assert sys.getrefcount(bs) == refcount
 
 
-def test_read_manifest_entries_as_arrow_batches_outlive_reader(
+def test_read_manifest_entries_as_arrow_reader_batches_outlive_reader(
     tmp_path: Path,
 ) -> None:
     bs, manifest_file = _write_manifest(tmp_path, 3)
@@ -401,7 +403,9 @@ def test_read_manifest_entries_as_arrow_batches_outlive_reader(
     ]
 
 
-def test_read_manifest_entries_as_arrow_raises_while_reading(tmp_path: Path) -> None:
+def test_read_manifest_entries_as_arrow_reader_raises_while_reading(
+    tmp_path: Path,
+) -> None:
     bs, manifest_file = _write_manifest(tmp_path, 3)
     # Assigning first row IDs to the second entry overflows i64.
     reader = _read_entries(bs, manifest_file, first_row_id=2**63 - 15)
@@ -413,7 +417,7 @@ def test_read_manifest_entries_as_arrow_raises_while_reading(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     "payload", [b"", b"not-an-avro-file", b"Obj\x01truncated-after-the-avro-magic"]
 )
-def test_read_manifest_entries_as_arrow_raises_on_invalid_avro(
+def test_read_manifest_entries_as_arrow_reader_raises_on_invalid_avro(
     tmp_path: Path, payload: bytes
 ) -> None:
     _, manifest_file = _write_manifest(tmp_path, 1)
@@ -422,7 +426,7 @@ def test_read_manifest_entries_as_arrow_raises_on_invalid_avro(
 
 
 @pytest.mark.parametrize("format_version", [1, 2])
-def test_read_manifest_list_as_arrow_matches_pyiceberg(
+def test_read_manifest_list_as_arrow_reader_matches_pyiceberg(
     tmp_path: Path, format_version: int
 ) -> None:
     from pyiceberg_core import manifest
@@ -457,7 +461,9 @@ def test_read_manifest_list_as_arrow_matches_pyiceberg(
             ]
         )
 
-    reader = manifest.read_manifest_list_as_arrow(io.new_input(path).open().read())
+    reader = manifest.read_manifest_list_as_arrow_reader(
+        io.new_input(path).open().read()
+    )
     assert isinstance(reader, pa.RecordBatchReader)
     rows = reader.read_all().to_pylist()
     expected = list(read_manifest_list(io.new_input(path)))
@@ -477,8 +483,10 @@ def test_read_manifest_list_as_arrow_matches_pyiceberg(
 @pytest.mark.parametrize(
     "payload", [b"", b"not-an-avro-file", b"Obj\x01truncated-after-the-avro-magic"]
 )
-def test_read_manifest_list_as_arrow_raises_on_invalid_avro(payload: bytes) -> None:
+def test_read_manifest_list_as_arrow_reader_raises_on_invalid_avro(
+    payload: bytes,
+) -> None:
     from pyiceberg_core import manifest
 
     with pytest.raises(ValueError):
-        manifest.read_manifest_list_as_arrow(payload)
+        manifest.read_manifest_list_as_arrow_reader(payload)
