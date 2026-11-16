@@ -409,7 +409,6 @@ impl<'a> TableScanBuilder<'a> {
             predicate: self.filter.map(Arc::new),
             snapshot_bound_predicate,
             object_cache: self.table.object_cache(),
-            runtime: self.table.runtime().clone(),
             field_ids: Arc::new(field_ids),
             name_mapping,
             partition_filter_cache: Arc::new(PartitionFilterCache::new()),
