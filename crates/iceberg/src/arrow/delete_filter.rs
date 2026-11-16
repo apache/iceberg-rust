@@ -347,6 +347,10 @@ impl DeleteFilter {
         notify: Arc<Notify>,
         eq_del: Receiver<Predicate>,
     ) {
+        debug_assert!(matches!(
+            self.state.read().unwrap().equality_deletes.get(delete_file_path),
+            Some(EqDelState::Loading(stored)) if Arc::ptr_eq(stored, &notify)
+        ));
         let state = self.state.clone();
         let delete_file_path = delete_file_path.to_string();
         self.runtime.cpu().spawn(async move {
