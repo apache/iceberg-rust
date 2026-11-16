@@ -140,6 +140,12 @@ pub struct FileScanTask {
 
     #[builder(default, setter(transform = |stats: Option<FileScanTaskColumnStats>| stats.map(Box::new)))]
     column_stats: Option<Box<FileScanTaskColumnStats>>,
+    /// Split offsets recorded on the data file (spec field 132): the byte offsets at which
+    /// the file can be split for parallel reading, in Parquet the start of each row group.
+    /// An engine that splits large files into several tasks uses these so a split boundary
+    /// never falls inside a row group. `None` when the writer did not record them.
+    #[builder(default)]
+    split_offsets: Option<Vec<i64>>,
 
     /// Whether this scan task should treat column names as case-sensitive when binding predicates.
     case_sensitive: bool,
@@ -255,6 +261,11 @@ impl FileScanTask {
     /// Returns the raw sort order id recorded on the data file, unresolved.
     pub fn sort_order_id(&self) -> Option<i32> {
         self.sort_order_id
+    }
+
+    /// The data file's split offsets, see [`DataFile::split_offsets()`](crate::spec::DataFile::split_offsets).
+    pub fn split_offsets(&self) -> Option<&[i64]> {
+        self.split_offsets.as_deref()
     }
 
     /// Returns the sort order this file's rows are sorted by, if resolved.
@@ -478,6 +489,7 @@ mod _serde {
         unified_partition_type: Option<Arc<StructType>>,
         #[serde(default)]
         sort_order_id: Option<i32>,
+        split_offsets: Option<Vec<i64>>,
         #[serde(default)]
         sort_order: Option<SortOrderRef>,
         #[serde(default)]
@@ -515,6 +527,7 @@ mod _serde {
         unified_partition_type: Option<&'a Arc<StructType>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         sort_order_id: Option<i32>,
+        split_offsets: Option<&'a [i64]>,
         #[serde(skip_serializing_if = "Option::is_none")]
         sort_order: Option<&'a SortOrderRef>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -567,6 +580,7 @@ mod _serde {
                 name_mapping: value.name_mapping.as_ref(),
                 unified_partition_type: value.unified_partition_type.as_ref(),
                 sort_order_id: value.sort_order_id,
+                split_offsets: value.split_offsets.as_deref(),
                 sort_order: value.sort_order.as_ref(),
                 column_stats: value.column_stats.as_deref(),
                 case_sensitive: value.case_sensitive,
@@ -618,6 +632,7 @@ mod _serde {
                 .with_name_mapping(value.name_mapping)
                 .with_unified_partition_type(value.unified_partition_type)
                 .with_sort_order_id(value.sort_order_id)
+                .with_split_offsets(value.split_offsets)
                 .with_sort_order(value.sort_order)
                 .with_column_stats(value.column_stats)
                 .with_case_sensitive(value.case_sensitive)

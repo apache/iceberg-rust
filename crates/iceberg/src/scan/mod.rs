@@ -1562,6 +1562,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_plan_files_carries_split_offsets_from_the_manifest_entry() {
+        let mut fixture = TableTestFixture::new();
+
+        // Offsets recorded (the usual case: one per Parquet row group), an empty list,
+        // and a file whose writer did not record them.
+        fixture
+            .setup_manifest_files_with_split_offsets([
+                Some(vec![4, 1_048_580, 2_097_156]),
+                Some(vec![]),
+                None,
+            ])
+            .await;
+
+        let mut tasks: Vec<_> = fixture
+            .table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+        tasks.sort_by(|a, b| a.data_file_path().cmp(b.data_file_path()));
+        assert_eq!(tasks.len(), 3);
+
+        assert_eq!(
+            tasks[0].split_offsets(),
+            Some(&[4, 1_048_580, 2_097_156][..]),
+            "offsets recorded on the data file reach the task unchanged"
+        );
+        assert_eq!(
+            tasks[1].split_offsets(),
+            Some(&[][..]),
+            "an empty list is carried as an empty list, not as None"
+        );
+        assert_eq!(
+            tasks[2].split_offsets(),
+            None,
+            "a file without recorded offsets carries None"
+        );
+    }
+
+    #[tokio::test]
     async fn test_plan_files_carries_sort_order_into_file_scan_task() {
         let mut fixture = TableTestFixture::new();
 
@@ -2999,6 +3044,7 @@ mod tests {
                 vec![],
             )]))))
             .with_unified_partition_type(Some(unified_partition_type))
+            .with_split_offsets(Some(vec![4, 1_048_580]))
             .with_sort_order_id(Some(1))
             .with_sort_order(Some(sort_order))
             .with_column_stats(Some(

@@ -228,6 +228,12 @@ impl ManifestEntryContext {
             .with_column_stats(self.column_stats_columns.as_deref().map(|columns| {
                 FileScanTaskColumnStats::from_data_file(self.manifest_entry.data_file(), columns)
             }))
+            .with_split_offsets(
+                self.manifest_entry
+                    .data_file()
+                    .split_offsets()
+                    .map(<[i64]>::to_vec),
+            )
             .build()
     }
 

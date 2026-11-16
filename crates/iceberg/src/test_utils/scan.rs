@@ -1466,6 +1466,74 @@ impl TableTestFixture {
         manifest_list_write.close().await.unwrap();
     }
 
+    /// Writes a manifest with one live "Added" data-file entry per element of
+    /// `split_offsets` (partitioned on `x` = 100, 200, ...), each with the given
+    /// `split_offsets` recorded on its `DataFile` (`None` leaves the field unset). Used
+    /// to test that the offsets flow from the manifest entry onto each `FileScanTask`.
+    pub(crate) async fn setup_manifest_files_with_split_offsets(
+        &mut self,
+        split_offsets: [Option<Vec<i64>>; 3],
+    ) {
+        let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+        let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+        let current_partition_spec = self.table.metadata().default_partition_spec();
+        let parquet_file_size = self.write_parquet_data_files();
+
+        let mut writer = ManifestWriterBuilder::new(
+            self.next_manifest_file(),
+            Some(current_snapshot.snapshot_id()),
+            current_schema.clone(),
+            current_partition_spec.as_ref().clone(),
+        )
+        .build_v2_data();
+
+        for (i, offsets) in split_offsets.into_iter().enumerate() {
+            let mut data_file_builder = DataFileBuilder::default();
+            data_file_builder
+                .partition_spec_id(0)
+                .content(DataContentType::Data)
+                .file_path(format!("{}/{}.parquet", &self.table_location, i + 1))
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(parquet_file_size)
+                .record_count(1)
+                .partition(Struct::from_iter([Some(Literal::long(
+                    100 * (i as i64 + 1),
+                ))]));
+            data_file_builder.split_offsets(offsets);
+            let data_file = data_file_builder.build().unwrap();
+
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(data_file)
+                        .build(),
+                )
+                .unwrap();
+        }
+
+        let data_file_manifest = writer.write_manifest_file().await.unwrap();
+
+        let manifest_list_writer = self
+            .table
+            .file_io()
+            .new_output(current_snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut manifest_list_write = ManifestListWriter::v2(
+            manifest_list_writer,
+            current_snapshot.snapshot_id(),
+            current_snapshot.parent_snapshot_id(),
+            current_snapshot.sequence_number(),
+        );
+        manifest_list_write
+            .add_manifests(std::iter::once(data_file_manifest))
+            .unwrap();
+        manifest_list_write.close().await.unwrap();
+    }
+
     /// Writes one manifest per element of `manifests`, in order. Each holds one live "Added"
     /// data-file entry per element of its statistics (`1.parquet`, `2.parquet`, ..., numbered
     /// across manifests and partitioned on `x` = 100, 200, ...), carrying that element's column
