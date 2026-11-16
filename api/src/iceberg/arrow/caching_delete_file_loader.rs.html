@@ -311,7 +311,7 @@
 <a href=#311 id=311 data-nosnippet>311</a>                };
 <a href=#312 id=312 data-nosnippet>312</a>
 <a href=#313 id=313 data-nosnippet>313</a>                <span class="kw">let </span>(sender, receiver) = channel();
-<a href=#314 id=314 data-nosnippet>314</a>                del_filter.insert_equality_delete(task.file_path(), receiver);
+<a href=#314 id=314 data-nosnippet>314</a>                del_filter.insert_equality_delete(task.file_path(), notify, receiver);
 <a href=#315 id=315 data-nosnippet>315</a>
 <a href=#316 id=316 data-nosnippet>316</a>                <span class="comment">// Per the Iceberg spec, evolve schema for equality deletes but only for the
 <a href=#317 id=317 data-nosnippet>317</a>                // equality_ids columns, not all table columns.
