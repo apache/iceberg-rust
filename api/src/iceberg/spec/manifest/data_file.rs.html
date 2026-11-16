@@ -377,7 +377,7 @@
 <a href=#377 id=377 data-nosnippet>377</a>        <span class="kw">let </span>value = to_value(DataFileSerde::try_from(
 <a href=#378 id=378 data-nosnippet>378</a>            data_file,
 <a href=#379 id=379 data-nosnippet>379</a>            <span class="kw-2">&amp;</span>partition_struct_type,
-<a href=#380 id=380 data-nosnippet>380</a>            FormatVersion::V1,
+<a href=#380 id=380 data-nosnippet>380</a>            version,
 <a href=#381 id=381 data-nosnippet>381</a>        )<span class="question-mark">?</span>)<span class="question-mark">?
 <a href=#382 id=382 data-nosnippet>382</a>        </span>.resolve(<span class="kw-2">&amp;</span>avro_schema)<span class="question-mark">?</span>;
 <a href=#383 id=383 data-nosnippet>383</a>        writer.append_value(value)<span class="question-mark">?</span>;
