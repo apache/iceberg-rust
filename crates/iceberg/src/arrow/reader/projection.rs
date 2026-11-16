@@ -2205,20 +2205,22 @@ message schema {
             &Int32Array::from(vec![10, 20, 30])
         );
 
-        // `s.a` resolves, so the row filter rejects the nested predicate as it does for files
-        // with embedded IDs, rather than matching no rows.
         let predicate = Reference::new("s.a")
             .greater_than(Datum::int(15))
             .bind(schema.clone(), true)
             .unwrap();
-        let err = reader
+        let result = reader
             .read(tasks(Some(predicate)))
             .unwrap()
             .stream()
             .try_collect::<Vec<RecordBatch>>()
             .await
-            .unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            .unwrap();
+        let ids: Vec<i32> = result
+            .iter()
+            .flat_map(|b| b.column(0).as_primitive::<Int32Type>().values().to_vec())
+            .collect();
+        assert_eq!(ids, vec![2, 3]);
     }
 
     /// Every nested Arrow type gets IDs, with list and map entries matched by their spec names.

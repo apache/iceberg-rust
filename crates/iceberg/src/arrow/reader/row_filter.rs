@@ -1585,10 +1585,10 @@ mod tests {
     }
 
     /// End-to-end regression for issue #2432: a predicate on a primitive leaf nested in a
-    /// struct (`person.age > 25`) must build a row filter and prune rows, rather than
-    /// failing because the leaf's Parquet column root is a group. Reads a real Parquet
-    /// file so the projected `RecordBatch` shape (a `StructArray` holding the leaf) comes
-    /// from arrow-rs, not a hand-built batch.
+    /// struct builds a row filter and prunes rows. Reads a real Parquet file so the projected
+    /// `RecordBatch` shape (a `StructArray` holding the leaf) comes from arrow-rs, not a
+    /// hand-built batch. The struct and the leaf are renamed in the Iceberg schema, so the
+    /// predicate has to resolve through the file's own column names.
     #[tokio::test]
     async fn test_predicate_on_nested_struct_leaf_reads_real_parquet() {
         use arrow_array::StructArray;
@@ -1596,7 +1596,7 @@ mod tests {
 
         use crate::spec::StructType;
 
-        // Schema: id: int (1), person: struct<age: int (3)> (2)
+        // Schema: id: int (1), who: struct<years: int (3)> (2)
         let iceberg_schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
@@ -1604,9 +1604,9 @@ mod tests {
                     NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
                     NestedField::required(
                         2,
-                        "person",
+                        "who",
                         Type::Struct(StructType::new(vec![
-                            NestedField::required(3, "age", Type::Primitive(PrimitiveType::Int))
+                            NestedField::required(3, "years", Type::Primitive(PrimitiveType::Int))
                                 .into(),
                         ])),
                     )
@@ -1616,7 +1616,8 @@ mod tests {
                 .unwrap(),
         );
 
-        // Arrow schema carrying field ids so the reader resolves by id, not position.
+        // Written before the renames, as person: struct<age: int (3)> (2). The Arrow schema
+        // carries field ids so the reader resolves by id, not position.
         let age_field = field_with_id("age", DataType::Int32, 3);
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             field_with_id("id", DataType::Int32, 1),
@@ -1633,12 +1634,12 @@ mod tests {
             Arc::new(Int32Array::from(vec![30, 20, 40])) as ArrayRef,
         )])) as ArrayRef;
 
-        // person.age > 25 keeps id=1 (30) and id=3 (40); id=2 (20) is pruned.
+        // who.years > 25 keeps id=1 (30) and id=3 (40); id=2 (20) is pruned.
         let ids = ids_kept_by_predicate(
             iceberg_schema,
             arrow_schema,
             vec![id, person],
-            Reference::new("person.age").greater_than(Datum::int(25)),
+            Reference::new("who.years").greater_than(Datum::int(25)),
         )
         .await;
         assert_eq!(ids, vec![1, 3]);
@@ -1776,7 +1777,6 @@ mod tests {
     /// A null parent struct implies null leaves (spec: "if a parent struct column is null it
     /// implies the leaf column is null"). With `person` optional and a null row, `project_column`
     /// must carry the parent's validity into the child, so a required leaf reads as null there.
-    /// Before the `flatten` fix these predicates over-returned the null row.
     #[tokio::test]
     async fn test_predicate_on_leaf_under_null_parent_struct() {
         use arrow_array::StructArray;

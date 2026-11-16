@@ -632,10 +632,10 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(path) = self.bound_reference(reference)? {
-            let literals: Vec<_> = literals
+            let literals = literals
                 .iter()
-                .map(|lit| get_arrow_datum(lit).unwrap())
-                .collect();
+                .map(get_arrow_datum)
+                .collect::<Result<Vec<_>>>()?;
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native is_in kernel
@@ -662,10 +662,10 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
         _predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
         if let Some(path) = self.bound_reference(reference)? {
-            let literals: Vec<_> = literals
+            let literals = literals
                 .iter()
-                .map(|lit| get_arrow_datum(lit).unwrap())
-                .collect();
+                .map(get_arrow_datum)
+                .collect::<Result<Vec<_>>>()?;
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native not_in kernel
@@ -884,9 +884,8 @@ mod tests {
         assert!(!result.is_null(2));
     }
 
-    /// A predicate on a primitive leaf inside a struct must build and evaluate rather than
-    /// being rejected because the leaf's Parquet column root is a group. Regression test
-    /// for issue #2432.
+    /// A predicate on a primitive leaf inside a struct, whose Parquet column root is a group,
+    /// builds and evaluates. Regression test for issue #2432.
     #[test]
     fn test_predicate_on_nested_leaf_column() {
         use arrow_array::{ArrayRef, Int32Array, StructArray};
@@ -938,7 +937,7 @@ mod tests {
         let batch = RecordBatch::try_new(arrow_schema, vec![person]).unwrap();
 
         // Parquet schema: the nested leaf `person.age` sits under a group, so its column
-        // root is a group (the shape that used to be rejected).
+        // root is a group.
         let message_type = "
             message schema {
               required group person = 2 {
@@ -962,8 +961,67 @@ mod tests {
         let mut predicate_fn = visit(&mut converter, &bound).unwrap();
         let result = predicate_fn(batch).unwrap();
 
-        assert_eq!([result.value(0), result.value(1), result.value(2)], [
-            true, false, true
-        ]);
+        assert_eq!(result, BooleanArray::from(vec![true, false, true]));
+    }
+
+    /// `IN` and `NOT IN` on a nested leaf whose literals have no Arrow conversion return a
+    /// `FeatureUnsupported` error.
+    #[test]
+    fn test_in_on_nested_leaf_with_unconvertible_literals_returns_error() {
+        use crate::ErrorKind;
+        use crate::spec::Datum;
+
+        // Schema: person: struct<t: time (3)> (2)
+        let schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(
+                        2,
+                        "person",
+                        Type::Struct(crate::spec::StructType::new(vec![
+                            NestedField::required(3, "t", Type::Primitive(PrimitiveType::Time))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let message_type = "
+            message schema {
+              required group person = 2 {
+                required int64 t (TIME(MICROS,false)) = 3;
+              }
+            }
+        ";
+        let parquet_type = parse_message_type(message_type).expect("parse schema");
+        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
+        let column_map = HashMap::from([(3i32, 0usize)]);
+        let column_indices = vec![0usize];
+
+        // Two literals each, so binding keeps `IN` / `NOT IN` rather than rewriting to `=` / `!=`.
+        let literals = || {
+            [
+                Datum::time_micros(1).unwrap(),
+                Datum::time_micros(2).unwrap(),
+            ]
+        };
+        for predicate in [
+            Reference::new("person.t").is_in(literals()),
+            Reference::new("person.t").is_not_in(literals()),
+        ] {
+            let bound = predicate.bind(schema.clone(), true).unwrap();
+            let mut converter = PredicateConverter {
+                parquet_schema: &parquet_schema,
+                column_map: &column_map,
+                column_indices: &column_indices,
+            };
+            let Err(err) = visit(&mut converter, &bound) else {
+                panic!("expected converting `{bound}` to fail");
+            };
+            assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        }
     }
 }
