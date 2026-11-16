@@ -151,7 +151,7 @@ mod tests {
         schema_descr: SchemaDescPtr,
         columns: Vec<ColumnChunkMetaData>,
         num_rows: i64,
-        ordinal: i16,
+        ordinal: i32,
     ) -> RowGroupMetaData {
         RowGroupMetaData::builder(schema_descr.clone())
             .set_num_rows(num_rows)
@@ -199,7 +199,7 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(i, &n)| {
-                    build_test_row_group_meta(schema_descr.clone(), columns.clone(), n, i as i16)
+                    build_test_row_group_meta(schema_descr.clone(), columns.clone(), n, i as i32)
                 })
                 .collect()
         };
@@ -292,7 +292,7 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(i, &n)| {
-                build_test_row_group_meta(schema_descr.clone(), columns.clone(), n, i as i16)
+                build_test_row_group_meta(schema_descr.clone(), columns.clone(), n, i as i32)
             })
             .collect();
         // Rows 1..5 are deleted: two in row group 0 and two in row group 2.
@@ -362,7 +362,7 @@ mod tests {
                             schema_descr.clone(),
                             columns.clone(),
                             n as i64,
-                            i as i16,
+                            i as i32,
                         )
                     })
                     .collect();

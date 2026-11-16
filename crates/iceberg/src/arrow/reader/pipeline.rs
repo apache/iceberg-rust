@@ -36,7 +36,7 @@ use parquet::encryption::decrypt::FileDecryptionProperties;
 use super::row_lineage::synthesize_row_id_column;
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
-    apply_name_mapping_to_arrow_schema, find_leaf_by_field_id,
+    apply_name_mapping_to_arrow_schema, coerce_fixed_size_lists, find_leaf_by_field_id,
 };
 use crate::arrow::build_partition_constant;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
@@ -65,19 +65,23 @@ impl ArrowReader {
     /// Take a stream of FileScanTasks and reads all the files.
     /// Returns a [`ScanResult`] containing the record batch stream and scan metrics.
     pub fn read(self, tasks: FileScanTaskStream) -> Result<ScanResult> {
-        let concurrency_limit_data_files = self.concurrency_limit_data_files;
+        let concurrency_limit_data_files = self
+            .options
+            .data_file_concurrency_limit()
+            .expect("reader construction sets concurrency")
+            .max(1);
         let scan_metrics = ScanMetrics::new();
 
         let task_reader = FileScanTaskReader {
-            batch_size: self.batch_size,
+            batch_size: self.options.batch_size(),
             file_io: self.file_io,
             delete_file_loader: self
                 .delete_file_loader
                 .with_scan_metrics(scan_metrics.clone()),
-            row_group_filtering_enabled: self.row_group_filtering_enabled,
-            row_selection_enabled: self.row_selection_enabled,
-            bloom_filter_enabled: self.bloom_filter_enabled,
-            parquet_read_options: self.parquet_read_options,
+            row_group_filtering_enabled: self.options.row_group_filtering_enabled(),
+            row_selection_enabled: self.options.row_selection_enabled(),
+            bloom_filter_enabled: self.options.bloom_filter_enabled(),
+            parquet_read_options: self.options.parquet_options().clone(),
             scan_metrics: scan_metrics.clone(),
             runtime: self.runtime,
         };
@@ -151,10 +155,13 @@ fn candidate_row_groups(
 
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
+        // A known-empty data file contributes no rows, regardless of predicates or deletes.
+        if task.record_count() == Some(0) {
+            return Ok(Box::pin(futures::stream::empty()));
+        }
+
         let should_load_page_index = (self.row_selection_enabled && task.predicate().is_some())
             || !task.deletes().is_empty();
-        let mut parquet_read_options = self.parquet_read_options;
-        parquet_read_options.preload_page_index = should_load_page_index;
 
         let delete_filter_rx = self
             .delete_file_loader
@@ -169,6 +176,10 @@ impl FileScanTaskReader {
         let file_size_in_bytes = task.file_size_in_bytes();
         let bytes_read = Arc::clone(self.scan_metrics.bytes_read_counter());
         let key_metadata = task.key_metadata().map(|km| km.to_vec());
+        let parquet_read_options = self
+            .parquet_read_options
+            .clone()
+            .with_preload_page_index(should_load_page_index);
         let opening = self
             .runtime
             .io()
@@ -687,14 +698,18 @@ impl FileScanTaskReader {
         // otherwise, use applyNameMapping() followed by pruneColumns() when configured, or
         // addFallbackIds() followed by pruneColumnsFallback() for position-based fallback.
         // The fast path returns early without materializing an owned schema.
+        //
+        // Rewrite FixedSizeList hints to List before name mapping / fallback IDs so
+        // parquet-rs uses the 3-level LIST reader. Same placement as #3467's list-view rewrite.
+        let without_fixed_size_lists = coerce_fixed_size_lists(arrow_metadata.schema());
+        let file_schema = without_fixed_size_lists
+            .as_ref()
+            .unwrap_or(arrow_metadata.schema());
         let arrow_schema = if missing_field_ids {
             let schema = if let Some(name_mapping) = task.name_mapping() {
-                apply_name_mapping_to_arrow_schema(
-                    Arc::clone(arrow_metadata.schema()),
-                    name_mapping,
-                )?
+                apply_name_mapping_to_arrow_schema(Arc::clone(file_schema), name_mapping)?
             } else {
-                add_fallback_field_ids_to_arrow_schema(arrow_metadata.schema())
+                add_fallback_field_ids_to_arrow_schema(file_schema)
             };
             // Coerce INT96 timestamp columns before building the stream reader to avoid
             // i64 overflow in arrow-rs. Apply this after assigning any missing field IDs
@@ -702,13 +717,13 @@ impl FileScanTaskReader {
             coerce_int96_timestamps(&schema, task.schema(), arrow_metadata.parquet_schema())?
                 .unwrap_or(schema)
         } else if let Some(coerced) = coerce_int96_timestamps(
-            arrow_metadata.schema(),
+            file_schema,
             task.schema(),
             arrow_metadata.parquet_schema(),
         )? {
             coerced
-        } else if install_row_number {
-            Arc::clone(arrow_metadata.schema())
+        } else if without_fixed_size_lists.is_some() || install_row_number {
+            Arc::clone(file_schema)
         } else {
             return Ok(arrow_metadata);
         };
@@ -906,8 +921,8 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::Runtime;
-    use crate::arrow::ArrowReaderBuilder;
     use crate::arrow::test_utils::write_encrypted_parquet;
+    use crate::arrow::{ArrowReaderBuilder, ArrowReaderOptions as ReaderOptions};
     use crate::io::FileIO;
     use crate::metadata_columns::{
         RESERVED_COL_NAME_POS, RESERVED_COL_NAME_ROW_ID, RESERVED_FIELD_ID_FILE,
@@ -918,6 +933,109 @@ mod tests {
         DataFileFormat, MappedField, NameMapping, NestedField, PrimitiveType, Schema, SchemaRef,
         Type,
     };
+
+    fn record_count_task(path: &str, file_size: u64, record_count: Option<u64>) -> FileScanTask {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+            ])
+            .build()
+            .unwrap();
+        FileScanTask::builder()
+            .with_data_file_path(path.to_string())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_file_size_in_bytes(file_size)
+            .with_start(0)
+            .with_length(file_size)
+            .with_record_count(record_count)
+            .with_schema(Arc::new(schema))
+            .with_project_field_ids(vec![1])
+            .with_case_sensitive(true)
+            .build()
+            .unwrap()
+    }
+
+    async fn read_tasks(
+        tasks: Vec<FileScanTask>,
+        concurrency: usize,
+    ) -> crate::Result<Vec<RecordBatch>> {
+        let tasks = futures::stream::iter(tasks.into_iter().map(Ok));
+        ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+            .with_options(
+                ReaderOptions::builder()
+                    .with_data_file_concurrency_limit(concurrency)
+                    .build(),
+            )
+            .build()
+            .read(Box::pin(tasks))?
+            .stream()
+            .try_collect()
+            .await
+    }
+
+    #[tokio::test]
+    async fn test_read_zero_record_files_without_opening_them() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing_path = temp_dir
+            .path()
+            .join("missing.parquet")
+            .display()
+            .to_string();
+
+        for concurrency in [1, 2] {
+            // The record count, not the byte size, determines whether the file is empty.
+            let tasks = vec![
+                record_count_task(&missing_path, 0, Some(0)),
+                record_count_task(&missing_path, 128, Some(0)),
+            ];
+            let batches = read_tasks(tasks, concurrency).await.unwrap();
+            assert!(batches.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_zero_size_files_with_nonzero_or_unknown_record_count() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("empty.parquet").display().to_string();
+        File::create(&path).unwrap();
+
+        for concurrency in [1, 2] {
+            for record_count in [Some(1), None] {
+                let task = record_count_task(&path, 0, record_count);
+                let error = read_tasks(vec![task], concurrency).await.unwrap_err();
+                assert!(
+                    error
+                        .to_string()
+                        .contains("file size of 0 is less than footer"),
+                    "{error}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_nonempty_files_alongside_zero_record_files() {
+        use arrow_array::types::Int32Type;
+
+        let temp_dir = TempDir::new().unwrap();
+        let dir = temp_dir.path().to_str().unwrap();
+        let path = write_plain_parquet(dir, "data.parquet", vec![], vec![]);
+        let file_size = std::fs::metadata(&path).unwrap().len();
+        let missing_path = format!("{dir}/missing.parquet");
+
+        for concurrency in [1, 2] {
+            for record_count in [Some(3), None] {
+                let empty_task = record_count_task(&missing_path, 0, Some(0));
+                let data_task = record_count_task(&path, file_size, record_count);
+                let tasks = vec![empty_task.clone(), data_task, empty_task];
+                let batches = read_tasks(tasks, concurrency).await.unwrap();
+
+                assert_eq!(batches.len(), 1);
+                let ids = batches[0].column(0).as_primitive::<Int32Type>();
+                assert_eq!(ids.values(), &[1, 2, 3]);
+            }
+        }
+    }
 
     // INT96 encoding: [nanos_low_u32, nanos_high_u32, julian_day_u32]
     // Julian day 2_440_588 = Unix epoch (1970-01-01)
@@ -2327,7 +2445,11 @@ mod tests {
 
         // Row selection must be enabled for the predicate to produce a RowSelection.
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let batches: Vec<RecordBatch> = reader
@@ -2368,7 +2490,11 @@ mod tests {
         );
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let batches: Vec<RecordBatch> = reader
@@ -2719,7 +2845,11 @@ mod tests {
 
         // Read with concurrency=1 (fast-path)
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-            .with_data_file_concurrency_limit(1)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_data_file_concurrency_limit(1)
+                    .build(),
+            )
             .build();
 
         // Create tasks in a specific order: file_0, file_1, file_2
@@ -3867,7 +3997,11 @@ mod tests {
         // reads `id` for its own evaluation even though `id` is not projected; the surviving
         // rows must keep their ABSOLUTE positions (0 and 2), not renumbered (0 and 1).
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let batches: Vec<RecordBatch> = reader
@@ -4270,6 +4404,7 @@ mod tests {
 
         use super::*;
         use crate::Result;
+        use crate::arrow::ParquetReadOptions;
         use crate::arrow::scan_metrics::ScanMetrics;
         use crate::expr::{Bind, Predicate, Reference};
         use crate::io::{
@@ -4454,9 +4589,17 @@ mod tests {
             let file_io = FileIOBuilder::new(Arc::new(DeferredStorageFactory { storage })).build();
 
             let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-                .with_data_file_concurrency_limit(CONCURRENCY)
-                .with_metadata_size_hint(METADATA_SIZE_HINT)
-                .with_bloom_filter_enabled(bound.is_some())
+                .with_options(
+                    ReaderOptions::builder()
+                        .with_data_file_concurrency_limit(CONCURRENCY)
+                        .with_bloom_filter_enabled(bound.is_some())
+                        .with_parquet_options(
+                            ParquetReadOptions::builder()
+                                .with_metadata_size_hint(METADATA_SIZE_HINT)
+                                .build(),
+                        )
+                        .build(),
+                )
                 .build();
             let tasks =
                 Box::pin(futures::stream::iter(tasks.into_iter().map(Ok))) as FileScanTaskStream;
