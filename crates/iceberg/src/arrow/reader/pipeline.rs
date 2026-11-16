@@ -3140,6 +3140,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_int96_with_mixed_timestamp_types_in_struct() {
+        for with_field_ids in [true, false] {
+            assert_int96_mixed_timestamp_types_in_struct(with_field_ids).await;
+        }
+    }
+
+    async fn assert_int96_mixed_timestamp_types_in_struct(with_field_ids: bool) {
         use arrow_array::{StructArray, TimestampMicrosecondArray, TimestampNanosecondArray};
         use parquet::data_type::{Int64Type, Int96Type};
         use parquet::file::writer::SerializedFileWriter;
@@ -3149,7 +3155,7 @@ mod tests {
         use crate::arrow::schema_to_arrow_schema;
         use crate::spec::StructType;
 
-        let parquet_schema = parse_message_type(
+        let message = if with_field_ids {
             "message schema {
                 required int64 id = 1;
                 required group data = 2 {
@@ -3158,9 +3164,30 @@ mod tests {
                 }
                 optional int64 nanos (TIMESTAMP(NANOS,true)) = 5;
                 optional int96 trailing = 6;
-            }",
-        )
-        .unwrap();
+            }"
+        } else {
+            "message schema {
+                required int64 id;
+                required group data {
+                    optional int64 micros (TIMESTAMP(MICROS,false));
+                    optional int96 legacy;
+                }
+                optional int64 nanos (TIMESTAMP(NANOS,true));
+                optional int96 trailing;
+            }"
+        };
+        let parquet_schema = parse_message_type(message).unwrap();
+        let name_mapping = (!with_field_ids).then(|| {
+            Arc::new(NameMapping::new(vec![
+                MappedField::new(Some(1), vec!["id".to_string()], vec![]),
+                MappedField::new(Some(2), vec!["data".to_string()], vec![
+                    MappedField::new(Some(3), vec!["micros".to_string()], vec![]),
+                    MappedField::new(Some(4), vec!["legacy".to_string()], vec![]),
+                ]),
+                MappedField::new(Some(5), vec!["nanos".to_string()], vec![]),
+                MappedField::new(Some(6), vec!["trailing".to_string()], vec![]),
+            ]))
+        });
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
@@ -3275,8 +3302,13 @@ mod tests {
             (vec![2], vec![1]),
             (vec![6, 2, 5], vec![3, 1, 2]),
         ] {
-            let actual =
-                read_int96_batches(file_path.to_str().unwrap(), schema.clone(), field_ids).await;
+            let actual = read_int96_batches_with_name_mapping(
+                file_path.to_str().unwrap(),
+                schema.clone(),
+                field_ids,
+                name_mapping.clone(),
+            )
+            .await;
             let expected = vec![expected_batch.project(&column_indices).unwrap()];
             assert_eq!(actual, expected);
         }

@@ -36,6 +36,9 @@ use crate::{Error, ErrorKind};
 /// arrow-rs defaults INT96 to `Timestamp(Nanosecond)`, which overflows i64 for dates outside
 /// ~1677-2262. We use arrow-rs's schema hint mechanism to read INT96 at the resolution
 /// specified by the Iceberg schema (`timestamp` → microsecond, `timestamp_ns` → nanosecond).
+/// For `timestamptz` and `timestamptz_ns`, the hint also sets the UTC timezone. Without it,
+/// projection sees a `timestamp` column where the table expects `timestamptz`, drops the
+/// column, and the read returns NULLs.
 /// The Arrow schema must contain all physical columns in file order, before projection.
 ///
 /// Iceberg Java handles this differently: it bypasses parquet-mr with a custom column reader
@@ -439,24 +442,25 @@ mod tests {
     #[test]
     fn test_coercion_rejects_mismatched_leaf_counts() {
         let iceberg = iceberg_schema_with_timestamp();
-        for (message, expected_message) in [
+        let fields = [
+            Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true)
+                .with_metadata(field_id_meta(1)),
+            Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(2)),
+        ];
+        for (message, arrow_leaves, expected_message) in [
             (
                 "message schema { optional int96 ts; required int32 id; }",
+                1,
                 "Arrow schema has fewer primitive leaves than the Parquet schema has columns",
             ),
             (
                 "message schema { optional int96 ts; }",
+                2,
                 "Missing Parquet column for Arrow primitive",
             ),
         ] {
             let parquet = parquet_schema(message);
-            let fields = [
-                Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true)
-                    .with_metadata(field_id_meta(1)),
-                Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(2)),
-            ];
-            let leaf_count = if parquet.num_columns() == 2 { 1 } else { 2 };
-            let arrow_schema = Arc::new(ArrowSchema::new(fields[..leaf_count].to_vec()));
+            let arrow_schema = Arc::new(ArrowSchema::new(fields[..arrow_leaves].to_vec()));
             let error = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap_err();
             assert_eq!(
                 (error.kind(), error.message()),
