@@ -36,7 +36,7 @@ use crate::expr::BoundPredicate;
 use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
-use crate::spec::Schema;
+use crate::spec::{NestedFieldRef, Schema, Type, prune_columns};
 use crate::{Error, ErrorKind};
 
 impl ArrowReader {
@@ -73,18 +73,10 @@ impl ArrowReader {
         let mut predicate_func = visit(&mut converter, predicates)?;
         // Predicates are bound to the table schema, so evaluate them on the filter columns
         // converted to it, as the reader's output is (e.g. a file written before an `int` ->
-        // `long` promotion). The transformer's schema holds only the top-level filter fields, so
-        // its per-file setup does not grow with the table's width.
-        let filter_schema = Schema::builder()
-            .with_schema_id(snapshot_schema.schema_id())
-            .with_fields(
-                field_ids
-                    .iter()
-                    .filter_map(|id| snapshot_schema.as_struct().field_by_id(*id).cloned()),
-            )
-            .build()?;
+        // `long` promotion).
+        let (filter_schema, root_ids) = filter_schema(snapshot_schema, &field_ids)?;
         let mut transformer =
-            RecordBatchTransformerBuilder::new(Arc::new(filter_schema), &field_ids).build();
+            RecordBatchTransformerBuilder::new(Arc::new(filter_schema), &root_ids).build();
         let arrow_predicate = ArrowPredicateFn::new(projection_mask, move |batch| {
             let batch = transformer
                 .process_record_batch(batch)
@@ -245,6 +237,33 @@ impl ArrowReader {
     }
 }
 
+/// The top-level fields holding `leaf_ids`, pruned to those leaves, and their ids in leaf order
+/// (the filter batch's column order). Only these fields are converted, so the transformer's
+/// per-file setup does not grow with the table's width.
+fn filter_schema(snapshot_schema: &Schema, leaf_ids: &[i32]) -> Result<(Schema, Vec<i32>)> {
+    let mut roots: Vec<NestedFieldRef> = Vec::with_capacity(leaf_ids.len());
+    for accessor in leaf_ids
+        .iter()
+        .filter_map(|id| snapshot_schema.accessor_by_field_id(*id))
+    {
+        let root = &snapshot_schema.as_struct().fields()[accessor.position()];
+        if !roots.iter().any(|r| r.id == root.id) {
+            roots.push(Arc::clone(root));
+        }
+    }
+    let root_ids = roots.iter().map(|r| r.id).collect();
+    let mut schema = Schema::builder().with_schema_id(snapshot_schema.schema_id());
+    // `prune_columns` panics when it selects nothing, e.g. when no filter column is in the file.
+    if !roots.is_empty() {
+        let roots = Schema::builder().with_fields(roots).build()?;
+        let Type::Struct(pruned) = prune_columns(&roots, leaf_ids.iter().copied(), false)? else {
+            unreachable!("prune_columns returns a struct");
+        };
+        schema = schema.with_fields(pruned.fields().iter().cloned());
+    }
+    Ok((schema.build()?, root_ids))
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -268,6 +287,7 @@ mod tests {
     use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
+    use super::filter_schema;
     use crate::Runtime;
     use crate::arrow::{
         ArrowReader, ArrowReaderBuilder, ArrowReaderOptions as ReaderOptions, ParquetReadOptions,
@@ -276,8 +296,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, Literal, NestedField, PartitionSpec, PrimitiveType,
-        Schema, SchemaRef, Struct, Transform, Type,
+        DataContentType, DataFileFormat, Datum, Literal, NestedField, NestedFieldRef,
+        PartitionSpec, PrimitiveType, Schema, SchemaRef, Struct, StructType, Transform, Type,
     };
 
     async fn test_perform_read(
@@ -529,6 +549,38 @@ mod tests {
                     "{predicate}, with_field_id = {with_field_id}"
                 );
             }
+        }
+    }
+
+    /// The filter schema holds each filter leaf's top-level field, pruned to the filter leaves,
+    /// with root ids in leaf order.
+    #[test]
+    fn test_filter_schema_prunes_nested_roots() {
+        let person = |fields: Vec<NestedFieldRef>| {
+            NestedField::required(2, "person", Type::Struct(StructType::new(fields))).into()
+        };
+        let n = || NestedField::required(3, "n", Type::Primitive(PrimitiveType::Long)).into();
+        let m = || NestedField::optional(4, "m", Type::Primitive(PrimitiveType::Int)).into();
+        let id = || NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into();
+        let schema = Schema::builder()
+            .with_fields(vec![id(), person(vec![n(), m()])])
+            .build()
+            .unwrap();
+
+        for (leaf_ids, expected_fields, expected_root_ids) in [
+            (vec![3], vec![person(vec![n()])], vec![2]),
+            (vec![4, 1, 3], vec![person(vec![n(), m()]), id()], vec![
+                2, 1,
+            ]),
+            (vec![], vec![], vec![]),
+        ] {
+            let (filter_schema, root_ids) = filter_schema(&schema, &leaf_ids).unwrap();
+            assert_eq!(
+                filter_schema.as_struct().fields(),
+                expected_fields,
+                "{leaf_ids:?}"
+            );
+            assert_eq!(root_ids, expected_root_ids, "{leaf_ids:?}");
         }
     }
 
