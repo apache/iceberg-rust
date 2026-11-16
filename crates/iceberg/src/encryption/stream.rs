@@ -92,8 +92,8 @@ pub(crate) fn stream_block_aad(aad_prefix: &[u8], block_index: u32) -> Vec<u8> {
 }
 
 /// Checks that `header` is an AGS1 header declaring the supported plaintext block size.
-fn check_stream_header(header: &[u8]) -> Result<()> {
-    let (magic, plain_block_size) = header.split_at(GCM_STREAM_MAGIC.len());
+fn check_stream_header(header: &[u8; GCM_STREAM_HEADER_LENGTH as usize]) -> Result<()> {
+    let [magic @ .., b0, b1, b2, b3] = *header;
     if magic != GCM_STREAM_MAGIC {
         return Err(invalid_data!(
             "Invalid AGS1 header: magic \"{}\" does not match \"AGS1\"",
@@ -101,11 +101,7 @@ fn check_stream_header(header: &[u8]) -> Result<()> {
         ));
     }
 
-    let plain_block_size = u32::from_le_bytes(
-        plain_block_size
-            .try_into()
-            .map_err(|_| invalid_data!("Invalid AGS1 header length: {}", header.len()))?,
-    );
+    let plain_block_size = u32::from_le_bytes([b0, b1, b2, b3]);
     if plain_block_size != PLAIN_BLOCK_SIZE {
         return Err(invalid_data!(
             "Unsupported AGS1 block size: {plain_block_size} (expected {PLAIN_BLOCK_SIZE})"
@@ -280,9 +276,10 @@ impl FileRead for AesGcmFileRead {
     ///    requested data.
     ///
     /// 2. **Single I/O read** — calculates the contiguous byte range in the
-    ///    encrypted file that covers all needed blocks (including the 8-byte AGS1
-    ///    header offset, 12-byte nonces, and 16-byte GCM tags) and fetches them in
-    ///    one call to the inner `FileRead`.
+    ///    encrypted file that covers all needed blocks (including their 12-byte
+    ///    nonces and 16-byte GCM tags) and fetches them in one call to the inner
+    ///    `FileRead`. When block 0 is needed, the 8-byte AGS1 header is fetched
+    ///    with it and checked before any block is decrypted.
     ///
     /// 3. **Decrypt per block** — iterates over each cipher block in the response,
     ///    decrypts it with AES-GCM using the per-block AAD (`aad_prefix || block_index`),
@@ -324,13 +321,13 @@ impl FileRead for AesGcmFileRead {
 
         // The header is not authenticated, so it is read and checked along with the first block.
         let header_length = if first_block == 0 {
-            GCM_STREAM_HEADER_LENGTH as usize
+            GCM_STREAM_HEADER_LENGTH as u64
         } else {
             0
         };
 
         // Read all needed encrypted blocks in a single I/O call
-        let encrypted_start = Self::encrypted_block_offset(first_block) - header_length as u64;
+        let encrypted_start = Self::encrypted_block_offset(first_block) - header_length;
         let encrypted_end =
             Self::encrypted_block_offset(last_block) + self.cipher_block_size(last_block) as u64;
 
@@ -342,10 +339,15 @@ impl FileRead for AesGcmFileRead {
                 all_encrypted.len()
             ));
         }
-        let (header, all_encrypted) = all_encrypted.split_at(header_length);
-        if first_block == 0 {
+        let all_encrypted = if first_block == 0 {
+            let (header, blocks) = all_encrypted
+                .split_first_chunk()
+                .ok_or_else(|| invalid_data!("Encrypted read is shorter than the AGS1 header"))?;
             check_stream_header(header)?;
-        }
+            blocks
+        } else {
+            &all_encrypted[..]
+        };
 
         // Decrypt each block and extract the requested plaintext range
         let result_len = (range.end - range.start) as usize;
@@ -972,32 +974,33 @@ mod tests {
     async fn test_invalid_header_is_rejected() {
         let key = b"0123456789abcdef";
         let aad_prefix = b"test-aad-prefix!";
-        let plaintext = b"sensitive data";
-        let encrypted = encrypt_ags1(plaintext, &make_cipher(key), aad_prefix);
 
-        for (header, message) in [
-            (
-                *b"AGS2\x00\x00\x10\x00",
-                "Invalid AGS1 header: magic \"AGS2\" does not match \"AGS1\"",
-            ),
-            (
-                *b"AGS1\x00\x02\x00\x00",
-                "Unsupported AGS1 block size: 512 (expected 1048576)",
-            ),
-        ] {
-            let mut tampered = encrypted.clone();
-            tampered[..GCM_STREAM_HEADER_LENGTH as usize].copy_from_slice(&header);
-            let reader = AesGcmFileRead::new(
-                memory_reader(tampered),
-                Arc::new(make_cipher(key)),
-                aad_prefix.as_slice().into(),
-                encrypted.len() as u64,
-            )
-            .unwrap();
+        for plaintext in [b"".as_slice(), b"sensitive data".as_slice()] {
+            let encrypted = encrypt_ags1(plaintext, &make_cipher(key), aad_prefix);
+            for (header, message) in [
+                (
+                    *b"AGS2\x00\x00\x10\x00",
+                    "Invalid AGS1 header: magic \"AGS2\" does not match \"AGS1\"",
+                ),
+                (
+                    *b"AGS1\x00\x02\x00\x00",
+                    "Unsupported AGS1 block size: 512 (expected 1048576)",
+                ),
+            ] {
+                let mut tampered = encrypted.clone();
+                tampered[..GCM_STREAM_HEADER_LENGTH as usize].copy_from_slice(&header);
+                let reader = AesGcmFileRead::new(
+                    memory_reader(tampered),
+                    Arc::new(make_cipher(key)),
+                    aad_prefix.as_slice().into(),
+                    encrypted.len() as u64,
+                )
+                .unwrap();
 
-            let err = reader.read(0..plaintext.len() as u64).await.unwrap_err();
-            assert_eq!(err.kind(), ErrorKind::DataInvalid);
-            assert_eq!(err.message(), message);
+                let err = reader.read(0..plaintext.len() as u64).await.unwrap_err();
+                assert_eq!(err.kind(), ErrorKind::DataInvalid);
+                assert_eq!(err.message(), message);
+            }
         }
     }
 
