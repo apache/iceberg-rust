@@ -42,11 +42,33 @@ pub(crate) enum CachedObjectKey {
     // shares that entry. The version can still shift under a live cache across
     // an in-place upgrade (`Table::with_metadata`), which is why the key omits it.
     ManifestList(String),
-    // The manifest-level `first_row_id` is part of the key because the parsed
-    // manifest inherits it onto its entries: the same physical manifest can be
-    // referenced with different offsets across snapshots and branches, so it
-    // cannot be shared under the path alone.
-    Manifest((String, Option<u64>)),
+    // Keyed by the path plus every manifest-list value that `ManifestReader`
+    // inherits onto the parsed entries. The same physical manifest can be
+    // referenced under different values: `first_row_id` differs across
+    // snapshots and branches, and `sequence_number` differs when a transaction
+    // retry reuses a manifest it wrote under an earlier attempt's manifest
+    // list. A key missing any of these would serve one reference's inherited
+    // values for another.
+    Manifest(ManifestKey),
+}
+
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub(crate) struct ManifestKey {
+    path: String,
+    added_snapshot_id: i64,
+    sequence_number: i64,
+    first_row_id: Option<u64>,
+}
+
+impl ManifestKey {
+    fn new(manifest_file: &ManifestFile) -> Self {
+        Self {
+            path: manifest_file.manifest_path.clone(),
+            added_snapshot_id: manifest_file.added_snapshot_id,
+            sequence_number: manifest_file.sequence_number,
+            first_row_id: manifest_file.first_row_id,
+        }
+    }
 }
 
 /// Caches metadata objects deserialized from immutable files
@@ -114,10 +136,7 @@ impl ObjectCache {
                 .map(Arc::new);
         }
 
-        let key = CachedObjectKey::Manifest((
-            manifest_file.manifest_path.clone(),
-            manifest_file.first_row_id,
-        ));
+        let key = CachedObjectKey::Manifest(ManifestKey::new(manifest_file));
 
         let cache_entry = self
             .cache
@@ -661,5 +680,74 @@ mod tests {
             manifest_b.entries()[0].data_file().first_row_id(),
             Some(2000)
         );
+    }
+
+    /// A transaction retry reuses the manifest it wrote during an earlier
+    /// attempt, but the retry's manifest list assigns it a newer sequence
+    /// number. Entries inherit that number on read, so a cache that already
+    /// holds the earlier attempt's parse must not serve it for the retry.
+    #[tokio::test]
+    async fn test_get_manifest_keys_on_sequence_number() {
+        use crate::spec::{NestedField, PartitionSpec, PrimitiveType, Schema, SchemaRef, Type};
+
+        let io = FileIO::new_with_memory();
+        let path = "memory:///metadata/retried_manifest.avro";
+
+        let schema: SchemaRef = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap()
+            .into();
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+
+        // A v2 manifest: entries carry no sequence number of their own and
+        // `first_row_id` stays `None`, so only the sequence number distinguishes
+        // the two references below.
+        let mut writer = ManifestWriterBuilder::new(
+            io.new_output(path).unwrap(),
+            Some(1),
+            schema,
+            partition_spec,
+        )
+        .build_v2_data();
+        writer
+            .add_entry(
+                ManifestEntry::builder()
+                    .status(ManifestStatus::Added)
+                    .data_file(
+                        DataFileBuilder::default()
+                            .content(DataContentType::Data)
+                            .file_path(path.to_string())
+                            .file_format(DataFileFormat::Parquet)
+                            .file_size_in_bytes(100)
+                            .record_count(1)
+                            .build()
+                            .unwrap(),
+                    )
+                    .build(),
+            )
+            .unwrap();
+        let manifest_file = writer.write_manifest_file().await.unwrap();
+        assert_eq!(manifest_file.first_row_id, None);
+
+        // First attempt's manifest list assigns 35; after a rebase the retry's
+        // manifest list assigns 36 to the same physical manifest.
+        let mut first_attempt = manifest_file.clone();
+        first_attempt.sequence_number = 35;
+        let mut retry = manifest_file;
+        retry.sequence_number = 36;
+
+        let object_cache = ObjectCache::new(io, None);
+
+        let first = object_cache.get_manifest(&first_attempt).await.unwrap();
+        let second = object_cache.get_manifest(&retry).await.unwrap();
+
+        assert_eq!(first.entries()[0].sequence_number(), Some(35));
+        assert_eq!(second.entries()[0].sequence_number(), Some(36));
     }
 }

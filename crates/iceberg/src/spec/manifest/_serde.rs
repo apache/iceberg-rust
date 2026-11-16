@@ -381,7 +381,7 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Arc;
 
-    use crate::avro::define_named_types_repeatedly;
+    use crate::avro::{assert_deflate_codec, define_named_types_repeatedly};
     use crate::spec::manifest::_serde::{I64Entry, parse_i64_entry};
     use crate::spec::{
         DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, Literal, NestedField,
@@ -466,6 +466,7 @@ mod tests {
             FormatVersion::V2,
         )
         .unwrap();
+        assert_deflate_codec(&buffer);
 
         let actual_data_file = read_data_files_from_avro(
             &mut Cursor::new(buffer),
@@ -538,6 +539,7 @@ mod tests {
             FormatVersion::V1,
         )
         .unwrap();
+        assert_deflate_codec(&buffer);
 
         let actual_data_file = read_data_files_from_avro(
             &mut Cursor::new(buffer),
