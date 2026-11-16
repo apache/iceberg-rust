@@ -91,6 +91,29 @@ pub(crate) fn stream_block_aad(aad_prefix: &[u8], block_index: u32) -> Vec<u8> {
     }
 }
 
+/// Checks that `header` is an AGS1 header declaring the supported plaintext block size.
+fn check_stream_header(header: &[u8]) -> Result<()> {
+    let (magic, plain_block_size) = header.split_at(GCM_STREAM_MAGIC.len());
+    if magic != GCM_STREAM_MAGIC {
+        return Err(invalid_data!(
+            "Invalid AGS1 header: magic \"{}\" does not match \"AGS1\"",
+            magic.escape_ascii()
+        ));
+    }
+
+    let plain_block_size = u32::from_le_bytes(
+        plain_block_size
+            .try_into()
+            .map_err(|_| invalid_data!("Invalid AGS1 header length: {}", header.len()))?,
+    );
+    if plain_block_size != PLAIN_BLOCK_SIZE {
+        return Err(invalid_data!(
+            "Unsupported AGS1 block size: {plain_block_size} (expected {PLAIN_BLOCK_SIZE})"
+        ));
+    }
+    Ok(())
+}
+
 /// Transparent decryption of AGS1 stream-encrypted files.
 ///
 /// Implements the [`FileRead`] trait, providing random-access reads over
@@ -131,8 +154,8 @@ impl AesGcmFileRead {
     /// Creates a new `AesGcmFileRead` for decrypting an AGS1 stream.
     ///
     /// Computes the plaintext size and block layout from the encrypted file
-    /// length. No I/O is performed; header validation happens implicitly
-    /// when blocks are decrypted (GCM authentication will fail on corrupt data).
+    /// length. No I/O is performed; reads that cover the first block check
+    /// the AGS1 header.
     ///
     /// # Arguments
     ///
@@ -299,8 +322,15 @@ impl FileRead for AesGcmFileRead {
         let first_block = range.start / PLAIN_BLOCK_SIZE as u64;
         let last_block = range.end.saturating_sub(1) / PLAIN_BLOCK_SIZE as u64;
 
+        // The header is not authenticated, so it is read and checked along with the first block.
+        let header_length = if first_block == 0 {
+            GCM_STREAM_HEADER_LENGTH as usize
+        } else {
+            0
+        };
+
         // Read all needed encrypted blocks in a single I/O call
-        let encrypted_start = Self::encrypted_block_offset(first_block);
+        let encrypted_start = Self::encrypted_block_offset(first_block) - header_length as u64;
         let encrypted_end =
             Self::encrypted_block_offset(last_block) + self.cipher_block_size(last_block) as u64;
 
@@ -311,6 +341,10 @@ impl FileRead for AesGcmFileRead {
                 encrypted_end - encrypted_start,
                 all_encrypted.len()
             ));
+        }
+        let (header, all_encrypted) = all_encrypted.split_at(header_length);
+        if first_block == 0 {
+            check_stream_header(header)?;
         }
 
         // Decrypt each block and extract the requested plaintext range
@@ -932,6 +966,39 @@ mod tests {
 
         let result = reader.read(0..plaintext.len() as u64).await;
         assert!(result.is_err(), "Decryption with wrong key should fail");
+    }
+
+    #[tokio::test]
+    async fn test_invalid_header_is_rejected() {
+        let key = b"0123456789abcdef";
+        let aad_prefix = b"test-aad-prefix!";
+        let plaintext = b"sensitive data";
+        let encrypted = encrypt_ags1(plaintext, &make_cipher(key), aad_prefix);
+
+        for (header, message) in [
+            (
+                *b"AGS2\x00\x00\x10\x00",
+                "Invalid AGS1 header: magic \"AGS2\" does not match \"AGS1\"",
+            ),
+            (
+                *b"AGS1\x00\x02\x00\x00",
+                "Unsupported AGS1 block size: 512 (expected 1048576)",
+            ),
+        ] {
+            let mut tampered = encrypted.clone();
+            tampered[..GCM_STREAM_HEADER_LENGTH as usize].copy_from_slice(&header);
+            let reader = AesGcmFileRead::new(
+                memory_reader(tampered),
+                Arc::new(make_cipher(key)),
+                aad_prefix.as_slice().into(),
+                encrypted.len() as u64,
+            )
+            .unwrap();
+
+            let err = reader.read(0..plaintext.len() as u64).await.unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert_eq!(err.message(), message);
+        }
     }
 
     #[tokio::test]
