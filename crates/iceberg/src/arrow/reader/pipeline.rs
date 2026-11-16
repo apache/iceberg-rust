@@ -716,11 +716,9 @@ impl FileScanTaskReader {
             // so the final schema contains both changes.
             coerce_int96_timestamps(&schema, task.schema(), arrow_metadata.parquet_schema())?
                 .unwrap_or(schema)
-        } else if let Some(coerced) = coerce_int96_timestamps(
-            file_schema,
-            task.schema(),
-            arrow_metadata.parquet_schema(),
-        )? {
+        } else if let Some(coerced) =
+            coerce_int96_timestamps(file_schema, task.schema(), arrow_metadata.parquet_schema())?
+        {
             coerced
         } else if without_fixed_size_lists.is_some() || install_row_number {
             Arc::clone(file_schema)
