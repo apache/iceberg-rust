@@ -311,7 +311,7 @@ impl CachingDeleteFileLoader {
                 };
 
                 let (sender, receiver) = channel();
-                del_filter.insert_equality_delete(task.file_path(), receiver);
+                del_filter.insert_equality_delete(task.file_path(), notify, receiver);
 
                 // Per the Iceberg spec, evolve schema for equality deletes but only for the
                 // equality_ids columns, not all table columns.
