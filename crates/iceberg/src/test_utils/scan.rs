@@ -1466,18 +1466,21 @@ impl TableTestFixture {
         manifest_list_write.close().await.unwrap();
     }
 
-    /// Writes a manifest with one live "Added" data-file entry per element of
-    /// `split_offsets` (partitioned on `x` = 100, 200, ...), each with the given
-    /// `split_offsets` recorded on its `DataFile` (`None` leaves the field unset). Used
-    /// to test that the offsets flow from the manifest entry onto each `FileScanTask`.
+    /// Writes a manifest with one live "Added" data-file entry per element returned by
+    /// `split_offsets` (partitioned on `x` = 100, 200, ...), each with that element
+    /// recorded as its `DataFile`'s `split_offsets` (`None` leaves the field unset). The
+    /// closure receives the `file_size_in_bytes` every entry records, so a test can place
+    /// offsets on either side of it. Used to test which offsets flow from the manifest entry
+    /// onto each `FileScanTask`.
     pub(crate) async fn setup_manifest_files_with_split_offsets(
         &mut self,
-        split_offsets: [Option<Vec<i64>>; 3],
+        split_offsets: impl FnOnce(u64) -> Vec<Option<Vec<i64>>>,
     ) {
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
         let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
         let current_partition_spec = self.table.metadata().default_partition_spec();
         let parquet_file_size = self.write_parquet_data_files();
+        let split_offsets = split_offsets(parquet_file_size);
 
         let mut writer = ManifestWriterBuilder::new(
             self.next_manifest_file(),

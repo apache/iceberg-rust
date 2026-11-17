@@ -264,6 +264,12 @@ impl FileScanTask {
     }
 
     /// The data file's split offsets, see [`DataFile::split_offsets()`](crate::spec::DataFile::split_offsets).
+    ///
+    /// A task planned by [`TableScan`](crate::scan::TableScan) carries them only when they
+    /// are well defined, as Java's `BaseFile.splitOffsets()` decides it: `Some` is then
+    /// non-empty and its last offset is below [`Self::file_size_in_bytes`]. A list a writer
+    /// recorded that fails that check is dropped, so an engine cutting a file at these
+    /// offsets never cuts past its end.
     pub fn split_offsets(&self) -> Option<&[i64]> {
         self.split_offsets.as_deref()
     }
@@ -489,6 +495,7 @@ mod _serde {
         unified_partition_type: Option<Arc<StructType>>,
         #[serde(default)]
         sort_order_id: Option<i32>,
+        #[serde(default)]
         split_offsets: Option<Vec<i64>>,
         #[serde(default)]
         sort_order: Option<SortOrderRef>,
@@ -527,6 +534,7 @@ mod _serde {
         unified_partition_type: Option<&'a Arc<StructType>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         sort_order_id: Option<i32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         split_offsets: Option<&'a [i64]>,
         #[serde(skip_serializing_if = "Option::is_none")]
         sort_order: Option<&'a SortOrderRef>,

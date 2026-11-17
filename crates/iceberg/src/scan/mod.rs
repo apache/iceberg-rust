@@ -1562,17 +1562,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_plan_files_carries_split_offsets_from_the_manifest_entry() {
+    async fn test_plan_files_carries_well_defined_split_offsets_from_the_manifest_entry() {
         let mut fixture = TableTestFixture::new();
 
-        // Offsets recorded (the usual case: one per Parquet row group), an empty list,
-        // and a file whose writer did not record them.
+        // Java's `BaseFile.splitOffsets()` hands offsets on only when the list is non-empty
+        // and its last offset is below the file size; the task carries the same set. The
+        // cases: the usual recording (one offset per row group), the last offset just
+        // inside the file, an empty list, a file whose writer did not record them, the last
+        // offset at the file size, and one past it.
         fixture
-            .setup_manifest_files_with_split_offsets([
-                Some(vec![4, 1_048_580, 2_097_156]),
-                Some(vec![]),
-                None,
-            ])
+            .setup_manifest_files_with_split_offsets(|file_size| {
+                let file_size = i64::try_from(file_size).unwrap();
+                vec![
+                    Some(vec![4, 100, 200]),
+                    Some(vec![4, file_size - 1]),
+                    Some(vec![]),
+                    None,
+                    Some(vec![4, file_size]),
+                    Some(vec![4, file_size + 1]),
+                ]
+            })
             .await;
 
         let mut tasks: Vec<_> = fixture
@@ -1587,22 +1596,38 @@ mod tests {
             .await
             .unwrap();
         tasks.sort_by(|a, b| a.data_file_path().cmp(b.data_file_path()));
-        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks.len(), 6);
+        let file_size = i64::try_from(tasks[0].file_size_in_bytes()).unwrap();
 
         assert_eq!(
             tasks[0].split_offsets(),
-            Some(&[4, 1_048_580, 2_097_156][..]),
+            Some(&[4, 100, 200][..]),
             "offsets recorded on the data file reach the task unchanged"
         );
         assert_eq!(
             tasks[1].split_offsets(),
-            Some(&[][..]),
-            "an empty list is carried as an empty list, not as None"
+            Some(&[4, file_size - 1][..]),
+            "a last offset just below the file size is well defined"
         );
         assert_eq!(
             tasks[2].split_offsets(),
             None,
+            "an empty list carries nothing to split on, so it is None, as in Java"
+        );
+        assert_eq!(
+            tasks[3].split_offsets(),
+            None,
             "a file without recorded offsets carries None"
+        );
+        assert_eq!(
+            tasks[4].split_offsets(),
+            None,
+            "a last offset at the file size is not below it and is dropped"
+        );
+        assert_eq!(
+            tasks[5].split_offsets(),
+            None,
+            "a last offset past the file size is dropped, so no split cuts past the end"
         );
     }
 
