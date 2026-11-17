@@ -130,8 +130,7 @@ impl Transaction {
         Ok(updated_table)
     }
 
-    /// Catalogs check requirements against the transaction base, which only the first
-    /// requirement on each value was derived from, so later ones on the same value are dropped.
+    // Catalogs check against the base, so keep only the first requirement per value.
     fn merge_requirements(
         existing_requirements: &mut Vec<TableRequirement>,
         requirements: Vec<TableRequirement>,
