@@ -19,8 +19,10 @@
 
 #![deny(missing_docs)]
 
+mod credentials;
 mod properties;
 
+pub use credentials::AwsSdkCredentialProvider;
 pub use properties::{
     AWS_ACCESS_KEY_ID, AWS_ASSUME_ROLE_ARN, AWS_ASSUME_ROLE_EXTERNAL_ID,
     AWS_ASSUME_ROLE_SESSION_NAME, AWS_PROFILE_NAME, AWS_REGION_NAME, AWS_SECRET_ACCESS_KEY,
