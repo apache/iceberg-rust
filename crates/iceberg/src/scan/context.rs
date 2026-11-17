@@ -40,7 +40,7 @@ use crate::{Error, ErrorKind, Result};
 pub(crate) struct ManifestFileContext {
     manifest_file: ManifestFile,
 
-    sender: Sender<ManifestEntryContext>,
+    sender: Sender<Vec<ManifestEntryContext>>,
 
     field_ids: Arc<Vec<i32>>,
     bound_predicates: Option<Arc<BoundPredicates>>,
@@ -98,6 +98,14 @@ fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
     })
 }
 
+/// Live entries are handed to the entry stage in chunks of at most this many,
+/// so one spawned task processes a chunk instead of one task per entry, while a
+/// single large manifest still spreads over several workers. Measured on 4
+/// workers, 64 brings back some per-chunk overhead and 4096 leaves too few
+/// chunks to balance a single large manifest; 256 and 1024 perform the same,
+/// and 256 buffers fewer planned files.
+pub(crate) const ENTRY_CHUNK_SIZE: usize = 256;
+
 impl ManifestFileContext {
     /// Fetches the manifest and streams its live entries to the context's channel.
     pub(crate) async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
@@ -136,6 +144,7 @@ impl ManifestFileContext {
             None => None,
         };
 
+        let mut chunk = Vec::with_capacity(ENTRY_CHUNK_SIZE.min(manifest.entries().len()));
         for manifest_entry in manifest.entries() {
             if !manifest_entry.is_alive() {
                 continue;
@@ -179,8 +188,20 @@ impl ManifestFileContext {
                 column_stats_columns: column_stats_columns.clone(),
             };
 
+            chunk.push(manifest_entry_context);
+            if chunk.len() == ENTRY_CHUNK_SIZE {
+                sender
+                    .send(std::mem::replace(
+                        &mut chunk,
+                        Vec::with_capacity(ENTRY_CHUNK_SIZE),
+                    ))
+                    .map_err(|_| Error::new(ErrorKind::Unexpected, "mpsc channel SendError"))
+                    .await?;
+            }
+        }
+        if !chunk.is_empty() {
             sender
-                .send(manifest_entry_context)
+                .send(chunk)
                 .map_err(|_| Error::new(ErrorKind::Unexpected, "mpsc channel SendError"))
                 .await?;
         }
@@ -316,9 +337,9 @@ impl PlanContext {
     pub(crate) fn build_manifest_file_contexts(
         &self,
         manifest_list: Arc<ManifestList>,
-        tx_data: Sender<ManifestEntryContext>,
+        tx_data: Sender<Vec<ManifestEntryContext>>,
         delete_file_idx: DeleteFileIndex,
-        delete_file_tx: Sender<ManifestEntryContext>,
+        delete_file_tx: Sender<Vec<ManifestEntryContext>>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
         let mut manifest_files = manifest_list.entries().iter().collect::<Vec<_>>();
         // Sort manifest files to process delete manifests first.
@@ -379,7 +400,7 @@ impl PlanContext {
         &self,
         manifest_file: &ManifestFile,
         partition_filter: Option<Arc<BoundPredicate>>,
-        sender: Sender<ManifestEntryContext>,
+        sender: Sender<Vec<ManifestEntryContext>>,
         delete_file_index: DeleteFileIndex,
     ) -> ManifestFileContext {
         let bound_predicates =

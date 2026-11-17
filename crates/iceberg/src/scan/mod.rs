@@ -30,7 +30,7 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
 use futures::stream::BoxStream;
-use futures::{SinkExt, StreamExt, TryStreamExt};
+use futures::{SinkExt, StreamExt, TryStreamExt, stream};
 pub use task::*;
 
 use crate::arrow::{ArrowReaderBuilder, ArrowReaderOptions};
@@ -320,7 +320,10 @@ impl<'a> TableScanBuilder<'a> {
         self
     }
 
-    /// Sets the manifest entry concurrency limit for this scan
+    /// Sets the manifest entry concurrency limit for this scan.
+    ///
+    /// Entries are planned in chunks of up to a few hundred, so this bounds how
+    /// many chunks are processed at once rather than how many single entries.
     pub fn with_manifest_entry_concurrency_limit(mut self, limit: usize) -> Self {
         self.concurrency_limit_manifest_entries = limit;
         self
@@ -443,8 +446,8 @@ pub struct TableScan {
     /// retrieved from [`FileIO`] concurrently
     concurrency_limit_manifest_files: usize,
 
-    /// The maximum number of [`ManifestEntry`]s that will
-    /// be processed in parallel
+    /// The maximum number of chunks of [`ManifestEntry`]s that
+    /// will be processed in parallel
     concurrency_limit_manifest_entries: usize,
 
     runtime: Runtime,
@@ -473,7 +476,7 @@ impl TableScan {
         Fut: Future<Output = Result<T>> + Send + 'static,
     {
         let Some(plan_context) = self.plan_context.as_ref() else {
-            return Ok(Box::pin(futures::stream::empty()));
+            return Ok(Box::pin(stream::empty()));
         };
 
         let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
@@ -485,8 +488,10 @@ impl TableScan {
         let (manifest_entry_delete_ctx_tx, manifest_entry_delete_ctx_rx) =
             channel(concurrency_limit_manifest_files);
 
-        // used to stream the planned data file results back to the caller
-        let (planned_file_tx, planned_file_rx) = channel(concurrency_limit_manifest_entries);
+        // used to stream the planned data file results back to the caller, one
+        // batch per chunk of manifest entries
+        let (planned_file_tx, planned_file_rx) =
+            channel::<Result<Vec<T>>>(concurrency_limit_manifest_entries);
 
         let (delete_file_idx, delete_file_tx) = DeleteFileIndex::new(self.runtime.clone());
 
@@ -510,7 +515,7 @@ impl TableScan {
 
         // Concurrently load all [`Manifest`]s and stream their [`ManifestEntry`]s
         rt.io().spawn(async move {
-            let result = futures::stream::iter(manifest_file_contexts)
+            let result = stream::iter(manifest_file_contexts)
                 .try_for_each_concurrent(concurrency_limit_manifest_files, |ctx| async move {
                     ctx.fetch_manifest_and_stream_manifest_entries().await
                 })
@@ -527,25 +532,25 @@ impl TableScan {
             let rt_inner = rt.clone();
             rt.cpu().spawn(async move {
                 let result = manifest_entry_delete_ctx_rx
-                    .map(|me_ctx| Ok((me_ctx, delete_file_tx.clone())))
-                    .try_for_each_concurrent(
-                        concurrency_limit_manifest_entries,
-                        |(manifest_entry_context, tx)| {
-                            let rt_inner = rt_inner.clone();
-                            async move {
-                                rt_inner
-                                    .cpu()
-                                    .spawn(async move {
+                    .map(|chunk| Ok((chunk, delete_file_tx.clone())))
+                    .try_for_each_concurrent(concurrency_limit_manifest_entries, |(chunk, tx)| {
+                        let rt_inner = rt_inner.clone();
+                        async move {
+                            rt_inner
+                                .cpu()
+                                .spawn(async move {
+                                    for manifest_entry_context in chunk {
                                         Self::process_delete_manifest_entry(
                                             manifest_entry_context,
-                                            tx,
+                                            tx.clone(),
                                         )
-                                        .await
-                                    })
-                                    .await?
-                            }
-                        },
-                    )
+                                        .await?;
+                                    }
+                                    Ok(())
+                                })
+                                .await?
+                        }
+                    })
                     .await;
 
                 if let Err(error) = result {
@@ -561,26 +566,34 @@ impl TableScan {
             let rt_inner = rt.clone();
             rt.cpu().spawn(async move {
                 let result = manifest_entry_data_ctx_rx
-                    .map(|me_ctx| Ok((me_ctx, planned_file_tx.clone())))
-                    .try_for_each_concurrent(
-                        concurrency_limit_manifest_entries,
-                        |(manifest_entry_context, tx)| {
-                            let rt_inner = rt_inner.clone();
-                            async move {
-                                rt_inner
-                                    .cpu()
-                                    .spawn(async move {
-                                        Self::process_data_manifest_entry(
-                                            manifest_entry_context,
-                                            tx,
-                                            build_result,
-                                        )
-                                        .await
-                                    })
-                                    .await?
-                            }
-                        },
-                    )
+                    .map(|chunk| Ok((chunk, planned_file_tx.clone())))
+                    .try_for_each_concurrent(concurrency_limit_manifest_entries, |(chunk, tx)| {
+                        let rt_inner = rt_inner.clone();
+                        async move {
+                            rt_inner
+                                .cpu()
+                                .spawn(async move {
+                                    let mut tx = tx;
+                                    let mut planned = Vec::with_capacity(chunk.len());
+                                    for manifest_entry_context in chunk {
+                                        if let Some(planned_file) =
+                                            Self::process_data_manifest_entry(
+                                                manifest_entry_context,
+                                                build_result,
+                                            )
+                                            .await?
+                                        {
+                                            planned.push(planned_file);
+                                        }
+                                    }
+                                    if !planned.is_empty() {
+                                        tx.send(Ok(planned)).await?;
+                                    }
+                                    Ok(())
+                                })
+                                .await?
+                        }
+                    })
                     .await;
 
                 if let Err(error) = result {
@@ -589,7 +602,12 @@ impl TableScan {
             });
         }
 
-        Ok(planned_file_rx.boxed())
+        Ok(planned_file_rx
+            .flat_map(|batch| match batch {
+                Ok(planned) => stream::iter(planned).map(Ok).left_stream(),
+                Err(error) => stream::once(async move { Err(error) }).right_stream(),
+            })
+            .boxed())
     }
 
     /// Returns an [`ArrowRecordBatchStream`] using the supplied reader settings.
@@ -645,11 +663,12 @@ impl TableScan {
         self.plan_context.as_ref().map(|x| &x.snapshot)
     }
 
+    /// Returns the planned file for a data manifest entry, or `None` when the
+    /// scan's filter prunes it.
     async fn process_data_manifest_entry<T, F, Fut>(
         manifest_entry_context: ManifestEntryContext,
-        mut planned_file_tx: Sender<Result<T>>,
         build_result: F,
-    ) -> Result<()>
+    ) -> Result<Option<T>>
     where
         F: Fn(ManifestEntryContext) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<T>> + Send + 'static,
@@ -679,7 +698,7 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
-                return Ok(());
+                return Ok(None);
             }
 
             // skip any data file whose metrics don't match this scan's filter
@@ -688,18 +707,13 @@ impl TableScan {
                 manifest_entry_context.manifest_entry.data_file(),
                 false,
             )? {
-                return Ok(());
+                return Ok(None);
             }
         }
 
         // congratulations! the manifest entry has made its way through the
-        // entire plan without getting filtered out. Build the planned file before
-        // sending so delete-file lookup preserves the original scan timing.
-        planned_file_tx
-            .send(Ok(build_result(manifest_entry_context).await?))
-            .await?;
-
-        Ok(())
+        // entire plan without getting filtered out.
+        build_result(manifest_entry_context).await.map(Some)
     }
 
     async fn process_delete_manifest_entry(
@@ -788,6 +802,85 @@ mod tests {
     use crate::test_utils::test_runtime;
     use crate::util::snapshot::snapshot_id_as_of_time;
     use crate::{ErrorKind, Result, Runtime, TableIdent};
+
+    /// A manifest with more live entries than fit in one chunk must plan every
+    /// entry exactly once, including the partial last chunk.
+    #[tokio::test]
+    async fn test_plan_files_spans_entry_chunks() {
+        use crate::scan::context::ENTRY_CHUNK_SIZE;
+
+        let fixture = TableTestFixture::new();
+        let table = &fixture.table;
+        let snapshot = table.metadata().current_snapshot().unwrap().clone();
+        let schema = snapshot.schema(table.metadata()).unwrap();
+        let spec = table.metadata().default_partition_spec();
+        let n_entries = 2 * ENTRY_CHUNK_SIZE + 1;
+
+        let mut writer = ManifestWriterBuilder::new(
+            fixture.next_manifest_file(),
+            Some(snapshot.snapshot_id()),
+            schema.clone(),
+            spec.as_ref().clone(),
+        )
+        .build_v2_data();
+        for i in 0..n_entries {
+            writer
+                .add_entry(
+                    ManifestEntry::builder()
+                        .status(ManifestStatus::Added)
+                        .data_file(
+                            DataFileBuilder::default()
+                                .partition_spec_id(0)
+                                .content(DataContentType::Data)
+                                .file_path(format!("{}/{i}.parquet", fixture.table_location))
+                                .file_format(DataFileFormat::Parquet)
+                                .file_size_in_bytes(100)
+                                .record_count(1)
+                                .partition(Struct::from_iter([Some(Literal::long(100))]))
+                                .build()
+                                .unwrap(),
+                        )
+                        .build(),
+                )
+                .unwrap();
+        }
+        let manifest = writer.write_manifest_file().await.unwrap();
+        let out = table
+            .file_io()
+            .new_output(snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut manifest_list = ManifestListWriter::v2(
+            out,
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+        );
+        manifest_list.add_manifests([manifest].into_iter()).unwrap();
+        manifest_list.close().await.unwrap();
+
+        let tasks: Vec<FileScanTask> = table
+            .scan()
+            .build()
+            .unwrap()
+            .plan_files()
+            .await
+            .unwrap()
+            .try_collect()
+            .await
+            .unwrap();
+
+        let mut paths: Vec<_> = tasks
+            .iter()
+            .map(|t| t.data_file_path().to_string())
+            .collect();
+        paths.sort();
+        paths.dedup();
+        assert_eq!(tasks.len(), n_entries);
+        assert_eq!(paths.len(), n_entries);
+    }
 
     #[tokio::test]
     async fn test_table_scan_columns() {
