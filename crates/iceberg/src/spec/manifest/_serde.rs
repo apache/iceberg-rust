@@ -312,6 +312,12 @@ fn parse_bytes_entry(v: Vec<BytesEntry>, schema: &Schema) -> Result<HashMap<i32,
             .or_else(|| metadata_columns::get_metadata_field(entry.key).ok());
 
         if let Some(field) = field {
+            // Variant bounds are Variant-encoded objects keyed by path, not single
+            // primitive values, and nothing reads them yet. Skip them so manifests
+            // that carry them still load; without the bound, nothing gets pruned on it.
+            if field.field_type.is_variant() {
+                continue;
+            }
             let data_type = field
                 .field_type
                 .as_primitive_type()
@@ -730,5 +736,35 @@ mod tests {
             Some(&Datum::long(pos_value)),
             "_pos should be parsed as long with correct value"
         );
+    }
+
+    #[test]
+    fn test_parse_bytes_entry_skips_variant_bounds() {
+        use crate::spec::manifest::_serde::{BytesEntry, parse_bytes_entry};
+        use crate::spec::{PrimitiveType, VariantType};
+
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+                NestedField::optional(2, "id", Type::Primitive(PrimitiveType::Long)).into(),
+            ])
+            .build()
+            .unwrap();
+        let entries = vec![
+            // Variant-encoded bound for field `v`, taken from the report in #3705.
+            BytesEntry {
+                key: 1,
+                value: serde_bytes::ByteBuf::from(vec![1, 0, 0, 2, 0, 0]),
+            },
+            BytesEntry {
+                key: 2,
+                value: serde_bytes::ByteBuf::from(7i64.to_le_bytes().to_vec()),
+            },
+        ];
+
+        let result = parse_bytes_entry(entries, &schema).unwrap();
+
+        assert!(!result.contains_key(&1), "variant bound should be skipped");
+        assert_eq!(result.get(&2), Some(&Datum::long(7)));
     }
 }
