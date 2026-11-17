@@ -39,7 +39,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 * `iceberg_catalog_loader::BoxedCatalogBuilder` has a new required method, `with_runtime`. Types implementing `CatalogBuilder` get it through the blanket impl; types implementing `BoxedCatalogBuilder` directly (for example, a wrapper around another `Box<dyn BoxedCatalogBuilder>`) must implement it, typically by forwarding the runtime to the builder they wrap.
 * `Transaction::commit` now returns `ErrorKind::PreconditionFailed` for read-only tables (`Table::readonly()`, e.g. from `StaticTable::into_table` or `TableBuilder::readonly(true)`), including empty transactions, which previously returned the table unchanged. Java treats an empty transaction on a static table as a no-op.
 * `ArrowReader` reads nested struct fields as null for Parquet files that have neither field ids nor a name mapping, as iceberg-java does. Earlier versions returned their stored values by position. Tables migrated without field ids need a name mapping (`schema.name-mapping.default`) that covers nested fields to read them.
-* Format-version 1 table metadata keeps its `refs` when it is read and written, as iceberg-java does. Earlier versions dropped every branch and tag except `main`. Format-version 1 metadata with invalid refs now fails to load, as for format versions 2 and 3: a ref to a missing snapshot, a `main` branch that does not match `current-snapshot-id`, or a `main` branch without a current snapshot.
 
 ## [v0.10.1] - 2026-07-28
 
