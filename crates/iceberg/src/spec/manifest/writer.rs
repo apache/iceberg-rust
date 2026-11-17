@@ -17,7 +17,7 @@
 
 use std::cmp::min;
 
-use apache_avro::{Writer as AvroWriter, to_value};
+use apache_avro::to_value;
 use bytes::Bytes;
 use itertools::Itertools;
 use serde_json::to_vec;
@@ -26,11 +26,12 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
+use crate::avro::new_writer;
 use crate::encryption::EncryptedOutputFile;
 use crate::error::{Result, invalid_data};
 use crate::io::{FileMetadata, FileWrite, OutputFile};
-use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
-use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
+use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2, ManifestEntryV3};
+use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2, manifest_schema_v3};
 use crate::spec::{
     DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
     ManifestStatus, PrimitiveLiteral, SchemaRef, StructType, Type,
@@ -429,10 +430,10 @@ impl ManifestWriter {
         let table_schema = &self.metadata.schema;
         let avro_schema = match self.metadata.format_version {
             FormatVersion::V1 => manifest_schema_v1(&partition_type)?,
-            // Manifest schema did not change between V2 and V3
-            FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
+            FormatVersion::V2 => manifest_schema_v2(&partition_type)?,
+            FormatVersion::V3 => manifest_schema_v3(&partition_type)?,
         };
-        let mut avro_writer = AvroWriter::new(&avro_schema, Vec::new())?;
+        let mut avro_writer = new_writer(&avro_schema, Vec::new())?;
         avro_writer.add_user_metadata(
             "schema".to_string(),
             to_vec(table_schema)
@@ -472,9 +473,12 @@ impl ManifestWriter {
                     to_value(ManifestEntryV1::try_from(entry, &partition_struct_type)?)?
                         .resolve(&avro_schema)?
                 }
-                // Manifest entry format did not change between V2 and V3
-                FormatVersion::V2 | FormatVersion::V3 => {
+                FormatVersion::V2 => {
                     to_value(ManifestEntryV2::try_from(entry, &partition_struct_type)?)?
+                        .resolve(&avro_schema)?
+                }
+                FormatVersion::V3 => {
+                    to_value(ManifestEntryV3::try_from(entry, &partition_struct_type)?)?
                         .resolve(&avro_schema)?
                 }
             };
@@ -577,10 +581,12 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
+    use apache_avro::Reader as AvroReader;
+    use apache_avro::schema::Schema as AvroSchema;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::avro::define_named_types_repeatedly;
+    use crate::avro::{assert_deflate_codec, define_named_types_repeatedly};
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Manifest, NestedField,
@@ -724,9 +730,9 @@ mod tests {
         writer.write_manifest_file().await.unwrap();
 
         // read back the manifest file and check the content
-        let actual_manifest =
-            Manifest::parse_avro(fs::read(path).expect("read_file must succeed").as_slice())
-                .unwrap();
+        let bytes = fs::read(path).expect("read_file must succeed");
+        assert_deflate_codec(&bytes);
+        let actual_manifest = Manifest::parse_avro(&bytes).unwrap();
 
         // The snapshot id is assigned when the entry is added and delete to the manifest. Existing entries are keep original.
         entries[0].snapshot_id = Some(3);
@@ -814,6 +820,7 @@ mod tests {
 
         // Read back the manifest file
         let bytes = fs::read(&path).expect("read_file must succeed");
+        assert_deflate_codec(&bytes);
         assert_eq!(manifest_file.manifest_length, bytes.len() as i64);
         let actual_manifest = Manifest::parse_avro(&bytes).unwrap();
 
@@ -920,5 +927,135 @@ mod tests {
             Literal::fixed(vec![5, 6, 7, 8]),
         ])
         .await;
+    }
+
+    /// Writes a manifest with one added data file and returns the field names
+    /// of its Avro `data_file` record.
+    async fn written_data_file_field_names(
+        build: fn(ManifestWriterBuilder) -> ManifestWriter,
+    ) -> Vec<String> {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("manifest.avro");
+        let output_file = FileIO::new_with_fs()
+            .new_output(path.to_str().unwrap())
+            .unwrap();
+        let mut writer = build(ManifestWriterBuilder::new(
+            output_file,
+            Some(1),
+            schema,
+            partition_spec,
+        ));
+        writer
+            .add_file(
+                DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path("s3://bucket/table/data/a.parquet".to_string())
+                    .file_format(DataFileFormat::Parquet)
+                    .partition(Struct::empty())
+                    .record_count(1)
+                    .file_size_in_bytes(1)
+                    .partition_spec_id(0)
+                    .build()
+                    .unwrap(),
+                1,
+            )
+            .unwrap();
+        writer.write_manifest_file().await.unwrap();
+        let bs = fs::read(&path).unwrap();
+
+        let reader = AvroReader::new(&bs[..]).unwrap();
+        let AvroSchema::Record(entry) = reader.writer_schema() else {
+            panic!("manifest_entry is not a record");
+        };
+        let data_file_schema = &entry.fields[entry.lookup["data_file"]].schema;
+        let AvroSchema::Record(data_file) = data_file_schema else {
+            panic!("data_file is not a record");
+        };
+        data_file.fields.iter().map(|f| f.name.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn test_v1_manifest_data_file_schema() {
+        let field_names = written_data_file_field_names(ManifestWriterBuilder::build_v1).await;
+        assert_eq!(field_names, vec![
+            "file_path",
+            "file_format",
+            "partition",
+            "record_count",
+            "file_size_in_bytes",
+            "block_size_in_bytes",
+            "column_sizes",
+            "value_counts",
+            "null_value_counts",
+            "nan_value_counts",
+            "lower_bounds",
+            "upper_bounds",
+            "key_metadata",
+            "split_offsets",
+            "sort_order_id",
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_v2_manifest_data_file_schema() {
+        let field_names = written_data_file_field_names(ManifestWriterBuilder::build_v2_data).await;
+        assert_eq!(field_names, vec![
+            "content",
+            "file_path",
+            "file_format",
+            "partition",
+            "record_count",
+            "file_size_in_bytes",
+            "column_sizes",
+            "value_counts",
+            "null_value_counts",
+            "nan_value_counts",
+            "lower_bounds",
+            "upper_bounds",
+            "key_metadata",
+            "split_offsets",
+            "equality_ids",
+            "sort_order_id",
+            "referenced_data_file",
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_v3_manifest_data_file_schema() {
+        let field_names = written_data_file_field_names(ManifestWriterBuilder::build_v3_data).await;
+        assert_eq!(field_names, vec![
+            "content",
+            "file_path",
+            "file_format",
+            "partition",
+            "record_count",
+            "file_size_in_bytes",
+            "column_sizes",
+            "value_counts",
+            "null_value_counts",
+            "nan_value_counts",
+            "lower_bounds",
+            "upper_bounds",
+            "key_metadata",
+            "split_offsets",
+            "equality_ids",
+            "sort_order_id",
+            "first_row_id",
+            "referenced_data_file",
+            "content_offset",
+            "content_size_in_bytes",
+        ]);
     }
 }

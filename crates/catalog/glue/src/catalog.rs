@@ -34,7 +34,7 @@ use iceberg::spec::{TableMetadata, TableMetadataBuilder};
 use iceberg::table::Table;
 use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, MetadataLocation, Namespace, NamespaceIdent, Result,
-    Runtime, TableCommit, TableCreation, TableIdent,
+    Runtime, TableCommit, TableCreation, TableIdent, delete_removed_metadata_files,
 };
 use iceberg_property_macro::Properties;
 use iceberg_storage_opendal::OpenDalStorageFactory;
@@ -871,6 +871,7 @@ impl Catalog for GlueCatalog {
         let (current_table, current_version_id) =
             self.load_table_with_version_id(&table_ident).await?;
         let current_metadata_location = current_table.metadata_location_result()?.to_string();
+        let base_metadata = current_table.metadata_ref();
 
         let staged_table = commit.apply(current_table)?;
         let staged_metadata_location_str = staged_table.metadata_location_result()?;
@@ -922,6 +923,13 @@ impl Catalog for GlueCatalog {
             }
             .with_source(anyhow!("aws sdk error: {error:?}"))
         })?;
+
+        delete_removed_metadata_files(
+            staged_table.file_io(),
+            &base_metadata,
+            staged_table.metadata(),
+        )
+        .await;
 
         Ok(staged_table)
     }

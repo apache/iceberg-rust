@@ -23,6 +23,7 @@ use fnv::FnvHashSet;
 use ordered_float::OrderedFloat;
 use parquet::arrow::arrow_reader::{RowSelection, RowSelector};
 use parquet::file::metadata::RowGroupMetaData;
+use parquet::file::metadata::page_index::RowGroupPageIndex;
 use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::page_index::offset_index::OffsetIndexMetaData;
 
@@ -31,8 +32,6 @@ use crate::expr::{BoundPredicate, BoundReference};
 use crate::spec::decimal_utils::i128_from_be_bytes;
 use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, Schema};
 use crate::{Error, ErrorKind, Result};
-
-type OffsetIndex = Vec<OffsetIndexMetaData>;
 
 const IN_PREDICATE_LIMIT: usize = 200;
 
@@ -60,8 +59,7 @@ impl PageNullCount {
 }
 
 pub(crate) struct PageIndexEvaluator<'a> {
-    column_index: &'a [ColumnIndexMetaData],
-    offset_index: &'a OffsetIndex,
+    page_index: &'a RowGroupPageIndex,
     row_group_metadata: &'a RowGroupMetaData,
     iceberg_field_id_to_parquet_column_index: &'a HashMap<i32, usize>,
     snapshot_schema: &'a Schema,
@@ -70,15 +68,13 @@ pub(crate) struct PageIndexEvaluator<'a> {
 
 impl<'a> PageIndexEvaluator<'a> {
     pub(crate) fn new(
-        column_index: &'a [ColumnIndexMetaData],
-        offset_index: &'a OffsetIndex,
+        page_index: &'a RowGroupPageIndex,
         row_group_metadata: &'a RowGroupMetaData,
         field_id_map: &'a HashMap<i32, usize>,
         snapshot_schema: &'a Schema,
     ) -> Self {
         Self {
-            column_index,
-            offset_index,
+            page_index,
             row_group_metadata,
             iceberg_field_id_to_parquet_column_index: field_id_map,
             snapshot_schema,
@@ -93,8 +89,7 @@ impl<'a> PageIndexEvaluator<'a> {
     /// matching the filter predicate.
     pub(crate) fn eval(
         filter: &'a BoundPredicate,
-        column_index: &'a [ColumnIndexMetaData],
-        offset_index: &'a OffsetIndex,
+        page_index: &'a RowGroupPageIndex,
         row_group_metadata: &'a RowGroupMetaData,
         field_id_map: &'a HashMap<i32, usize>,
         snapshot_schema: &'a Schema,
@@ -104,8 +99,7 @@ impl<'a> PageIndexEvaluator<'a> {
         }
 
         let mut evaluator = Self::new(
-            column_index,
-            offset_index,
+            page_index,
             row_group_metadata,
             field_id_map,
             snapshot_schema,
@@ -162,9 +156,9 @@ impl<'a> PageIndexEvaluator<'a> {
             ));
         };
 
-        let Some(column_index) = self.column_index.get(parquet_column_index) else {
-            // This should not happen, but we fail soft anyway so that the scan is still
-            // successful, just a bit slower
+        let Some(column_index) = self.page_index.column_index(parquet_column_index) else {
+            // The writer can omit the column index for a column chunk, for example
+            // when page statistics are disabled. Without it we can't prune pages.
             return self.select_all_rows();
         };
 
@@ -185,12 +179,12 @@ impl<'a> PageIndexEvaluator<'a> {
             match self.row_count_cache.get(&parquet_column_index) {
                 Some(count) => count.clone(),
                 None => {
-                    let Some(offset_index) = self.offset_index.get(parquet_column_index) else {
-                        // if we have a column index, we should always have an offset index.
-                        return Err(Error::new(
-                            ErrorKind::Unexpected,
-                            format!("Missing offset index for field id {field_id}"),
-                        ));
+                    let Some(offset_index) = self.page_index.offset_index(parquet_column_index)
+                    else {
+                        // A page index provider can load column and offset indexes
+                        // independently. Without offsets, we cannot construct a row
+                        // selection, so preserve correctness by skipping page pruning.
+                        return self.select_all_rows();
                     };
 
                     let count = self.calc_row_counts(offset_index);
@@ -232,9 +226,8 @@ impl<'a> PageIndexEvaluator<'a> {
     /// Returns a list of row counts per page
     fn calc_row_counts(&self, offset_index: &OffsetIndexMetaData) -> Vec<usize> {
         let mut remaining_rows = self.row_group_metadata.num_rows() as usize;
-        let mut row_counts = Vec::with_capacity(self.offset_index.len());
-
         let page_locations = offset_index.page_locations();
+        let mut row_counts = Vec::with_capacity(page_locations.len());
         for (idx, page_location) in page_locations.iter().enumerate() {
             let row_count = if idx < page_locations.len() - 1 {
                 let row_count = (page_locations[idx + 1].first_row_index
@@ -263,9 +256,6 @@ impl<'a> PageIndexEvaluator<'a> {
         F: Fn(Option<Datum>, Option<Datum>, PageNullCount) -> Result<bool>,
     {
         let result: Result<Vec<bool>> = match column_index {
-            ColumnIndexMetaData::NONE => {
-                return Ok(None);
-            }
             ColumnIndexMetaData::BOOLEAN(idx) => idx
                 .min_values_iter()
                 .zip(idx.max_values_iter())
@@ -596,7 +586,9 @@ impl<'a> PageIndexEvaluator<'a> {
                 let bound = if use_lower_bound { min } else { max };
 
                 if let Some(bound) = bound {
-                    if cmp_fn(&bound, datum) {
+                    // A bound that can't be compared with the literal (e.g. a
+                    // file column narrower than the field type) might match.
+                    if bound.partial_cmp(datum).is_none() || cmp_fn(&bound, datum) {
                         return Ok(true);
                     }
 
@@ -937,11 +929,13 @@ impl BoundPredicateVisitor for PageIndexEvaluator<'_> {
                         // if all values are outside the bounds, no rows can match
                         return Ok(false);
                     }
-                    (Some(min), _) if !literals.iter().any(|datum| datum.ge(&min)) => {
+                    // `all(lt)` rather than `!any(ge)`, so that a bound that
+                    // can't be compared with the literals keeps the page.
+                    (Some(min), _) if literals.iter().all(|datum| datum.lt(&min)) => {
                         // if no values are within the min bound, no rows can match
                         return Ok(false);
                     }
-                    (_, Some(max)) if !literals.iter().any(|datum| datum.le(&max)) => {
+                    (_, Some(max)) if literals.iter().all(|datum| datum.gt(&max)) => {
                         // if no values are within the max bound, no rows can match
                         return Ok(false);
                     }
@@ -973,21 +967,22 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::{
-        ArrayRef, Decimal128Array, FixedSizeBinaryArray, Float32Array, LargeBinaryArray,
-        RecordBatch, StringArray,
+        ArrayRef, Decimal128Array, FixedSizeBinaryArray, Float32Array, Int32Array,
+        LargeBinaryArray, RecordBatch, StringArray, UInt32Array,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use parquet::arrow::ArrowWriter;
     use parquet::arrow::arrow_reader::{
         ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelector,
     };
+    use parquet::file::metadata::page_index::{PageIndex, RowGroupPageIndex};
     use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData};
     use parquet::file::properties::WriterProperties;
     use rand::Rng;
     use tempfile::NamedTempFile;
 
     use super::PageIndexEvaluator;
-    use crate::expr::{Bind, Reference};
+    use crate::expr::{Bind, Predicate, Reference};
     use crate::spec::decimal_utils::decimal_from_i128_with_scale;
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, Type};
     use crate::{ErrorKind, Result};
@@ -1248,9 +1243,34 @@ mod tests {
         scale: i8,
         pages: &[Option<i128>],
     ) -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
+        let pages: Vec<ArrayRef> = pages
+            .iter()
+            .map(|page| {
+                Arc::new(
+                    match page {
+                        Some(unscaled) => {
+                            Decimal128Array::from_iter_values(std::iter::repeat_n(*unscaled, 1024))
+                        }
+                        None => Decimal128Array::from(vec![None; 1024]),
+                    }
+                    .with_precision_and_scale(precision, scale)
+                    .unwrap(),
+                ) as ArrayRef
+            })
+            .collect();
+        create_single_column_parquet_file(&pages)
+    }
+
+    /// Creates a single-column parquet file named `col` with one page per
+    /// 1024-row array in `pages`. Used to back an Iceberg field with a
+    /// narrower physical column, e.g. a `long` field with an `INT32` column
+    /// written before an `int` -> `long` promotion.
+    fn create_single_column_parquet_file(
+        pages: &[ArrayRef],
+    ) -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
         let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
-            "col_decimal",
-            DataType::Decimal128(precision, scale),
+            "col",
+            pages[0].data_type().clone(),
             true,
         )]));
 
@@ -1265,17 +1285,7 @@ mod tests {
         let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props)).unwrap();
 
         for page in pages {
-            let array = Arc::new(
-                match page {
-                    Some(unscaled) => {
-                        Decimal128Array::from_iter_values(std::iter::repeat_n(*unscaled, 1024))
-                    }
-                    None => Decimal128Array::from(vec![None; 1024]),
-                }
-                .with_precision_and_scale(precision, scale)
-                .unwrap(),
-            ) as ArrayRef;
-            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![array]).unwrap();
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![page.clone()]).unwrap();
             // Write rows one at a time so the writer splits into per-value pages.
             for i in 0..batch.num_rows() {
                 writer.write(&batch.slice(i, 1)).unwrap();
@@ -1292,18 +1302,26 @@ mod tests {
         Ok((metadata, temp_file))
     }
 
+    /// Creates a single-column parquet file with one 1024-row page per value,
+    /// using `to_array` to build each page.
+    fn create_parquet_file_from_values<T: Copy>(
+        values: &[T],
+        to_array: impl Fn(Vec<T>) -> ArrayRef,
+    ) -> Result<(Arc<ParquetMetaData>, NamedTempFile)> {
+        let pages: Vec<ArrayRef> = values.iter().map(|&v| to_array(vec![v; 1024])).collect();
+        create_single_column_parquet_file(&pages)
+    }
+
     /// Get the test metadata components for testing
     fn get_test_metadata(
         metadata: &ParquetMetaData,
     ) -> (
-        Vec<parquet::file::page_index::column_index::ColumnIndexMetaData>,
-        Vec<parquet::file::page_index::offset_index::OffsetIndexMetaData>,
+        RowGroupPageIndex,
         &parquet::file::metadata::RowGroupMetaData,
     ) {
         let row_group_metadata = metadata.row_group(0);
-        let column_index = metadata.column_index().unwrap()[0].to_vec();
-        let offset_index = metadata.offset_index().unwrap()[0].to_vec();
-        (column_index, offset_index, row_group_metadata)
+        let page_index = metadata.page_index_for_row_group(0);
+        (page_index, row_group_metadata)
     }
 
     #[test]
@@ -1341,13 +1359,11 @@ mod tests {
             .bind(iceberg_schema_ref.clone(), false)?;
 
         let row_group_metadata = metadata.row_group(0);
-        let column_index = metadata.column_index().unwrap()[0].to_vec();
-        let offset_index = metadata.offset_index().unwrap()[0].to_vec();
+        let page_index = metadata.page_index_for_row_group(0);
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1361,7 +1377,7 @@ mod tests {
     #[test]
     fn eval_is_null_select_only_pages_with_nulls() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1370,8 +1386,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1389,9 +1404,47 @@ mod tests {
     }
 
     #[test]
+    fn eval_selects_all_rows_when_column_lacks_offset_index() -> Result<()> {
+        let (metadata, _temp_file) = create_test_parquet_file()?;
+        let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
+
+        let page_index = metadata.page_index().unwrap();
+        let mut builder = page_index
+            .as_any()
+            .downcast_ref::<PageIndex>()
+            .unwrap()
+            .clone()
+            .into_builder();
+        builder.allocate_offset_indexes(1, 2);
+        builder.put_offset_index(page_index.offset_index(0, 1).unwrap().clone(), 0, 1);
+        let metadata = metadata
+            .as_ref()
+            .clone()
+            .into_builder()
+            .set_page_index(Some(Arc::new(builder.build())))
+            .build();
+
+        let filter = Reference::new("col_float")
+            .is_not_null()
+            .bind(iceberg_schema_ref.clone(), false)?;
+
+        let result = PageIndexEvaluator::eval(
+            &filter,
+            &metadata.page_index_for_row_group(0),
+            metadata.row_group(0),
+            &field_id_map,
+            iceberg_schema_ref.as_ref(),
+        )?;
+
+        assert_eq!(result, vec![RowSelector::select(4096)]);
+
+        Ok(())
+    }
+
+    #[test]
     fn eval_is_not_null_dont_select_pages_with_all_nulls() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1400,8 +1453,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1417,7 +1469,7 @@ mod tests {
     #[test]
     fn eval_is_nan_select_all() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1426,8 +1478,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1443,7 +1494,7 @@ mod tests {
     #[test]
     fn eval_not_nan_select_all() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1452,8 +1503,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1469,7 +1519,7 @@ mod tests {
     #[test]
     fn eval_inequality_nan_datum_all_rows_except_all_null_pages() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1478,8 +1528,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1495,7 +1544,7 @@ mod tests {
     #[test]
     fn eval_inequality_pages_containing_value_except_all_null_pages() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1504,8 +1553,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1525,7 +1573,7 @@ mod tests {
     #[test]
     fn eval_eq_pages_containing_value_except_all_null_pages() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1534,8 +1582,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1558,7 +1605,7 @@ mod tests {
     #[test]
     fn eval_not_eq_all_rows() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1567,8 +1614,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1584,7 +1630,7 @@ mod tests {
     #[test]
     fn eval_inequality_prunes_binary_pages_with_non_utf8_bounds() -> Result<()> {
         let (metadata, _temp_file) = create_binary_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
 
         let iceberg_schema = Arc::new(
             Schema::builder()
@@ -1606,8 +1652,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -1628,7 +1673,7 @@ mod tests {
         // order), so the evaluator skips page pruning rather than prune pages
         // that might match.
         let (metadata, _temp_file) = create_binary_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
 
         let iceberg_schema = Arc::new(
             Schema::builder()
@@ -1655,8 +1700,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -1675,7 +1719,7 @@ mod tests {
         // bounds aren't, so the evaluator skips page pruning for them rather than
         // abort the scan.
         let (metadata, _temp_file) = create_fixed_len_byte_array_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
 
         let iceberg_schema = Arc::new(
             Schema::builder()
@@ -1696,8 +1740,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -1716,7 +1759,7 @@ mod tests {
         // as a string fails, so the evaluator skips page pruning for the column
         // rather than aborting the whole file read.
         let (metadata, _temp_file) = create_binary_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
 
         let iceberg_schema = Arc::new(
             Schema::builder()
@@ -1739,8 +1782,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -1755,7 +1797,7 @@ mod tests {
     #[test]
     fn eval_starts_with_error_float_col() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1764,8 +1806,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1779,7 +1820,7 @@ mod tests {
     #[test]
     fn eval_starts_with_pages_containing_value_except_all_null_pages() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         // Test starts_with on string column where only some pages match
@@ -1791,8 +1832,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1810,7 +1850,7 @@ mod tests {
     fn eval_not_starts_with_pages_containing_value_except_pages_with_min_and_max_equal_to_prefix_and_all_null_pages()
     -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         // Test not_starts_with where one page has ALL values starting with prefix
@@ -1822,8 +1862,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1847,7 +1886,7 @@ mod tests {
     fn eval_in_length_of_set_above_limit_all_rows() -> Result<()> {
         let mut rng = rand::rng();
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         let filter = Reference::new("col_float")
@@ -1859,8 +1898,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1876,7 +1914,7 @@ mod tests {
     #[test]
     fn eval_in_valid_set_size_some_rows() -> Result<()> {
         let (metadata, _temp_file) = create_test_parquet_file()?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema_ref, field_id_map) = build_iceberg_schema_and_field_map()?;
 
         // Test is_in with multiple values using min/max bounds
@@ -1888,8 +1926,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema_ref.as_ref(),
@@ -1912,7 +1949,7 @@ mod tests {
     fn eval_inequality_prunes_int32_decimal_pages() -> Result<()> {
         // precision 9 -> Parquet INT32 page bounds.
         let (metadata, _temp_file) = create_decimal_parquet_file(9, 2, &[100, 200, 300, 400])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(9, 2)?;
 
         // Pages hold 1.00, 2.00, 3.00, 4.00. `> 2.50` keeps the pages whose
@@ -1923,8 +1960,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -1942,7 +1978,7 @@ mod tests {
     fn eval_in_prunes_int32_decimal_pages() -> Result<()> {
         // precision 9 -> Parquet INT32 page bounds.
         let (metadata, _temp_file) = create_decimal_parquet_file(9, 2, &[100, 200, 300, 400])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(9, 2)?;
 
         // Pages hold 1.00, 2.00, 3.00, 4.00. IN (2.00, 4.00) keeps only the
@@ -1953,8 +1989,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -1974,7 +2009,7 @@ mod tests {
     fn eval_inequality_prunes_int64_decimal_pages() -> Result<()> {
         // precision 18 -> Parquet INT64 page bounds.
         let (metadata, _temp_file) = create_decimal_parquet_file(18, 2, &[100, 200, 300, 400])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(18, 2)?;
 
         // Pages hold 1.00, 2.00, 3.00, 4.00. `> 2.50` keeps the pages whose
@@ -1985,8 +2020,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -2004,7 +2038,7 @@ mod tests {
     fn eval_in_prunes_int64_decimal_pages() -> Result<()> {
         // precision 18 -> Parquet INT64 page bounds.
         let (metadata, _temp_file) = create_decimal_parquet_file(18, 2, &[100, 200, 300, 400])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(18, 2)?;
 
         // Pages hold 1.00, 2.00, 3.00, 4.00. IN (2.00, 4.00) keeps only the
@@ -2015,8 +2049,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -2036,7 +2069,7 @@ mod tests {
     fn eval_inequality_prunes_negative_decimal_pages_at_boundary() -> Result<()> {
         // precision 9 -> Parquet INT32 page bounds, spanning negative values.
         let (metadata, _temp_file) = create_decimal_parquet_file(9, 2, &[-400, -200, 100, 300])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(9, 2)?;
 
         // Pages hold -4.00, -2.00, 1.00, 3.00. `>= -2.00` keeps the pages whose
@@ -2047,8 +2080,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -2066,7 +2098,7 @@ mod tests {
     fn eval_inequality_prunes_fixed_len_byte_array_decimal_pages() -> Result<()> {
         // precision 30 -> Parquet FIXED_LEN_BYTE_ARRAY page bounds.
         let (metadata, _temp_file) = create_decimal_parquet_file(30, 2, &[100, 200, 300, 400])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(30, 2)?;
 
         // Pages hold 1.00, 2.00, 3.00, 4.00. `> 2.50` keeps the pages whose
@@ -2077,8 +2109,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -2096,7 +2127,7 @@ mod tests {
     fn eval_in_prunes_fixed_len_byte_array_decimal_pages() -> Result<()> {
         // precision 30 -> Parquet FIXED_LEN_BYTE_ARRAY page bounds.
         let (metadata, _temp_file) = create_decimal_parquet_file(30, 2, &[100, 200, 300, 400])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(30, 2)?;
 
         // Pages hold 1.00, 2.00, 3.00, 4.00. IN (2.00, 4.00) keeps only the
@@ -2107,8 +2138,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -2131,7 +2161,7 @@ mod tests {
         // complement, so this only prunes correctly if the bounds are compared
         // numerically rather than by raw byte order.
         let (metadata, _temp_file) = create_decimal_parquet_file(30, 2, &[-400, -200, 100, 300])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(30, 2)?;
 
         // Pages hold -4.00, -2.00, 1.00, 3.00. `>= -2.00` keeps the pages whose
@@ -2142,8 +2172,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -2173,7 +2202,7 @@ mod tests {
         let mut page1 = [0u8; 13];
         page1[12] = 0xff; // unscaled 255 -> 2.55
         let (metadata, _temp_file) = create_truncated_flba_file(13, 4, &[&page0, &page1])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
 
         // The Iceberg schema calls the 13-byte column a Decimal(30,2).
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(30, 2)?;
@@ -2184,8 +2213,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -2205,7 +2233,7 @@ mod tests {
         // carry significant bits in the high-order bytes, and span both signs.
         let max = 10_i128.pow(38) - 1;
         let (metadata, _temp_file) = create_decimal_parquet_file(38, 2, &[-max, 0, max])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(38, 2)?;
 
         // `> 0` keeps only the +max page; the -max and 0 pages are pruned.
@@ -2215,8 +2243,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -2237,7 +2264,7 @@ mod tests {
         // The guard keys off the file's type_length (9), not the field
         // precision's canonical width (13).
         let (metadata, _temp_file) = create_decimal_parquet_file(20, 2, &[-400, 100, 300])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
         // Read the 9-byte column as decimal(30,2).
         let (iceberg_schema, field_id_map) = build_decimal_schema_and_field_map(30, 2)?;
 
@@ -2248,8 +2275,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -2271,7 +2297,7 @@ mod tests {
         // 1-2 hold 2.00 and 3.00.
         let (metadata, _temp_file) =
             create_decimal_parquet_file_with_null_pages(30, 2, &[None, Some(200), Some(300)])?;
-        let (column_index, offset_index, row_group_metadata) = get_test_metadata(&metadata);
+        let (page_index, row_group_metadata) = get_test_metadata(&metadata);
 
         // The column is optional so IS NULL binds to a real predicate (on a
         // required field it would simplify to always-false).
@@ -2297,8 +2323,7 @@ mod tests {
 
         let result = PageIndexEvaluator::eval(
             &filter,
-            &column_index,
-            &offset_index,
+            &page_index,
             row_group_metadata,
             &field_id_map,
             iceberg_schema.as_ref(),
@@ -2310,6 +2335,142 @@ mod tests {
         ]);
 
         Ok(())
+    }
+
+    #[test]
+    fn eval_keeps_int32_pages_of_promoted_long_field() -> Result<()> {
+        // An `int` -> `long` promotion leaves older files with INT32 page
+        // bounds, which can't be compared with a `long` literal.
+        let (metadata, _temp_file) = create_parquet_file_from_values(&[100, 200, 300, 400], |v| {
+            Arc::new(Int32Array::from(v))
+        })?;
+
+        assert_keeps_all_pages(&metadata, PrimitiveType::Long, 4096, [
+            Reference::new("col").less_than(Datum::long(250)),
+            Reference::new("col").less_than_or_equal_to(Datum::long(250)),
+            Reference::new("col").greater_than(Datum::long(250)),
+            Reference::new("col").greater_than_or_equal_to(Datum::long(250)),
+            // A literal outside the `int` range.
+            Reference::new("col").less_than(Datum::long(i64::from(i32::MAX) + 1)),
+            Reference::new("col").is_in([Datum::long(200), Datum::long(400)]),
+        ])
+    }
+
+    #[test]
+    fn eval_keeps_float_pages_of_promoted_double_field() -> Result<()> {
+        // A `float` -> `double` promotion leaves older files with FLOAT page
+        // bounds, which can't be compared with a `double` literal.
+        let (metadata, _temp_file) =
+            create_parquet_file_from_values(&[1.0_f32, 2.0, 3.0, 4.0], |v| {
+                Arc::new(Float32Array::from(v))
+            })?;
+
+        assert_keeps_all_pages(&metadata, PrimitiveType::Double, 4096, [
+            Reference::new("col").less_than(Datum::double(2.5)),
+            Reference::new("col").less_than_or_equal_to(Datum::double(2.5)),
+            Reference::new("col").greater_than(Datum::double(2.5)),
+            Reference::new("col").greater_than_or_equal_to(Datum::double(2.5)),
+            Reference::new("col").is_in([Datum::double(2.0), Datum::double(4.0)]),
+        ])
+    }
+
+    #[test]
+    fn eval_keeps_uint32_pages_of_long_field() -> Result<()> {
+        // Parquet `UINT_32` columns map to `long` but have INT32 page bounds.
+        // The last page mixes both values, so its raw signed max is smaller
+        // than its min and a sign-extending widening would prune it.
+        let mixed: Vec<u32> = [100_u32, 3_000_000_000].repeat(512);
+        let (metadata, _temp_file) = create_single_column_parquet_file(&[
+            Arc::new(UInt32Array::from(vec![100_u32; 1024])),
+            Arc::new(UInt32Array::from(vec![3_000_000_000_u32; 1024])),
+            Arc::new(UInt32Array::from(mixed)),
+        ])?;
+
+        let page_index = metadata.page_index_for_row_group(0);
+        let column_index = page_index.column_index(0).unwrap();
+        let parquet::file::page_index::column_index::ColumnIndexMetaData::INT32(idx) = column_index
+        else {
+            panic!("expected INT32 column index, got {column_index:?}");
+        };
+        let bounds: Vec<_> = idx.min_values_iter().zip(idx.max_values_iter()).collect();
+        assert_eq!(bounds.len(), 3);
+        assert_eq!(bounds[2], (Some(&100), Some(&(3_000_000_000_u32 as i32))));
+
+        assert_keeps_all_pages(&metadata, PrimitiveType::Long, 3072, [
+            Reference::new("col").equal_to(Datum::long(3_000_000_000_i64)),
+            Reference::new("col").greater_than(Datum::long(2_000_000_000)),
+            Reference::new("col").is_in([
+                Datum::long(3_000_000_000_i64),
+                Datum::long(4_000_000_000_i64),
+            ]),
+        ])
+    }
+
+    #[test]
+    fn eval_keeps_pages_with_bounds_incomparable_to_predicate() -> Result<()> {
+        // INT32 bounds on a `timestamp` field (e.g. a file whose column was
+        // written as `date`) can't be compared with the predicate literal.
+        let (metadata, _temp_file) = create_parquet_file_from_values(&[100, 200, 300, 400], |v| {
+            Arc::new(Int32Array::from(v))
+        })?;
+
+        assert_keeps_all_pages(&metadata, PrimitiveType::Timestamp, 4096, [
+            Reference::new("col").less_than(Datum::timestamp_micros(250)),
+            Reference::new("col").less_than_or_equal_to(Datum::timestamp_micros(250)),
+            Reference::new("col").greater_than(Datum::timestamp_micros(250)),
+            Reference::new("col").greater_than_or_equal_to(Datum::timestamp_micros(250)),
+            Reference::new("col").equal_to(Datum::timestamp_micros(250)),
+            Reference::new("col")
+                .is_in([Datum::timestamp_micros(200), Datum::timestamp_micros(400)]),
+        ])
+    }
+
+    /// Asserts that each of `filters`, bound to a single `field_type` field
+    /// over the column in `metadata`, selects all `row_count` rows. Pages
+    /// whose bounds can't be compared with the predicate might match.
+    fn assert_keeps_all_pages(
+        metadata: &ParquetMetaData,
+        field_type: PrimitiveType,
+        row_count: usize,
+        filters: impl IntoIterator<Item = Predicate>,
+    ) -> Result<()> {
+        let (page_index, row_group_metadata) = get_test_metadata(metadata);
+        let (iceberg_schema, field_id_map) = build_single_field_schema_and_field_map(field_type)?;
+
+        for filter in filters {
+            let filter = filter.bind(iceberg_schema.clone(), false)?;
+
+            let result = PageIndexEvaluator::eval(
+                &filter,
+                &page_index,
+                row_group_metadata,
+                &field_id_map,
+                iceberg_schema.as_ref(),
+            )?;
+
+            assert_eq!(result, vec![RowSelector::select(row_count)], "{filter}");
+        }
+
+        Ok(())
+    }
+
+    /// Builds a schema holding a single optional field `col` (id 1) of
+    /// `field_type`, mapped to parquet column 0.
+    fn build_single_field_schema_and_field_map(
+        field_type: PrimitiveType,
+    ) -> Result<(Arc<Schema>, HashMap<i32, usize>)> {
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_fields([Arc::new(NestedField::new(
+                    1,
+                    "col",
+                    Type::Primitive(field_type),
+                    false,
+                ))])
+                .build()?,
+        );
+
+        Ok((iceberg_schema, HashMap::from_iter([(1, 0)])))
     }
 
     /// Builds a decimal query [`Datum`] from an `unscaled` mantissa, matching

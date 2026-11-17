@@ -25,12 +25,13 @@ use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
 use crate::scan::{
-    BoundPredicates, ExpressionEvaluatorCache, FileScanTask, ManifestEvaluatorCache,
-    PartitionFilterCache,
+    BoundPredicates, ColumnStatsColumns, ExpressionEvaluatorCache, FileScanTask,
+    FileScanTaskColumnStats, ManifestEvaluatorCache, PartitionFilterCache,
 };
 use crate::spec::{
     ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
-    PartitionSpecRef, SchemaRef, SnapshotRef, SortOrderRef, StructType, TableMetadataRef,
+    PartitionSpecRef, PrimitiveType, SchemaRef, SnapshotRef, SortOrderRef, StructType,
+    TableMetadataRef,
 };
 use crate::{Error, ErrorKind, Result};
 
@@ -52,6 +53,7 @@ pub(crate) struct ManifestFileContext {
     partition_spec: Option<PartitionSpecRef>,
     unified_partition_type: Option<Arc<StructType>>,
     sort_orders: Arc<HashMap<i64, SortOrderRef>>,
+    column_stats_columns: Option<ColumnStatsColumns>,
 }
 
 /// Wraps a [`ManifestEntryRef`] alongside the objects that are needed
@@ -71,11 +73,33 @@ pub(crate) struct ManifestEntryContext {
     pub unified_partition_type: Option<Arc<StructType>>,
     pub sort_order_id: Option<i32>,
     pub sort_order: Option<SortOrderRef>,
+    pub column_stats_columns: Option<ColumnStatsColumns>,
+}
+
+/// Returns whether any `int` or `float` field of `written` is widened in `current`, to
+/// `long`/`double` or to `unknown` once its source column is dropped, i.e. partition
+/// values written with `written` need normalizing before they compare against predicates
+/// bound to the current schema or against delete-file partitions.
+fn partition_types_differ(current: &StructType, written: &StructType) -> bool {
+    current.fields().iter().zip(written.fields()).any(|(c, w)| {
+        matches!(
+            (
+                w.field_type.as_primitive_type(),
+                c.field_type.as_primitive_type()
+            ),
+            (
+                Some(PrimitiveType::Int),
+                Some(PrimitiveType::Long | PrimitiveType::Unknown)
+            ) | (
+                Some(PrimitiveType::Float),
+                Some(PrimitiveType::Double | PrimitiveType::Unknown)
+            )
+        )
+    })
 }
 
 impl ManifestFileContext {
-    /// Consumes this [`ManifestFileContext`], fetching its Manifest from FileIO and then
-    /// streaming its constituent [`ManifestEntries`] to the channel provided in the context
+    /// Fetches the manifest and streams its live entries to the context's channel.
     pub(crate) async fn fetch_manifest_and_stream_manifest_entries(self) -> Result<()> {
         let ManifestFileContext {
             object_cache,
@@ -91,11 +115,42 @@ impl ManifestFileContext {
             partition_spec,
             unified_partition_type,
             sort_orders,
+            column_stats_columns,
         } = self;
 
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
+        // A manifest written under an older schema stores partition values in that
+        // schema's (narrower) types. When the current partition type widens the one the
+        // manifest was written with (e.g. an int source column promoted to long), widen
+        // each entry's partition tuple here so the pruning evaluator and the delete-file
+        // index compare like-typed values. The gate compares the partition types
+        // themselves, not schema ids, since v1 may omit them (defaulting to 0). Column
+        // bounds are widened lazily where the metrics evaluator compares them.
+        let promotion_target: Option<(StructType, StructType)> = match partition_spec.as_ref() {
+            Some(spec) => {
+                let current = spec.partition_type(&snapshot_schema)?;
+                let written = spec.partition_type(manifest.metadata().schema())?;
+                partition_types_differ(&current, &written).then_some((current, written))
+            }
+            None => None,
+        };
+
         for manifest_entry in manifest.entries() {
+            if !manifest_entry.is_alive() {
+                continue;
+            }
+
+            let manifest_entry = match promotion_target.as_ref() {
+                Some((current, written)) => {
+                    let mut entry = manifest_entry.as_ref().clone();
+                    entry.data_file.partition =
+                        entry.data_file.promoted_partition(current, written)?;
+                    Arc::new(entry)
+                }
+                None => manifest_entry.clone(),
+            };
+
             // Carry the raw id through unresolved, then resolve it to an order for the
             // reader. The resolved order is `None` for the unsorted order (empty fields) so
             // that `Some` always means genuinely sorted, matching Java's `isSorted()` gate;
@@ -108,8 +163,7 @@ impl ManifestFileContext {
                 .cloned();
 
             let manifest_entry_context = ManifestEntryContext {
-                // TODO: refactor to avoid the expensive ManifestEntry clone
-                manifest_entry: manifest_entry.clone(),
+                manifest_entry,
                 expression_evaluator_cache: expression_evaluator_cache.clone(),
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
@@ -122,6 +176,7 @@ impl ManifestFileContext {
                 unified_partition_type: unified_partition_type.clone(),
                 sort_order_id,
                 sort_order,
+                column_stats_columns: column_stats_columns.clone(),
             };
 
             sender
@@ -170,6 +225,9 @@ impl ManifestEntryContext {
             .with_key_metadata(self.manifest_entry.data_file.key_metadata().map(Box::from))
             .with_sort_order_id(self.sort_order_id)
             .with_sort_order(self.sort_order)
+            .with_column_stats(self.column_stats_columns.as_deref().map(|columns| {
+                FileScanTaskColumnStats::from_data_file(self.manifest_entry.data_file(), columns)
+            }))
             .build()
     }
 
@@ -219,6 +277,9 @@ pub(crate) struct PlanContext {
     /// [`ManifestFileContext`] carries only this narrow map rather than the full table
     /// metadata. Mirrors how `unified_partition_type` carries a precomputed value.
     pub sort_orders: Arc<HashMap<i64, SortOrderRef>>,
+
+    /// Field ids whose column statistics each [`FileScanTask`] retains, or `None` to retain none.
+    pub column_stats_columns: Option<ColumnStatsColumns>,
 }
 
 impl PlanContext {
@@ -350,6 +411,7 @@ impl PlanContext {
                 .cloned(),
             unified_partition_type: self.unified_partition_type.clone(),
             sort_orders: self.sort_orders.clone(),
+            column_stats_columns: self.column_stats_columns.clone(),
         }
     }
 }

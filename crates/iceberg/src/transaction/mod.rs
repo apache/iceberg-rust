@@ -214,6 +214,7 @@ impl Transaction {
             )))
             .with_max_times(props.commit_num_retries()?)
             .with_factor(2.0)
+            .with_jitter()
             .build())
     }
 
@@ -264,8 +265,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
-        TableProperties,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, PartitionSpec, Struct,
+        TableMetadata, TableProperties, Transform,
     };
     use crate::table::{StaticTable, Table};
     use crate::test_utils::{make_encrypted_table, test_runtime};
@@ -332,6 +333,47 @@ mod tests {
             .unwrap()
     }
 
+    pub(crate) fn make_v3_minimal_table() -> Table {
+        let file = File::open(format!(
+            "{}/testdata/table_metadata/{}",
+            env!("CARGO_MANIFEST_DIR"),
+            "TableMetadataV3ValidMinimal.json"
+        ))
+        .unwrap();
+        let reader = BufReader::new(file);
+        let resp = serde_json::from_reader::<_, TableMetadata>(reader).unwrap();
+
+        Table::builder()
+            .metadata(resp)
+            .metadata_location("s3://bucket/test/location/metadata/v1.json")
+            .identifier(TableIdent::from_strs(["ns1", "test1"]).unwrap())
+            .file_io(FileIO::new_with_memory())
+            .runtime(test_runtime())
+            .build()
+            .unwrap()
+    }
+
+    pub(super) fn with_bucket_partition_spec(table: Table) -> Table {
+        let spec = PartitionSpec::builder(table.metadata().current_schema().clone())
+            .add_partition_field("x", "x", Transform::Identity)
+            .unwrap()
+            .add_partition_field("y", "y_bucket", Transform::Bucket(16))
+            .unwrap()
+            .build()
+            .unwrap()
+            .into_unbound();
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .add_default_partition_spec(spec)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        table.with_metadata(Arc::new(metadata))
+    }
+
     async fn make_v2_minimal_readonly_table() -> Table {
         let table = make_v2_minimal_table();
         StaticTable::from_metadata(
@@ -379,8 +421,11 @@ mod tests {
 
     /// Helper function to create a test table with retry properties
     pub(super) fn setup_test_table(num_retries: &str) -> Table {
-        let table = make_v2_table();
+        with_retry_properties(make_v2_table(), num_retries)
+    }
 
+    /// Sets fast commit retry properties on `table`.
+    pub(super) fn with_retry_properties(table: Table, num_retries: &str) -> Table {
         // Set retry properties
         let mut props = HashMap::new();
         props.insert("commit.retry.min-wait-ms".to_string(), "10".to_string());
@@ -542,6 +587,18 @@ mod tests {
             assert_eq!(err.message(), "Commit conflict");
             assert!(err.retryable(), "Error should be retryable");
         }
+    }
+
+    #[test]
+    fn test_commit_backoff_is_jittered() {
+        let table = setup_test_table("4");
+        let delays = || {
+            Transaction::build_backoff(table.metadata().table_properties())
+                .unwrap()
+                .collect::<Vec<_>>()
+        };
+
+        assert_ne!(delays(), delays());
     }
 
     #[tokio::test]

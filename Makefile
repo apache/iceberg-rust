@@ -90,7 +90,7 @@ check-public-api: install-cargo-public-api
 	if [ $$fail -ne 0 ]; then exit 1; fi
 
 check-license-notice:
-	bash ./dev/check_license_notice.sh
+	python3 ./dev/release/licenses.py crates check
 
 # Keep version in sync with the CI lint install step in .github/workflows/ci.yml.
 install-cargo-deny:
