@@ -2977,6 +2977,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "iceberg-aws"
+version = "0.10.1"
+dependencies = [
+ "aws-config",
+ "aws-credential-types",
+ "aws-sdk-sts",
+ "iceberg",
+ "iceberg-property-macro",
+ "mockito",
+ "reqsign-aws-v4",
+ "reqsign-core",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "iceberg-cache-moka"
 version = "0.10.1"
 dependencies = [
