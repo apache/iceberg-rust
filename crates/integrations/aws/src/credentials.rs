@@ -31,10 +31,17 @@ use tokio::sync::RwLock;
 
 const REFRESH_RETRY_BACKOFF: Duration = Duration::from_secs(30);
 
-#[derive(Debug)]
 pub(crate) struct RefreshingCredentialsProvider {
     inner: AssumeRoleProvider,
     cached: RwLock<CachedCredentialsState>,
+}
+
+impl Debug for RefreshingCredentialsProvider {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshingCredentialsProvider")
+            .field("cached", &self.cached)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Default)]
@@ -105,11 +112,12 @@ impl RefreshingCredentialsProvider {
                 Ok(credentials)
             }
             Err(error) => {
-                state.retry_not_before = Some(now + REFRESH_RETRY_BACKOFF);
+                let failed_at = SystemTime::now();
+                state.retry_not_before = Some(failed_at + REFRESH_RETRY_BACKOFF);
                 if let Some(credentials) = state
                     .credentials
                     .as_ref()
-                    .filter(|credentials| credentials_are_unexpired(credentials, now))
+                    .filter(|credentials| credentials_are_unexpired(credentials, failed_at))
                 {
                     tracing::warn!(
                         "failed to refresh AssumeRole credentials, falling back to cached \
@@ -481,6 +489,31 @@ mod tests {
         assert!(!formatted.contains("cached-secret-key"));
         assert!(!formatted.contains("cached-access-key"));
         assert!(!formatted.contains("cached-session-token"));
+        assert!(!formatted.contains("base-access-key"));
         assert!(formatted.contains("has_credentials: true"));
+    }
+
+    #[tokio::test]
+    async fn aws_sdk_credential_provider_propagates_provider_error() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/")
+            .with_status(403)
+            .with_header("content-type", "text/xml")
+            .with_body(assume_role_error_response())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let refreshing =
+            RefreshingCredentialsProvider::new(build_assume_role_provider(&server.url()).await);
+        let sdk_config = SdkConfig::builder()
+            .credentials_provider(SharedCredentialsProvider::new(refreshing))
+            .build();
+        let adapter = AwsSdkCredentialProvider::from_sdk_config(&sdk_config).unwrap();
+
+        let result = adapter.provide_credential(&Context::new()).await;
+        assert!(result.is_err());
+        mock.assert_async().await;
     }
 }

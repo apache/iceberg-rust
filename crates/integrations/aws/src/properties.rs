@@ -137,18 +137,17 @@ impl AwsProperties<'_> {
     ) -> HashMap<String, String> {
         let mut s3_props = self.properties.clone();
 
-        if !s3_props.contains_key(S3_ACCESS_KEY_ID)
-            && let Some(access_key_id) = s3_props.get(Self::PROPERTY_ACCESS_KEY_ID)
-        {
-            s3_props.insert(S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string());
-        }
-        if !s3_props.contains_key(S3_SECRET_ACCESS_KEY)
-            && let Some(secret_access_key) = s3_props.get(Self::PROPERTY_SECRET_ACCESS_KEY)
-        {
-            s3_props.insert(
-                S3_SECRET_ACCESS_KEY.to_string(),
-                secret_access_key.to_string(),
-            );
+        if !self.has_explicit_s3_credentials() {
+            if let Some(access_key_id) = s3_props.get(Self::PROPERTY_ACCESS_KEY_ID).cloned() {
+                s3_props.insert(S3_ACCESS_KEY_ID.to_string(), access_key_id);
+            }
+            if let Some(secret_access_key) = s3_props.get(Self::PROPERTY_SECRET_ACCESS_KEY).cloned()
+            {
+                s3_props.insert(S3_SECRET_ACCESS_KEY.to_string(), secret_access_key);
+            }
+            if let Some(session_token) = s3_props.get(Self::PROPERTY_SESSION_TOKEN).cloned() {
+                s3_props.insert(S3_SESSION_TOKEN.to_string(), session_token);
+            }
         }
         if !s3_props.contains_key(S3_REGION) {
             if let Some(region) = s3_props.get(Self::PROPERTY_REGION_NAME) {
@@ -156,11 +155,6 @@ impl AwsProperties<'_> {
             } else if let Some(region) = resolved_region {
                 s3_props.insert(S3_REGION.to_string(), region.to_string());
             }
-        }
-        if !s3_props.contains_key(S3_SESSION_TOKEN)
-            && let Some(session_token) = s3_props.get(Self::PROPERTY_SESSION_TOKEN)
-        {
-            s3_props.insert(S3_SESSION_TOKEN.to_string(), session_token.to_string());
         }
         if !s3_props.contains_key(S3_ENDPOINT)
             && let Some(aws_endpoint) = endpoint_uri
@@ -429,6 +423,36 @@ mod tests {
         assert!(!debug_output.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(!debug_output.contains("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"));
         assert!(!debug_output.contains("AQoDYXdzEJr...secret-token"));
+        assert!(AwsProperties::is_sensitive_property("db_password"));
+        assert!(AwsProperties::is_sensitive_property("custom_credential"));
+        assert!(AwsProperties::is_sensitive_property(
+            "AWS_SECRET_ACCESS_KEY"
+        ));
+        assert!(!AwsProperties::is_sensitive_property("table_bucket_arn"));
+    }
+
+    #[test]
+    fn does_not_leak_aws_session_token_when_explicit_s3_credentials_present() {
+        let mut properties = assume_role_properties();
+        properties.insert(AWS_SESSION_TOKEN.to_string(), "aws-temp-token".to_string());
+        properties.insert(S3_ACCESS_KEY_ID.to_string(), "s3-static-key".to_string());
+        properties.insert(
+            S3_SECRET_ACCESS_KEY.to_string(),
+            "s3-static-secret".to_string(),
+        );
+
+        let mapped =
+            AwsProperties::new(&properties).s3_file_io_properties(None, DEFAULT_SESSION_NAME, None);
+
+        assert_eq!(
+            mapped.get(S3_ACCESS_KEY_ID).map(String::as_str),
+            Some("s3-static-key")
+        );
+        assert_eq!(
+            mapped.get(S3_SECRET_ACCESS_KEY).map(String::as_str),
+            Some("s3-static-secret")
+        );
+        assert!(!mapped.contains_key(S3_SESSION_TOKEN));
     }
 
     #[test]
