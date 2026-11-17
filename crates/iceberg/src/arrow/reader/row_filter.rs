@@ -241,7 +241,9 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::Runtime;
-    use crate::arrow::{ArrowReader, ArrowReaderBuilder};
+    use crate::arrow::{
+        ArrowReader, ArrowReaderBuilder, ArrowReaderOptions as ReaderOptions, ParquetReadOptions,
+    };
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
@@ -685,7 +687,11 @@ mod tests {
             .unwrap();
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_group_filtering_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(true)
+                    .build(),
+            )
             .build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
@@ -1053,7 +1059,11 @@ mod tests {
         );
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_group_filtering_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(true)
+                    .build(),
+            )
             .build();
 
         let task = FileScanTask::builder()
@@ -1135,8 +1145,12 @@ mod tests {
         assert!(matches!(predicate, BoundPredicate::Not(_)));
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_group_filtering_enabled(false)
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(false)
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let task = FileScanTask::builder()
@@ -1418,7 +1432,11 @@ mod tests {
         let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
             // Enabling row selection ()
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let file_size = std::fs::metadata(&file_path).unwrap().len();
@@ -1506,7 +1524,11 @@ mod tests {
             .unwrap();
 
         let reader_sub2 = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let task_sub2 = FileScanTask::builder()
@@ -1620,10 +1642,18 @@ mod tests {
     ) -> (Vec<RecordBatch>, u64) {
         let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-            .with_bloom_filter_enabled(bloom_enabled)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_bloom_filter_enabled(bloom_enabled)
+                    .build(),
+            )
             // Keep the fixed footer prefetch small so the byte measurement reflects
             // row group I/O rather than a constant metadata read.
-            .with_metadata_size_hint(8 * 1024)
+            .with_parquet_options(
+                ParquetReadOptions::builder()
+                    .with_metadata_size_hint(8 * 1024)
+                    .build(),
+            )
             .build();
 
         let task = FileScanTask::builder()
