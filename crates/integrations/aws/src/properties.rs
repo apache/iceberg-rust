@@ -18,11 +18,14 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 
+use aws_config::SdkConfig;
 use iceberg::io::{
     S3_ACCESS_KEY_ID, S3_ASSUME_ROLE_ARN, S3_ASSUME_ROLE_EXTERNAL_ID, S3_ASSUME_ROLE_SESSION_NAME,
     S3_ENDPOINT, S3_REGION, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN,
 };
 use iceberg_property_macro::properties_view;
+
+use crate::AwsSdkCredentialProvider;
 
 /// AWS profile name property key.
 pub const AWS_PROFILE_NAME: &str = AwsProperties::PROPERTY_PROFILE_NAME;
@@ -109,6 +112,15 @@ impl AwsProperties<'_> {
     /// Session name passed to AWS STS AssumeRole property key.
     pub const PROPERTY_ASSUME_ROLE_SESSION_NAME: &'static str = "client.assume-role.session-name";
 
+    /// Creates an AWS SDK configuration from these properties and an optional catalog endpoint URI.
+    pub async fn create_sdk_config(
+        &self,
+        endpoint_uri: Option<&str>,
+        default_session_name: &str,
+    ) -> SdkConfig {
+        crate::config::create_sdk_config(self, endpoint_uri, default_session_name).await
+    }
+
     /// Returns whether the caller supplied S3-specific static credentials.
     pub fn has_explicit_s3_credentials(&self) -> bool {
         self.properties.contains_key(S3_ACCESS_KEY_ID)
@@ -167,6 +179,32 @@ impl AwsProperties<'_> {
         s3_props
     }
 
+    /// Prepares S3 `FileIO` properties and an optional shared SDK credential provider.
+    pub fn prepare_s3_file_io(
+        &self,
+        sdk_config: &SdkConfig,
+        endpoint_uri: Option<&str>,
+        default_session_name: &str,
+    ) -> (HashMap<String, String>, Option<AwsSdkCredentialProvider>) {
+        let resolved_region = sdk_config.region().map(AsRef::as_ref);
+        let mut file_io_props =
+            self.s3_file_io_properties(endpoint_uri, default_session_name, resolved_region);
+
+        let sdk_cred_provider = if file_io_props.contains_key(Self::PROPERTY_ASSUME_ROLE_ARN)
+            && !self.has_explicit_s3_credentials()
+        {
+            let provider = AwsSdkCredentialProvider::from_sdk_config(sdk_config);
+            if provider.is_some() {
+                remove_assume_role_properties(&mut file_io_props);
+            }
+            provider
+        } else {
+            None
+        };
+
+        (file_io_props, sdk_cred_provider)
+    }
+
     /// Returns whether `key` holds a secret value that should be redacted in debug output.
     pub fn is_sensitive_property(key: &str) -> bool {
         let lower = key.to_ascii_lowercase();
@@ -178,7 +216,6 @@ impl AwsProperties<'_> {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn remove_assume_role_properties(properties: &mut HashMap<String, String>) {
     properties.remove(S3_ASSUME_ROLE_ARN);
     properties.remove(S3_ASSUME_ROLE_EXTERNAL_ID);
@@ -411,5 +448,116 @@ mod tests {
         assert!(!mapped.contains_key(S3_ASSUME_ROLE_ARN));
         assert!(!mapped.contains_key(S3_ASSUME_ROLE_EXTERNAL_ID));
         assert!(!mapped.contains_key(S3_ASSUME_ROLE_SESSION_NAME));
+    }
+
+    #[test]
+    fn prepare_s3_file_io_bridges_provider_and_strips_assume_role_props() {
+        let mut properties = assume_role_properties();
+        properties.insert(AWS_SESSION_TOKEN.to_string(), "base-token".to_string());
+        properties.insert(
+            AWS_ASSUME_ROLE_EXTERNAL_ID.to_string(),
+            "ext-id".to_string(),
+        );
+        properties.insert(
+            AWS_ASSUME_ROLE_SESSION_NAME.to_string(),
+            "custom-session".to_string(),
+        );
+
+        let sdk_config = SdkConfig::builder()
+            .credentials_provider(
+                aws_credential_types::provider::SharedCredentialsProvider::new(
+                    aws_sdk_sts::config::Credentials::new(
+                        "assumed-access-key",
+                        "assumed-secret-key",
+                        Some("assumed-token".to_string()),
+                        None,
+                        "test",
+                    ),
+                ),
+            )
+            .region(aws_config::Region::new("eu-west-1"))
+            .build();
+
+        let view = AwsProperties::new(&properties);
+        let (file_io_props, provider) = view.prepare_s3_file_io(
+            &sdk_config,
+            Some("http://s3-endpoint.example"),
+            DEFAULT_SESSION_NAME,
+        );
+
+        assert!(provider.is_some());
+        assert_eq!(
+            file_io_props.get(S3_ACCESS_KEY_ID).map(String::as_str),
+            Some("base-access-key")
+        );
+        assert_eq!(
+            file_io_props.get(S3_SECRET_ACCESS_KEY).map(String::as_str),
+            Some("base-secret-key")
+        );
+        assert_eq!(
+            file_io_props.get(S3_SESSION_TOKEN).map(String::as_str),
+            Some("base-token")
+        );
+        assert_eq!(
+            file_io_props.get(S3_ENDPOINT).map(String::as_str),
+            Some("http://s3-endpoint.example")
+        );
+        assert_eq!(
+            file_io_props.get(S3_REGION).map(String::as_str),
+            Some("ap-southeast-2")
+        );
+        assert!(!file_io_props.contains_key(S3_ASSUME_ROLE_ARN));
+        assert!(!file_io_props.contains_key(S3_ASSUME_ROLE_EXTERNAL_ID));
+        assert!(!file_io_props.contains_key(S3_ASSUME_ROLE_SESSION_NAME));
+    }
+
+    #[test]
+    fn prepare_s3_file_io_keeps_assume_role_props_when_explicit_s3_credentials_present() {
+        let mut properties = assume_role_properties();
+        properties.insert(S3_ACCESS_KEY_ID.to_string(), "s3-access-key".to_string());
+        properties.insert(
+            AWS_ASSUME_ROLE_EXTERNAL_ID.to_string(),
+            "ext-id".to_string(),
+        );
+
+        let sdk_config = SdkConfig::builder()
+            .credentials_provider(
+                aws_credential_types::provider::SharedCredentialsProvider::new(
+                    aws_sdk_sts::config::Credentials::new(
+                        "assumed-access-key",
+                        "assumed-secret-key",
+                        None,
+                        None,
+                        "test",
+                    ),
+                ),
+            )
+            .build();
+
+        let view = AwsProperties::new(&properties);
+        let (file_io_props, provider) =
+            view.prepare_s3_file_io(&sdk_config, None, DEFAULT_SESSION_NAME);
+
+        assert!(provider.is_none());
+        assert_eq!(
+            file_io_props.get(S3_ACCESS_KEY_ID).map(String::as_str),
+            Some("s3-access-key")
+        );
+        assert_eq!(
+            file_io_props.get(S3_ASSUME_ROLE_ARN).map(String::as_str),
+            Some("arn:aws:iam::123456789012:role/TestRole")
+        );
+        assert_eq!(
+            file_io_props
+                .get(S3_ASSUME_ROLE_EXTERNAL_ID)
+                .map(String::as_str),
+            Some("ext-id")
+        );
+        assert_eq!(
+            file_io_props
+                .get(S3_ASSUME_ROLE_SESSION_NAME)
+                .map(String::as_str),
+            Some(DEFAULT_SESSION_NAME)
+        );
     }
 }

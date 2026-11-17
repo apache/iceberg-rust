@@ -76,7 +76,6 @@ impl CachedCredentialsState {
 }
 
 impl RefreshingCredentialsProvider {
-    #[allow(dead_code)]
     pub(crate) fn new(inner: AssumeRoleProvider) -> Self {
         Self {
             inner,

@@ -19,6 +19,7 @@
 
 #![deny(missing_docs)]
 
+mod config;
 mod credentials;
 mod properties;
 
