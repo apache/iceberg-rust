@@ -929,6 +929,19 @@ mod tests {
         .await;
     }
 
+    #[tokio::test]
+    async fn test_write_manifest_with_repeated_uuid_partition_type() {
+        roundtrip_two_partition_fields_of_type(Type::Primitive(PrimitiveType::Uuid), [
+            Literal::uuid(uuid::Uuid::from_u128(
+                0xf79c3e09_677c_4bbd_a479_3f349cb785e7,
+            )),
+            Literal::uuid(uuid::Uuid::from_u128(
+                0x0b1c4f2a_9d3e_4a5b_8c6d_7e8f9a0b1c2d,
+            )),
+        ])
+        .await;
+    }
+
     /// Writes a manifest with one added data file and returns the field names
     /// of its Avro `data_file` record.
     async fn written_data_file_field_names(
@@ -1074,7 +1087,7 @@ mod tests {
             .unwrap();
 
         let output = write_and_read_data_file(
-            FormatVersion::V1,
+            ManifestWriterBuilder::build_v1,
             Type::Primitive(PrimitiveType::Uuid),
             data_file.clone(),
         )
@@ -1098,7 +1111,7 @@ mod tests {
             .unwrap();
 
         let output = write_and_read_data_file(
-            FormatVersion::V2,
+            ManifestWriterBuilder::build_v2_data,
             Type::Primitive(PrimitiveType::Uuid),
             data_file.clone(),
         )
@@ -1122,7 +1135,7 @@ mod tests {
             .unwrap();
 
         let output = write_and_read_data_file(
-            FormatVersion::V3,
+            ManifestWriterBuilder::build_v3_data,
             Type::Primitive(PrimitiveType::Uuid),
             data_file.clone(),
         )
@@ -1146,7 +1159,7 @@ mod tests {
             .unwrap();
 
         let output = write_and_read_data_file(
-            FormatVersion::V1,
+            ManifestWriterBuilder::build_v1,
             Type::Primitive(PrimitiveType::Fixed(16)),
             data_file.clone(),
         )
@@ -1170,7 +1183,7 @@ mod tests {
             .unwrap();
 
         let output = write_and_read_data_file(
-            FormatVersion::V2,
+            ManifestWriterBuilder::build_v2_data,
             Type::Primitive(PrimitiveType::Fixed(16)),
             data_file.clone(),
         )
@@ -1194,7 +1207,7 @@ mod tests {
             .unwrap();
 
         let output = write_and_read_data_file(
-            FormatVersion::V3,
+            ManifestWriterBuilder::build_v3_data,
             Type::Primitive(PrimitiveType::Fixed(16)),
             data_file.clone(),
         )
@@ -1206,7 +1219,7 @@ mod tests {
     /// Writes `data_file` to a manifest partitioned by identity on one column
     /// of `partition_field_type`, then reads it back with [`ManifestReader`].
     async fn write_and_read_data_file(
-        format_version: FormatVersion,
+        build: fn(ManifestWriterBuilder) -> ManifestWriter,
         partition_field_type: Type,
         data_file: DataFile,
     ) -> DataFile {
@@ -1225,18 +1238,13 @@ mod tests {
             .build()
             .unwrap();
         let io = FileIO::new_with_memory();
-        let builder = ManifestWriterBuilder::new(
+        let mut writer = build(ManifestWriterBuilder::new(
             io.new_output("memory:///table/metadata/manifest.avro")
                 .unwrap(),
             Some(1),
             schema,
             partition_spec,
-        );
-        let mut writer = match format_version {
-            FormatVersion::V1 => builder.build_v1(),
-            FormatVersion::V2 => builder.build_v2_data(),
-            FormatVersion::V3 => builder.build_v3_data(),
-        };
+        ));
         writer.add_file(data_file, 1).unwrap();
         let manifest_file = writer.write_manifest_file().await.unwrap();
 
