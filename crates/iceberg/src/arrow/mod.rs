@@ -29,9 +29,11 @@ pub(crate) mod delete_filter;
 
 mod int96;
 mod manifest;
+mod manifest_filter;
 pub use manifest::{
     ManifestEntryBatchReader, ManifestListBatchReader, read_manifest_entries, read_manifest_list,
 };
+pub use manifest_filter::ManifestFilter;
 mod reader;
 /// RecordBatch projection utilities
 pub mod record_batch_projector;
