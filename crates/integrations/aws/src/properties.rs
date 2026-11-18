@@ -184,7 +184,8 @@ impl AwsProperties<'_> {
         let mut file_io_props =
             self.s3_file_io_properties(endpoint_uri, default_session_name, resolved_region);
 
-        let sdk_cred_provider = if file_io_props.contains_key(Self::PROPERTY_ASSUME_ROLE_ARN)
+        let sdk_cred_provider = if (file_io_props.contains_key(Self::PROPERTY_ASSUME_ROLE_ARN)
+            || file_io_props.contains_key(Self::PROPERTY_PROFILE_NAME))
             && !self.has_explicit_s3_credentials()
         {
             let provider = AwsSdkCredentialProvider::from_sdk_config(sdk_config);
@@ -583,5 +584,40 @@ mod tests {
                 .map(String::as_str),
             Some(DEFAULT_SESSION_NAME)
         );
+    }
+
+    #[test]
+    fn prepare_s3_file_io_bridges_provider_for_named_profile_without_assume_role() {
+        let properties = HashMap::from([(AWS_PROFILE_NAME.to_string(), "my-profile".to_string())]);
+        let sdk_config = SdkConfig::builder()
+            .credentials_provider(
+                aws_credential_types::provider::SharedCredentialsProvider::new(
+                    aws_sdk_sts::config::Credentials::new(
+                        "profile-access-key",
+                        "profile-secret-key",
+                        None,
+                        None,
+                        "profile",
+                    ),
+                ),
+            )
+            .region(aws_config::Region::new("us-west-2"))
+            .build();
+
+        let view = AwsProperties::new(&properties);
+        let (file_io_props, provider) =
+            view.prepare_s3_file_io(&sdk_config, None, DEFAULT_SESSION_NAME);
+
+        assert!(provider.is_some());
+        assert_eq!(
+            file_io_props.get(S3_REGION).map(String::as_str),
+            Some("us-west-2")
+        );
+
+        let mut with_explicit_s3 = properties;
+        with_explicit_s3.insert(S3_ACCESS_KEY_ID.to_string(), "s3-key".to_string());
+        let (_, provider_with_explicit_s3) = AwsProperties::new(&with_explicit_s3)
+            .prepare_s3_file_io(&sdk_config, None, DEFAULT_SESSION_NAME);
+        assert!(provider_with_explicit_s3.is_none());
     }
 }

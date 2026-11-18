@@ -47,6 +47,10 @@ impl Debug for RefreshingCredentialsProvider {
 #[derive(Default)]
 struct CachedCredentialsState {
     credentials: Option<AwsSdkCredentials>,
+    /// Suppresses proactive early-refresh STS retries for 30s after a transient refresh
+    /// failure while unexpired cached credentials remain available. Cold-start or post-expiry
+    /// loads without valid cached credentials still attempt STS rather than negative-caching
+    /// a startup blip for 30s.
     retry_not_before: Option<SystemTime>,
 }
 
