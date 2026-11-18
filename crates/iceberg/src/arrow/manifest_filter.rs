@@ -621,6 +621,9 @@ fn decode_bounds(bounds: &BinaryArray, field_type: &PrimitiveType) -> Result<Arr
                 _ => f64::from_le_bytes(bytes.try_into()?),
             })
         })?)),
+        // The default precision and scale are safe because only the order of
+        // unscaled values matters, and binding gives the literal the field's
+        // scale. `literal_scalar` uses the same default, so the types match.
         PrimitiveType::Decimal { .. } => {
             Arc::new(Decimal128Array::from(decode(bounds, |bytes| {
                 i128_from_be_bytes(bytes)
