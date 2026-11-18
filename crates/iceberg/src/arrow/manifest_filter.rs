@@ -901,7 +901,7 @@ mod tests {
             b().equal_to(Datum::bool(true)),
             b().not_equal_to(Datum::bool(true)),
         ]);
-        for prefix in ["a", "ab", "abc", "abd", "abcd", "abz", "abzz", "b"] {
+        for prefix in ["a", "ab", "abc", "abm", "abcd", "abz", "abzz", "b"] {
             predicates.push(Reference::new("s").starts_with(Datum::string(prefix)));
             predicates.push(Reference::new("s").not_starts_with(Datum::string(prefix)));
         }
@@ -1037,7 +1037,7 @@ mod tests {
     async fn test_case_insensitive_filter() {
         let predicates = vec![
             Reference::new("I").less_than(Datum::int(10)),
-            Reference::new("S").starts_with(Datum::string("abd")),
+            Reference::new("S").starts_with(Datum::string("abm")),
         ];
         let pruned = assert_masks_match_manifest_evaluator(
             &table_schema(),
