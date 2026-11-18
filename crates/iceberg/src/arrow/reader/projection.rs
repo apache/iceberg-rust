@@ -664,6 +664,11 @@ mod tests {
     };
     use crate::{ErrorKind, Runtime};
 
+    /// Microseconds in one day, the unit an Iceberg `date` becomes when promoted to `timestamp`.
+    const MICROS_PER_DAY: i64 = 86_400_000_000;
+    /// Nanoseconds in one microsecond.
+    const NANOS_PER_MICRO: i64 = 1_000;
+
     #[test]
     fn test_name_mapping_duplicate_alias_preserves_first_match() {
         let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
@@ -3116,14 +3121,17 @@ message schema {
         let new_schema = Arc::new(schema(PrimitiveType::Timestamp, PrimitiveType::TimestampNs));
         let micros: Vec<i64> = days
             .iter()
-            .map(|d| i64::from(*d) * 86_400_000_000)
+            .map(|d| i64::from(*d) * MICROS_PER_DAY)
             .collect();
         let expected = RecordBatch::try_new(
             Arc::new(schema_to_arrow_schema(&new_schema).unwrap()),
             vec![
                 Arc::new(TimestampMicrosecondArray::from(micros.clone())),
                 Arc::new(TimestampNanosecondArray::from(
-                    micros.iter().map(|us| us * 1000).collect::<Vec<_>>(),
+                    micros
+                        .iter()
+                        .map(|us| us * NANOS_PER_MICRO)
+                        .collect::<Vec<_>>(),
                 )),
                 ints,
             ],
@@ -3131,20 +3139,21 @@ message schema {
         .unwrap();
 
         let tmp_dir = TempDir::new().unwrap();
-        let file_path = format!("{}/date.parquet", tmp_dir.path().to_str().unwrap());
+        let file_path = tmp_dir.path().join("date.parquet");
         let mut writer =
             ArrowWriter::try_new(File::create(&file_path).unwrap(), old_batch.schema(), None)
                 .unwrap();
         writer.write(&old_batch).unwrap();
         writer.close().unwrap();
+        let file_len = std::fs::metadata(&file_path).unwrap().len();
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
         let tasks = Box::pin(futures::stream::iter(
             vec![Ok(FileScanTask::builder()
-                .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
+                .with_file_size_in_bytes(file_len)
                 .with_start(0)
-                .with_length(0)
-                .with_data_file_path(file_path)
+                .with_length(file_len)
+                .with_data_file_path(file_path.to_string_lossy().to_string())
                 .with_data_file_format(DataFileFormat::Parquet)
                 .with_schema(new_schema)
                 .with_project_field_ids(vec![1, 2, 3])
