@@ -96,6 +96,18 @@ impl serde_core::ser::Serialize for iceberg::arrow::ArrowReaderOptions
 pub fn iceberg::arrow::ArrowReaderOptions::serialize<__S>(&self, __serializer: __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
 impl<'de> serde_core::de::Deserialize<'de> for iceberg::arrow::ArrowReaderOptions where iceberg::arrow::ArrowReaderOptions: core::default::Default
 pub fn iceberg::arrow::ArrowReaderOptions::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+pub struct iceberg::arrow::ManifestEntryBatchReader<B: core::convert::AsRef<[u8]>>
+impl<B: core::convert::AsRef<[u8]>> iceberg::arrow::ManifestEntryBatchReader<B>
+pub fn iceberg::arrow::ManifestEntryBatchReader<B>::schema(&self) -> arrow_schema::schema::SchemaRef
+impl<B: core::convert::AsRef<[u8]>> core::iter::traits::iterator::Iterator for iceberg::arrow::ManifestEntryBatchReader<B>
+pub type iceberg::arrow::ManifestEntryBatchReader<B>::Item = core::result::Result<arrow_array::record_batch::RecordBatch, iceberg::Error>
+pub fn iceberg::arrow::ManifestEntryBatchReader<B>::next(&mut self) -> core::option::Option<Self::Item>
+pub struct iceberg::arrow::ManifestListBatchReader<B: core::convert::AsRef<[u8]>>
+impl<B: core::convert::AsRef<[u8]>> iceberg::arrow::ManifestListBatchReader<B>
+pub fn iceberg::arrow::ManifestListBatchReader<B>::schema(&self) -> arrow_schema::schema::SchemaRef
+impl<B: core::convert::AsRef<[u8]>> core::iter::traits::iterator::Iterator for iceberg::arrow::ManifestListBatchReader<B>
+pub type iceberg::arrow::ManifestListBatchReader<B>::Item = core::result::Result<arrow_array::record_batch::RecordBatch, iceberg::Error>
+pub fn iceberg::arrow::ManifestListBatchReader<B>::next(&mut self) -> core::option::Option<Self::Item>
 pub struct iceberg::arrow::ParquetReadOptions
 impl iceberg::arrow::ParquetReadOptions
 pub fn iceberg::arrow::ParquetReadOptions::metadata_size_hint(&self) -> usize
@@ -171,8 +183,8 @@ pub fn iceberg::arrow::arrow_schema_to_schema_auto_assign_ids(schema: &arrow_sch
 pub fn iceberg::arrow::arrow_struct_to_literal(struct_array: &arrow_array::array::ArrayRef, ty: &iceberg::spec::StructType) -> iceberg::Result<alloc::vec::Vec<core::option::Option<iceberg::spec::Literal>>>
 pub fn iceberg::arrow::arrow_type_to_type(ty: &arrow_schema::datatype::DataType) -> iceberg::Result<iceberg::spec::Type>
 pub fn iceberg::arrow::datum_to_arrow_type_with_ree(datum: &iceberg::spec::Datum) -> arrow_schema::datatype::DataType
-pub fn iceberg::arrow::read_manifest_entries(bytes: &[u8], manifest_file: &iceberg::spec::ManifestFile) -> iceberg::Result<arrow_array::record_batch::RecordBatch>
-pub fn iceberg::arrow::read_manifest_list(bytes: &[u8]) -> iceberg::Result<arrow_array::record_batch::RecordBatch>
+pub fn iceberg::arrow::read_manifest_entries<B: core::convert::AsRef<[u8]>>(bytes: B, manifest_file: &iceberg::spec::ManifestFile) -> iceberg::Result<iceberg::arrow::ManifestEntryBatchReader<B>>
+pub fn iceberg::arrow::read_manifest_list<B: core::convert::AsRef<[u8]>>(bytes: B) -> iceberg::Result<iceberg::arrow::ManifestListBatchReader<B>>
 pub fn iceberg::arrow::schema_to_arrow_schema(schema: &iceberg::spec::Schema) -> iceberg::Result<arrow_schema::schema::Schema>
 pub fn iceberg::arrow::strip_metadata_from_schema(schema: &arrow_schema::schema::Schema) -> iceberg::Result<arrow_schema::schema::Schema>
 pub fn iceberg::arrow::type_to_arrow_type(ty: &iceberg::spec::Type) -> iceberg::Result<arrow_schema::datatype::DataType>
