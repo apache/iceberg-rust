@@ -71,7 +71,6 @@ parquet = { workspace = true, features = [
   "encryption",
   "arrow_canonical_extension_types",
   "geospatial",
-  "variant_experimental",
 ] }
 parquet-geospatial = { workspace = true }
 rand = { workspace = true }
@@ -98,6 +97,7 @@ expect-test = { workspace = true }
 iceberg_test_utils = { path = "../test_utils", features = ["tests"] }
 minijinja = { workspace = true }
 mockall = { workspace = true }
+parquet-variant-compute = { workspace = true }
 pretty_assertions = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
