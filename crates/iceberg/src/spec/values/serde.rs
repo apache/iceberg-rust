@@ -109,11 +109,10 @@ pub(crate) mod _serde {
         Double(f64),
         String(String),
         Bytes(ByteBuf),
-        // Note with the use of `serialize_with` here:
-        //  - it is to ensure we get an Avro Value::Fixed, and not Value::Bytes.
-        //    This is for UUID support. The spec requires that UUIDs _must_ use `Value::Fixed`.
-        //  - `apache_avro::serde::fixed::serialize` only affects the behaviour of
-        //    `apache_avro::serde::to_value`. Internally it sets a thread local flag for Avro.
+        // apache-avro accepts only `Value::Uuid` or `Value::Fixed` for the spec's `fixed`
+        // uuid schema, and a `ByteBuf` serializes to `Value::Bytes` by default.
+        // `apache_avro::serde::fixed::serialize` makes `apache_avro::to_value` produce
+        // `Value::Fixed`. Other serializers, such as serde_json, still see plain bytes.
         Fixed(#[serde(serialize_with = "apache_avro::serde::fixed::serialize")] ByteBuf),
         List(List),
         StringMap(StringMap),
