@@ -51,6 +51,23 @@ the code they describe or they are wrong.
   `make generate-public-api` to update each crate's `public-api.txt`, and
   check its diff for API growth.
 
+## Public API
+
+Justify each new public item: check that it needs to be public and that it
+fits the existing abstractions. Consider how it would be changed or removed
+later, and prefer additive changes to breaking ones. Derives such as
+`#[derive(Clone)]` count as public API. A type that needs table-scoped context
+to construct gets an accessor on `Table` instead of a public `new()`, so new
+parameters do not break callers. Prefer expandable types, such as structs and enums, for configuration
+over adding parameters to a function, so options can grow without breaking
+callers.
+
+Iceberg Java has a
+[deprecation policy](https://github.com/apache/iceberg/blob/9203eaff9eb97fef9d1f5a3ef4460e8453adaed9/site/docs/contribute.md?plain=1#L142-L170)
+that iceberg-rust has not adopted. Treat it as a reference for how long a
+deprecation lasts, not as a rule. In a review, name every new or changed public
+item and consider whether the change needs it.
+
 ## Pull requests
 
 - Follow the PR template. Keep each section short: the problem, the

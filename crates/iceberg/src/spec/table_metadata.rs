@@ -153,14 +153,6 @@ impl TableMetadata {
         TableMetadataBuilder::new_from_metadata(self, current_file_location)
     }
 
-    /// Check if a partition field name exists in any partition spec.
-    #[inline]
-    pub(crate) fn partition_name_exists(&self, name: &str) -> bool {
-        self.partition_specs
-            .values()
-            .any(|spec| spec.fields().iter().any(|pf| pf.name == name))
-    }
-
     /// Check if a field name exists in any schema.
     #[inline]
     pub(crate) fn name_exists_in_any_schema(&self, name: &str) -> bool {
@@ -785,7 +777,7 @@ pub(super) mod _serde {
     use crate::spec::{
         EncryptedKey, INITIAL_ROW_ID, PartitionField, PartitionSpec, PartitionSpecRef,
         PartitionStatisticsFile, Schema, SchemaRef, Snapshot, SnapshotReference, SnapshotRetention,
-        SortOrder, StatisticsFile,
+        SortOrder, StatisticsFile, UnboundPartitionSpec,
     };
     use crate::{Error, ErrorKind};
 
@@ -890,6 +882,8 @@ pub(super) mod _serde {
         pub metadata_log: Option<Vec<MetadataLog>>,
         pub sort_orders: Option<Vec<SortOrder>>,
         pub default_sort_order_id: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub refs: Option<HashMap<String, SnapshotReference>>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         pub statistics: Vec<StatisticsFile>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1220,10 +1214,14 @@ pub(super) mod _serde {
                     .collect::<HashMap<_, _>>()
             } else if let Some(partition_spec) = value.partition_spec {
                 // Option 2: Fall back to 'partition_spec'
-                let spec = PartitionSpec::builder(current_schema.clone())
-                    .with_spec_id(DEFAULT_PARTITION_SPEC_ID)
-                    .add_unbound_fields(partition_spec.into_iter().map(|f| f.into_unbound()))?
-                    .build()?;
+                let spec = UnboundPartitionSpec {
+                    spec_id: Some(DEFAULT_PARTITION_SPEC_ID),
+                    fields: partition_spec
+                        .into_iter()
+                        .map(|f| f.into_unbound())
+                        .collect(),
+                }
+                .bind(current_schema.clone())?;
 
                 HashMap::from_iter(vec![(DEFAULT_PARTITION_SPEC_ID, Arc::new(spec))])
             } else {
@@ -1288,18 +1286,8 @@ pub(super) mod _serde {
                 default_sort_order_id: value
                     .default_sort_order_id
                     .unwrap_or(SortOrder::UNSORTED_ORDER_ID),
-                refs: if let Some(snapshot_id) = current_snapshot_id {
-                    HashMap::from_iter(vec![(MAIN_BRANCH.to_string(), SnapshotReference {
-                        snapshot_id,
-                        retention: SnapshotRetention::Branch {
-                            min_snapshots_to_keep: None,
-                            max_snapshot_age_ms: None,
-                            max_ref_age_ms: None,
-                        },
-                    })])
-                } else {
-                    HashMap::new()
-                },
+                // `try_normalize` adds `main` from `current-snapshot-id` if it is missing.
+                refs: value.refs.unwrap_or_default(),
                 statistics: index_statistics(value.statistics),
                 partition_statistics: index_partition_statistics(value.partition_statistics),
                 encryption_keys: HashMap::new(),
@@ -1492,6 +1480,7 @@ pub(super) mod _serde {
                         .collect(),
                 ),
                 default_sort_order_id: Some(v.default_sort_order_id),
+                refs: Some(v.refs),
                 statistics: v.statistics.into_values().collect(),
                 partition_statistics: v.partition_statistics.into_values().collect(),
             })
@@ -3318,6 +3307,33 @@ mod tests {
     }
 
     #[test]
+    fn test_table_metadata_v1_legacy_partition_spec_with_void_fields() {
+        let mut metadata: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap(),
+        )
+        .unwrap();
+        // What a format version 1 spec keeps after identity(x) was removed twice.
+        metadata["partition-spec"] = serde_json::json!([
+            {"name": "x", "transform": "void", "source-id": 1, "field-id": 1000},
+            {"name": "x_null", "transform": "void", "source-id": 1, "field-id": 1001},
+        ]);
+
+        let metadata: TableMetadata = serde_json::from_value(metadata).unwrap();
+
+        let fields = metadata.default_partition_spec().fields();
+        assert_eq!(
+            fields
+                .iter()
+                .map(|f| (f.field_id, f.name.as_str(), f.transform))
+                .collect::<Vec<_>>(),
+            vec![
+                (1000, "x", Transform::Void),
+                (1001, "x_null", Transform::Void)
+            ]
+        );
+    }
+
+    #[test]
     fn test_empty_snapshot_id_is_normalized_to_none() {
         let metadata =
             fs::read_to_string("testdata/table_metadata/TableMetadataV1Valid.json").unwrap();
@@ -3350,6 +3366,95 @@ mod tests {
         );
         assert_eq!(desered_type.last_updated_ms(), 1727773114005);
         assert_eq!(desered_type.current_schema_id(), 0);
+    }
+
+    fn v1_main_ref() -> (String, SnapshotReference) {
+        let retention = SnapshotRetention::branch(None, None, None);
+        (
+            "main".to_string(),
+            SnapshotReference::new(6278926806555018392, retention),
+        )
+    }
+
+    #[test]
+    fn test_table_metadata_v1_refs_round_trip() {
+        // Written by Spark 3.5.6 with Iceberg 1.9.2, paths rewritten.
+        let json =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1WithRefs.json").unwrap();
+        let metadata: TableMetadata = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(metadata.format_version(), FormatVersion::V1);
+        assert_eq!(
+            metadata.refs,
+            HashMap::from_iter([
+                v1_main_ref(),
+                (
+                    "t1".to_string(),
+                    SnapshotReference::new(7825560978372493301, SnapshotRetention::Tag {
+                        max_ref_age_ms: Some(604800000),
+                    }),
+                ),
+                (
+                    "b1".to_string(),
+                    SnapshotReference::new(
+                        7825560978372493301,
+                        SnapshotRetention::branch(Some(2), None, None),
+                    ),
+                ),
+            ])
+        );
+
+        let written = serde_json::to_value(&metadata).unwrap();
+        let java_written = serde_json::from_str::<serde_json::Value>(&json).unwrap();
+        assert_eq!(written["format-version"], 1);
+        assert_eq!(written["refs"], java_written["refs"]);
+        assert_eq!(
+            serde_json::from_value::<TableMetadata>(written).unwrap(),
+            metadata
+        );
+    }
+
+    #[test]
+    fn test_table_metadata_v1_without_refs_has_main_branch() {
+        let json =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1WithRefs.json").unwrap();
+        let mut value = serde_json::from_str::<serde_json::Value>(&json).unwrap();
+        value.as_object_mut().unwrap().remove("refs").unwrap();
+        let metadata: TableMetadata = serde_json::from_value(value).unwrap();
+
+        assert_eq!(metadata.refs, HashMap::from_iter([v1_main_ref()]));
+        assert_eq!(
+            serde_json::to_value(&metadata).unwrap()["refs"],
+            serde_json::json!({"main": {"snapshot-id": 6278926806555018392_i64, "type": "branch"}})
+        );
+    }
+
+    #[test]
+    fn test_table_metadata_v1_invalid_refs_fail_to_load() {
+        let json =
+            fs::read_to_string("testdata/table_metadata/TableMetadataV1WithRefs.json").unwrap();
+        let load_error = |edit: fn(&mut serde_json::Value)| {
+            let mut value = serde_json::from_str::<serde_json::Value>(&json).unwrap();
+            edit(&mut value);
+            serde_json::from_value::<TableMetadata>(value)
+                .unwrap_err()
+                .to_string()
+        };
+
+        assert_eq!(
+            load_error(|value| value["refs"]["t1"]["snapshot-id"] = 1.into()),
+            "DataInvalid => Snapshot for reference t1 does not exist in the existing snapshots list"
+        );
+        assert_eq!(
+            load_error(
+                |value| value["refs"]["main"]["snapshot-id"] = 7825560978372493301_i64.into()
+            ),
+            "DataInvalid => Current snapshot id does not match main branch (6278926806555018392 != 7825560978372493301)"
+        );
+        assert_eq!(
+            load_error(|value| value["current-snapshot-id"] = (-1).into()),
+            "DataInvalid => Current snapshot is not set, but main branch exists"
+        );
     }
 
     #[test]
@@ -3800,82 +3905,6 @@ mod tests {
     }
 
     #[test]
-    fn test_partition_name_exists() {
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
-                NestedField::required(2, "partition_col", Type::Primitive(PrimitiveType::Int))
-                    .into(),
-            ])
-            .build()
-            .unwrap();
-
-        let spec1 = PartitionSpec::builder(schema.clone())
-            .with_spec_id(1)
-            .add_partition_field("data", "data_partition", Transform::Identity)
-            .unwrap()
-            .build()
-            .unwrap();
-
-        let spec2 = PartitionSpec::builder(schema.clone())
-            .with_spec_id(2)
-            .add_partition_field("partition_col", "partition_bucket", Transform::Bucket(16))
-            .unwrap()
-            .build()
-            .unwrap();
-
-        // Build metadata with these specs
-        let metadata = TableMetadataBuilder::new(
-            schema,
-            spec1.clone().into_unbound(),
-            SortOrder::unsorted_order(),
-            "s3://test/location".to_string(),
-            FormatVersion::V2,
-            HashMap::new(),
-        )
-        .unwrap()
-        .add_partition_spec(spec2.into_unbound())
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-
-        assert!(metadata.partition_name_exists("data_partition"));
-        assert!(metadata.partition_name_exists("partition_bucket"));
-
-        assert!(!metadata.partition_name_exists("nonexistent_field"));
-        assert!(!metadata.partition_name_exists("data")); // schema field name, not partition field name
-        assert!(!metadata.partition_name_exists(""));
-    }
-
-    #[test]
-    fn test_partition_name_exists_empty_specs() {
-        // Create metadata with no partition specs (unpartitioned table)
-        let schema = Schema::builder()
-            .with_fields(vec![
-                NestedField::required(1, "data", Type::Primitive(PrimitiveType::String)).into(),
-            ])
-            .build()
-            .unwrap();
-
-        let metadata = TableMetadataBuilder::new(
-            schema,
-            PartitionSpec::unpartition_spec().into_unbound(),
-            SortOrder::unsorted_order(),
-            "s3://test/location".to_string(),
-            FormatVersion::V2,
-            HashMap::new(),
-        )
-        .unwrap()
-        .build()
-        .unwrap()
-        .metadata;
-
-        assert!(!metadata.partition_name_exists("any_field"));
-        assert!(!metadata.partition_name_exists("data"));
-    }
-
-    #[test]
     fn test_name_exists_in_any_schema() {
         // Create multiple schemas with different fields
         let schema1 = Schema::builder()
@@ -4002,8 +4031,6 @@ mod tests {
             .build()
             .unwrap()
             .metadata;
-
-        assert!(!final_metadata.partition_name_exists("nonexistent_partition")); // unpartitioned table
 
         assert!(final_metadata.name_exists_in_any_schema("id")); // exists in both schemas
         assert!(final_metadata.name_exists_in_any_schema("name")); // exists in both schemas

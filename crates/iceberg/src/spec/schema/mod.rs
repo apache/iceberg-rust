@@ -25,9 +25,7 @@ mod utils;
 mod visitor;
 pub use self::visitor::*;
 pub(super) mod _serde;
-// TODO: Use for table replacement in https://github.com/apache/iceberg-rust/issues/3056.
-#[allow(dead_code)]
-pub(crate) mod assign_fresh_ids;
+mod assign_fresh_ids;
 mod id_reassigner;
 mod index;
 mod prune_columns;
@@ -36,6 +34,7 @@ use itertools::{Itertools, zip_eq};
 use serde::{Deserialize, Serialize};
 
 use self::_serde::SchemaEnum;
+pub(crate) use self::assign_fresh_ids::assign_fresh_ids;
 use self::id_reassigner::ReassignFieldIds;
 use self::index::{IndexByName, index_by_id, index_parents};
 pub use self::prune_columns::prune_columns;
@@ -662,7 +661,7 @@ mod tests {
 
     #[test]
     fn test_calc_min_compatible_format() {
-        use crate::spec::{FormatVersion, VariantType};
+        use crate::spec::{FormatVersion, GeometryType, VariantType};
 
         fn schema_with(fields: Vec<NestedFieldRef>) -> Schema {
             Schema::builder().with_fields(fields).build().unwrap()
@@ -688,6 +687,22 @@ mod tests {
         assert_eq!(unknown.calc_min_compatible_format(), FormatVersion::V3);
         assert!(
             unknown
+                .check_format_compatibility(FormatVersion::V2)
+                .is_err()
+        );
+
+        // Geospatial types are v3-only.
+        let geometry = schema_with(vec![
+            NestedField::optional(
+                1,
+                "geom",
+                Primitive(PrimitiveType::Geometry(GeometryType::default())),
+            )
+            .into(),
+        ]);
+        assert_eq!(geometry.calc_min_compatible_format(), FormatVersion::V3);
+        assert!(
+            geometry
                 .check_format_compatibility(FormatVersion::V2)
                 .is_err()
         );

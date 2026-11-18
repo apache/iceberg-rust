@@ -35,7 +35,7 @@ use crate::spec::datatypes::{
     ListType, MapType, NestedField, PrimitiveType, StructType, Type, VariantType,
 };
 use crate::spec::values::datum::{INT_MAX, INT_MIN, LONG_MAX, LONG_MIN};
-use crate::spec::values::{Datum, Literal, Map, PrimitiveLiteral, RawLiteral, Struct};
+use crate::spec::values::{Datum, Decimal, Literal, Map, PrimitiveLiteral, RawLiteral, Struct};
 
 fn check_json_serde(json: &str, expected_literal: Literal, expected_type: &Type) {
     let raw_json_value = serde_json::from_str::<JsonValue>(json).unwrap();
@@ -185,6 +185,75 @@ fn json_double() {
         Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(1.0))),
         &Primitive(PrimitiveType::Double),
     );
+}
+
+const FLOAT_VALUES: [f32; 6] = [
+    100.1,
+    123.456,
+    -123.456,
+    f32::MAX,
+    f32::MIN,
+    f32::from_bits(1),
+];
+
+#[test]
+fn raw_literal_json_number_to_float() {
+    for value in FLOAT_VALUES {
+        let raw: RawLiteral = serde_json::from_str(&format!("{value:e}")).unwrap();
+
+        assert_eq!(
+            raw.try_into(&Primitive(PrimitiveType::Float)).unwrap(),
+            Some(Literal::float(value))
+        );
+    }
+}
+
+#[test]
+fn raw_literal_avro_double_to_float() {
+    for value in FLOAT_VALUES {
+        for double in [f64::from(value), format!("{value:e}").parse().unwrap()] {
+            let raw: RawLiteral = apache_avro::from_value(&Value::Double(double)).unwrap();
+
+            assert_eq!(
+                raw.try_into(&Primitive(PrimitiveType::Float)).unwrap(),
+                Some(Literal::float(value))
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_literal_double_without_exact_float_narrows_to_nearest() {
+    for (double, expected) in [(16777217.0_f64, 16777216.0_f32), (1.0000000001, 1.0)] {
+        let raw: RawLiteral = serde_json::from_str(&format!("{double:?}")).unwrap();
+
+        assert_eq!(
+            raw.try_into(&Primitive(PrimitiveType::Float)).unwrap(),
+            Some(Literal::float(expected))
+        );
+    }
+}
+
+#[test]
+fn raw_literal_avro_non_finite_and_negative_zero_double_to_float() {
+    for (double, expected) in [
+        (f64::NAN, f32::NAN),
+        (f64::INFINITY, f32::INFINITY),
+        (f64::NEG_INFINITY, f32::NEG_INFINITY),
+        (-0.0, -0.0_f32),
+    ] {
+        let raw: RawLiteral = apache_avro::from_value(&Value::Double(double)).unwrap();
+        let value = match raw.try_into(&Primitive(PrimitiveType::Float)).unwrap() {
+            Some(Literal::Primitive(PrimitiveLiteral::Float(value))) => value.0,
+            _ => panic!("unexpected literal type"),
+        };
+
+        if expected.is_nan() {
+            assert!(value.is_nan());
+        } else {
+            assert_eq!(value.to_bits(), expected.to_bits());
+        }
+    }
 }
 
 #[test]
@@ -546,6 +615,65 @@ fn avro_bytes_string() {
     let bytes = vec![105u8, 99u8, 101u8, 98u8, 101u8, 114u8, 103u8];
 
     check_avro_bytes_serde(bytes, Datum::string("iceberg"), &PrimitiveType::String);
+}
+
+#[test]
+fn avro_bytes_geometry() {
+    let bytes = vec![1u8, 2u8, 3u8, 4u8];
+    let ty = PrimitiveType::Geometry(Default::default());
+    check_avro_bytes_serde(
+        bytes.clone(),
+        Datum::new(ty.clone(), PrimitiveLiteral::Binary(bytes)),
+        &ty,
+    );
+}
+
+#[test]
+fn geospatial_wkt_json_is_not_yet_supported() {
+    for primitive_type in [
+        PrimitiveType::Geometry(Default::default()),
+        PrimitiveType::Geography(Default::default()),
+    ] {
+        let err = Literal::try_from_json(
+            serde_json::json!("POINT (1 2)"),
+            &Primitive(primitive_type.clone()),
+        )
+        .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        assert_eq!(
+            err.message(),
+            "WKT deserialization for geospatial types is not yet supported"
+        );
+
+        let err = Literal::Primitive(PrimitiveLiteral::Binary(vec![1, 2, 3]))
+            .try_into_json(&Primitive(primitive_type))
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        assert_eq!(
+            err.message(),
+            "WKT serialization for geospatial types is not yet supported"
+        );
+    }
+}
+
+#[test]
+fn geospatial_datums_are_not_orderable() {
+    let geometry_type = PrimitiveType::Geometry(Default::default());
+    let geography_type = PrimitiveType::Geography(Default::default());
+    let geometry = Datum::new(
+        geometry_type.clone(),
+        PrimitiveLiteral::Binary(vec![1, 2, 3]),
+    );
+    let other_geometry = Datum::new(geometry_type, PrimitiveLiteral::Binary(vec![4, 5, 6]));
+    let geography = Datum::new(
+        geography_type.clone(),
+        PrimitiveLiteral::Binary(vec![1, 2, 3]),
+    );
+    let other_geography = Datum::new(geography_type, PrimitiveLiteral::Binary(vec![4, 5, 6]));
+
+    assert_eq!(geometry.partial_cmp(&other_geometry), None);
+    assert_eq!(geography.partial_cmp(&other_geography), None);
 }
 
 #[test]
@@ -1780,6 +1908,94 @@ fn test_date_from_json_as_number() {
 }
 
 #[test]
+fn test_decimal_from_str_rejects_non_finite_values() {
+    for input in [
+        "NaN",
+        "nan",
+        "NAN",
+        "Inf",
+        "inf",
+        "+Inf",
+        "-Inf",
+        "Infinity",
+        "+Infinity",
+        "-Infinity",
+        "infinity",
+        "INFINITY",
+    ] {
+        assert_eq!(
+            Datum::decimal_from_str(input).unwrap_err().kind(),
+            ErrorKind::DataInvalid,
+            "{input}"
+        );
+        assert_eq!(
+            Literal::decimal_from_str(input).unwrap_err().kind(),
+            ErrorKind::DataInvalid,
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn test_decimal_constructors_reject_non_finite_values() {
+    for value in [Decimal::NAN, Decimal::INFINITY, Decimal::NEG_INFINITY] {
+        assert_eq!(
+            Datum::decimal(value).unwrap_err().kind(),
+            ErrorKind::DataInvalid
+        );
+        assert_eq!(
+            Datum::decimal_with_precision(value, 9).unwrap_err().kind(),
+            ErrorKind::DataInvalid
+        );
+    }
+}
+
+#[test]
+fn test_decimal_from_json_rejects_non_finite_values() {
+    let decimal_type = Type::decimal(9, 2).unwrap();
+    for input in ["NaN", "Infinity", "-Infinity"] {
+        assert_eq!(
+            Literal::try_from_json(JsonValue::String(input.to_string()), &decimal_type)
+                .unwrap_err()
+                .kind(),
+            ErrorKind::DataInvalid,
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn test_decimal_constructors_accept_finite_values() {
+    for (input, mantissa, scale) in [
+        ("0", 0, 0),
+        ("-0", 0, 0),
+        ("0.00", 0, 2),
+        ("-0.00", 0, 2),
+        ("123.45", 12345, 2),
+        ("-123.45", -12345, 2),
+    ] {
+        let datum = Datum::decimal_from_str(input).unwrap();
+        assert_eq!(datum.literal(), &PrimitiveLiteral::Int128(mantissa));
+        assert_eq!(datum.data_type(), &PrimitiveType::Decimal {
+            precision: 38,
+            scale,
+        });
+        assert_eq!(
+            Literal::decimal_from_str(input).unwrap(),
+            Literal::decimal(mantissa)
+        );
+        let value = Decimal::from_str(input, fastnum::decimal::Context::default()).unwrap();
+        assert_eq!(Datum::decimal(value).unwrap(), datum);
+        let datum = Datum::decimal_with_precision(value, 9).unwrap();
+        assert_eq!(datum.literal(), &PrimitiveLiteral::Int128(mantissa));
+        assert_eq!(datum.data_type(), &PrimitiveType::Decimal {
+            precision: 9,
+            scale,
+        });
+    }
+}
+
+#[test]
 fn test_datum_to_decimal_narrows_precision_when_scale_matches() {
     let target_type = Primitive(PrimitiveType::Decimal {
         precision: 9,
@@ -1985,4 +2201,39 @@ fn test_raw_literal_project_by_name_rejects_missing_required_field() {
 
     let err = raw.project_by_name(&expected).unwrap_err();
     assert_eq!(err.kind(), ErrorKind::DataInvalid);
+}
+
+/// Expected values are the output of Java's `Double.toString` / `Float.toString` (JDK 21).
+#[test]
+fn test_datum_to_human_string_float_matches_java() {
+    let double = |value: f64| Datum::double(value).to_human_string();
+    assert_eq!(double(1.0), "1.0");
+    assert_eq!(double(100.0), "100.0");
+    assert_eq!(double(0.0), "0.0");
+    assert_eq!(double(-0.0), "-0.0");
+    assert_eq!(double(1.5), "1.5");
+    assert_eq!(double(0.001), "0.001");
+    assert_eq!(double(9999999.0), "9999999.0");
+    assert_eq!(double(1.0e7), "1.0E7");
+    assert_eq!(double(1.0e-5), "1.0E-5");
+    assert_eq!(double(1.23456789e20), "1.23456789E20");
+    assert_eq!(double(1.0e23), "1.0E23");
+    assert_eq!(double(f64::INFINITY), "Infinity");
+    assert_eq!(double(f64::NEG_INFINITY), "-Infinity");
+    assert_eq!(double(f64::NAN), "NaN");
+    assert_eq!(double(f64::MAX), "1.7976931348623157E308");
+    // Java uses at least two significant digits.
+    assert_eq!(double(f64::from_bits(1)), "4.9E-324");
+    // Halfway between two 17-digit decimals: Java picks the even one.
+    assert_eq!(double(2f64.powi(-25)), "2.9802322387695312E-8");
+
+    let float = |value: f32| Datum::float(value).to_human_string();
+    assert_eq!(float(1.0), "1.0");
+    assert_eq!(float(-0.0), "-0.0");
+    assert_eq!(float(0.1), "0.1");
+    assert_eq!(float(1.0e7), "1.0E7");
+    assert_eq!(float(f32::NEG_INFINITY), "-Infinity");
+    assert_eq!(float(f32::from_bits(1)), "1.4E-45");
+    // 2097152.25, halfway between 2097152.2 and 2097152.3.
+    assert_eq!(float(f32::from_bits(0x4a00_0001)), "2097152.2");
 }
