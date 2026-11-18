@@ -83,9 +83,15 @@ use crate::{Error, ErrorKind, Result};
 #[derive(Debug, TypedBuilder)]
 #[builder(build_method(into = Result<ManifestFilter>))]
 pub struct ManifestFilter {
+    /// The schema to bind the filter to. `TableScan` uses the table's current
+    /// schema, or the snapshot's schema when it reads an older snapshot.
     schema: SchemaRef,
+    /// Every partition spec the manifest list references, usually all of the
+    /// table's specs.
     partition_specs: Vec<PartitionSpecRef>,
+    /// The row filter.
     filter: Predicate,
+    /// Whether the filter matches field names case-sensitively.
     #[builder(default = true)]
     case_sensitive: bool,
     /// The filter projected to each spec's partition values, by spec ID.
@@ -157,14 +163,17 @@ impl ManifestFilter {
         // `ManifestEvaluator`.
         let mut rows_by_spec: HashMap<i32, Vec<usize>> = HashMap::new();
         for row in 0..batch.num_rows() {
+            if spec_ids.is_null(row) {
+                return Err(invalid_data!("manifest has no partition_spec_id"));
+            }
+            // `TableScan` looks up every manifest's spec, including manifests
+            // without partition summaries.
+            let spec_id = spec_ids.value(row);
+            if !self.partition_filters.contains_key(&spec_id) {
+                return Err(invalid_data!("no partition spec with ID {spec_id}"));
+            }
             if partitions.is_valid(row) && partitions.value_length(row) > 0 {
-                if spec_ids.is_null(row) {
-                    return Err(invalid_data!("manifest has no partition_spec_id"));
-                }
-                rows_by_spec
-                    .entry(spec_ids.value(row))
-                    .or_default()
-                    .push(row);
+                rows_by_spec.entry(spec_id).or_default().push(row);
             }
         }
 
@@ -516,7 +525,16 @@ impl BoundPredicateVisitor for SummaryVisitor<'_> {
         let field = self.field(reference)?;
         // A missing lower bound means every value is null or NaN.
         let has_lower = not(&is_null(&field.lower_bound)?)?;
-        if literals.len() > IN_PREDICATE_LIMIT {
+        // `ManifestEvaluator` doesn't prune on a literal that doesn't compare
+        // with the bounds, such as one outside the field type's range, which
+        // binding keeps as `AboveMax` or `BelowMin`.
+        let out_of_range = literals.iter().any(|literal| {
+            matches!(
+                literal.literal(),
+                PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin
+            )
+        });
+        if literals.len() > IN_PREDICATE_LIMIT || out_of_range {
             return Ok(has_lower);
         }
         let no_upper = is_null(&field.upper_bound)?;
@@ -575,10 +593,10 @@ fn string_literal<'a>(datum: &'a Datum, message: &str) -> Result<&'a [u8]> {
 /// `Datum` does. Both order floats by IEEE 754 `totalOrder`. Strings, binary,
 /// fixed, and uuid compare bytewise, so their bounds stay as they are.
 fn decode_bounds(bounds: &BinaryArray, field_type: &PrimitiveType) -> Result<ArrayRef> {
-    fn decode<T>(
+    fn decode<T, A: FromIterator<Option<T>>>(
         bounds: &BinaryArray,
         decode: impl Fn(&[u8]) -> Result<T>,
-    ) -> Result<Vec<Option<T>>> {
+    ) -> Result<A> {
         bounds
             .iter()
             .map(|bound| bound.map(&decode).transpose())
@@ -587,49 +605,44 @@ fn decode_bounds(bounds: &BinaryArray, field_type: &PrimitiveType) -> Result<Arr
 
     let array: ArrayRef = match field_type {
         PrimitiveType::Boolean => {
-            Arc::new(BooleanArray::from(decode(
-                bounds,
-                |bytes| Ok(bytes != [0]),
-            )?))
+            Arc::new(decode::<_, BooleanArray>(bounds, |bytes| Ok(bytes != [0]))?)
         }
         PrimitiveType::Int | PrimitiveType::Date => {
-            Arc::new(Int32Array::from(decode(bounds, |bytes| {
+            Arc::new(decode::<_, Int32Array>(bounds, |bytes| {
                 Ok(i32::from_le_bytes(bytes.try_into()?))
-            })?))
+            })?)
         }
-        PrimitiveType::Long => Arc::new(Int64Array::from(decode(bounds, |bytes| {
+        PrimitiveType::Long => Arc::new(decode::<_, Int64Array>(bounds, |bytes| {
             // A 4-byte bound was written before the field was promoted from int.
             Ok(match bytes.len() {
                 4 => i64::from(i32::from_le_bytes(bytes.try_into()?)),
                 _ => i64::from_le_bytes(bytes.try_into()?),
             })
-        })?)),
+        })?),
         PrimitiveType::Time
         | PrimitiveType::Timestamp
         | PrimitiveType::Timestamptz
         | PrimitiveType::TimestampNs
-        | PrimitiveType::TimestamptzNs => Arc::new(Int64Array::from(decode(bounds, |bytes| {
+        | PrimitiveType::TimestamptzNs => Arc::new(decode::<_, Int64Array>(bounds, |bytes| {
             Ok(i64::from_le_bytes(bytes.try_into()?))
-        })?)),
-        PrimitiveType::Float => Arc::new(Float32Array::from(decode(bounds, |bytes| {
+        })?),
+        PrimitiveType::Float => Arc::new(decode::<_, Float32Array>(bounds, |bytes| {
             Ok(f32::from_le_bytes(bytes.try_into()?))
-        })?)),
-        PrimitiveType::Double => Arc::new(Float64Array::from(decode(bounds, |bytes| {
+        })?),
+        PrimitiveType::Double => Arc::new(decode::<_, Float64Array>(bounds, |bytes| {
             // A 4-byte bound was written before the field was promoted from float.
             Ok(match bytes.len() {
                 4 => f64::from(f32::from_le_bytes(bytes.try_into()?)),
                 _ => f64::from_le_bytes(bytes.try_into()?),
             })
-        })?)),
+        })?),
         // The default precision and scale are safe because only the order of
         // unscaled values matters, and binding gives the literal the field's
         // scale. `literal_scalar` uses the same default, so the types match.
-        PrimitiveType::Decimal { .. } => {
-            Arc::new(Decimal128Array::from(decode(bounds, |bytes| {
-                i128_from_be_bytes(bytes)
-                    .ok_or_else(|| invalid_data!("Can't convert bytes to i128: {bytes:?}"))
-            })?))
-        }
+        PrimitiveType::Decimal { .. } => Arc::new(decode::<_, Decimal128Array>(bounds, |bytes| {
+            i128_from_be_bytes(bytes)
+                .ok_or_else(|| invalid_data!("Can't convert bytes to i128: {bytes:?}"))
+        })?),
         PrimitiveType::String
         | PrimitiveType::Uuid
         | PrimitiveType::Fixed(_)
@@ -663,7 +676,7 @@ fn literal_scalar(datum: &Datum) -> Result<Scalar<ArrayRef>> {
         PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin => {
             return Err(Error::new(
                 ErrorKind::Unexpected,
-                format!("Cannot compare partition summaries with {datum}"),
+                format!("Cannot compare partition summaries with {datum:?}"),
             ));
         }
     };
@@ -677,12 +690,12 @@ mod tests {
 
     use super::*;
     use crate::arrow::read_manifest_list;
+    use crate::arrow::test_utils::{listed_manifest, write_manifest_list};
     use crate::expr::Reference;
     use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
-    use crate::io::FileIO;
     use crate::spec::{
-        FieldSummary, FormatVersion, ManifestContentType, ManifestFile, ManifestListWriter,
-        NestedField, PartitionSpec, Schema, Transform, Type,
+        FieldSummary, FormatVersion, ManifestContentType, ManifestFile, NestedField, PartitionSpec,
+        Schema, Transform, Type,
     };
 
     fn table_schema() -> SchemaRef {
@@ -815,22 +828,9 @@ mod tests {
 
     fn manifest(path: &str, spec_id: i32, partitions: Option<Vec<FieldSummary>>) -> ManifestFile {
         ManifestFile {
-            manifest_path: path.to_string(),
-            manifest_length: 1,
             partition_spec_id: spec_id,
-            content: ManifestContentType::Data,
-            sequence_number: 1,
-            min_sequence_number: 1,
-            added_snapshot_id: 1,
-            added_files_count: Some(1),
-            existing_files_count: Some(0),
-            deleted_files_count: Some(0),
-            added_rows_count: Some(1),
-            existing_rows_count: Some(0),
-            deleted_rows_count: Some(0),
             partitions,
-            key_metadata: None,
-            first_row_id: None,
+            ..listed_manifest(path, ManifestContentType::Data)
         }
     }
 
@@ -865,6 +865,24 @@ mod tests {
                 .collect();
             manifests.push(manifest(&format!("spec1-{kind:?}"), 1, Some(summaries)));
         }
+        // `l` and `d` bounds written before the columns were promoted from int
+        // and float, which take 4 bytes.
+        let promoted = identity_columns
+            .iter()
+            .map(|column| {
+                let values = values(column);
+                match column.as_str() {
+                    "l" => field_summary(Summary::Bounded, &Datum::int(10), &Datum::int(20)),
+                    "d" => field_summary(
+                        Summary::Bounded,
+                        &Datum::float(1.5_f32),
+                        &Datum::float(2.5_f32),
+                    ),
+                    _ => field_summary(Summary::Bounded, &values[1], &values[3]),
+                }
+            })
+            .collect();
+        manifests.push(manifest("spec0-promoted", 0, Some(promoted)));
         manifests.push(manifest("no-summaries", 0, None));
         manifests.push(manifest("empty-summaries", 0, Some(vec![])));
         manifests
@@ -908,6 +926,8 @@ mod tests {
         // More literals than `IN_PREDICATE_LIMIT`, all outside the bounds, which
         // `ManifestEvaluator` doesn't check.
         predicates.push(Reference::new("i").is_in((1000..=1200).map(Datum::int)));
+        // Binding keeps a literal outside the float range as `AboveMax`.
+        predicates.push(Reference::new("f").is_in([Datum::float(1.5_f32), Datum::double(1e300)]));
         let lt = Reference::new("i").less_than(Datum::int(5));
         let gt = Reference::new("l").greater_than(Datum::long(15));
         predicates.extend([
@@ -917,19 +937,6 @@ mod tests {
             !(lt.or(gt)),
         ]);
         predicates
-    }
-
-    async fn write_manifest_list(version: FormatVersion, manifests: Vec<ManifestFile>) -> Vec<u8> {
-        let io = FileIO::new_with_memory();
-        let path = "memory:///manifest-list.avro";
-        let output = io.new_output(path).unwrap().writer().await.unwrap();
-        let mut writer = match version {
-            FormatVersion::V1 => ManifestListWriter::v1(output, 1, None),
-            _ => ManifestListWriter::v2(output, 1, None, 1),
-        };
-        writer.add_manifests(manifests.into_iter()).unwrap();
-        writer.close().await.unwrap();
-        io.new_input(path).unwrap().read().await.unwrap().to_vec()
     }
 
     async fn manifest_list_batch(
@@ -1162,18 +1169,24 @@ mod tests {
         assert!(error.message().contains(message), "{error}");
     }
 
+    /// `TableScan` looks up the spec of every manifest, with or without
+    /// partition summaries.
     #[tokio::test]
     async fn test_unknown_partition_spec_is_an_error() {
-        let batch = manifest_list_batch(FormatVersion::V2, manifests()).await;
+        let batch = manifest_list_batch(FormatVersion::V2, vec![
+            manifest("no-summaries", 7, None),
+            manifest("empty-summaries", 7, Some(vec![])),
+        ])
+        .await;
         let filter = ManifestFilter::builder()
             .schema(table_schema())
-            .partition_specs(partition_specs()[1..].to_vec())
+            .partition_specs(partition_specs())
             .filter(Reference::new("i").less_than(Datum::int(10)))
             .build()
             .unwrap();
         assert_data_invalid(
             filter.manifest_list_mask(&batch),
-            "no partition spec with ID 0",
+            "no partition spec with ID 7",
         );
     }
 
@@ -1214,7 +1227,10 @@ mod tests {
             .filter(Reference::new("i").equal_to(Datum::int(10)))
             .build()
             .unwrap();
-        assert!(filter.manifest_list_mask(&batch).is_err());
+        assert_data_invalid(
+            filter.manifest_list_mask(&batch),
+            "failed to convert byte slice to array",
+        );
     }
 
     #[test]
