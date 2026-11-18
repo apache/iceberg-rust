@@ -1073,147 +1073,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_manifest_v1_roundtrips_uuid_partition() {
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("memory:///table/data/00000.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .partition(Struct::from_iter([Some(Literal::uuid(
-                uuid::Uuid::from_u128(0xf79c3e09_677c_4bbd_a479_3f349cb785e7),
-            ))]))
-            .record_count(123)
-            .file_size_in_bytes(456)
-            .build()
-            .unwrap();
-
-        let output = write_and_read_data_file(
+    async fn test_manifest_roundtrips_uuid_and_fixed_partitions_in_each_format_version() {
+        let uuid = uuid::Uuid::from_u128(0xf79c3e09_677c_4bbd_a479_3f349cb785e7);
+        let cases = [
+            (
+                Type::Primitive(PrimitiveType::Uuid),
+                Some(Literal::uuid(uuid)),
+            ),
+            (Type::Primitive(PrimitiveType::Uuid), None),
+            (
+                Type::Primitive(PrimitiveType::Fixed(16)),
+                Some(Literal::fixed(uuid.into_bytes())),
+            ),
+        ];
+        let builds: [fn(ManifestWriterBuilder) -> ManifestWriter; 3] = [
             ManifestWriterBuilder::build_v1,
-            Type::Primitive(PrimitiveType::Uuid),
-            data_file.clone(),
-        )
-        .await;
-
-        assert_eq!(output, data_file);
-    }
-
-    #[tokio::test]
-    async fn test_manifest_v2_roundtrips_uuid_partition() {
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("memory:///table/data/00000.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .partition(Struct::from_iter([Some(Literal::uuid(
-                uuid::Uuid::from_u128(0xf79c3e09_677c_4bbd_a479_3f349cb785e7),
-            ))]))
-            .record_count(123)
-            .file_size_in_bytes(456)
-            .build()
-            .unwrap();
-
-        let output = write_and_read_data_file(
             ManifestWriterBuilder::build_v2_data,
-            Type::Primitive(PrimitiveType::Uuid),
-            data_file.clone(),
-        )
-        .await;
-
-        assert_eq!(output, data_file);
-    }
-
-    #[tokio::test]
-    async fn test_manifest_v3_roundtrips_uuid_partition() {
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("memory:///table/data/00000.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .partition(Struct::from_iter([Some(Literal::uuid(
-                uuid::Uuid::from_u128(0xf79c3e09_677c_4bbd_a479_3f349cb785e7),
-            ))]))
-            .record_count(123)
-            .file_size_in_bytes(456)
-            .build()
-            .unwrap();
-
-        let output = write_and_read_data_file(
             ManifestWriterBuilder::build_v3_data,
-            Type::Primitive(PrimitiveType::Uuid),
-            data_file.clone(),
-        )
-        .await;
+        ];
 
-        assert_eq!(output, data_file);
-    }
+        for build in builds {
+            for (partition_field_type, value) in cases.clone() {
+                let data_file = DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path("memory:///table/data/00000.parquet".to_string())
+                    .file_format(DataFileFormat::Parquet)
+                    .partition(Struct::from_iter([value]))
+                    .record_count(123)
+                    .file_size_in_bytes(456)
+                    .build()
+                    .unwrap();
 
-    #[tokio::test]
-    async fn test_manifest_v1_roundtrips_16_byte_fixed_partition() {
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("memory:///table/data/00000.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .partition(Struct::from_iter([Some(Literal::fixed(
-                0xf79c3e09_677c_4bbd_a479_3f349cb785e7_u128.to_be_bytes(),
-            ))]))
-            .record_count(123)
-            .file_size_in_bytes(456)
-            .build()
-            .unwrap();
+                let output =
+                    write_and_read_data_file(build, partition_field_type, data_file.clone()).await;
 
-        let output = write_and_read_data_file(
-            ManifestWriterBuilder::build_v1,
-            Type::Primitive(PrimitiveType::Fixed(16)),
-            data_file.clone(),
-        )
-        .await;
-
-        assert_eq!(output, data_file);
-    }
-
-    #[tokio::test]
-    async fn test_manifest_v2_roundtrips_16_byte_fixed_partition() {
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("memory:///table/data/00000.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .partition(Struct::from_iter([Some(Literal::fixed(
-                0xf79c3e09_677c_4bbd_a479_3f349cb785e7_u128.to_be_bytes(),
-            ))]))
-            .record_count(123)
-            .file_size_in_bytes(456)
-            .build()
-            .unwrap();
-
-        let output = write_and_read_data_file(
-            ManifestWriterBuilder::build_v2_data,
-            Type::Primitive(PrimitiveType::Fixed(16)),
-            data_file.clone(),
-        )
-        .await;
-
-        assert_eq!(output, data_file);
-    }
-
-    #[tokio::test]
-    async fn test_manifest_v3_roundtrips_16_byte_fixed_partition() {
-        let data_file = DataFileBuilder::default()
-            .content(DataContentType::Data)
-            .file_path("memory:///table/data/00000.parquet".to_string())
-            .file_format(DataFileFormat::Parquet)
-            .partition(Struct::from_iter([Some(Literal::fixed(
-                0xf79c3e09_677c_4bbd_a479_3f349cb785e7_u128.to_be_bytes(),
-            ))]))
-            .record_count(123)
-            .file_size_in_bytes(456)
-            .build()
-            .unwrap();
-
-        let output = write_and_read_data_file(
-            ManifestWriterBuilder::build_v3_data,
-            Type::Primitive(PrimitiveType::Fixed(16)),
-            data_file.clone(),
-        )
-        .await;
-
-        assert_eq!(output, data_file);
+                assert_eq!(output, data_file);
+            }
+        }
     }
 
     /// Writes `data_file` to a manifest partitioned by identity on one column
