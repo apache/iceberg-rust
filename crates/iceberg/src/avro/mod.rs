@@ -24,3 +24,41 @@ pub(crate) use named_types::define_named_types_once;
 #[cfg(test)]
 pub(crate) use named_types::define_named_types_repeatedly;
 pub(crate) use schema::*;
+
+/// Creates an Avro writer with deflate compression.
+pub(crate) fn new_writer<W: std::io::Write>(
+    schema: &apache_avro::Schema,
+    writer: W,
+) -> apache_avro::AvroResult<apache_avro::Writer<'_, W>> {
+    apache_avro::Writer::with_codec(
+        schema,
+        writer,
+        apache_avro::Codec::Deflate(Default::default()),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn assert_deflate_codec(bytes: &[u8]) {
+    use apache_avro::Schema;
+    use apache_avro::reader::datum::GenericDatumReader;
+    use apache_avro::schema::MapSchema;
+    use apache_avro::types::Value;
+
+    let schema = Schema::Map(MapSchema {
+        types: Box::new(Schema::Bytes),
+        attributes: Default::default(),
+    });
+    let mut body = bytes.strip_prefix(b"Obj\x01").unwrap();
+    let Value::Map(metadata) = GenericDatumReader::builder(&schema)
+        .build()
+        .unwrap()
+        .read_value(&mut body)
+        .unwrap()
+    else {
+        panic!("Avro header metadata must be a map");
+    };
+    assert_eq!(
+        metadata.get("avro.codec"),
+        Some(&Value::Bytes(b"deflate".to_vec()))
+    );
+}

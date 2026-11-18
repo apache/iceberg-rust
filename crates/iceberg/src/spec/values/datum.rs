@@ -300,10 +300,16 @@ impl Display for Datum {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match (&self.r#type, &self.literal) {
             (_, PrimitiveLiteral::Boolean(val)) => write!(f, "{val}"),
-            (PrimitiveType::Int | PrimitiveType::Unknown, PrimitiveLiteral::Int(val)) => {
+            (
+                PrimitiveType::Int | PrimitiveType::Long | PrimitiveType::Unknown,
+                PrimitiveLiteral::Int(val),
+            ) => {
                 write!(f, "{val}")
             }
-            (PrimitiveType::Long | PrimitiveType::Unknown, PrimitiveLiteral::Long(val)) => {
+            (
+                PrimitiveType::Int | PrimitiveType::Long | PrimitiveType::Unknown,
+                PrimitiveLiteral::Long(val),
+            ) => {
                 write!(f, "{val}")
             }
             (_, PrimitiveLiteral::Float(val)) => write!(f, "{val}"),
@@ -327,7 +333,7 @@ impl Display for Datum {
                 write!(f, "{}", timestamptz::nanoseconds_to_datetimetz(*val))
             }
             (_, PrimitiveLiteral::String(val)) => write!(f, r#""{val}""#),
-            (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(val)) => {
+            (PrimitiveType::Uuid | PrimitiveType::Unknown, PrimitiveLiteral::UInt128(val)) => {
                 write!(f, "{}", uuid::Uuid::from_u128(*val))
             }
             (_, PrimitiveLiteral::Binary(val)) => display_bytes(val, f),
@@ -340,6 +346,8 @@ impl Display for Datum {
             ) => {
                 write!(f, "{}", decimal_from_i128_with_scale(*val, *scale))
             }
+            // The scale lives on the dropped source type, so only the unscaled value is left.
+            (PrimitiveType::Unknown, PrimitiveLiteral::Int128(val)) => write!(f, "{val}"),
             (_, _) => {
                 unreachable!()
             }
@@ -1021,6 +1029,7 @@ impl Datum {
     /// assert_eq!(&format!("{t}"), "1.23");
     /// ```
     pub fn decimal(value: Decimal) -> Result<Self> {
+        ensure_data_valid!(value.is_finite(), "Decimal value must be finite: {}", value);
         let scale = decimal_scale(&value);
 
         let r#type = Type::decimal(MAX_DECIMAL_PRECISION, scale)?;
@@ -1040,6 +1049,7 @@ impl Datum {
     /// which is useful when you need to control the storage requirements.
     /// Use [`Datum::decimal`] if you want to use the maximum precision (38).
     pub fn decimal_with_precision(value: Decimal, precision: u32) -> Result<Self> {
+        ensure_data_valid!(value.is_finite(), "Decimal value must be finite: {}", value);
         let scale = decimal_scale(&value);
         let mantissa = decimal_mantissa(&value);
 

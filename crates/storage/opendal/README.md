@@ -80,7 +80,7 @@ async fn main() -> iceberg::Result<()> {
         .await?;
 
     let scan = table.scan().select_all().build()?;
-    let stream = scan.to_arrow().await?;
+    let stream = scan.to_arrow(Default::default()).await?;
 
     Ok(())
 }

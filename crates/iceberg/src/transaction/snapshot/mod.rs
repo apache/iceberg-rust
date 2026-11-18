@@ -252,24 +252,41 @@ fn build_summary(
     );
 
     for data_file in added_files {
+        let partition_spec = metadata
+            .partition_spec_by_id(data_file.partition_spec_id)
+            .ok_or_else(|| {
+                invalid_data!("Unknown partition spec id {}", data_file.partition_spec_id)
+            })?;
         collector.add_file(
             data_file,
             metadata.current_schema().clone(),
-            metadata.default_partition_spec().clone(),
+            partition_spec.clone(),
         );
     }
 
+    let mut schemas_by_spec = HashMap::new();
     for data_file in removed_files {
         let partition_spec = metadata
             .partition_spec_by_id(data_file.partition_spec_id)
             .ok_or_else(|| {
                 invalid_data!("Unknown partition spec id {}", data_file.partition_spec_id)
             })?;
-        collector.remove_file(
-            data_file,
-            metadata.current_schema().clone(),
-            partition_spec.clone(),
-        );
+        // A dropped source column keeps its type, such as a decimal's scale, only in an
+        // older schema.
+        let schema = schemas_by_spec
+            .entry(data_file.partition_spec_id)
+            .or_insert_with(|| {
+                metadata
+                    .schemas_iter()
+                    .filter(|schema| {
+                        let mut source_ids = partition_spec.fields().iter().map(|f| f.source_id);
+                        source_ids.all(|id| schema.field_by_id(id).is_some())
+                    })
+                    .max_by_key(|schema| schema.schema_id())
+                    .unwrap_or(metadata.current_schema())
+                    .clone()
+            });
+        collector.remove_file(data_file, schema.clone(), partition_spec.clone());
     }
 
     properties.extend(collector.build());
@@ -421,14 +438,17 @@ pub(crate) async fn write_snapshot_commit(
         })
         .unwrap_or_default();
 
+    // `SetSnapshotRef` replaces the whole reference, so keep the retention of `main`, as Java does.
+    let main_retention = match metadata.refs.get(MAIN_BRANCH) {
+        Some(main) if main.is_branch() => main.retention.clone(),
+        _ => SnapshotRetention::branch(None, None, None),
+    };
+
     updates.extend([
         TableUpdate::AddSnapshot { snapshot },
         TableUpdate::SetSnapshotRef {
             ref_name: MAIN_BRANCH.to_string(),
-            reference: SnapshotReference::new(
-                snapshot_id,
-                SnapshotRetention::branch(None, None, None),
-            ),
+            reference: SnapshotReference::new(snapshot_id, main_retention),
         },
     ]);
 
@@ -454,12 +474,13 @@ mod tests {
 
     use super::simple::{AppendIntent, SimpleSnapshotProducer};
     use super::*;
+    use crate::ErrorKind;
     use crate::spec::{
         DataContentType, DataFileBuilder, Literal, Manifest, NestedField, PartitionSpec,
-        PrimitiveType, Schema, SnapshotRef, Transform, Type,
+        PrimitiveType, Schema, SortOrder, TableMetadataBuilder, Transform, Type,
     };
+    use crate::transaction::Transaction;
     use crate::transaction::tests::make_v2_minimal_table;
-    use crate::{ErrorKind, TableUpdate};
 
     fn data_file(table: &Table, path: &str, record_count: u64) -> DataFile {
         DataFileBuilder::default()
@@ -486,35 +507,34 @@ mod tests {
             snapshot_properties: HashMap::new(),
             data_files,
         });
-        let snapshot = producer
-            .apply(table)
-            .await
-            .unwrap()
-            .take_updates()
-            .into_iter()
-            .find_map(|u| match u {
-                TableUpdate::AddSnapshot { snapshot } => Some(SnapshotRef::new(snapshot)),
-                _ => None,
-            })
-            .expect("append should add a snapshot");
+        let updates = producer.apply(table).await.unwrap().take_updates();
+        Transaction::update_table_metadata(table.clone(), &updates).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_commit_keeps_main_branch_retention() {
+        let table = make_v2_minimal_table();
+        let table = append_to(&table, vec![data_file(&table, "test/1.parquet", 1)]).await;
+        let retention =
+            SnapshotRetention::branch(Some(9), Some(3_456_000_000), Some(2_592_000_000));
+        let main = SnapshotReference::new(
+            table.metadata().current_snapshot_id().unwrap(),
+            retention.clone(),
+        );
         let metadata = table
             .metadata()
             .clone()
             .into_builder(None)
-            .add_snapshot(snapshot.as_ref().clone())
-            .unwrap()
-            .set_ref(
-                MAIN_BRANCH,
-                SnapshotReference::new(
-                    snapshot.snapshot_id(),
-                    SnapshotRetention::branch(None, None, None),
-                ),
-            )
+            .set_ref(MAIN_BRANCH, main)
             .unwrap()
             .build()
             .unwrap()
             .metadata;
-        table.clone().with_metadata(Arc::new(metadata))
+        let table = table.with_metadata(Arc::new(metadata));
+
+        let table = append_to(&table, vec![data_file(&table, "test/2.parquet", 1)]).await;
+
+        assert_eq!(table.metadata().refs[MAIN_BRANCH].retention, retention);
     }
 
     #[tokio::test]
@@ -575,6 +595,77 @@ mod tests {
         assert_eq!(properties.get("deleted-data-files").unwrap(), "1");
         assert_eq!(properties.get("deleted-records").unwrap(), "2");
         assert_eq!(properties.get("removed-files-size").unwrap(), "100");
+    }
+
+    #[test]
+    fn test_summary_keeps_decimal_scale_of_dropped_partition_source() {
+        let decimal = PrimitiveType::Decimal {
+            precision: 9,
+            scale: 2,
+        };
+        let d = Arc::new(NestedField::required(1, "d", Type::Primitive(decimal)));
+        let x = |ty| Arc::new(NestedField::required(2, "x", Type::Primitive(ty)));
+        let schema = |fields: Vec<_>| Schema::builder().with_fields(fields).build().unwrap();
+        let base = schema(vec![d.clone(), x(PrimitiveType::Int)]);
+        let spec = PartitionSpec::builder(base.clone())
+            .add_partition_field("d", "d", Transform::Identity)
+            .unwrap()
+            .add_partition_field("x", "x", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let table = make_v2_minimal_table();
+        let metadata = TableMetadataBuilder::new(
+            base,
+            spec,
+            SortOrder::unsorted_order(),
+            table.metadata().location().to_string(),
+            FormatVersion::V2,
+            HashMap::from([(
+                TableProperties::PROPERTY_WRITE_PARTITION_SUMMARY_LIMIT.to_string(),
+                "10".to_string(),
+            )]),
+        )
+        .unwrap()
+        .add_current_schema(schema(vec![d, x(PrimitiveType::Long)]))
+        .unwrap()
+        .add_default_partition_spec(Default::default())
+        .unwrap()
+        .add_current_schema(schema(vec![x(PrimitiveType::Long)]))
+        .unwrap()
+        .build()
+        .unwrap()
+        .metadata;
+        let table = table.with_metadata(Arc::new(metadata));
+        let deleted = DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path("test/deleted.parquet".to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(2)
+            .partition_spec_id(0)
+            .partition(Struct::from_iter([
+                Some(Literal::decimal(123)),
+                Some(Literal::int(5)),
+            ]))
+            .build()
+            .unwrap();
+
+        let summary = build_summary(
+            &table,
+            Operation::Delete,
+            HashMap::new(),
+            &[],
+            &[deleted],
+            false,
+        )
+        .unwrap();
+
+        assert!(
+            summary
+                .additional_properties
+                .contains_key("partitions.d=1.23/x=5")
+        );
     }
 
     #[cfg(debug_assertions)]
