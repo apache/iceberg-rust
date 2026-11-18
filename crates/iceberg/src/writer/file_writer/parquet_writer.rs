@@ -56,6 +56,9 @@ use crate::writer::{CurrentFileStatus, DataFile};
 use crate::{Error, ErrorKind, Result};
 
 /// ParquetWriterBuilder is used to builder a [`ParquetWriter`]
+///
+/// If the schema has the position delete `file_path` field, statistics truncation is
+/// turned off regardless of `WriterProperties`, so the file keeps exact `file_path` bounds.
 #[derive(Clone, Debug)]
 pub struct ParquetWriterBuilder {
     props: WriterProperties,
@@ -173,7 +176,7 @@ impl FileWriterBuilder for ParquetWriterBuilder {
             .map(|em| em.generate_key_metadata());
         let mut props = self.props.clone();
         // Like Java's `MetricsConfig.forPositionDelete`, keep full statistics for a position
-        // delete file. A truncated `file_path` gives unequal bounds, so the file can no
+        // delete file. A truncated `file_path` has no exact bounds, so the file can no
         // longer be matched to the one data file it references.
         if self
             .schema
