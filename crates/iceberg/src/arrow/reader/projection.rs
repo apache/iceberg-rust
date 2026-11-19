@@ -85,6 +85,10 @@ impl ArrowReader {
                 (Some(PrimitiveType::Int), Some(PrimitiveType::Long)) => true,
                 (Some(PrimitiveType::Float), Some(PrimitiveType::Double)) => true,
                 (
+                    Some(PrimitiveType::Date),
+                    Some(PrimitiveType::Timestamp | PrimitiveType::TimestampNs),
+                ) => true,
+                (
                     Some(PrimitiveType::Decimal {
                         precision: file_precision,
                         scale: file_scale,
@@ -1022,6 +1026,11 @@ mod tests {
         StructType, Type, VariantType,
     };
     use crate::{ErrorKind, Runtime};
+
+    /// Microseconds in one day, the unit an Iceberg `date` becomes when promoted to `timestamp`.
+    const MICROS_PER_DAY: i64 = 86_400_000_000;
+    /// Nanoseconds in one microsecond.
+    const NANOS_PER_MICRO: i64 = 1_000;
 
     #[test]
     fn test_name_mapping_duplicate_alias_preserves_first_match() {
@@ -5072,5 +5081,93 @@ message schema {
             .unwrap();
         assert_eq!(fallback.len(), 1);
         assert_top_list(&fallback[0]);
+    }
+
+    /// Reads a file that stores `date` columns through a schema that promotes them to
+    /// `timestamp` and `timestamp_ns`, with an unpromoted column projected alongside them.
+    #[tokio::test]
+    async fn test_read_date_promoted_to_timestamp_with_other_columns() {
+        use arrow_array::{
+            Date32Array, Int32Array, TimestampMicrosecondArray, TimestampNanosecondArray,
+        };
+
+        use crate::arrow::schema_to_arrow_schema;
+
+        fn schema(d: PrimitiveType, e: PrimitiveType) -> Schema {
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "d", Type::Primitive(d)).into(),
+                    NestedField::required(2, "e", Type::Primitive(e)).into(),
+                    NestedField::optional(3, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap()
+        }
+
+        let days = [18000, -1, 0];
+        let ints = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let old_schema = schema(PrimitiveType::Date, PrimitiveType::Date);
+        let old_batch = RecordBatch::try_new(
+            Arc::new(schema_to_arrow_schema(&old_schema).unwrap()),
+            vec![
+                Arc::new(Date32Array::from(days.to_vec())),
+                Arc::new(Date32Array::from(days.to_vec())),
+                ints.clone(),
+            ],
+        )
+        .unwrap();
+        let new_schema = Arc::new(schema(PrimitiveType::Timestamp, PrimitiveType::TimestampNs));
+        let micros: Vec<i64> = days
+            .iter()
+            .map(|d| i64::from(*d) * MICROS_PER_DAY)
+            .collect();
+        let expected = RecordBatch::try_new(
+            Arc::new(schema_to_arrow_schema(&new_schema).unwrap()),
+            vec![
+                Arc::new(TimestampMicrosecondArray::from(micros.clone())),
+                Arc::new(TimestampNanosecondArray::from(
+                    micros
+                        .iter()
+                        .map(|us| us * NANOS_PER_MICRO)
+                        .collect::<Vec<_>>(),
+                )),
+                ints,
+            ],
+        )
+        .unwrap();
+
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = tmp_dir.path().join("date.parquet");
+        let mut writer =
+            ArrowWriter::try_new(File::create(&file_path).unwrap(), old_batch.schema(), None)
+                .unwrap();
+        writer.write(&old_batch).unwrap();
+        writer.close().unwrap();
+        let file_len = std::fs::metadata(&file_path).unwrap().len();
+
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        let tasks = Box::pin(futures::stream::iter(
+            vec![Ok(FileScanTask::builder()
+                .with_file_size_in_bytes(file_len)
+                .with_start(0)
+                .with_length(file_len)
+                .with_data_file_path(file_path.to_string_lossy().to_string())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(new_schema)
+                .with_project_field_ids(vec![1, 2, 3])
+                .with_case_sensitive(false)
+                .build()
+                .unwrap())]
+            .into_iter(),
+        )) as FileScanTaskStream;
+
+        let result = reader
+            .read(tasks)
+            .unwrap()
+            .stream()
+            .try_collect::<Vec<RecordBatch>>()
+            .await
+            .unwrap();
+        assert_eq!(result, vec![expected]);
     }
 }
