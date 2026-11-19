@@ -166,17 +166,20 @@ impl TableBuilder {
             Arc::new(ObjectCache::with_disabled_cache(
                 file_io.clone(),
                 encryption_manager.clone(),
+                runtime.clone(),
             ))
         } else if let Some(cache_size_bytes) = cache_size_bytes {
             Arc::new(ObjectCache::new_with_capacity(
                 file_io.clone(),
                 cache_size_bytes,
                 encryption_manager.clone(),
+                runtime.clone(),
             ))
         } else {
             Arc::new(ObjectCache::new(
                 file_io.clone(),
                 encryption_manager.clone(),
+                runtime.clone(),
             ))
         };
 
@@ -224,6 +227,7 @@ impl Table {
     /// Tasks such as scan planning and reads are spawned on `runtime`. A table rebuilt
     /// through [`Table::builder`] starts with an empty cache.
     pub fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.object_cache = Arc::new(self.object_cache.with_runtime(runtime.clone()));
         self.runtime = runtime;
         self
     }
@@ -318,7 +322,7 @@ impl Table {
 
     /// Creates a [`ManifestReader`] for loading manifests referenced by this table.
     pub fn manifest_reader(&self) -> ManifestReader {
-        ManifestReader::new(self.file_io.clone())
+        ManifestReader::new(self.file_io.clone(), self.runtime.clone())
     }
 
     /// Create a reader for the table.
@@ -422,6 +426,7 @@ mod tests {
     use crate::encryption::SensitiveBytes;
     use crate::encryption::kms::MemoryKeyManagementClient;
     use crate::spec::TableProperties;
+    use crate::test_utils::scan::TableTestFixture;
 
     fn load_test_metadata(filename: &str) -> TableMetadata {
         let path = format!(
@@ -506,29 +511,58 @@ mod tests {
         assert_eq!(table.identifier.name(), "table");
     }
 
+    /// `with_runtime` must move both the table's own spawns and the object
+    /// cache's manifest parses onto the new runtime, while the rebound cache
+    /// keeps serving what the original already loaded.
     #[tokio::test]
     async fn test_table_with_runtime_moves_work_and_keeps_object_cache() {
-        let old = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
+        let old = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        // Built on `old` from the start, so its object cache is bound to `old`
+        // too; `with_runtime` on a table built elsewhere would not show that.
         let table = Table::builder()
-            .metadata(load_test_metadata("TableMetadataV2Valid.json"))
-            .identifier(TableIdent::from_strs(["ns", "table"]).unwrap())
-            .file_io(FileIO::new_with_memory())
+            .metadata(fixture.table.metadata().clone())
+            .identifier(fixture.table.identifier().clone())
+            .file_io(fixture.table.file_io().clone())
             .runtime(Runtime::new(&old))
             .build()
             .unwrap();
-        // With the old runtime shut down, the spawn below succeeds only if
+
+        // Load the manifest list through the original table so it is cached.
+        let snapshot = table.metadata().current_snapshot().unwrap().clone();
+        let manifest_list = table
+            .object_cache()
+            .get_manifest_list(&snapshot, &table.metadata_ref())
+            .await
+            .unwrap();
+        // With the old runtime shut down, every spawn below succeeds only if
         // `rebound` uses the new one.
         old.shutdown_background();
 
         let rebound = table.clone().with_runtime(Runtime::try_current().unwrap());
-
-        assert!(Arc::ptr_eq(&table.object_cache(), &rebound.object_cache()));
         assert_eq!(
             rebound.runtime().io().spawn(async { 42 }).await.unwrap(),
             42
         );
+
+        // The rebound cache parses a manifest it has not seen on the new runtime.
+        let manifest_file = manifest_list.entries()[0].clone();
+        rebound
+            .object_cache()
+            .get_manifest(&manifest_file)
+            .await
+            .unwrap();
+
+        // And it still holds the manifest list the original table loaded: with
+        // the file gone, only a cache hit can answer.
+        fs::remove_file(snapshot.manifest_list()).unwrap();
+        let from_cache = rebound
+            .object_cache()
+            .get_manifest_list(&snapshot, &rebound.metadata_ref())
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&manifest_list, &from_cache));
     }
 
     fn make_kms() -> Arc<dyn KeyManagementClient> {
