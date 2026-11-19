@@ -51,13 +51,10 @@ const ENTROPY_DIR_LENGTH: usize = 4;
 /// Number of entropy directories generated from the hash.
 const ENTROPY_DIR_DEPTH: usize = 3;
 
-#[derive(Clone, Debug)]
-/// `DefaultLocationGenerator` used to generate the data dir location of data file.
-/// The location is generated based on the table location and the data location in table properties.
+/// Generates paths under the data directory, with partition subdirectories.
 ///
-/// "Default" names the layout, not the table's choice: this generator always writes
-/// `{data location}/{partition path}/{file name}` and ignores `write.object-storage.enabled`.
-/// Use [`TableLocationGenerator`] to follow the layout selected by the table properties.
+/// Use [`TableLocationGenerator`] to honor `write.object-storage.enabled`.
+#[derive(Clone, Debug)]
 pub struct DefaultLocationGenerator {
     data_location: String,
 }
@@ -207,17 +204,11 @@ impl LocationGenerator for ObjectStorageLocationGenerator {
     }
 }
 
-/// `TableLocationGenerator` generates data file locations in the layout that the table
-/// properties select.
+/// Generates data file paths using the layout configured in table properties.
 ///
 /// It uses [`ObjectStorageLocationGenerator`] when
 /// [`write.object-storage.enabled`](crate::spec::TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED)
-/// is `true`, and [`DefaultLocationGenerator`] otherwise. A custom location provider configured
-/// with `write.location-provider.impl` is ignored, and the default or object-storage layout is
-/// used instead.
-///
-/// Writers that produce data files for a table should use this generator so that the files
-/// follow the table's configured layout.
+/// is `true`, and [`DefaultLocationGenerator`] otherwise.
 #[derive(Clone, Debug)]
 pub struct TableLocationGenerator {
     inner: Layout,
@@ -230,7 +221,9 @@ enum Layout {
 }
 
 impl TableLocationGenerator {
-    /// Create a new `TableLocationGenerator` from table metadata.
+    /// Creates a generator from table metadata.
+    ///
+    /// # Errors
     ///
     /// Returns an error if a layout-related table property has an invalid value.
     pub fn new(table_metadata: &TableMetadata) -> Result<Self> {
@@ -345,6 +338,7 @@ pub(crate) mod test {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use rstest::rstest;
     use uuid::Uuid;
 
     use super::LocationGenerator;
@@ -665,82 +659,83 @@ pub(crate) mod test {
         );
     }
 
-    #[test]
-    fn test_table_location_generator_default_layout() {
-        let enabled = TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED;
-        for properties in [vec![], vec![(enabled, "false")]] {
-            let table_metadata = table_metadata_with_properties(&properties);
-            let expected = DefaultLocationGenerator::new(&table_metadata).unwrap();
-            assert_same_locations(&table_metadata, &expected);
-        }
-    }
-
-    #[test]
-    fn test_table_location_generator_object_storage_layout() {
-        let enabled = TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED;
-        let partitioned_paths = TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_PARTITIONED_PATHS;
-        let cases = [
-            vec![(enabled, "true"), (partitioned_paths, "false")],
-            vec![(enabled, "true")],
-            vec![(enabled, "TRUE")],
-        ];
-        for properties in cases {
-            let table_metadata = table_metadata_with_properties(&properties);
-            let expected = ObjectStorageLocationGenerator::new(&table_metadata).unwrap();
-            assert_same_locations(&table_metadata, &expected);
-        }
-    }
-
-    #[test]
-    fn test_table_location_generator_invalid_property() {
-        let table_metadata = table_metadata_with_properties(&[(
-            TableProperties::PROPERTY_WRITE_OBJECT_STORAGE_ENABLED,
-            "yes",
-        )]);
-        let err = TableLocationGenerator::new(&table_metadata).unwrap_err();
-
-        assert_eq!(err.kind(), ErrorKind::DataInvalid);
-    }
-
-    /// Assert that a `TableLocationGenerator` built from `table_metadata` generates the same
-    /// locations as `expected`, with and without a partition key.
-    fn assert_same_locations(table_metadata: &TableMetadata, expected: &impl LocationGenerator) {
-        let location_gen = TableLocationGenerator::new(table_metadata).unwrap();
-        let partition_key = partition_key();
-        for partition_key in [None, Some(&partition_key)] {
-            assert_eq!(
-                location_gen.generate_location(partition_key, "test.parquet"),
-                expected.generate_location(partition_key, "test.parquet")
-            );
-        }
-    }
-
-    /// Build a partition key with an identity partition on `id = 42`.
-    fn partition_key() -> PartitionKey {
+    #[rstest]
+    #[case::unset(&[], [
+        "s3://data.db/table/data/test.parquet",
+        "s3://data.db/table/data/data%231=val%231/test.parquet",
+    ])]
+    #[case::disabled(&[("write.object-storage.enabled", "false")], [
+        "s3://data.db/table/data/test.parquet",
+        "s3://data.db/table/data/data%231=val%231/test.parquet",
+    ])]
+    #[case::enabled(&[("write.object-storage.enabled", "true")], [
+        "s3://data.db/table/data/0110/1010/0011/11101000/test.parquet",
+        "s3://data.db/table/data/0000/1011/0110/00001000/data%231=val%231/test.parquet",
+    ])]
+    #[case::uppercase(&[("write.object-storage.enabled", "TRUE")], [
+        "s3://data.db/table/data/0110/1010/0011/11101000/test.parquet",
+        "s3://data.db/table/data/0000/1011/0110/00001000/data%231=val%231/test.parquet",
+    ])]
+    #[case::without_partition_paths(&[
+        ("write.object-storage.enabled", "true"),
+        ("write.object-storage.partitioned-paths", "false"),
+    ], [
+        "s3://data.db/table/data/0110/1010/0011/11101000-test.parquet",
+        "s3://data.db/table/data/0110/1010/0011/11101000-test.parquet",
+    ])]
+    fn table_location_follows_properties(
+        #[case] properties: &[(&str, &str)],
+        #[case] expected: [&str; 2],
+    ) {
+        let metadata = table_metadata_with(
+            "s3://data.db/table",
+            properties
+                .iter()
+                .map(|(key, value)| (key.to_string(), value.to_string()))
+                .collect(),
+        );
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(1, "data#1", Type::Primitive(PrimitiveType::String))
+                        .into(),
                 ])
                 .build()
                 .unwrap(),
         );
         let partition_spec = PartitionSpec::builder(schema.clone())
-            .add_partition_field("id", "id", Transform::Identity)
+            .add_partition_field("data#1", "data#1", Transform::Identity)
             .unwrap()
             .build()
             .unwrap();
-        let partition_data = Struct::from_iter([Some(Literal::int(42))]);
-        PartitionKey::new(partition_spec, schema, partition_data)
+        let partition_key = PartitionKey::new(
+            partition_spec,
+            schema,
+            Struct::from_iter([Some(Literal::string("val#1"))]),
+        );
+        let generator = TableLocationGenerator::new(&metadata).unwrap();
+
+        assert_eq!(
+            [
+                generator.generate_location(None, "test.parquet"),
+                generator.generate_location(Some(&partition_key), "test.parquet"),
+            ],
+            expected
+        );
     }
 
-    /// Build a minimal `TableMetadata` at `s3://data.db/table` with the given properties.
-    fn table_metadata_with_properties(properties: &[(&str, &str)]) -> TableMetadata {
-        let properties = properties
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect();
-        table_metadata_with("s3://data.db/table", properties)
+    #[test]
+    fn table_location_rejects_invalid_property() {
+        let metadata = table_metadata_with(
+            "s3://data.db/table",
+            HashMap::from([(
+                "write.object-storage.enabled".to_string(),
+                "yes".to_string(),
+            )]),
+        );
+        let err = TableLocationGenerator::new(&metadata).unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     /// Build a minimal `TableMetadata` for location generator tests.
