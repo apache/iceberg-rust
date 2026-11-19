@@ -29,16 +29,14 @@ mod writer;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use apache_avro::Reader as AvroReader;
-use apache_avro::error::Details;
 pub use writer::*;
 
 use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType, Schema, Struct, Type,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::avro::{Resolved, define_named_types_once};
-use crate::error::{Error, Result, invalid_data};
+use crate::avro::{ObjectContainerFile, Resolved};
+use crate::error::{Result, invalid_data};
 
 /// Whether a manifest with repeated Avro named type definitions was logged at
 /// warn level. A table written by an affected release can have many of them.
@@ -58,51 +56,26 @@ impl Manifest {
         bs: &[u8],
         location: Option<&str>,
     ) -> Result<(ManifestMetadata, Vec<ManifestEntry>)> {
-        let rewritten;
-        let reader = match AvroReader::new(bs) {
-            Ok(reader) => reader,
-            // iceberg-rust repeated `decimal` definitions before
-            // `schema_to_avro_schema` defined each named type once, so this
-            // fallback stays while tables can contain manifests it wrote.
-            Err(e) if matches!(e.details(), Details::AmbiguousSchemaDefinition(_)) => {
-                let (bs, repeated) = match define_named_types_once(bs) {
-                    Ok(Some(rewrite)) => rewrite,
-                    Ok(None) => return Err(e.into()),
-                    Err(rewrite_error) => {
-                        return Err(Error::from(e).with_context(
-                            "error defining each named type once",
-                            rewrite_error.to_string(),
-                        ));
-                    }
-                };
-                rewritten = bs;
-                let reader = AvroReader::new(rewritten.as_slice()).map_err(|retry_error| {
-                    Error::from(e).with_context(
-                        "error after defining each named type once",
-                        retry_error.to_string(),
-                    )
-                })?;
-                let location = location.unwrap_or("<unknown location>");
-                if WARNED_REPEATED_DEFINITIONS.swap(true, Ordering::Relaxed) {
-                    tracing::debug!(
-                        "Manifest {location} defines Avro named types {repeated:?} more than once."
-                    );
-                } else {
-                    tracing::warn!(
-                        "Manifest {location} defines Avro named types {repeated:?} more than once, \
-                         which the Avro specification doesn't allow. Reading it with each repeated \
-                         definition replaced by a reference to the first. Later manifests like \
-                         this are logged at debug level."
-                    );
-                }
-                reader
+        let file = ObjectContainerFile::parse(bs)?;
+        let repeated = file.repeated_named_type_definitions();
+        if !repeated.is_empty() {
+            let location = location.unwrap_or("<unknown location>");
+            if WARNED_REPEATED_DEFINITIONS.swap(true, Ordering::Relaxed) {
+                tracing::debug!(
+                    "Manifest {location} defines Avro named types {repeated:?} more than once."
+                );
+            } else {
+                tracing::warn!(
+                    "Manifest {location} defines Avro named types {repeated:?} more than once, \
+                     which the Avro specification doesn't allow. Reading it with each repeated \
+                     definition replaced by a reference to the first. Later manifests like \
+                     this are logged at debug level."
+                );
             }
-            Err(e) => return Err(e.into()),
-        };
+        }
 
         // Parse manifest metadata
-        let meta = reader.user_metadata();
-        let metadata = ManifestMetadata::parse(meta)?;
+        let metadata = ManifestMetadata::parse(file.user_metadata())?;
 
         // Parse manifest entries
         let partition_type = metadata.partition_spec.partition_type(&metadata.schema)?;
@@ -112,30 +85,33 @@ impl Manifest {
         let partition_struct_type = Type::Struct(partition_type.clone());
 
         let entries = match metadata.format_version {
-            FormatVersion::V1 => reader
-                .into_deser_iter::<Resolved<_serde::ManifestEntryV1>>()
+            FormatVersion::V1 => file
+                .records::<Resolved<_serde::ManifestEntryV1>>()?
+                .into_iter()
                 .map(|entry| {
-                    entry?.0.try_into(
+                    entry.0.try_into(
                         metadata.partition_spec.spec_id(),
                         &partition_struct_type,
                         &metadata.schema,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?,
-            FormatVersion::V2 => reader
-                .into_deser_iter::<Resolved<_serde::ManifestEntryV2>>()
+            FormatVersion::V2 => file
+                .records::<Resolved<_serde::ManifestEntryV2>>()?
+                .into_iter()
                 .map(|entry| {
-                    entry?.0.try_into(
+                    entry.0.try_into(
                         metadata.partition_spec.spec_id(),
                         &partition_struct_type,
                         &metadata.schema,
                     )
                 })
                 .collect::<Result<Vec<_>>>()?,
-            FormatVersion::V3 => reader
-                .into_deser_iter::<Resolved<_serde::ManifestEntryV3>>()
+            FormatVersion::V3 => file
+                .records::<Resolved<_serde::ManifestEntryV3>>()?
+                .into_iter()
                 .map(|entry| {
-                    entry?.0.try_into(
+                    entry.0.try_into(
                         metadata.partition_spec.spec_id(),
                         &partition_struct_type,
                         &metadata.schema,
@@ -2251,14 +2227,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_manifest_with_repeated_named_type_definitions_reports_original_error() {
+    fn test_parse_manifest_with_repeated_named_type_definitions_truncated_header() {
         let bs = fs::read(format!(
             "{}/testdata/manifests/repeated-decimal-type-definitions.avro",
             env!("CARGO_MANIFEST_DIR")
         ))
         .unwrap();
-        // Cut the header's sync marker in half, so the rewritten header parses
-        // its schema but fails to read the marker. The file ends with the marker.
+        // Cut the header's sync marker in half, so the header fails to read
+        // before any entry is. The file ends with the marker.
         let marker = &bs[bs.len() - 16..];
         let header_marker = bs.windows(16).position(|w| w == marker).unwrap();
         let truncated = &bs[..header_marker + 8];
@@ -2272,14 +2248,102 @@ mod tests {
         let err = with_default(subscriber, || Manifest::parse_avro(truncated)).unwrap_err();
 
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
-        let message = err.to_string();
-        assert!(
-            message.contains("Two named schema defined for same fullname"),
-            "{message}"
-        );
-        assert!(message.contains("Failed to read marker bytes"), "{message}");
         // The fallback logs only manifests that it reads.
         let log = fs::read_to_string(&log_path).unwrap();
         assert!(!log.contains("more than once"), "{log}");
+    }
+
+    #[test]
+    fn test_parse_manifest_reuses_writer_schema() {
+        // Two manifests with byte-identical writer schemas: the second parse
+        // finds the first one's schema in the cache and must decode the same.
+        let metadata = writer_schema_test_metadata(FormatVersion::V2);
+        let schema = v2_writer_schema(serde_json::json!([
+            {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+            {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
+            {"name": "score", "type": ["null", "double"], "default": null, "field-id": 1002},
+        ]));
+        let partitions = [
+            (
+                serde_json::json!({"id": 5, "name": "a", "score": 2.5}),
+                Struct::from_iter([
+                    Some(Literal::long(5)),
+                    Some(Literal::string("a")),
+                    Some(Literal::double(2.5)),
+                ]),
+            ),
+            (
+                serde_json::json!({"id": null, "name": "b", "score": -1.0}),
+                Struct::from_iter([
+                    None,
+                    Some(Literal::string("b")),
+                    Some(Literal::double(-1.0)),
+                ]),
+            ),
+        ];
+
+        for (partition, expected) in partitions {
+            let bs = write_with_writer_schema(&metadata, &schema, vec![v2_entry(partition)]);
+
+            let manifest = Manifest::parse_avro(&bs).unwrap();
+
+            assert_eq!(
+                manifest,
+                Manifest::new(metadata.clone(), vec![expected_entry(expected)])
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_manifest_with_different_writer_schema_after_cached_one() {
+        // Manifest B's writer schema differs from A's by one partition field.
+        // Served A's schema, B would decode a two-field partition.
+        let metadata_a = {
+            let mut metadata = writer_schema_test_metadata(FormatVersion::V2);
+            metadata.partition_spec = PartitionSpec::builder(metadata.schema.clone())
+                .with_spec_id(0)
+                .add_partition_field("id", "id", Transform::Identity)
+                .unwrap()
+                .add_partition_field("name", "name", Transform::Identity)
+                .unwrap()
+                .build()
+                .unwrap();
+            metadata
+        };
+        let schema_a = v2_writer_schema(serde_json::json!([
+            {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+            {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
+        ]));
+        let bs_a = write_with_writer_schema(&metadata_a, &schema_a, vec![v2_entry(
+            serde_json::json!({"id": 5, "name": "a"}),
+        )]);
+        let metadata_b = writer_schema_test_metadata(FormatVersion::V2);
+        let schema_b = v2_writer_schema(serde_json::json!([
+            {"name": "id", "type": ["null", "long"], "default": null, "field-id": 1000},
+            {"name": "name", "type": ["null", "string"], "default": null, "field-id": 1001},
+            {"name": "score", "type": ["null", "double"], "default": null, "field-id": 1002},
+        ]));
+        let bs_b = write_with_writer_schema(&metadata_b, &schema_b, vec![v2_entry(
+            serde_json::json!({"id": 6, "name": "b", "score": 0.5}),
+        )]);
+
+        let manifest_a = Manifest::parse_avro(&bs_a).unwrap();
+        let manifest_b = Manifest::parse_avro(&bs_b).unwrap();
+
+        assert_eq!(
+            manifest_a,
+            Manifest::new(metadata_a, vec![expected_entry(Struct::from_iter([
+                Some(Literal::long(5)),
+                Some(Literal::string("a")),
+            ]))])
+        );
+        assert_eq!(
+            manifest_b,
+            Manifest::new(metadata_b, vec![expected_entry(Struct::from_iter([
+                Some(Literal::long(6)),
+                Some(Literal::string("b")),
+                Some(Literal::double(0.5)),
+            ]))])
+        );
     }
 }
