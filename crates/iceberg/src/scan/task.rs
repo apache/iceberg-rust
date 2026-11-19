@@ -780,7 +780,7 @@ impl FileScanTaskDeleteFile {
         self.key_metadata.as_deref()
     }
 
-    fn is_deletion_vector(&self) -> bool {
+    pub(super) fn is_deletion_vector(&self) -> bool {
         self.file_type == DataContentType::PositionDeletes
             && self.file_format == DataFileFormat::Puffin
     }
