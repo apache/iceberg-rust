@@ -21,11 +21,13 @@ mod cache;
 use cache::*;
 mod context;
 use context::*;
+mod metrics;
 mod task;
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
@@ -453,18 +455,20 @@ pub struct TableScan {
 impl TableScan {
     /// Returns a stream of [`FileScanTask`]s.
     pub async fn plan_files(&self) -> Result<FileScanTaskStream> {
-        self.plan_data_files(|ctx| ctx.into_file_scan_task()).await
+        self.plan_data_files(Arc::default(), |ctx| ctx.into_file_scan_task())
+            .await
     }
 
     pub(crate) async fn plan_cow_rewrite_files(
         &self,
     ) -> Result<BoxStream<'static, Result<crate::cow_rewrite::CowRewriteFile>>> {
-        self.plan_data_files(|ctx| ctx.into_cow_rewrite_file())
+        self.plan_data_files(Arc::default(), |ctx| ctx.into_cow_rewrite_file())
             .await
     }
 
     async fn plan_data_files<T, F, Fut>(
         &self,
+        metrics: Arc<metrics::PlanningCounters>,
         build_result: F,
     ) -> Result<BoxStream<'static, Result<T>>>
     where
@@ -500,6 +504,7 @@ impl TableScan {
             manifest_entry_data_ctx_tx,
             delete_file_idx.clone(),
             manifest_entry_delete_ctx_tx,
+            metrics.clone(),
         )?;
 
         let mut channel_for_manifest_error = planned_file_tx.clone();
@@ -679,6 +684,10 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+                manifest_entry_context
+                    .metrics
+                    .skipped_data_files
+                    .fetch_add(1, Ordering::Relaxed);
                 return Ok(());
             }
 
@@ -688,6 +697,10 @@ impl TableScan {
                 manifest_entry_context.manifest_entry.data_file(),
                 false,
             )? {
+                manifest_entry_context
+                    .metrics
+                    .skipped_data_files
+                    .fetch_add(1, Ordering::Relaxed);
                 return Ok(());
             }
         }
@@ -726,6 +739,10 @@ impl TableScan {
             // skip any data file whose partition data indicates that it can't contain
             // any data that matches this scan's filter
             if !expression_evaluator.eval(manifest_entry_context.manifest_entry.data_file())? {
+                manifest_entry_context
+                    .metrics
+                    .skipped_delete_files
+                    .fetch_add(1, Ordering::Relaxed);
                 return Ok(());
             }
         }
@@ -736,6 +753,19 @@ impl TableScan {
                 partition_spec_id: manifest_entry_context.partition_spec_id,
             })
             .await?;
+
+        let metrics = &manifest_entry_context.metrics;
+        metrics.indexed_delete_files.fetch_add(1, Ordering::Relaxed);
+        let counter = match manifest_entry_context.manifest_entry.content_type() {
+            DataContentType::EqualityDeletes => &metrics.equality_delete_files,
+            _ if manifest_entry_context.manifest_entry.file_format()
+                == crate::spec::DataFileFormat::Puffin =>
+            {
+                &metrics.dvs
+            }
+            _ => &metrics.positional_delete_files,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
 
         Ok(())
     }
@@ -765,6 +795,7 @@ mod tests {
     use parquet::arrow::ArrowWriter;
     use uuid::Uuid;
 
+    use super::metrics::{PlanningCounters, PlanningCounts};
     use super::{resolve_column_stats_columns, resolve_field_id};
     use crate::arrow::{ArrowReaderBuilder, ArrowReaderOptions, ParquetReadOptions};
     use crate::expr::{BoundPredicate, Reference};
@@ -4359,22 +4390,30 @@ mod tests {
                     .with_filter(Reference::new("x").less_than(Datum::long(200)))
                     .build()
                     .unwrap();
-                let stream = if cow {
-                    scan.plan_cow_rewrite_files()
-                        .await
-                        .unwrap()
-                        .map_ok(|file| file.scan_task)
-                        .boxed()
+                let (mut actual, counts) = collect_planning_counts(&scan, cow).await;
+                let expected_counts = if content == ManifestContentType::Deletes {
+                    PlanningCounts {
+                        total_data_manifests: 1,
+                        total_delete_manifests: 2,
+                        scanned_data_manifests: 1,
+                        scanned_delete_manifests: 1,
+                        skipped_delete_manifests: 1,
+                        result_data_files: 10,
+                        result_delete_files: 10,
+                        total_file_size_in_bytes: 1000,
+                        total_delete_file_size_in_bytes: 1000,
+                        indexed_delete_files: 1,
+                        positional_delete_files: 1,
+                        ..Default::default()
+                    }
                 } else {
-                    scan.plan_files().await.unwrap()
+                    PlanningCounts {
+                        total_data_manifests: 1,
+                        skipped_data_manifests: 1,
+                        ..Default::default()
+                    }
                 };
-                let mut actual = tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
-                    stream.try_collect::<Vec<_>>(),
-                )
-                .await
-                .unwrap()
-                .unwrap();
+                assert_eq!(counts, expected_counts);
                 actual.sort_by(|a, b| a.data_file_path().cmp(b.data_file_path()));
                 assert_eq!(
                     actual,
@@ -4480,22 +4519,14 @@ mod tests {
                     ),
                     (added, existing)
                 );
-                let stream = if cow {
-                    scan.plan_cow_rewrite_files()
-                        .await
-                        .unwrap()
-                        .map_ok(|file| file.scan_task)
-                        .boxed()
-                } else {
-                    scan.plan_files().await.unwrap()
-                };
-                let tasks = tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
-                    stream.try_collect::<Vec<_>>(),
-                )
-                .await
-                .unwrap()
-                .unwrap();
+                let (tasks, counts) = collect_planning_counts(&scan, cow).await;
+                assert_eq!(counts, PlanningCounts {
+                    total_data_manifests: 1,
+                    scanned_data_manifests: 1,
+                    result_data_files: 1,
+                    total_file_size_in_bytes: entry.file_size_in_bytes(),
+                    ..Default::default()
+                });
                 let actual: Vec<_> = tasks
                     .into_iter()
                     .map(|task| (task.data_file_path().to_owned(), task.deletes().to_vec()))
@@ -4505,6 +4536,244 @@ mod tests {
                     "status={status:?}, added={added:?}, existing={existing:?}, cow={cow}"
                 );
             }
+        }
+    }
+
+    async fn collect_planning_counts(
+        scan: &TableScan,
+        cow: bool,
+    ) -> (Vec<FileScanTask>, PlanningCounts) {
+        let counters = Arc::new(PlanningCounters::default());
+        let stream = if cow {
+            scan.plan_data_files(counters.clone(), |ctx| ctx.into_cow_rewrite_file())
+                .await
+                .unwrap()
+                .map_ok(|file| file.scan_task)
+                .boxed()
+        } else {
+            scan.plan_data_files(counters.clone(), |ctx| ctx.into_file_scan_task())
+                .await
+                .unwrap()
+        };
+        let tasks = tokio::time::timeout(std::time::Duration::from_secs(10), stream.try_collect())
+            .await
+            .unwrap()
+            .unwrap();
+        (tasks, counters.snapshot())
+    }
+
+    #[tokio::test]
+    async fn test_planning_counts_pruning_and_independent_invocations() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let file_size = fs::metadata(format!("{}/1.parquet", fixture.table_location))
+            .unwrap()
+            .len();
+        for cow in [false, true] {
+            for (limit, scanned, skipped_manifests, files, skipped_files) in
+                [(50, 0, 1, 0, 0), (200, 1, 0, 1, 1), (400, 1, 0, 2, 0)]
+            {
+                let scan = fixture
+                    .table
+                    .scan()
+                    .with_filter(Reference::new("x").less_than(Datum::long(limit)))
+                    .build()
+                    .unwrap();
+                let (left, right) = tokio::join!(
+                    collect_planning_counts(&scan, cow),
+                    collect_planning_counts(&scan, cow)
+                );
+                let expected = PlanningCounts {
+                    total_data_manifests: 1,
+                    scanned_data_manifests: scanned,
+                    skipped_data_manifests: skipped_manifests,
+                    result_data_files: files,
+                    skipped_data_files: skipped_files,
+                    total_file_size_in_bytes: file_size * files,
+                    ..Default::default()
+                };
+                assert_eq!(left.0.len() as u64, files);
+                assert_eq!(left.1, expected);
+                assert_eq!(right.1, expected);
+                assert_eq!(collect_planning_counts(&scan, cow).await.1, expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_planning_counts_delete_types_and_attachments() {
+        for kind in ["position", "equality", "dv"] {
+            let mut fixture = TableTestFixture::new();
+            match kind {
+                "position" => fixture.setup_deadlock_manifests().await,
+                "equality" => fixture.setup_promoted_partition_with_eq_delete(true).await,
+                _ => fixture.setup_promoted_partition_with_dv().await,
+            }
+            let scan = fixture.table.scan().build().unwrap();
+            for cow in [false, true] {
+                let (_, counts) = collect_planning_counts(&scan, cow).await;
+                let files = if kind == "position" { 10 } else { 1 };
+                assert_eq!(counts, PlanningCounts {
+                    total_data_manifests: 1,
+                    total_delete_manifests: 1,
+                    scanned_data_manifests: 1,
+                    scanned_delete_manifests: 1,
+                    result_data_files: files,
+                    result_delete_files: files,
+                    total_file_size_in_bytes: 100 * files,
+                    total_delete_file_size_in_bytes: if kind == "dv" { 40 } else { 100 * files },
+                    indexed_delete_files: 1,
+                    equality_delete_files: u64::from(kind == "equality"),
+                    positional_delete_files: u64::from(kind == "position"),
+                    dvs: u64::from(kind == "dv"),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_planning_counts_statistics_rejections() {
+        let mut fixture = TableTestFixture::new();
+        let stats = FileScanTaskColumnStats::builder()
+            .with_lower_bounds(HashMap::from([(2, Datum::long(10))]))
+            .with_upper_bounds(HashMap::from([(2, Datum::long(10))]))
+            .build();
+        fixture
+            .setup_manifest_files_with_column_stats(&[(None, vec![stats])])
+            .await;
+        let scan = fixture
+            .table
+            .scan()
+            .with_filter(Reference::new("y").less_than(Datum::long(0)))
+            .build()
+            .unwrap();
+        for cow in [false, true] {
+            assert_eq!(
+                collect_planning_counts(&scan, cow).await.1,
+                PlanningCounts {
+                    total_data_manifests: 1,
+                    scanned_data_manifests: 1,
+                    skipped_data_files: 1,
+                    ..Default::default()
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_planning_counts_delete_pruning() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_deadlock_manifests().await;
+        let scan = fixture.table.scan().build().unwrap();
+        let context = scan.plan_context.as_ref().unwrap();
+        let list = context.get_manifest_list().await.unwrap();
+        let snapshot = fixture.table.metadata().current_snapshot().unwrap();
+        for clear_bounds in [false, true] {
+            if clear_bounds {
+                let output = fixture
+                    .table
+                    .file_io()
+                    .new_output(snapshot.manifest_list())
+                    .unwrap()
+                    .writer()
+                    .await
+                    .unwrap();
+                let mut writer = ManifestListWriter::v2(
+                    output,
+                    snapshot.snapshot_id(),
+                    snapshot.parent_snapshot_id(),
+                    snapshot.sequence_number(),
+                );
+                writer
+                    .add_manifests(list.entries().iter().cloned().map(|mut manifest| {
+                        manifest.partitions = None;
+                        manifest
+                    }))
+                    .unwrap();
+                writer.close().await.unwrap();
+            }
+            let table = Table::builder()
+                .metadata(fixture.table.metadata().clone())
+                .identifier(fixture.table.identifier().clone())
+                .file_io(fixture.table.file_io().clone())
+                .runtime(test_runtime())
+                .build()
+                .unwrap();
+            let scan = table
+                .scan()
+                .with_filter(Reference::new("x").less_than(Datum::long(50)))
+                .build()
+                .unwrap();
+            for cow in [false, true] {
+                let expected = if clear_bounds {
+                    PlanningCounts {
+                        total_data_manifests: 1,
+                        total_delete_manifests: 1,
+                        scanned_data_manifests: 1,
+                        scanned_delete_manifests: 1,
+                        skipped_data_files: 10,
+                        skipped_delete_files: 1,
+                        ..Default::default()
+                    }
+                } else {
+                    PlanningCounts {
+                        total_data_manifests: 1,
+                        total_delete_manifests: 1,
+                        skipped_data_manifests: 1,
+                        skipped_delete_manifests: 1,
+                        ..Default::default()
+                    }
+                };
+                assert_eq!(collect_planning_counts(&scan, cow).await.1, expected);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_planning_counts_empty_and_failed_scans() {
+        for cow in [false, true] {
+            let scan = TableTestFixture::new_empty().table.scan().build().unwrap();
+            assert_eq!(
+                collect_planning_counts(&scan, cow).await.1,
+                PlanningCounts::default()
+            );
+            let mut fixture = TableTestFixture::new();
+            fixture.setup_manifest_files().await;
+            let scan = fixture.table.scan().build().unwrap();
+            let context = scan.plan_context.as_ref().unwrap();
+            let list = context.get_manifest_list().await.unwrap();
+            fixture
+                .table
+                .file_io()
+                .delete(&list.entries()[0].manifest_path)
+                .await
+                .unwrap();
+            let counters = Arc::new(PlanningCounters::default());
+            let stream = scan
+                .plan_data_files(counters.clone(), move |ctx| async move {
+                    if cow {
+                        ctx.into_cow_rewrite_file().await.map(|file| file.scan_task)
+                    } else {
+                        ctx.into_file_scan_task().await
+                    }
+                })
+                .await
+                .unwrap();
+            assert!(
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    stream.try_collect::<Vec<_>>()
+                )
+                .await
+                .unwrap()
+                .is_err()
+            );
+            assert_eq!(counters.snapshot(), PlanningCounts {
+                total_data_manifests: 1,
+                scanned_data_manifests: 1,
+                ..Default::default()
+            });
         }
     }
 }
