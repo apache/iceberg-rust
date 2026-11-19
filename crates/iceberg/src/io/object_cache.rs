@@ -160,6 +160,29 @@ impl ObjectCache {
         }
     }
 
+    /// Inserts an already parsed [`Manifest`] under the key
+    /// [`ObjectCache::get_manifest`] uses for `manifest_file`, so that a later
+    /// lookup reuses it instead of fetching and parsing the file again.
+    ///
+    /// Returns `false` when the cache is disabled and nothing was stored. An
+    /// existing entry for the same key is kept: both are parses of the same
+    /// immutable file.
+    pub(crate) async fn insert_manifest(
+        &self,
+        manifest_file: &ManifestFile,
+        manifest: Arc<Manifest>,
+    ) -> bool {
+        let Some(cache) = self.cache() else {
+            return false;
+        };
+        let key = CachedObjectKey::Manifest(ManifestKey::new(manifest_file));
+        cache
+            .entry(key)
+            .or_insert(CachedItem::Manifest(manifest))
+            .await;
+        true
+    }
+
     /// Retrieves an Arc [`ManifestList`] from the cache
     /// or retrieves one from FileIO and parses it if not present
     pub(crate) async fn get_manifest_list(
@@ -755,5 +778,78 @@ mod tests {
 
         assert_eq!(first.entries()[0].sequence_number(), Some(35));
         assert_eq!(second.entries()[0].sequence_number(), Some(36));
+    }
+
+    #[tokio::test]
+    async fn test_seeded_manifest_is_reused_without_reading_the_file() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let table = fixture.table.clone();
+
+        let object_cache = table.object_cache();
+        let manifest_list = object_cache
+            .get_manifest_list(
+                table.metadata().current_snapshot().unwrap(),
+                &table.metadata_ref(),
+            )
+            .await
+            .unwrap();
+        let manifest_file = manifest_list.entries().first().unwrap();
+
+        // A caller parses the manifest itself, then seeds it through a clone.
+        let parsed = Arc::new(table.manifest_reader().read(manifest_file).await.unwrap());
+        assert!(
+            table
+                .clone()
+                .seed_manifest_cache(manifest_file, parsed.clone())
+                .await
+        );
+
+        // The file is gone: only the seeded entry can answer.
+        table
+            .file_io()
+            .delete(&manifest_file.manifest_path)
+            .await
+            .unwrap();
+        let cached = object_cache.get_manifest(manifest_file).await.unwrap();
+        assert!(Arc::ptr_eq(&parsed, &cached));
+
+        // A second seed keeps the first entry.
+        let other = Arc::new(Manifest::new(parsed.metadata().clone(), Vec::new()));
+        assert!(table.seed_manifest_cache(manifest_file, other).await);
+        let cached = object_cache.get_manifest(manifest_file).await.unwrap();
+        assert!(Arc::ptr_eq(&parsed, &cached));
+    }
+
+    #[tokio::test]
+    async fn test_seed_manifest_is_a_no_op_for_a_disabled_cache() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let object_cache = ObjectCache::new(fixture.table.file_io().clone(), None);
+        let manifest_list = object_cache
+            .get_manifest_list(
+                fixture.table.metadata().current_snapshot().unwrap(),
+                &fixture.table.metadata_ref(),
+            )
+            .await
+            .unwrap();
+        let manifest_file = manifest_list.entries().first().unwrap();
+        let parsed = Arc::new(
+            fixture
+                .table
+                .manifest_reader()
+                .read(manifest_file)
+                .await
+                .unwrap(),
+        );
+
+        let disabled = ObjectCache::with_disabled_cache(fixture.table.file_io().clone(), None);
+        assert!(
+            !disabled
+                .insert_manifest(manifest_file, parsed.clone())
+                .await
+        );
+        let read = disabled.get_manifest(manifest_file).await.unwrap();
+        assert!(!Arc::ptr_eq(&parsed, &read));
     }
 }

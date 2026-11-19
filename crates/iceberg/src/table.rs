@@ -29,7 +29,8 @@ use crate::io::object_cache::ObjectCache;
 use crate::runtime::Runtime;
 use crate::scan::TableScanBuilder;
 use crate::spec::{
-    ManifestListReader, ManifestReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef,
+    Manifest, ManifestFile, ManifestListReader, ManifestReader, SchemaRef, SnapshotRef,
+    TableMetadata, TableMetadataRef,
 };
 use crate::{Result, TableIdent};
 
@@ -263,6 +264,24 @@ impl Table {
     /// Returns file io used in this table.
     pub fn file_io(&self) -> &FileIO {
         &self.file_io
+    }
+
+    /// Seeds this table's manifest cache with a manifest the caller already
+    /// parsed, so a later scan planning pass over the same [`ManifestFile`]
+    /// reuses it instead of fetching and parsing the manifest again.
+    ///
+    /// `manifest` must be the result of reading `manifest_file` with
+    /// [`Table::manifest_reader`]. The cache is shared by every clone of this
+    /// table. Returns `false`, storing nothing, when the table was built with
+    /// its cache disabled. A manifest that is already cached is kept.
+    pub async fn seed_manifest_cache(
+        &self,
+        manifest_file: &ManifestFile,
+        manifest: Arc<Manifest>,
+    ) -> bool {
+        self.object_cache
+            .insert_manifest(manifest_file, manifest)
+            .await
     }
 
     /// Returns this table's object cache
