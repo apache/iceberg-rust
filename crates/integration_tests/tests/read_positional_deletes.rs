@@ -61,7 +61,7 @@ async fn test_read_table_with_positional_deletes() {
     assert_eq!(plan[0].deletes().len(), 1);
 
     // we should see two rows deleted, returning 10 rows instead of 12
-    let batch_stream = scan.to_arrow().await.unwrap();
+    let batch_stream = scan.to_arrow(Default::default()).await.unwrap();
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
     let num_rows: usize = batches.iter().map(|v| v.num_rows()).sum();
     assert_eq!(num_rows, 10);
