@@ -1849,8 +1849,8 @@ mod tests {
             .await?;
         let col0 = Arc::new(
             Decimal128Array::from(vec![
-                Some(decimal_mantissa(&decimal_max)),
-                Some(decimal_mantissa(&decimal_min)),
+                Some(decimal_mantissa(decimal_max).unwrap()),
+                Some(decimal_mantissa(decimal_min).unwrap()),
             ])
             .with_data_type(DataType::Decimal128(38, 0)),
         ) as ArrayRef;
