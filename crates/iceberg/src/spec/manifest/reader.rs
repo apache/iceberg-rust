@@ -39,6 +39,11 @@ impl ManifestReader {
 
     /// Read, decrypt, parse and return the manifest described by
     /// `manifest_file`.
+    ///
+    /// The file is fetched on the calling task and parsed on the reader's cpu
+    /// runtime. A parse that panics, or a cpu runtime that has shut down, returns
+    /// an [`ErrorKind::Unexpected`](crate::ErrorKind::Unexpected) error naming the
+    /// manifest.
     pub async fn read(self, manifest_file: &ManifestFile) -> Result<Manifest> {
         let input_file = self.file_io.new_input(&manifest_file.manifest_path)?;
         let key_metadata = manifest_file

@@ -3679,8 +3679,10 @@ mod tests {
     }
 
     /// A manifest parse spawned on a shut-down cpu runtime is cancelled, which
-    /// takes the same `JoinError` path a panicking parse does. The error must
-    /// still name the manifest, which a `JoinError` on its own does not.
+    /// takes the same `JoinError` path a panicking parse does. The manifest path
+    /// in the error comes from `ObjectCache`'s "Failed to load manifest" wrapper;
+    /// `test_read_names_manifest_when_parse_is_cancelled` covers the reader's own
+    /// context.
     #[tokio::test]
     async fn test_plan_files_reports_cancelled_manifest_parse_as_error() {
         let mut fixture = TableTestFixture::new();

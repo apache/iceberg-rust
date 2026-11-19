@@ -321,6 +321,11 @@ impl Table {
     }
 
     /// Creates a [`ManifestReader`] for loading manifests referenced by this table.
+    ///
+    /// The reader parses manifests on this table's [`Runtime::cpu`] handle, so
+    /// [`ManifestReader::read`] returns an
+    /// [`ErrorKind::Unexpected`](crate::ErrorKind::Unexpected) error once that
+    /// runtime has shut down.
     pub fn manifest_reader(&self) -> ManifestReader {
         ManifestReader::new(self.file_io.clone(), self.runtime.clone())
     }
