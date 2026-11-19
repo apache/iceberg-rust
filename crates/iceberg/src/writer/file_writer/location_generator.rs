@@ -51,10 +51,13 @@ const ENTROPY_DIR_LENGTH: usize = 4;
 /// Number of entropy directories generated from the hash.
 const ENTROPY_DIR_DEPTH: usize = 3;
 
-/// Generates paths under the data directory, with partition subdirectories.
-///
-/// Use [`TableLocationGenerator`] to honor `write.object-storage.enabled`.
 #[derive(Clone, Debug)]
+/// `DefaultLocationGenerator` used to generate the data dir location of data file.
+/// The location is generated based on the table location and the data location in table properties.
+///
+/// Paths use `{data location}/{partition path}/{file name}`, omitting the
+/// partition path for unpartitioned files. This generator always uses this layout.
+/// Use [`TableLocationGenerator`] to select the layout from table properties.
 pub struct DefaultLocationGenerator {
     data_location: String,
 }
