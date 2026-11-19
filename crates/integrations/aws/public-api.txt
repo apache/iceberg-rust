@@ -1,0 +1,46 @@
+pub mod iceberg_aws
+pub struct iceberg_aws::AwsProperties<'properties>
+impl iceberg_aws::AwsProperties<'_>
+pub const iceberg_aws::AwsProperties<'_>::PROPERTY_ACCESS_KEY_ID: &'static str
+pub const iceberg_aws::AwsProperties<'_>::PROPERTY_ASSUME_ROLE_ARN: &'static str
+pub const iceberg_aws::AwsProperties<'_>::PROPERTY_ASSUME_ROLE_EXTERNAL_ID: &'static str
+pub const iceberg_aws::AwsProperties<'_>::PROPERTY_ASSUME_ROLE_SESSION_NAME: &'static str
+pub const iceberg_aws::AwsProperties<'_>::PROPERTY_PROFILE_NAME: &'static str
+pub const iceberg_aws::AwsProperties<'_>::PROPERTY_REGION_NAME: &'static str
+pub const iceberg_aws::AwsProperties<'_>::PROPERTY_SECRET_ACCESS_KEY: &'static str
+pub const iceberg_aws::AwsProperties<'_>::PROPERTY_SESSION_TOKEN: &'static str
+pub async fn iceberg_aws::AwsProperties<'_>::create_sdk_config(&self, endpoint_uri: core::option::Option<&str>, default_session_name: &str) -> aws_types::sdk_config::SdkConfig
+pub fn iceberg_aws::AwsProperties<'_>::has_explicit_s3_credentials(&self) -> bool
+pub fn iceberg_aws::AwsProperties<'_>::is_sensitive_property(key: &str) -> bool
+pub fn iceberg_aws::AwsProperties<'_>::prepare_s3_file_io(&self, sdk_config: &aws_types::sdk_config::SdkConfig, endpoint_uri: core::option::Option<&str>, default_session_name: &str) -> (std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>, core::option::Option<iceberg_aws::AwsSdkCredentialProvider>)
+pub fn iceberg_aws::AwsProperties<'_>::s3_file_io_properties(&self, endpoint_uri: core::option::Option<&str>, default_session_name: &str, resolved_region: core::option::Option<&str>) -> std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+impl<'properties> iceberg_aws::AwsProperties<'properties>
+pub fn iceberg_aws::AwsProperties<'properties>::access_key_id(&self) -> iceberg::error::Result<core::option::Option<alloc::string::String>>
+pub fn iceberg_aws::AwsProperties<'properties>::assume_role_arn(&self) -> iceberg::error::Result<core::option::Option<alloc::string::String>>
+pub fn iceberg_aws::AwsProperties<'properties>::assume_role_external_id(&self) -> iceberg::error::Result<core::option::Option<alloc::string::String>>
+pub fn iceberg_aws::AwsProperties<'properties>::assume_role_session_name(&self) -> iceberg::error::Result<core::option::Option<alloc::string::String>>
+pub fn iceberg_aws::AwsProperties<'properties>::new(properties: &'properties std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg_aws::AwsProperties<'properties>::profile_name(&self) -> iceberg::error::Result<core::option::Option<alloc::string::String>>
+pub fn iceberg_aws::AwsProperties<'properties>::region_name(&self) -> iceberg::error::Result<core::option::Option<alloc::string::String>>
+pub fn iceberg_aws::AwsProperties<'properties>::secret_access_key(&self) -> iceberg::error::Result<core::option::Option<alloc::string::String>>
+pub fn iceberg_aws::AwsProperties<'properties>::session_token(&self) -> iceberg::error::Result<core::option::Option<alloc::string::String>>
+impl core::fmt::Debug for iceberg_aws::AwsProperties<'_>
+pub fn iceberg_aws::AwsProperties<'_>::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct iceberg_aws::AwsSdkCredentialProvider
+impl iceberg_aws::AwsSdkCredentialProvider
+pub fn iceberg_aws::AwsSdkCredentialProvider::from_sdk_config(config: &aws_types::sdk_config::SdkConfig) -> core::option::Option<Self>
+impl core::clone::Clone for iceberg_aws::AwsSdkCredentialProvider
+pub fn iceberg_aws::AwsSdkCredentialProvider::clone(&self) -> iceberg_aws::AwsSdkCredentialProvider
+impl core::fmt::Debug for iceberg_aws::AwsSdkCredentialProvider
+pub fn iceberg_aws::AwsSdkCredentialProvider::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl reqsign_core::api::ProvideCredential for iceberg_aws::AwsSdkCredentialProvider
+pub type iceberg_aws::AwsSdkCredentialProvider::Credential = reqsign_aws_core::credential::Credential
+pub async fn iceberg_aws::AwsSdkCredentialProvider::provide_credential(&self, _ctx: &reqsign_core::context::Context) -> reqsign_core::error::Result<core::option::Option<Self::Credential>>
+pub const iceberg_aws::AWS_ACCESS_KEY_ID: &str
+pub const iceberg_aws::AWS_ASSUME_ROLE_ARN: &str
+pub const iceberg_aws::AWS_ASSUME_ROLE_EXTERNAL_ID: &str
+pub const iceberg_aws::AWS_ASSUME_ROLE_SESSION_NAME: &str
+pub const iceberg_aws::AWS_PROFILE_NAME: &str
+pub const iceberg_aws::AWS_REGION_NAME: &str
+pub const iceberg_aws::AWS_SECRET_ACCESS_KEY: &str
+pub const iceberg_aws::AWS_SESSION_TOKEN: &str
