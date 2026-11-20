@@ -268,16 +268,16 @@ impl PartialEq for SetLiterals {
 }
 
 pub(crate) enum SetIndex {
-    Int(FnvHashSet<i32>),
-    Long(FnvHashSet<i64>),
+    Int(HashSet<i32, FixedState>),
+    Long(HashSet<i64, FixedState>),
     String(HashSet<String, FixedState>),
 }
 
 impl SetIndex {
     fn new(values: &FnvHashSet<Datum>) -> Option<Self> {
         let mut index = match values.iter().next()?.data_type() {
-            PrimitiveType::Int => Self::Int(FnvHashSet::default()),
-            PrimitiveType::Long => Self::Long(FnvHashSet::default()),
+            PrimitiveType::Int => Self::Int(HashSet::default()),
+            PrimitiveType::Long => Self::Long(HashSet::default()),
             PrimitiveType::String => Self::String(HashSet::default()),
             _ => return None,
         };
