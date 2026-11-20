@@ -528,9 +528,13 @@ impl MinMaxColAggregator {
 }
 
 impl ParquetWriter {
-    /// Converts parquet files to data files
-    #[allow(dead_code)]
-    pub(crate) async fn parquet_files_to_data_files(
+    /// Builds a [`DataFile`] for each existing Parquet file, from its footer alone: record count,
+    /// file size, column sizes, value and null counts, and lower/upper bounds mapped to the table's
+    /// current schema by column name. The files are not rewritten, so they can be registered in a
+    /// table as they are (an "add files" commit, with [`crate::transaction::FastAppendAction`]).
+    ///
+    /// Only unpartitioned tables are supported: every file gets the empty partition.
+    pub async fn parquet_files_to_data_files(
         file_io: &FileIO,
         file_paths: Vec<String>,
         table_metadata: &TableMetadata,
