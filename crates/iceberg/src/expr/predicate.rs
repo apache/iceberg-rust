@@ -895,16 +895,14 @@ mod tests {
             .unwrap();
         let encoded = serde_json::to_value(&predicate).unwrap();
         assert_eq!(encoded["Set"]["literals"].as_array().unwrap().len(), 64);
-        let BoundPredicate::Set(original) = &predicate else {
-            panic!("expected set predicates");
-        };
-        let index = original.membership_index().unwrap();
         let negated = BoundPredicate::Not(LogicalExpression::new([Box::new(predicate.clone())]))
             .rewrite_not();
-        let BoundPredicate::Set(negated) = negated else {
-            panic!("expected a negated set predicate");
+        let (BoundPredicate::Set(original), BoundPredicate::Set(negated)) = (&predicate, &negated)
+        else {
+            panic!("expected set predicates");
         };
         assert_eq!(negated.op(), PredicateOperator::NotIn);
+        let index = original.membership_index().unwrap();
         assert!(Arc::ptr_eq(&index, &negated.membership_index().unwrap()));
 
         assert_eq!(serde_json::to_value(&predicate).unwrap(), encoded);
