@@ -38,6 +38,7 @@ sigv4 = ["dep:aws-credential-types", "dep:aws-sigv4", "dep:base64", "dep:sha2"]
 async-trait = { workspace = true }
 aws-credential-types = { workspace = true, optional = true }
 aws-sigv4 = { workspace = true, optional = true }
+backon = { workspace = true }
 base64 = { workspace = true, optional = true }
 chrono = { workspace = true }
 http = { workspace = true }
