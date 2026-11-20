@@ -20,77 +20,22 @@
 //! The Avro specification allows one definition per full name. iceberg-rust
 //! wrote manifests that define a `fixed` or `decimal` type once for every field
 //! that uses it, while `apache-avro` 0.21 accepted that. `apache-avro` 0.22
-//! rejects such a file's header. Rewriting each repeated definition as a
-//! reference to the first one keeps those files readable, because a reference
-//! decodes the same bytes as the definition it refers to.
+//! rejects such a schema when it resolves its names. Rewriting each repeated
+//! definition in the schema JSON as a reference to the first one keeps those
+//! files readable, because a reference decodes the same bytes as the definition
+//! it refers to.
 
 use std::collections::HashMap;
-use std::io::Cursor;
 
-use apache_avro::Schema as AvroSchema;
-use apache_avro::reader::datum::GenericDatumReader;
-use apache_avro::schema::MapSchema;
-use apache_avro::types::Value as AvroValue;
-use apache_avro::writer::datum::GenericDatumWriter;
 use serde_json::{Map, Value as JsonValue};
 
-use crate::Result;
-use crate::error::invalid_data;
-
-const MAGIC: &[u8] = b"Obj\x01";
-const SCHEMA_KEY: &str = "avro.schema";
-
-/// Rewrites the header of an Avro object container file so that each named type
-/// is defined once and referenced by name afterwards. Returns the rewritten
-/// file and the full names of the repeated types, or `None` if a repeated
-/// definition differs from the first one, which leaves the file ambiguous.
-pub(crate) fn define_named_types_once(bs: &[u8]) -> Result<Option<(Vec<u8>, Vec<String>)>> {
-    rewrite_schema(bs, reference_repeated_definitions)
-}
-
-/// Rewrites the schema in the header of an Avro object container file with
-/// `rewrite`, leaving the data blocks as they are. Returns `None` if `rewrite`
-/// does.
-fn rewrite_schema<T>(
-    bs: &[u8],
-    rewrite: impl FnOnce(&mut JsonValue) -> Option<T>,
-) -> Result<Option<(Vec<u8>, T)>> {
-    let body = bs
-        .strip_prefix(MAGIC)
-        .ok_or_else(|| invalid_data!("Not an Avro object container file"))?;
-    // The header's metadata is an Avro `map<bytes>`, followed by the sync marker.
-    let metadata_schema = AvroSchema::Map(MapSchema {
-        types: Box::new(AvroSchema::Bytes),
-        attributes: Default::default(),
-    });
-    let mut cursor = Cursor::new(body);
-    let AvroValue::Map(mut metadata) = GenericDatumReader::builder(&metadata_schema)
-        .build()?
-        .read_value(&mut cursor)?
-    else {
-        return Err(invalid_data!("Avro file metadata is not a map"));
-    };
-    let rest = usize::try_from(cursor.position())
-        .ok()
-        .and_then(|position| body.get(position..))
-        .ok_or_else(|| invalid_data!("Avro file metadata extends past the end of the file"))?;
-
-    let Some(AvroValue::Bytes(schema)) = metadata.get(SCHEMA_KEY) else {
-        return Err(invalid_data!("Avro file metadata has no {SCHEMA_KEY}"));
-    };
-    let mut schema: JsonValue = serde_json::from_slice(schema)?;
-    let Some(rewritten) = rewrite(&mut schema) else {
-        return Ok(None);
-    };
-    metadata.insert(
-        SCHEMA_KEY.to_string(),
-        AvroValue::Bytes(serde_json::to_vec(&schema)?),
-    );
-    let metadata = GenericDatumWriter::builder(&metadata_schema)
-        .build()?
-        .write_value_to_vec(AvroValue::Map(metadata))?;
-
-    Ok(Some(([MAGIC, &metadata, rest].concat(), rewritten)))
+/// Replaces each repeated definition of a named type in `schema` with its full
+/// name. Returns the replaced names, or `None` if a repeated definition differs
+/// from the first one, which leaves the schema ambiguous.
+pub(crate) fn define_named_types_once(schema: &mut JsonValue) -> Option<Vec<String>> {
+    let mut defined = HashMap::new();
+    let mut repeated = Vec::new();
+    reference_repeated(schema, None, &mut defined, &mut repeated).then_some(repeated)
 }
 
 /// Rewrites the header of an Avro object container file so that each reference
@@ -98,6 +43,11 @@ fn rewrite_schema<T>(
 /// `apache-avro` 0.21.
 #[cfg(test)]
 pub(crate) fn define_named_types_repeatedly(bs: &[u8]) -> Vec<u8> {
+    use apache_avro::types::Value as AvroValue;
+    use apache_avro::writer::datum::GenericDatumWriter;
+
+    use super::container::{MAGIC, SCHEMA_KEY, metadata_schema, read_metadata};
+
     fn inline_references(schema: &mut JsonValue, defined: &mut HashMap<String, JsonValue>) {
         match schema {
             JsonValue::String(name) => {
@@ -125,22 +75,23 @@ pub(crate) fn define_named_types_repeatedly(bs: &[u8]) -> Vec<u8> {
         }
     }
 
-    rewrite_schema(bs, |schema| {
-        inline_references(schema, &mut HashMap::new());
-        Some(())
-    })
-    .unwrap()
-    .unwrap()
-    .0
-}
-
-/// Replaces each repeated definition of a named type in `schema` with its full
-/// name. Returns the replaced names, or `None` if a repeated definition differs
-/// from the first one.
-fn reference_repeated_definitions(schema: &mut JsonValue) -> Option<Vec<String>> {
-    let mut defined = HashMap::new();
-    let mut repeated = Vec::new();
-    reference_repeated(schema, None, &mut defined, &mut repeated).then_some(repeated)
+    let body = bs.strip_prefix(MAGIC).unwrap();
+    let (mut metadata, rest) = read_metadata(body).unwrap();
+    let Some(AvroValue::Bytes(schema)) = metadata.get(SCHEMA_KEY) else {
+        panic!("Avro file metadata has no {SCHEMA_KEY}");
+    };
+    let mut schema: JsonValue = serde_json::from_slice(schema).unwrap();
+    inline_references(&mut schema, &mut HashMap::new());
+    metadata.insert(
+        SCHEMA_KEY.to_string(),
+        AvroValue::Bytes(serde_json::to_vec(&schema).unwrap()),
+    );
+    let metadata = GenericDatumWriter::builder(&metadata_schema())
+        .build()
+        .unwrap()
+        .write_value_to_vec(AvroValue::Map(metadata))
+        .unwrap();
+    [MAGIC, &metadata, rest].concat()
 }
 
 /// Walks `schema` in the order Avro resolves names, recording each named type's
@@ -239,14 +190,14 @@ mod tests {
     }
 
     #[test]
-    fn test_reference_repeated_definitions() {
+    fn test_define_named_types_once() {
         let mut schema = json!({"type": "record", "name": "r102", "fields": [
             {"name": "a", "type": ["null", decimal_10_2()]},
             {"name": "b", "type": ["null", decimal_10_2()]},
             {"name": "c", "type": {"type": "array", "items": decimal_10_2()}},
         ]});
 
-        let repeated = reference_repeated_definitions(&mut schema);
+        let repeated = define_named_types_once(&mut schema);
 
         assert_eq!(
             repeated,
@@ -263,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reference_repeated_definitions_leaves_unique_names() {
+    fn test_define_named_types_once_leaves_unique_names() {
         let original = json!({"type": "record", "name": "r", "fields": [
             {"name": "a", "type": decimal_10_2()},
             {"name": "b", "type": "decimal_10_2"},
@@ -271,12 +222,12 @@ mod tests {
         ]});
         let mut schema = original.clone();
 
-        assert_eq!(reference_repeated_definitions(&mut schema), Some(vec![]));
+        assert_eq!(define_named_types_once(&mut schema), Some(vec![]));
         assert_eq!(schema, original);
     }
 
     #[test]
-    fn test_reference_repeated_definitions_uses_full_names() {
+    fn test_define_named_types_once_uses_full_names() {
         // The same short name in two namespaces names two different types.
         let mut schema = json!({"type": "record", "name": "r", "fields": [
             {"name": "a", "type": {"type": "fixed", "name": "f", "namespace": "x", "size": 4}},
@@ -287,7 +238,7 @@ mod tests {
             ]}},
         ]});
 
-        let repeated = reference_repeated_definitions(&mut schema);
+        let repeated = define_named_types_once(&mut schema);
 
         assert_eq!(repeated, Some(vec!["x.f".to_string(), "x.f".to_string()]));
         assert_eq!(schema["fields"][2]["type"], json!("x.f"));
@@ -298,12 +249,12 @@ mod tests {
     }
 
     #[test]
-    fn test_reference_repeated_definitions_rejects_different_definitions() {
+    fn test_define_named_types_once_rejects_different_definitions() {
         let mut schema = json!({"type": "record", "name": "r", "fields": [
             {"name": "a", "type": {"type": "fixed", "name": "f", "size": 4}},
             {"name": "b", "type": {"type": "fixed", "name": "f", "size": 8}},
         ]});
 
-        assert_eq!(reference_repeated_definitions(&mut schema), None);
+        assert_eq!(define_named_types_once(&mut schema), None);
     }
 }
