@@ -294,7 +294,8 @@ mod test {
         RESERVED_COL_NAME_DELETE_FILE_PATH, RESERVED_COL_NAME_DELETE_FILE_POS,
     };
     use crate::spec::{
-        DataFileFormat, Literal, NestedField, PartitionSpec, PrimitiveType, Struct, Transform, Type,
+        DataFileFormat, Datum, Literal, NestedField, PartitionSpec, PrimitiveType, Struct,
+        Transform, Type,
     };
     use crate::writer::file_writer::ParquetWriterBuilder;
     use crate::writer::file_writer::location_generator::{
@@ -359,6 +360,20 @@ mod test {
             DefaultFileNameGenerator,
         >,
     ) {
+        writer_setup_with_props(temp_dir, WriterProperties::builder().build())
+    }
+
+    fn writer_setup_with_props(
+        temp_dir: &TempDir,
+        props: WriterProperties,
+    ) -> (
+        FileIO,
+        PositionDeleteFileWriterBuilder<
+            ParquetWriterBuilder,
+            DefaultLocationGenerator,
+            DefaultFileNameGenerator,
+        >,
+    ) {
         let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
@@ -366,10 +381,7 @@ mod test {
         let file_name_gen =
             DefaultFileNameGenerator::new("test".to_string(), None, DataFileFormat::Parquet);
 
-        let parquet_writer_builder = ParquetWriterBuilder::new(
-            WriterProperties::builder().build(),
-            position_delete_schema(),
-        );
+        let parquet_writer_builder = ParquetWriterBuilder::new(props, position_delete_schema());
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             file_io.clone(),
@@ -414,6 +426,56 @@ mod test {
         // The written Parquet file round-trips back to the exact input rows.
         let read_back = read_back_single(&file_io, data_file, &batch.schema()).await;
         assert_eq!(read_back, batch);
+
+        Ok(())
+    }
+
+    /// Data file paths are usually longer than the 64-byte default statistics truncation
+    /// of parquet-rs. The `file_path` bounds stay equal, so the delete file still maps to
+    /// the one data file it references.
+    #[tokio::test]
+    async fn test_position_delete_writer_keeps_long_file_path_bounds() -> Result<()> {
+        let explicit_truncation = WriterProperties::builder()
+            .set_statistics_truncate_length(Some(16))
+            .build();
+        for (len, props) in [
+            (40, WriterProperties::builder().build()),
+            (70, WriterProperties::builder().build()),
+            (200, WriterProperties::builder().build()),
+            (200, explicit_truncation),
+        ] {
+            let temp_dir = TempDir::new().unwrap();
+            let (_, builder) = writer_setup_with_props(&temp_dir, props);
+            let mut writer = builder.build(None).await?;
+            let prefix = "s3://bucket/data/";
+            let suffix = ".parquet";
+            let path = format!(
+                "{prefix}{}{suffix}",
+                "a".repeat(len - prefix.len() - suffix.len())
+            );
+            assert_eq!(path.len(), len);
+            writer
+                .write(position_delete_batch(vec![&path, &path], vec![1, 3]))
+                .await?;
+            let data_files = writer.close().await?;
+
+            let bound = Datum::string(&path);
+            let data_file = &data_files[0];
+            assert_eq!(
+                data_file
+                    .lower_bounds()
+                    .get(&RESERVED_FIELD_ID_DELETE_FILE_PATH),
+                Some(&bound),
+                "lower bound for a {len}-byte path"
+            );
+            assert_eq!(
+                data_file
+                    .upper_bounds()
+                    .get(&RESERVED_FIELD_ID_DELETE_FILE_PATH),
+                Some(&bound),
+                "upper bound for a {len}-byte path"
+            );
+        }
 
         Ok(())
     }
