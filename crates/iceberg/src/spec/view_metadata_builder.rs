@@ -27,7 +27,7 @@ use super::{
     TableMetadataBuilder, VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED,
     VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED_DEFAULT, VIEW_PROPERTY_VERSION_HISTORY_SIZE,
     VIEW_PROPERTY_VERSION_HISTORY_SIZE_DEFAULT, ViewFormatVersion, ViewMetadata,
-    ViewRepresentation, ViewVersion, ViewVersionLog, ViewVersionRef,
+    ViewRepresentation, ViewVersion, ViewVersionId, ViewVersionLog, ViewVersionRef,
 };
 use crate::ViewCreation;
 use crate::catalog::ViewUpdate;
@@ -46,7 +46,7 @@ pub struct ViewMetadataBuilder {
     metadata: ViewMetadata,
     changes: Vec<ViewUpdate>,
     last_added_schema_id: Option<SchemaId>,
-    last_added_version_id: Option<SchemaId>,
+    last_added_version_id: Option<ViewVersionId>,
     history_entry: Option<ViewVersionLog>,
     // Previous view version is only used during build to check
     // weather dialects are dropped or not.
@@ -178,7 +178,7 @@ impl ViewMetadataBuilder {
     /// # Errors
     /// - The specified `version_id` does not exist.
     /// - The specified `version_id` is `-1` but no version has been added.
-    pub fn set_current_version_id(mut self, mut version_id: i32) -> Result<Self> {
+    pub fn set_current_version_id(mut self, mut version_id: ViewVersionId) -> Result<Self> {
         if version_id == Self::LAST_ADDED {
             let Some(last_added_id) = self.last_added_version_id else {
                 return Err(invalid_data!(
@@ -252,7 +252,7 @@ impl ViewMetadataBuilder {
         Ok(self)
     }
 
-    fn add_version_internal(&mut self, view_version: ViewVersion) -> Result<i32> {
+    fn add_version_internal(&mut self, view_version: ViewVersion) -> Result<ViewVersionId> {
         let version_id = self.reuse_or_create_new_view_version_id(&view_version);
         let view_version = view_version.with_version_id(version_id);
 
@@ -325,7 +325,7 @@ impl ViewMetadataBuilder {
         Ok(version_id)
     }
 
-    fn reuse_or_create_new_view_version_id(&self, new_view_version: &ViewVersion) -> i32 {
+    fn reuse_or_create_new_view_version_id(&self, new_view_version: &ViewVersion) -> ViewVersionId {
         self.metadata
             .versions
             .iter()
@@ -341,7 +341,7 @@ impl ViewMetadataBuilder {
             })
     }
 
-    fn get_highest_view_version_id(&self) -> Option<i32> {
+    fn get_highest_view_version_id(&self) -> Option<ViewVersionId> {
         self.metadata.versions.keys().max().copied()
     }
 
@@ -542,7 +542,7 @@ impl ViewMetadataBuilder {
 /// Returns the history entries to retain.
 fn update_version_log(
     version_log: Vec<ViewVersionLog>,
-    ids_to_keep: HashSet<i32>,
+    ids_to_keep: HashSet<ViewVersionId>,
 ) -> Vec<ViewVersionLog> {
     let mut retained_history = Vec::new();
     for log_entry in version_log {

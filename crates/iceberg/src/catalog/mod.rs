@@ -48,7 +48,7 @@ use crate::runtime::Runtime;
 use crate::spec::{
     EncryptedKey, FormatVersion, PartitionStatisticsFile, Schema, SchemaId, Snapshot,
     SnapshotReference, SortOrder, StatisticsFile, TableMetadata, TableMetadataBuilder,
-    UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion,
+    UnboundPartitionSpec, ViewFormatVersion, ViewRepresentations, ViewVersion, ViewVersionId,
 };
 use crate::table::Table;
 use crate::{Error, ErrorKind, Result};
@@ -1033,7 +1033,7 @@ pub enum ViewUpdate {
     #[serde(rename_all = "kebab-case")]
     SetCurrentViewVersion {
         /// View version id to set as current, or -1 to set last added version
-        view_version_id: i32,
+        view_version_id: ViewVersionId,
     },
 }
 

@@ -38,7 +38,7 @@ use crate::error::{Result, invalid_data, timestamp_ms_to_utc};
 pub type ViewMetadataRef = Arc<ViewMetadata>;
 
 // ID of the initial version of views
-pub(crate) static INITIAL_VIEW_VERSION_ID: i32 = 1;
+pub(crate) static INITIAL_VIEW_VERSION_ID: ViewVersionId = 1;
 
 /// Property key for allowing to drop dialects when replacing a view.
 pub const VIEW_PROPERTY_REPLACE_DROP_DIALECT_ALLOWED: &str = "replace.drop-dialect.allowed";
