@@ -761,7 +761,7 @@ mod tests {
         Array, ArrayRef, BooleanArray, Float64Array, Int32Array, Int64Array, RecordBatch, RunArray,
         StringArray,
     };
-    use futures::{TryStreamExt, stream};
+    use futures::{StreamExt, TryStreamExt, stream};
     use parquet::arrow::ArrowWriter;
     use parquet::file::properties::WriterProperties;
     use uuid::Uuid;
@@ -799,7 +799,7 @@ mod tests {
     };
     use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
     use crate::writer::{IcebergWriter, IcebergWriterBuilder};
-    use crate::{Catalog, ErrorKind, NamespaceIdent, Runtime, TableCreation, TableIdent};
+    use crate::{Catalog, ErrorKind, NamespaceIdent, Result, Runtime, TableCreation, TableIdent};
 
     #[tokio::test]
     async fn test_table_scan_columns() {
@@ -3632,6 +3632,94 @@ mod tests {
         assert!(result.is_ok(), "Scan timed out - deadlock detected");
     }
 
+    /// Plans `table` under a timeout so a swallowed manifest error shows up as
+    /// a timeout instead of a hang, and returns the collected result.
+    async fn plan_files_with_timeout(table: &Table) -> Result<Vec<FileScanTask>> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            table
+                .scan()
+                .build()
+                .unwrap()
+                .plan_files()
+                .await
+                .unwrap()
+                .try_collect::<Vec<_>>()
+                .await
+        })
+        .await
+        .expect("plan_files hung instead of reporting the manifest error")
+    }
+
+    /// Returns the path of the first manifest in the current snapshot.
+    async fn first_manifest_path(fixture: &TableTestFixture) -> String {
+        let snapshot = fixture.table.metadata().current_snapshot().unwrap();
+        let manifest_list = fixture
+            .table
+            .manifest_list_reader(snapshot)
+            .load()
+            .await
+            .unwrap();
+        manifest_list.entries()[0].manifest_path.clone()
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_reports_corrupt_manifest_as_error() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let path = first_manifest_path(&fixture).await;
+        fs::write(&path, b"not an avro file").unwrap();
+
+        let err = plan_files_with_timeout(&fixture.table)
+            .await
+            .expect_err("a corrupt manifest must fail the plan");
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.to_string().contains(&path), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_plan_files_reports_missing_manifest_as_error() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let path = first_manifest_path(&fixture).await;
+        fs::remove_file(&path).unwrap();
+
+        let err = plan_files_with_timeout(&fixture.table)
+            .await
+            .expect_err("a missing manifest must fail the plan");
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.to_string().contains(&path), "{err}");
+    }
+
+    /// A manifest parse spawned on a shut-down cpu runtime is cancelled, which
+    /// takes the same `JoinError` path a panicking parse does. The manifest path
+    /// in the error comes from `ObjectCache`'s "Failed to load manifest" wrapper;
+    /// `test_read_names_manifest_when_parse_is_cancelled` covers the reader's own
+    /// context.
+    #[tokio::test]
+    async fn test_plan_files_reports_cancelled_manifest_parse_as_error() {
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        let path = first_manifest_path(&fixture).await;
+        let io_rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let cpu_rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let rt = Runtime::new_with_split(&io_rt, &cpu_rt);
+        cpu_rt.shutdown_background();
+        let table = fixture.table.clone().with_runtime(rt);
+
+        let err = plan_files_with_timeout(&table)
+            .await
+            .expect_err("a cancelled manifest parse must fail the plan");
+        assert_eq!(err.kind(), ErrorKind::Unexpected);
+        assert!(err.to_string().contains(&path), "{err}");
+        io_rt.shutdown_background();
+    }
+
     #[tokio::test]
     async fn test_select_with_spec_id_column() {
         let mut fixture = TableTestFixture::new();
@@ -4380,6 +4468,275 @@ mod tests {
                 .collect();
             actual.sort();
             assert_eq!(actual, expected, "{message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dead_only_manifests_are_skipped() {
+        use crate::spec::ManifestContentType;
+
+        for content in [ManifestContentType::Data, ManifestContentType::Deletes] {
+            let mut fixture = TableTestFixture::new();
+            if content == ManifestContentType::Data {
+                fixture.setup_manifest_files().await;
+            } else {
+                fixture.setup_deadlock_manifests().await;
+            }
+            let snapshot = fixture.table.metadata().current_snapshot().unwrap();
+            let scan = fixture
+                .table
+                .scan()
+                .with_filter(Reference::new("x").less_than(Datum::long(200)))
+                .build()
+                .unwrap();
+            let mut expected = if content == ManifestContentType::Deletes {
+                let tasks = scan
+                    .plan_files()
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap();
+                assert_eq!(tasks.len(), 10);
+                assert!(tasks.iter().all(|task| task.deletes().len() == 1));
+                let cow_tasks = scan
+                    .plan_cow_rewrite_files()
+                    .await
+                    .unwrap()
+                    .map_ok(|file| file.scan_task)
+                    .try_collect::<Vec<_>>()
+                    .await
+                    .unwrap();
+                [tasks, cow_tasks]
+            } else {
+                [vec![], vec![]]
+            };
+            for tasks in &mut expected {
+                tasks.sort_by(|a, b| a.data_file_path().cmp(b.data_file_path()));
+            }
+            let context = scan.plan_context.as_ref().unwrap();
+            let list = context.get_manifest_list().await.unwrap();
+            let source = list
+                .entries()
+                .iter()
+                .find(|file| file.content == content)
+                .unwrap();
+            let manifest = context.object_cache.get_manifest(source).await.unwrap();
+            let builder = ManifestWriterBuilder::new(
+                fixture.next_manifest_file(),
+                Some(snapshot.snapshot_id()),
+                fixture.table.metadata().current_schema().clone(),
+                fixture
+                    .table
+                    .metadata()
+                    .default_partition_spec()
+                    .as_ref()
+                    .clone(),
+            );
+            let mut writer = if content == ManifestContentType::Data {
+                builder.build_v2_data()
+            } else {
+                builder.build_v2_deletes()
+            };
+            for entry in manifest.entries() {
+                writer.add_delete_entry(entry.as_ref().clone()).unwrap();
+            }
+            let mut manifest = writer.write_manifest_file().await.unwrap();
+            if content == ManifestContentType::Deletes {
+                manifest.partitions.as_mut().unwrap()[0].lower_bound = Some(vec![0].into());
+            }
+            assert_eq!(
+                (manifest.added_files_count, manifest.existing_files_count),
+                (Some(0), Some(0))
+            );
+            assert!(manifest.deleted_files_count.unwrap() > 0);
+            fixture
+                .table
+                .file_io()
+                .delete(&manifest.manifest_path)
+                .await
+                .unwrap();
+            let mut manifests = if content == ManifestContentType::Deletes {
+                list.entries().to_vec()
+            } else {
+                vec![]
+            };
+            manifests.push(manifest);
+            let output = fixture
+                .table
+                .file_io()
+                .new_output(snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
+            let mut writer = ManifestListWriter::v2(
+                output,
+                snapshot.snapshot_id(),
+                snapshot.parent_snapshot_id(),
+                snapshot.sequence_number(),
+            );
+            writer.add_manifests(manifests.into_iter()).unwrap();
+            writer.close().await.unwrap();
+            let table = Table::builder()
+                .metadata(fixture.table.metadata().clone())
+                .identifier(fixture.table.identifier().clone())
+                .file_io(fixture.table.file_io().clone())
+                .runtime(test_runtime())
+                .build()
+                .unwrap();
+            for cow in [false, true] {
+                let scan = table
+                    .scan()
+                    .with_filter(Reference::new("x").less_than(Datum::long(200)))
+                    .build()
+                    .unwrap();
+                let stream = if cow {
+                    scan.plan_cow_rewrite_files()
+                        .await
+                        .unwrap()
+                        .map_ok(|file| file.scan_task)
+                        .boxed()
+                } else {
+                    scan.plan_files().await.unwrap()
+                };
+                let mut actual = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    stream.try_collect::<Vec<_>>(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                actual.sort_by(|a, b| a.data_file_path().cmp(b.data_file_path()));
+                assert_eq!(
+                    actual,
+                    expected[usize::from(cow)],
+                    "content={content:?}, cow={cow}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_live_and_unknown_manifest_counts_preserve_tasks() {
+        use crate::spec::FormatVersion;
+
+        for (status, added, existing) in [
+            (ManifestStatus::Added, Some(1), Some(0)),
+            (ManifestStatus::Existing, Some(0), Some(1)),
+            (ManifestStatus::Added, None, Some(0)),
+            (ManifestStatus::Existing, Some(0), None),
+            (ManifestStatus::Added, None, None),
+        ] {
+            let mut fixture = TableTestFixture::new();
+            fixture.setup_manifest_files().await;
+            let snapshot = fixture.table.metadata().current_snapshot().unwrap();
+            let scan = fixture.table.scan().build().unwrap();
+            let context = scan.plan_context.as_ref().unwrap();
+            let list = context.get_manifest_list().await.unwrap();
+            let manifest = context
+                .object_cache
+                .get_manifest(&list.entries()[0])
+                .await
+                .unwrap();
+            let entry = manifest
+                .entries()
+                .iter()
+                .find(|entry| entry.status() == status)
+                .unwrap();
+            let expected = vec![(entry.data_file().file_path().to_owned(), vec![])];
+            let mut writer = ManifestWriterBuilder::new(
+                fixture.next_manifest_file(),
+                Some(snapshot.snapshot_id()),
+                fixture.table.metadata().current_schema().clone(),
+                fixture
+                    .table
+                    .metadata()
+                    .default_partition_spec()
+                    .as_ref()
+                    .clone(),
+            )
+            .build_v1();
+            if status == ManifestStatus::Added {
+                writer.add_entry(entry.as_ref().clone()).unwrap();
+            } else {
+                writer.add_existing_entry(entry.as_ref().clone()).unwrap();
+            }
+            let mut manifest = writer.write_manifest_file().await.unwrap();
+            assert_eq!(
+                (manifest.added_files_count, manifest.existing_files_count),
+                (
+                    Some(u32::from(status == ManifestStatus::Added)),
+                    Some(u32::from(status == ManifestStatus::Existing))
+                )
+            );
+            manifest.added_files_count = added;
+            manifest.existing_files_count = existing;
+            let output = fixture
+                .table
+                .file_io()
+                .new_output(snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap();
+            let mut writer = ManifestListWriter::v1(
+                output,
+                snapshot.snapshot_id(),
+                snapshot.parent_snapshot_id(),
+            );
+            writer.add_manifests(std::iter::once(manifest)).unwrap();
+            writer.close().await.unwrap();
+            let mut metadata = fixture.table.metadata().clone();
+            metadata.format_version = FormatVersion::V1;
+            let table = Table::builder()
+                .metadata(metadata)
+                .identifier(fixture.table.identifier().clone())
+                .file_io(fixture.table.file_io().clone())
+                .runtime(test_runtime())
+                .build()
+                .unwrap();
+            for cow in [false, true] {
+                let scan = table.scan().build().unwrap();
+                let counts = scan
+                    .plan_context
+                    .as_ref()
+                    .unwrap()
+                    .get_manifest_list()
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    (
+                        counts.entries()[0].added_files_count,
+                        counts.entries()[0].existing_files_count
+                    ),
+                    (added, existing)
+                );
+                let stream = if cow {
+                    scan.plan_cow_rewrite_files()
+                        .await
+                        .unwrap()
+                        .map_ok(|file| file.scan_task)
+                        .boxed()
+                } else {
+                    scan.plan_files().await.unwrap()
+                };
+                let tasks = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    stream.try_collect::<Vec<_>>(),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                let actual: Vec<_> = tasks
+                    .into_iter()
+                    .map(|task| (task.data_file_path().to_owned(), task.deletes().to_vec()))
+                    .collect();
+                assert_eq!(
+                    actual, expected,
+                    "status={status:?}, added={added:?}, existing={existing:?}, cow={cow}"
+                );
+            }
         }
     }
 }
