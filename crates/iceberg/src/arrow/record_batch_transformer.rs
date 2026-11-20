@@ -33,13 +33,12 @@ use arrow_select::zip::zip;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
 use crate::arrow::schema::{
-    get_field_id_from_metadata, is_variant_field, try_get_field_id_from_metadata,
-    validate_unshredded_variant,
+    field_to_arrow_field, get_field_id_from_metadata, is_variant_field,
+    try_get_field_id_from_metadata, validate_unshredded_variant,
 };
 use crate::arrow::value::{create_primitive_array_repeated, create_primitive_array_single_element};
 use crate::arrow::{
-    datum_to_arrow_type_with_ree, primitive_type_to_arrow_type_with_ree, schema_to_arrow_schema,
-    type_to_arrow_type,
+    datum_to_arrow_type_with_ree, primitive_type_to_arrow_type_with_ree, type_to_arrow_type,
 };
 use crate::error::invalid_data;
 use crate::metadata_columns::{
@@ -852,12 +851,6 @@ impl RecordBatchTransformer {
         constant_fields: &HashMap<i32, ColumnConstant>,
         virtual_fields: &HashSet<i32>,
     ) -> Result<BatchTransform> {
-        let mapped_unprojected_arrow_schema = Arc::new(schema_to_arrow_schema(snapshot_schema)?);
-        let field_id_to_mapped_schema_map =
-            Self::build_field_id_to_arrow_schema_map(&mapped_unprojected_arrow_schema)?;
-
-        // Create a new arrow schema by selecting fields from mapped_unprojected,
-        // in the order of the field ids in projected_iceberg_field_ids
         let fields: Result<Vec<_>> = projected_iceberg_field_ids
             .iter()
             .map(|field_id| {
@@ -939,13 +932,11 @@ impl RecordBatchTransformer {
                     return Ok(Arc::new(arrow_field));
                 }
 
-                // Regular fields and identity-partitioned constant fields both exist in the
-                // table schema, so use the mapped Arrow field as-is.
-                Ok(field_id_to_mapped_schema_map
-                    .get(field_id)
-                    .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?
-                    .0
-                    .clone())
+                let iceberg_field = snapshot_schema
+                    .as_struct()
+                    .field_by_id(*field_id)
+                    .ok_or(Error::new(ErrorKind::Unexpected, "field not found"))?;
+                Ok(Arc::new(field_to_arrow_field(iceberg_field)?))
             })
             .collect();
 
@@ -964,7 +955,7 @@ impl RecordBatchTransformer {
                     source_schema,
                     snapshot_schema,
                     projected_iceberg_field_ids,
-                    field_id_to_mapped_schema_map,
+                    target_schema.fields(),
                     constant_fields,
                     virtual_fields,
                 )?,
@@ -1061,7 +1052,7 @@ impl RecordBatchTransformer {
         source_schema: &ArrowSchemaRef,
         snapshot_schema: &IcebergSchema,
         projected_iceberg_field_ids: &[i32],
-        field_id_to_mapped_schema_map: HashMap<i32, (FieldRef, usize)>,
+        target_fields: &Fields,
         constant_fields: &HashMap<i32, ColumnConstant>,
         virtual_fields: &HashSet<i32>,
     ) -> Result<Vec<ColumnSource>> {
@@ -1070,7 +1061,8 @@ impl RecordBatchTransformer {
 
         projected_iceberg_field_ids
             .iter()
-            .map(|field_id| {
+            .zip(target_fields.iter())
+            .map(|(field_id, target_field)| {
                 match constant_fields.get(field_id) {
                     Some(ColumnConstant::Struct(pc))
                         if *field_id == RESERVED_FIELD_ID_PARTITION =>
@@ -1110,15 +1102,7 @@ impl RecordBatchTransformer {
                             let arrow_type = if is_metadata {
                                 datum_to_arrow_type_with_ree(datum)
                             } else {
-                                field_id_to_mapped_schema_map
-                                    .get(field_id)
-                                    .ok_or(Error::new(
-                                        ErrorKind::Unexpected,
-                                        "could not find field in schema",
-                                    ))?
-                                    .0
-                                    .data_type()
-                                    .clone()
+                                target_field.data_type().clone()
                             };
 
                             return Ok(ColumnSource::ConstantLookup {
@@ -1168,13 +1152,6 @@ impl RecordBatchTransformer {
                     return Ok(ColumnSource::PassThrough { source_index: *source_index });
                 }
 
-                let (target_field, _) =
-                    field_id_to_mapped_schema_map
-                        .get(field_id)
-                        .ok_or(Error::new(
-                            ErrorKind::Unexpected,
-                            format!("could not find field {field_id} in schema"),
-                        ))?;
                 let target_type = target_field.data_type();
 
                 let iceberg_field = snapshot_schema.field_by_id(*field_id).ok_or(Error::new(
@@ -1523,12 +1500,15 @@ mod test {
     use arrow_cast::cast;
     use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema};
 
-    use super::{field_with_id, schema_to_arrow_schema};
+    use super::field_with_id;
     use crate::ErrorKind;
     use crate::arrow::record_batch_transformer::{
         PromotePlan, RecordBatchTransformer, RecordBatchTransformerBuilder,
     };
-    use crate::arrow::{DEFAULT_MAP_FIELD_NAME, VariantExtensionType, build_partition_constant};
+    use crate::arrow::{
+        DEFAULT_MAP_FIELD_NAME, VariantExtensionType, build_partition_constant,
+        schema_to_arrow_schema,
+    };
     use crate::spec::{
         ListType, Literal, MapType, NestedField, PrimitiveType, Schema, Struct, StructType, Type,
     };

@@ -989,6 +989,15 @@ pub fn schema_to_arrow_schema(schema: &Schema) -> Result<ArrowSchema> {
     }
 }
 
+pub(super) fn field_to_arrow_field(field: &NestedFieldRef) -> Result<Field> {
+    let mut converter = ToArrowSchemaConverter;
+    let ty = crate::spec::visit_type(&field.field_type, &mut converter)?;
+    match converter.field(field, ty)? {
+        ArrowSchemaOrFieldOrType::Field(field) => Ok(field),
+        _ => unreachable!(),
+    }
+}
+
 /// Convert iceberg type to an arrow type.
 pub fn type_to_arrow_type(ty: &Type) -> Result<DataType> {
     let mut converter = ToArrowSchemaConverter;
