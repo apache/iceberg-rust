@@ -516,7 +516,7 @@ fn bench_with_predicate(c: &mut Criterion) {
         ("int64", "key", PrimitiveType::Long),
     ] {
         let (iceberg_schema, arrow_schema) = schemas_with_key(field, ty.clone());
-        for keys in [400, 5000] {
+        for keys in [2, 4, 8, 16, 32, 400, 5000] {
             let ids = Int64Array::from_iter_values(0..ROWS as i64);
             let values = (0..ROWS as i32).map(|id| if id % 2 == 0 { (id / 2) % keys } else { -1 });
             let (column, literals): (ArrayRef, Vec<Datum>) = match ty {
