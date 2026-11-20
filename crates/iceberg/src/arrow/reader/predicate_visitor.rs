@@ -726,7 +726,7 @@ mod tests {
 
     use super::{CollectFieldIdVisitor, PredicateConverter, constant_bool_array, probe_set};
     use crate::expr::visitors::bound_predicate_visitor::visit;
-    use crate::expr::{Bind, Predicate, Reference, SetIndex};
+    use crate::expr::{Bind, BoundPredicate, Predicate, Reference, SetIndex};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     fn table_schema_simple() -> SchemaRef {
@@ -844,13 +844,17 @@ mod tests {
         predicate_fn(batch).unwrap()
     }
 
-    fn check_set_filter(column: ArrayRef, ty: PrimitiveType, literals: Vec<Datum>) {
-        let schema = Arc::new(
+    fn key_schema(ty: PrimitiveType) -> SchemaRef {
+        Arc::new(
             Schema::builder()
                 .with_fields([NestedField::optional(1, "key", Type::Primitive(ty)).into()])
                 .build()
                 .unwrap(),
-        );
+        )
+    }
+
+    fn check_set_filter(column: ArrayRef, ty: PrimitiveType, literals: Vec<Datum>) {
+        let schema = key_schema(ty);
         let batch = RecordBatch::try_from_iter([("key", column)])
             .unwrap()
             .slice(1, 4);
@@ -933,17 +937,35 @@ mod tests {
         use arrow_array::{Int32Array, Int64Array, StringArray};
         use arrow_cast::cast::cast;
 
-        let ints = Int32Array::from(vec![1, 2]);
-        let longs = Int64Array::from(vec![1, 2]);
-        let strings = StringArray::from(vec!["1", "2"]);
-        let int_index = SetIndex::Int([1].into_iter().collect());
-        let long_index = SetIndex::Long([1].into_iter().collect());
-        let string_index = SetIndex::String([String::from("1")].into_iter().collect());
+        let index = |ty, literals: Vec<Datum>| {
+            let BoundPredicate::Set(set) = Reference::new("key")
+                .is_in(literals)
+                .bind(key_schema(ty), true)
+                .unwrap()
+            else {
+                panic!("expected a bound set predicate");
+            };
+            set.membership_index().unwrap()
+        };
+        let int_index = index(PrimitiveType::Int, (0..64).map(Datum::int).collect());
+        let long_index = index(PrimitiveType::Long, (0..64).map(Datum::long).collect());
+        let string_index = index(
+            PrimitiveType::String,
+            (0..64).map(|i| Datum::string(i.to_string())).collect(),
+        );
+        let ints = Int32Array::from(vec![1, 100]);
+        let longs = Int64Array::from(vec![1, 100]);
+        let strings = StringArray::from(vec!["1", "100"]);
         let expected = Some(BooleanArray::from(vec![true, false]));
         assert_eq!(probe_set(&int_index, &ints, false).unwrap(), expected);
         assert_eq!(probe_set(&long_index, &longs, false).unwrap(), expected);
         assert_eq!(probe_set(&long_index, &ints, false).unwrap(), None);
-        for ty in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        for ty in [
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        ] {
             let column = cast(&strings, &ty).unwrap();
             assert_eq!(
                 probe_set(&string_index, column.as_ref(), false).unwrap(),
