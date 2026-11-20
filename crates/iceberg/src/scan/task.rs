@@ -26,7 +26,7 @@ use crate::error::invalid_data;
 use crate::expr::BoundPredicate;
 use crate::spec::{
     DataContentType, DataFile, DataFileFormat, Datum, ManifestEntryRef, NameMapping, PartitionSpec,
-    PrimitiveType, Schema, SchemaRef, SortOrderRef, Struct, StructType,
+    PartitionSpecRef, PrimitiveType, Schema, SchemaRef, SortOrderRef, Struct, StructType,
 };
 use crate::{Error, Result};
 
@@ -318,6 +318,8 @@ impl From<FileScanTask> for Result<FileScanTask> {
 pub(crate) struct DeleteFileContext {
     pub(crate) manifest_entry: ManifestEntryRef,
     pub(crate) partition_spec_id: i32,
+    /// The delete file's partition spec, or `None` if the table metadata does not have it.
+    pub(crate) partition_spec: Option<PartitionSpecRef>,
 }
 
 impl TryFrom<&DeleteFileContext> for FileScanTaskDeleteFile {
@@ -1311,6 +1313,7 @@ mod tests {
                     .build(),
             ),
             partition_spec_id: 0,
+            partition_spec: None,
         }
     }
 
