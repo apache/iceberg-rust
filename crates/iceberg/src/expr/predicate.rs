@@ -19,12 +19,14 @@
 //! Predicate expressions are used to filter data, and evaluates to a boolean value. For example,
 //! `a > 10` is a predicate expression, and it evaluates to `true` if `a` is greater than `10`,
 
+use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Not;
 use std::sync::{Arc, OnceLock};
 
 use array_init::array_init;
 use fnv::FnvHashSet;
+use foldhash::fast::FixedState;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 
@@ -268,7 +270,7 @@ impl PartialEq for SetLiterals {
 pub(crate) enum SetIndex {
     Int(FnvHashSet<i32>),
     Long(FnvHashSet<i64>),
-    String(FnvHashSet<String>),
+    String(HashSet<String, FixedState>),
 }
 
 impl SetIndex {
@@ -276,7 +278,7 @@ impl SetIndex {
         let mut index = match values.iter().next()?.data_type() {
             PrimitiveType::Int => Self::Int(FnvHashSet::default()),
             PrimitiveType::Long => Self::Long(FnvHashSet::default()),
-            PrimitiveType::String => Self::String(FnvHashSet::default()),
+            PrimitiveType::String => Self::String(HashSet::default()),
             _ => return None,
         };
         for datum in values {
