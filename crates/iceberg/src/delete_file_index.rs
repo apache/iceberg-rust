@@ -136,9 +136,9 @@ impl DeleteFileIndex {
 
     /// Gets all the delete files that apply to the specified data file.
     ///
-    /// Fails if building the index found a spec violation, such as multiple deletion vectors
-    /// referencing the same data file, or if a matched deletion vector's sequence number
-    /// violates the spec relative to `seq_num`.
+    /// Fails if building the index finds multiple deletion vectors for a data file, if a
+    /// path-matched delete has a mismatched partition spec or tuple, or if a matched deletion
+    /// vector's sequence number violates the spec relative to `seq_num`.
     pub(crate) async fn get_deletes_for_data_file(
         &self,
         data_file: &DataFile,
@@ -272,11 +272,9 @@ impl PopulatedDeleteFileIndex {
 
     /// Determine all the delete files that apply to the provided `DataFile`.
     ///
-    /// Fails if a matched deletion vector's partition or data sequence number is inconsistent
-    /// with the data file's: a data file's path is permanently tied to one partition, and the
-    /// spec guarantees a DV is only ever written at or after the sequence number of the data
-    /// file it applies to, so either violation means the delete manifest is inconsistent, not
-    /// that the DV simply doesn't apply.
+    /// Fails if a path-matched position delete or deletion vector has a different partition
+    /// from the data file, or if a deletion vector has an invalid data sequence number.
+    /// Stale position deletes are ignored before their partition metadata is validated.
     fn get_deletes_for_data_file(
         &self,
         data_file: &DataFile,
@@ -357,9 +355,7 @@ impl PopulatedDeleteFileIndex {
             }
         }
 
-        // Position deletes indexed by the exact path of the data file they reference.
-        // An exact path match is sufficient proof that the delete applies, so no
-        // partition spec id check is performed.
+        // Validate the manifest partition even when the referenced path matches exactly.
         if let Some(deletes) = self.pos_deletes_by_path.get(data_file.file_path()) {
             for delete in deletes
                 .iter()
@@ -370,6 +366,21 @@ impl PopulatedDeleteFileIndex {
                         .unwrap_or(true)
                 })
             {
+                let delete_data_file = delete.manifest_entry.data_file();
+                if data_file.partition_spec_id != delete.partition_spec_id
+                    || data_file.partition() != delete_data_file.partition()
+                {
+                    return Err(invalid_data!(
+                        "position delete {} references data file {} but its partition (spec {}, {:?}) does not match the data file's partition (spec {}, {:?})",
+                        delete.manifest_entry.file_path(),
+                        data_file.file_path(),
+                        delete.partition_spec_id,
+                        delete_data_file.partition(),
+                        data_file.partition_spec_id,
+                        data_file.partition()
+                    ));
+                }
+
                 results.push(FileScanTaskDeleteFile::try_from(delete.as_ref())?);
             }
         }
@@ -651,6 +662,289 @@ mod tests {
     }
 
     #[test]
+    fn test_pos_delete_with_referenced_data_file_matches_partition() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 1;
+        let data_file = build_partitioned_data_file(&partition, spec_id);
+        let pos_delete =
+            build_partitioned_pos_delete_referencing(data_file.file_path(), &partition, spec_id);
+        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            partition_spec_id: spec_id,
+        }])
+        .unwrap();
+
+        let deletes = index
+            .get_deletes_for_data_file(&data_file, Some(0))
+            .unwrap();
+
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].file_path(), pos_delete.file_path());
+    }
+
+    #[test]
+    fn test_pos_delete_with_referenced_data_file_rejects_mismatched_partition_spec() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let data_file = build_partitioned_data_file(&partition, 1);
+        let pos_delete =
+            build_partitioned_pos_delete_referencing(data_file.file_path(), &partition, 2);
+        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            partition_spec_id: 2,
+        }])
+        .unwrap();
+
+        let err = index
+            .get_deletes_for_data_file(&data_file, Some(0))
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("partition"));
+    }
+
+    #[test]
+    fn test_pos_delete_with_equal_path_bounds_rejects_mismatched_partition() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let other_partition = Struct::from_iter([Some(Literal::long(200))]);
+        let spec_id = 1;
+        let data_file = build_partitioned_data_file(&partition, spec_id);
+        let pos_delete = build_partitioned_pos_delete_with_path_bounds(
+            data_file.file_path(),
+            data_file.file_path(),
+            &other_partition,
+            spec_id,
+        );
+        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            partition_spec_id: spec_id,
+        }])
+        .unwrap();
+
+        let err = index
+            .get_deletes_for_data_file(&data_file, Some(0))
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("partition"));
+    }
+
+    #[test]
+    fn test_pos_delete_with_referenced_data_file_rejects_mismatched_partition_values() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let other_partition = Struct::from_iter([Some(Literal::long(200))]);
+        let data_file = build_partitioned_data_file(&partition, 1);
+        let unrelated_file = build_partitioned_data_file(&other_partition, 1);
+        let pos_delete =
+            build_partitioned_pos_delete_referencing(data_file.file_path(), &other_partition, 1);
+        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            partition_spec_id: 1,
+        }])
+        .unwrap();
+
+        // The inconsistent metadata matters only for the file whose path is referenced.
+        assert!(
+            index
+                .get_deletes_for_data_file(&unrelated_file, Some(0))
+                .unwrap()
+                .is_empty()
+        );
+
+        let err = index
+            .get_deletes_for_data_file(&data_file, Some(0))
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains(pos_delete.file_path()));
+        assert!(err.message().contains(data_file.file_path()));
+    }
+
+    #[test]
+    fn test_pos_delete_with_equal_path_bounds_rejects_mismatched_partition_spec() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let data_file = build_partitioned_data_file(&partition, 1);
+        let pos_delete = build_partitioned_pos_delete_with_path_bounds(
+            data_file.file_path(),
+            data_file.file_path(),
+            &partition,
+            2,
+        );
+        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            partition_spec_id: 2,
+        }])
+        .unwrap();
+
+        let err = index
+            .get_deletes_for_data_file(&data_file, Some(0))
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("spec 2"));
+        assert!(err.message().contains("spec 1"));
+    }
+
+    #[test]
+    fn test_pos_delete_with_equal_path_bounds_matches_partition_and_stays_path_scoped() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let data_file = build_partitioned_data_file(&partition, 1);
+        let same_partition_neighbor = build_partitioned_data_file(&partition, 1);
+        let pos_delete = build_partitioned_pos_delete_with_path_bounds(
+            data_file.file_path(),
+            data_file.file_path(),
+            &partition,
+            1,
+        );
+        let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            partition_spec_id: 1,
+        }])
+        .unwrap();
+
+        let deletes = index
+            .get_deletes_for_data_file(&data_file, Some(5))
+            .unwrap();
+        assert_eq!(deletes.len(), 1);
+        assert_eq!(deletes[0].file_path(), pos_delete.file_path());
+        assert!(
+            index
+                .get_deletes_for_data_file(&same_partition_neighbor, Some(5))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_path_pos_delete_skips_stale_partition_mismatch_before_validation() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let other_partition = Struct::from_iter([Some(Literal::long(200))]);
+        let data_file = build_partitioned_data_file(&partition, 1);
+
+        // Both ways of deriving a path must filter by sequence number first.
+        let deletes = [
+            build_partitioned_pos_delete_referencing(data_file.file_path(), &other_partition, 1),
+            build_partitioned_pos_delete_with_path_bounds(
+                data_file.file_path(),
+                data_file.file_path(),
+                &other_partition,
+                1,
+            ),
+        ];
+        for pos_delete in deletes {
+            let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+                manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+                partition_spec_id: 1,
+            }])
+            .unwrap();
+
+            assert!(
+                index
+                    .get_deletes_for_data_file(&data_file, Some(6))
+                    .unwrap()
+                    .is_empty()
+            );
+            // Equal sequences still apply for position deletes, so validate the partition.
+            for seq_num in [Some(5), None] {
+                let err = index
+                    .get_deletes_for_data_file(&data_file, seq_num)
+                    .unwrap_err();
+                assert_eq!(err.kind(), ErrorKind::DataInvalid);
+                assert!(err.message().contains(pos_delete.file_path()));
+            }
+        }
+    }
+
+    #[test]
+    fn test_path_pos_delete_rejects_signed_zero_partition_mismatch() {
+        let partition = Struct::from_iter([Some(Literal::double(-0.0))]);
+        let other_partition = Struct::from_iter([Some(Literal::double(0.0))]);
+        let data_file = build_partitioned_data_file(&partition, 1);
+
+        // Signed zero represents two distinct partition values in Iceberg.
+        for pos_delete in [
+            build_partitioned_pos_delete_referencing(data_file.file_path(), &other_partition, 1),
+            build_partitioned_pos_delete_with_path_bounds(
+                data_file.file_path(),
+                data_file.file_path(),
+                &other_partition,
+                1,
+            ),
+        ] {
+            let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
+                manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+                partition_spec_id: 1,
+            }])
+            .unwrap();
+
+            let err = index
+                .get_deletes_for_data_file(&data_file, Some(0))
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        }
+    }
+
+    #[test]
+    fn test_path_pos_delete_rejects_invalid_partition_among_valid_deletes() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let other_partition = Struct::from_iter([Some(Literal::long(200))]);
+        let data_file = build_partitioned_data_file(&partition, 1);
+        let valid_delete =
+            build_partitioned_pos_delete_referencing(data_file.file_path(), &partition, 1);
+        let invalid_delete =
+            build_partitioned_pos_delete_referencing(data_file.file_path(), &other_partition, 1);
+
+        // A valid delete must not mask inconsistent metadata in another matched delete.
+        for invalid_first in [false, true] {
+            let mut contexts = vec![
+                DeleteFileContext {
+                    manifest_entry: build_added_manifest_entry(5, &valid_delete).into(),
+                    partition_spec_id: 1,
+                },
+                DeleteFileContext {
+                    manifest_entry: build_added_manifest_entry(5, &invalid_delete).into(),
+                    partition_spec_id: 1,
+                },
+            ];
+            if invalid_first {
+                contexts.reverse();
+            }
+            let index = PopulatedDeleteFileIndex::new(contexts).unwrap();
+
+            let err = index
+                .get_deletes_for_data_file(&data_file, Some(0))
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains(invalid_delete.file_path()));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_path_pos_delete_partition_mismatch_propagates_through_async_index() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let other_partition = Struct::from_iter([Some(Literal::long(200))]);
+        let data_file = build_partitioned_data_file(&partition, 1);
+        let pos_delete =
+            build_partitioned_pos_delete_referencing(data_file.file_path(), &other_partition, 1);
+
+        let (index, mut tx) = DeleteFileIndex::new(Runtime::current());
+        tx.try_send(DeleteFileContext {
+            manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
+            partition_spec_id: 1,
+        })
+        .unwrap();
+        drop(tx);
+
+        // The asynchronous index must surface the per-file validation error both while
+        // awaiting population and on subsequent lookups.
+        for _ in 0..2 {
+            let err = index
+                .get_deletes_for_data_file(&data_file, Some(0))
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains(pos_delete.file_path()));
+        }
+    }
+
+    #[test]
     fn test_pos_delete_with_equal_path_bounds_routes_by_path() {
         let data_file_a = build_unpartitioned_data_file();
         let data_file_b = build_unpartitioned_data_file();
@@ -712,16 +1006,15 @@ mod tests {
     }
 
     #[test]
-    fn test_pos_delete_by_path_applies_across_partition_spec_ids() {
-        let data_file =
-            build_partitioned_data_file(&Struct::from_iter([Some(Literal::long(100))]), 2);
-
-        // The delete is indexed under a different spec id than the data file's.
-        // An exact path match is sufficient proof that the delete applies.
-        let pos_delete = build_pos_delete_referencing(data_file.file_path());
+    fn test_pos_delete_by_path_applies_with_matching_partition_spec() {
+        let partition = Struct::from_iter([Some(Literal::long(100))]);
+        let spec_id = 2;
+        let data_file = build_partitioned_data_file(&partition, spec_id);
+        let pos_delete =
+            build_partitioned_pos_delete_referencing(data_file.file_path(), &partition, spec_id);
         let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
             manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
-            partition_spec_id: 0,
+            partition_spec_id: spec_id,
         }])
         .unwrap();
 
@@ -861,18 +1154,14 @@ mod tests {
     #[test]
     fn test_partitioned_pos_delete_with_referenced_path_routes_by_path() {
         let partition = Struct::from_iter([Some(Literal::long(100))]);
-        let other_partition = Struct::from_iter([Some(Literal::long(200))]);
 
-        // The data file lives in a different partition than the delete file.
-        let data_file = build_partitioned_data_file(&other_partition, 1);
+        let data_file = build_partitioned_data_file(&partition, 1);
         let same_partition_neighbor = build_partitioned_data_file(&partition, 1);
 
-        // A partitioned pos delete with a referenced path must route by path:
-        // it applies to the referenced file in another partition, and not to
-        // a different file in the delete's own partition.
-        let mut pos_delete = build_pos_delete_referencing(data_file.file_path());
-        pos_delete.partition = partition.clone();
-        pos_delete.partition_spec_id = 1;
+        // A partitioned pos delete with a referenced path applies only to that file,
+        // even when another file shares its partition.
+        let pos_delete =
+            build_partitioned_pos_delete_referencing(data_file.file_path(), &partition, 1);
 
         let index = PopulatedDeleteFileIndex::new(vec![DeleteFileContext {
             manifest_entry: build_added_manifest_entry(5, &pos_delete).into(),
@@ -931,27 +1220,44 @@ mod tests {
     }
 
     fn build_pos_delete_referencing(path: &str) -> DataFile {
+        build_partitioned_pos_delete_referencing(path, &Struct::empty(), 0)
+    }
+
+    fn build_partitioned_pos_delete_referencing(
+        path: &str,
+        partition: &Struct,
+        spec_id: i32,
+    ) -> DataFile {
         DataFileBuilder::default()
             .file_path(format!("{}-pos-delete.parquet", Uuid::new_v4()))
             .file_format(DataFileFormat::Parquet)
             .content(DataContentType::PositionDeletes)
             .record_count(1)
             .referenced_data_file(Some(path.to_string()))
-            .partition(Struct::empty())
-            .partition_spec_id(0)
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
             .file_size_in_bytes(100)
             .build()
             .unwrap()
     }
 
     fn build_pos_delete_with_path_bounds(lower: &str, upper: &str) -> DataFile {
+        build_partitioned_pos_delete_with_path_bounds(lower, upper, &Struct::empty(), 0)
+    }
+
+    fn build_partitioned_pos_delete_with_path_bounds(
+        lower: &str,
+        upper: &str,
+        partition: &Struct,
+        spec_id: i32,
+    ) -> DataFile {
         DataFileBuilder::default()
             .file_path(format!("{}-pos-delete.parquet", Uuid::new_v4()))
             .file_format(DataFileFormat::Parquet)
             .content(DataContentType::PositionDeletes)
             .record_count(1)
-            .partition(Struct::empty())
-            .partition_spec_id(0)
+            .partition(partition.clone())
+            .partition_spec_id(spec_id)
             .file_size_in_bytes(100)
             .lower_bounds(HashMap::from([(
                 RESERVED_FIELD_ID_DELETE_FILE_PATH,
