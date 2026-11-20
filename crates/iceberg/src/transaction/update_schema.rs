@@ -23,8 +23,8 @@ use typed_builder::TypedBuilder;
 
 use crate::spec::{
     LIST_FIELD_NAME, ListType, Literal, MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, MapType,
-    MappedField, NameMapping, NestedField, NestedFieldRef, SCHEMA_NAME_DELIMITER, Schema,
-    StructType, TableProperties, Type,
+    MappedField, NameMapping, NestedField, NestedFieldRef, PrimitiveType, SCHEMA_NAME_DELIMITER,
+    Schema, StructType, TableProperties, Type,
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, StatelessAction};
@@ -117,6 +117,7 @@ impl AddColumn {
 pub struct UpdateSchemaAction {
     additions: Vec<AddColumn>,
     deletes: Vec<String>,
+    type_updates: Vec<(String, Type)>,
 }
 
 impl UpdateSchemaAction {
@@ -125,7 +126,21 @@ impl UpdateSchemaAction {
         Self {
             additions: Vec::new(),
             deletes: Vec::new(),
+            type_updates: Vec::new(),
         }
+    }
+
+    /// Widen a primitive column's type in place, keeping its field id, name,
+    /// nullability, doc and defaults.
+    ///
+    /// Only the promotions the Iceberg spec allows are accepted at commit
+    /// time: `int` to `long`, `float` to `double`, and a `decimal` to a
+    /// `decimal` of the same scale and a larger precision. Existing data files
+    /// keep the narrower type and are read through the promotion. The column
+    /// name may be a dotted path into a struct (`person.age`).
+    pub fn update_column_type(mut self, name: impl ToString, new_type: Type) -> Self {
+        self.type_updates.push((name.to_string(), new_type));
+        self
     }
 
     // --- Root-level additions ---
@@ -264,28 +279,66 @@ fn rebuild_fields(
     fields: &[NestedFieldRef],
     adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
     delete_ids: &HashSet<i32>,
+    type_updates: &HashMap<i32, Type>,
     parent_id: Option<i32>,
 ) -> Vec<NestedFieldRef> {
     fields
         .iter()
         .filter(|f| !delete_ids.contains(&f.id))
-        .map(|f| rebuild_field(f, adds, delete_ids))
+        .map(|f| rebuild_field(f, adds, delete_ids, type_updates))
         .chain(adds.get(&parent_id).into_iter().flatten().cloned())
         .collect()
+}
+
+/// Whether the Iceberg spec allows changing a column's primitive type from
+/// `from` to `to` in place: `int` to `long`, `float` to `double`, and a
+/// `decimal` to a `decimal` of the same scale and a larger precision.
+pub fn is_type_promotion(from: &PrimitiveType, to: &PrimitiveType) -> bool {
+    match (from, to) {
+        (PrimitiveType::Int, PrimitiveType::Long)
+        | (PrimitiveType::Float, PrimitiveType::Double) => true,
+        (
+            PrimitiveType::Decimal {
+                precision: p1,
+                scale: s1,
+            },
+            PrimitiveType::Decimal {
+                precision: p2,
+                scale: s2,
+            },
+        ) => s1 == s2 && p2 > p1,
+        _ => false,
+    }
 }
 
 /// Recursively rebuild a single field. If the field (or any descendant) is a struct
 /// that has pending additions, those additions are appended to the struct's fields.
 /// Fields whose IDs appear in `delete_ids` are filtered out at every struct level.
+/// A primitive field whose ID appears in `type_updates` gets that type, keeping
+/// everything else.
 fn rebuild_field(
     field: &NestedFieldRef,
     adds: &HashMap<Option<i32>, Vec<NestedFieldRef>>,
     delete_ids: &HashSet<i32>,
+    type_updates: &HashMap<i32, Type>,
 ) -> NestedFieldRef {
     match field.field_type.as_ref() {
-        Type::Primitive(_) | Type::Variant(_) => field.clone(),
+        Type::Primitive(_) => match type_updates.get(&field.id) {
+            Some(new_type) => Arc::new(NestedField {
+                id: field.id,
+                name: field.name.clone(),
+                required: field.required,
+                field_type: Box::new(new_type.clone()),
+                doc: field.doc.clone(),
+                initial_default: field.initial_default.clone(),
+                write_default: field.write_default.clone(),
+            }),
+            None => field.clone(),
+        },
+        Type::Variant(_) => field.clone(),
         Type::Struct(s) => {
-            let new_fields = rebuild_fields(s.fields(), adds, delete_ids, Some(field.id));
+            let new_fields =
+                rebuild_fields(s.fields(), adds, delete_ids, type_updates, Some(field.id));
             Arc::new(NestedField {
                 id: field.id,
                 name: field.name.clone(),
@@ -297,7 +350,7 @@ fn rebuild_field(
             })
         }
         Type::List(l) => {
-            let new_element = rebuild_field(&l.element_field, adds, delete_ids);
+            let new_element = rebuild_field(&l.element_field, adds, delete_ids, type_updates);
             Arc::new(NestedField {
                 id: field.id,
                 name: field.name.clone(),
@@ -311,8 +364,8 @@ fn rebuild_field(
             })
         }
         Type::Map(m) => {
-            let new_key = rebuild_field(&m.key_field, adds, delete_ids);
-            let new_value = rebuild_field(&m.value_field, adds, delete_ids);
+            let new_key = rebuild_field(&m.key_field, adds, delete_ids, type_updates);
+            let new_value = rebuild_field(&m.value_field, adds, delete_ids, type_updates);
             Arc::new(NestedField {
                 id: field.id,
                 name: field.name.clone(),
@@ -442,6 +495,48 @@ impl StatelessAction for UpdateSchemaAction {
             })
             .collect::<Result<HashSet<i32>>>()?;
 
+        // --- 1b. Validate type updates: existing primitive columns, not being
+        // deleted, each updated once, and only spec-allowed promotions ---
+        let mut type_updates: HashMap<i32, Type> = HashMap::new();
+        for (name, new_type) in &self.type_updates {
+            let field = base_schema.field_by_name(name).ok_or_else(|| {
+                Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!("Cannot update type of missing column: {name}"),
+                )
+            })?;
+            if delete_ids.contains(&field.id) {
+                return Err(Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!("Cannot update type of a column being deleted: {name}"),
+                ));
+            }
+            let Type::Primitive(from) = field.field_type.as_ref() else {
+                return Err(Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!("Cannot update type of non-primitive column: {name}"),
+                ));
+            };
+            let Type::Primitive(to) = new_type else {
+                return Err(Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!("Cannot update column {name} to a non-primitive type: {new_type}"),
+                ));
+            };
+            if !is_type_promotion(from, to) {
+                return Err(Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!("Cannot change column type: {name}: {from} -> {to}"),
+                ));
+            }
+            if type_updates.insert(field.id, new_type.clone()).is_some() {
+                return Err(Error::new(
+                    ErrorKind::PreconditionFailed,
+                    format!("Cannot update type of column {name} more than once"),
+                ));
+            }
+        }
+
         // --- 2. Resolve parents, validate additions, assign IDs, and group by parent ID ---
         // We assign IDs inline (before grouping) to preserve the caller's insertion order,
         // since HashMap iteration order is non-deterministic.
@@ -525,6 +620,7 @@ impl StatelessAction for UpdateSchemaAction {
             base_schema.as_struct().fields(),
             &additions_by_parent,
             &delete_ids,
+            &type_updates,
             None,
         );
 
@@ -1547,5 +1643,150 @@ mod tests {
             .take_updates();
 
         assert_eq!(updates.len(), 2);
+    }
+
+    #[test]
+    fn test_is_type_promotion() {
+        use super::is_type_promotion;
+        assert!(is_type_promotion(&PrimitiveType::Int, &PrimitiveType::Long));
+        assert!(is_type_promotion(
+            &PrimitiveType::Float,
+            &PrimitiveType::Double
+        ));
+        assert!(is_type_promotion(
+            &PrimitiveType::Decimal {
+                precision: 10,
+                scale: 2
+            },
+            &PrimitiveType::Decimal {
+                precision: 18,
+                scale: 2
+            }
+        ));
+        assert!(!is_type_promotion(
+            &PrimitiveType::Long,
+            &PrimitiveType::Int
+        ));
+        assert!(!is_type_promotion(&PrimitiveType::Int, &PrimitiveType::Int));
+        assert!(!is_type_promotion(
+            &PrimitiveType::Int,
+            &PrimitiveType::Double
+        ));
+        assert!(!is_type_promotion(
+            &PrimitiveType::String,
+            &PrimitiveType::Long
+        ));
+        assert!(!is_type_promotion(
+            &PrimitiveType::Decimal {
+                precision: 10,
+                scale: 2
+            },
+            &PrimitiveType::Decimal {
+                precision: 10,
+                scale: 4
+            }
+        ));
+        assert!(!is_type_promotion(
+            &PrimitiveType::Decimal {
+                precision: 10,
+                scale: 2
+            },
+            &PrimitiveType::Decimal {
+                precision: 9,
+                scale: 2
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_update_column_type_promotes_in_place() {
+        let table = make_v2_table_with_nested();
+        let tx = Transaction::new(&table);
+        // person.age (id 6) is a required int; widen it and add a column in the
+        // same action.
+        let action = tx
+            .update_schema()
+            .update_column_type("person.age", Type::Primitive(PrimitiveType::Long))
+            .add_column(AddColumn::optional(
+                "note",
+                Type::Primitive(PrimitiveType::String),
+            ));
+
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
+        let updates = action_commit.take_updates();
+        let new_schema = match &updates[0] {
+            TableUpdate::AddSchema { schema } => schema,
+            other => panic!("expected AddSchema, got {other:?}"),
+        };
+        let age = new_schema.field_by_id(6).unwrap();
+        assert_eq!(age.name, "age");
+        assert!(age.required);
+        assert_eq!(*age.field_type, Type::Primitive(PrimitiveType::Long));
+        // Everything else is untouched: same ids, same types (field 4 is the
+        // parent struct, whose shape now carries the promoted child).
+        let base = table.metadata().current_schema();
+        for id in [1, 2, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14] {
+            assert_eq!(
+                new_schema.field_by_id(id).unwrap().field_type,
+                base.field_by_id(id).unwrap().field_type,
+                "field {id}"
+            );
+        }
+        assert_eq!(new_schema.field_by_name("note").unwrap().id, 15);
+        assert_eq!(new_schema.highest_field_id(), 15);
+        assert_eq!(updates[1], TableUpdate::SetCurrentSchema { schema_id: -1 });
+    }
+
+    #[tokio::test]
+    async fn test_update_column_type_rejects_everything_but_promotions() {
+        let table = make_v2_table_with_nested();
+        let cases: [(&str, Type, &str); 5] = [
+            (
+                "x",
+                Type::Primitive(PrimitiveType::Int),
+                "Cannot change column type",
+            ),
+            (
+                "person.name",
+                Type::Primitive(PrimitiveType::Long),
+                "Cannot change column type",
+            ),
+            (
+                "nope",
+                Type::Primitive(PrimitiveType::Long),
+                "missing column",
+            ),
+            (
+                "person",
+                Type::Primitive(PrimitiveType::Long),
+                "non-primitive column",
+            ),
+            (
+                "person.age",
+                Type::Struct(StructType::new(vec![])),
+                "non-primitive type",
+            ),
+        ];
+        for (name, ty, needle) in cases {
+            let tx = Transaction::new(&table);
+            let action = tx.update_schema().update_column_type(name, ty);
+            let err = match commit_with_fresh_state(action, &table).await {
+                Err(e) => e,
+                Ok(_) => panic!("expected an error for {name}"),
+            };
+            assert_eq!(err.kind(), ErrorKind::PreconditionFailed, "{name}");
+            assert!(err.message().contains(needle), "{name}: {err}");
+        }
+        // Deleting and widening the same column is refused too.
+        let tx = Transaction::new(&table);
+        let action = tx
+            .update_schema()
+            .delete_column("z")
+            .update_column_type("z", Type::Primitive(PrimitiveType::Long));
+        let err = match commit_with_fresh_state(action, &table).await {
+            Err(e) => e,
+            Ok(_) => panic!("expected an error for a deleted column"),
+        };
+        assert!(err.message().contains("being deleted"), "{err}");
     }
 }
