@@ -588,6 +588,7 @@ mod tests {
     use super::*;
     use crate::avro::{assert_deflate_codec, define_named_types_repeatedly};
     use crate::io::FileIO;
+    use crate::runtime::Runtime;
     use crate::spec::{
         DataContentType, DataFileBuilder, DataFileFormat, Literal, Manifest, ManifestReader,
         NestedField, PrimitiveType, Schema, Struct, Transform, Type,
@@ -1144,7 +1145,10 @@ mod tests {
         writer.add_file(data_file, 1).unwrap();
         let manifest_file = writer.write_manifest_file().await.unwrap();
 
-        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        let manifest = ManifestReader::new(io, Runtime::current())
+            .read(&manifest_file)
+            .await
+            .unwrap();
         manifest.entries()[0].data_file().clone()
     }
 }
