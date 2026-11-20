@@ -1640,6 +1640,46 @@ mod tests {
         assert!(catalog.table_exists(&table_ident).await.unwrap());
     }
 
+    #[tokio::test]
+    async fn test_unregister_table_keeps_table_when_metadata_read_fails() {
+        let db_path = temp_path();
+        let uri = format!("sqlite:{db_path}");
+        sqlx::Sqlite::create_database(&uri).await.unwrap();
+        let catalog = SqlCatalogBuilder::default()
+            .with_storage_factory(Arc::new(LocalFsStorageFactory))
+            .load(
+                "iceberg",
+                HashMap::from([
+                    (SQL_CATALOG_PROP_URI.to_string(), uri),
+                    (SQL_CATALOG_PROP_WAREHOUSE.to_string(), temp_path()),
+                ]),
+            )
+            .await
+            .unwrap();
+        let namespace = NamespaceIdent::new("unregister_read_fails".into());
+        create_namespace(&catalog, &namespace).await;
+        let table_ident = TableIdent::new(namespace, "table".into());
+        create_table(&catalog, &table_ident).await;
+
+        catalog
+            .execute(
+                "UPDATE iceberg_tables SET metadata_location = ?
+                 WHERE catalog_name = ? AND table_namespace = ? AND table_name = ?",
+                vec![
+                    Some("new-location"),
+                    Some("iceberg"),
+                    Some("unregister_read_fails"),
+                    Some("table"),
+                ],
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(catalog.unregister_table(&table_ident).await.is_err());
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
+    }
+
     async fn new_commit_error_catalog() -> SqlCatalog {
         let sql_lite_uri = format!("sqlite:{}", temp_path());
         sqlx::Sqlite::create_database(&sql_lite_uri).await.unwrap();

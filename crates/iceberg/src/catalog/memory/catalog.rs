@@ -2007,6 +2007,24 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn test_unregister_table_keeps_table_when_metadata_read_fails() {
+        let catalog = new_memory_catalog().await;
+        let namespace = NamespaceIdent::new("unregister_namespace".into());
+        create_namespace(&catalog, &namespace).await;
+        let table_ident = TableIdent::new(namespace, "unregister_table".into());
+        let table = create_table(&catalog, &table_ident).await;
+
+        table
+            .file_io()
+            .delete(table.metadata_location().unwrap())
+            .await
+            .unwrap();
+
+        assert!(catalog.unregister_table(&table_ident).await.is_err());
+        assert!(catalog.table_exists(&table_ident).await.unwrap());
+    }
+
+    #[tokio::test]
     async fn test_update_table() {
         let catalog = new_memory_catalog().await;
 
