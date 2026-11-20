@@ -58,11 +58,11 @@ use std::sync::{Arc, Once};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use futures::{TryStreamExt, stream};
 use iceberg::Runtime;
-use iceberg::arrow::{ArrowReaderBuilder, ArrowReaderOptions};
+use iceberg::arrow::{ArrowReaderBuilder, ArrowReaderOptions, schema_to_arrow_schema};
 use iceberg::expr::{Bind, BoundPredicate, Reference};
 use iceberg::io::FileIO;
 use iceberg::scan::{FileScanTask, FileScanTaskStream};
@@ -70,7 +70,7 @@ use iceberg::spec::{
     DataFileFormat, Datum, MappedField, NameMapping, NestedField, PrimitiveType, Schema, SchemaRef,
     Type,
 };
-use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
+use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use tempfile::TempDir;
@@ -85,32 +85,21 @@ const ROWS_PER_FILE: usize = 100;
 /// `(id: long, name: string)` with embedded Parquet field IDs, so the reader
 /// takes the "file has field IDs" fast path.
 fn schemas() -> (SchemaRef, arrow_schema::SchemaRef) {
+    schemas_with_key("name", PrimitiveType::String)
+}
+
+fn schemas_with_key(key: &str, ty: PrimitiveType) -> (SchemaRef, arrow_schema::SchemaRef) {
     let iceberg_schema = Arc::new(
         Schema::builder()
             .with_schema_id(1)
             .with_fields(vec![
                 NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
-                NestedField::optional(2, "name", Type::Primitive(PrimitiveType::String)).into(),
+                NestedField::optional(2, key, Type::Primitive(ty)).into(),
             ])
             .build()
             .unwrap(),
     );
-
-    let arrow_schema = Arc::new(arrow_schema::Schema::new(vec![
-        arrow_schema::Field::new("id", arrow_schema::DataType::Int64, false).with_metadata(
-            std::collections::HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "1".to_string(),
-            )]),
-        ),
-        arrow_schema::Field::new("name", arrow_schema::DataType::Utf8, true).with_metadata(
-            std::collections::HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                "2".to_string(),
-            )]),
-        ),
-    ]));
-
+    let arrow_schema = Arc::new(schema_to_arrow_schema(&iceberg_schema).unwrap());
     (iceberg_schema, arrow_schema)
 }
 
@@ -521,60 +510,82 @@ fn bench_with_predicate(c: &mut Criterion) {
         .with_row_selection_enabled(true)
         .build();
     group.throughput(Throughput::Elements(ROWS as u64));
-    for keys in [400, 5000] {
-        let ids = Int64Array::from_iter_values(0..ROWS as i64);
-        let names = StringArray::from_iter_values((0..ROWS).map(|id| {
-            if id % 2 == 0 {
-                format!("user-key-{}", (id / 2) % keys)
-            } else {
-                "user-key--1".to_owned()
-            }
-        }));
-        let batch =
-            RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(ids), Arc::new(names)])
-                .expect("build string IN batch");
-        let predicate =
-            Reference::new("name").is_in((0..keys).map(|i| Datum::string(format!("user-key-{i}"))));
-        let bind = || {
-            predicate
-                .bind(iceberg_schema.clone(), true)
-                .expect("bind string IN")
-        };
-
-        for (files, layout) in [(1, "string_in_1_file"), (64, "string_in_64_files")] {
-            let dir = TempDir::new().unwrap();
-            let rows_per_file = ROWS / files;
-            let paths = write_batches(
-                &dir,
-                (0..files).map(|i| batch.slice(i * rows_per_file, rows_per_file)),
-            );
-            let scan = |bound| {
-                let tasks =
-                    whole_file_tasks(&paths, &iceberg_schema, rows_per_file, Some(&bound), None);
-                read_all(tasks, options.clone(), ROWS / 2)
+    for (kind, field, ty) in [
+        ("string", "name", PrimitiveType::String),
+        ("int32", "key", PrimitiveType::Int),
+        ("int64", "key", PrimitiveType::Long),
+    ] {
+        let (iceberg_schema, arrow_schema) = schemas_with_key(field, ty.clone());
+        for keys in [400, 5000] {
+            let ids = Int64Array::from_iter_values(0..ROWS as i64);
+            let values = (0..ROWS as i32).map(|id| if id % 2 == 0 { (id / 2) % keys } else { -1 });
+            let (column, literals): (ArrayRef, Vec<Datum>) = match ty {
+                PrimitiveType::Int => (
+                    Arc::new(Int32Array::from_iter_values(values)),
+                    (0..keys).map(Datum::int).collect(),
+                ),
+                PrimitiveType::Long => (
+                    Arc::new(Int64Array::from_iter_values(values.map(i64::from))),
+                    (0..keys).map(|v| Datum::long(i64::from(v))).collect(),
+                ),
+                PrimitiveType::String => (
+                    Arc::new(StringArray::from_iter_values(
+                        values.map(|v| format!("user-key-{v}")),
+                    )),
+                    (0..keys)
+                        .map(|v| Datum::string(format!("user-key-{v}")))
+                        .collect(),
+                ),
+                _ => unreachable!(),
             };
-            let verify = Once::new();
-            group.bench_function(BenchmarkId::new(layout, keys), |b| {
-                verify.call_once(|| {
-                    let batches = tokio.block_on(scan(bind()));
-                    let mut ids: Vec<_> = batches
-                        .iter()
-                        .flat_map(|batch| {
-                            batch
-                                .column(0)
-                                .as_primitive::<Int64Type>()
-                                .values()
-                                .iter()
-                                .copied()
-                        })
-                        .collect();
-                    ids.sort_unstable();
-                    assert!(ids.into_iter().eq((0..ROWS as i64).step_by(2)));
+            let batch =
+                RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(ids), column]).unwrap();
+            let predicate = Reference::new(field).is_in(literals);
+            let bind = || {
+                predicate
+                    .bind(iceberg_schema.clone(), true)
+                    .expect("bind IN predicate")
+            };
+            for (files, layout) in [(1, "1_file"), (64, "64_files")] {
+                let dir = TempDir::new().unwrap();
+                let rows_per_file = ROWS / files;
+                let paths = write_batches(
+                    &dir,
+                    (0..files).map(|i| batch.slice(i * rows_per_file, rows_per_file)),
+                );
+                let scan = |bound| {
+                    let tasks = whole_file_tasks(
+                        &paths,
+                        &iceberg_schema,
+                        rows_per_file,
+                        Some(&bound),
+                        None,
+                    );
+                    read_all(tasks, options.clone(), ROWS / 2)
+                };
+                let verify = Once::new();
+                group.bench_function(BenchmarkId::new(format!("{kind}_in_{layout}"), keys), |b| {
+                    verify.call_once(|| {
+                        let batches = tokio.block_on(scan(bind()));
+                        let mut ids: Vec<_> = batches
+                            .iter()
+                            .flat_map(|batch| {
+                                batch
+                                    .column(0)
+                                    .as_primitive::<Int64Type>()
+                                    .values()
+                                    .iter()
+                                    .copied()
+                            })
+                            .collect();
+                        ids.sort_unstable();
+                        assert!(ids.into_iter().eq((0..ROWS as i64).step_by(2)));
+                    });
+                    // A fresh bound predicate includes any first-use index construction in the scan time.
+                    b.to_async(&tokio)
+                        .iter_batched(bind, scan, BatchSize::PerIteration);
                 });
-                // A fresh bound predicate includes any first-use index construction in the scan time.
-                b.to_async(&tokio)
-                    .iter_batched(bind, scan, BatchSize::PerIteration);
-            });
+            }
         }
     }
     group.finish();
