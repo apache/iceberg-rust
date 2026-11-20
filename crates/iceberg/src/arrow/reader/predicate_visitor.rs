@@ -920,6 +920,30 @@ mod tests {
     }
 
     #[test]
+    fn set_index_probes_supported_column_types() {
+        use arrow_array::{Int32Array, Int64Array, StringArray};
+        use arrow_cast::cast::cast;
+
+        let ints = Int32Array::from(vec![1, 2]);
+        let longs = Int64Array::from(vec![1, 2]);
+        let strings = StringArray::from(vec!["1", "2"]);
+        let int_index = SetIndex::Int([1].into_iter().collect());
+        let long_index = SetIndex::Long([1].into_iter().collect());
+        let string_index = SetIndex::String([String::from("1")].into_iter().collect());
+        let expected = Some(BooleanArray::from(vec![true, false]));
+        assert_eq!(probe_set(&int_index, &ints, false).unwrap(), expected);
+        assert_eq!(probe_set(&long_index, &longs, false).unwrap(), expected);
+        assert_eq!(probe_set(&long_index, &ints, false).unwrap(), None);
+        for ty in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            let column = cast(&strings, &ty).unwrap();
+            assert_eq!(
+                probe_set(&string_index, column.as_ref(), false).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn dictionary_set_probes_preserve_null_keys_and_values() {
         use arrow_array::types::Int32Type;
         use arrow_array::{DictionaryArray, Int32Array, StringArray};
