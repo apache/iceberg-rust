@@ -18,14 +18,15 @@
 //! This module provides the `FanoutWriter` implementation.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::marker::PhantomData;
 
 use async_trait::async_trait;
 
+use crate::Result;
 use crate::spec::{PartitionKey, Struct};
 use crate::writer::partitioning::PartitioningWriter;
 use crate::writer::{DefaultInput, DefaultOutput, IcebergWriter, IcebergWriterBuilder};
-use crate::{Error, ErrorKind, Result};
 
 /// A writer that can write data to multiple partitions simultaneously.
 ///
@@ -46,7 +47,7 @@ where
     <O as IntoIterator>::Item: Clone,
 {
     inner_builder: B,
-    partition_writers: HashMap<Struct, B::R>,
+    partition_writers: HashMap<(i32, Struct), B::R>,
     output: Vec<<O as IntoIterator>::Item>,
     _phantom: PhantomData<I>,
 }
@@ -70,23 +71,17 @@ where
 
     /// Get or create a writer for the specified partition.
     async fn get_or_create_writer(&mut self, partition_key: &PartitionKey) -> Result<&mut B::R> {
-        if !self.partition_writers.contains_key(partition_key.data()) {
-            let writer = self
-                .inner_builder
-                .build(Some(partition_key.clone()))
-                .await?;
-            self.partition_writers
-                .insert(partition_key.data().clone(), writer);
+        let partition = (partition_key.spec().spec_id(), partition_key.data().clone());
+        match self.partition_writers.entry(partition) {
+            Entry::Occupied(entry) => Ok(entry.into_mut()),
+            Entry::Vacant(entry) => {
+                let writer = self
+                    .inner_builder
+                    .build(Some(partition_key.clone()))
+                    .await?;
+                Ok(entry.insert(writer))
+            }
         }
-
-        self.partition_writers
-            .get_mut(partition_key.data())
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "Failed to get partition writer after creation",
-                )
-            })
     }
 }
 
@@ -119,9 +114,12 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
     use arrow_array::{Float64Array, Int32Array, RecordBatch, StringArray};
     use arrow_schema::{DataType, Field, Schema};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use parquet::file::properties::WriterProperties;
     use tempfile::TempDir;
 
@@ -462,6 +460,71 @@ mod tests {
             std::collections::HashSet::from([partition_value_neg_zero, partition_value_pos_zero])
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn fanout_separates_specs_with_equal_partition_values() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let schema = Arc::new(
+            crate::spec::Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(2, "b", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()?,
+        );
+        let spec_a = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("a", "a_part", Transform::Identity)?
+            .build()?;
+        let spec_b = PartitionSpec::builder(schema.clone())
+            .with_spec_id(1)
+            .with_last_assigned_field_id(1000)
+            .add_partition_field("b", "b_part", Transform::Identity)?
+            .build()?;
+        let partition_one = Struct::from_iter([Some(Literal::int(1))]);
+        let key_a = PartitionKey::new(spec_a, schema.clone(), partition_one.clone());
+        let key_b = PartitionKey::new(spec_b, schema.clone(), partition_one.clone());
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema)?);
+        let batch = |a: i32, b: i32| {
+            RecordBatch::try_new(arrow_schema.clone(), vec![
+                Arc::new(Int32Array::from(vec![a])),
+                Arc::new(Int32Array::from(vec![b])),
+            ])
+        };
+        let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone()),
+            FileIO::new_with_fs(),
+            DefaultLocationGenerator::with_data_location(temp_dir.path().to_str().unwrap().into()),
+            DefaultFileNameGenerator::new("test".into(), None, DataFileFormat::Parquet),
+        );
+        let mut writer = FanoutWriter::new(DataFileWriterBuilder::new(rolling_writer_builder));
+        writer.write(key_a.clone(), batch(1, 2)?).await?;
+        writer.write(key_b.clone(), batch(2, 1)?).await?;
+        writer.write(key_a.clone(), batch(1, 4)?).await?;
+        writer.write(key_b.clone(), batch(3, 1)?).await?;
+        let expected = vec![
+            (0, partition_one.clone(), vec![(1, 2), (1, 4)]),
+            (1, partition_one, vec![(2, 1), (3, 1)]),
+        ];
+        let mut written = Vec::new();
+        for file in writer.close().await? {
+            let reader =
+                ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(file.file_path())?)?
+                    .build()?;
+            let mut rows = Vec::new();
+            for batch in reader {
+                let batch = batch?;
+                let a = batch.column(0).as_primitive::<Int32Type>();
+                let b = batch.column(1).as_primitive::<Int32Type>();
+                rows.extend(a.values().iter().copied().zip(b.values().iter().copied()));
+            }
+            rows.sort_unstable();
+            written.push((file.partition_spec_id, file.partition().clone(), rows));
+        }
+        written.sort_by_key(|(spec, _, rows)| (*spec, rows.clone()));
+        assert_eq!(written, expected);
         Ok(())
     }
 }
