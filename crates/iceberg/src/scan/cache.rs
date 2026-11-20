@@ -18,10 +18,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use crate::expr::BoundPredicate;
 use crate::expr::visitors::expression_evaluator::ExpressionEvaluator;
-use crate::expr::visitors::inclusive_projection::InclusiveProjection;
+use crate::expr::visitors::inclusive_projection::project_partition_filter;
 use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
-use crate::expr::{Bind, BoundPredicate};
 use crate::spec::{Schema, TableMetadataRef};
 use crate::{Error, ErrorKind, Result};
 
@@ -69,41 +69,16 @@ impl PartitionFilterCache {
                 format!("Could not find partition spec for id {spec_id}"),
             ))?;
 
-        // A historical spec may reference a source column that was later dropped from the
-        // schema, which is a legitimate v2+ state. Such a spec cannot be resolved to a
-        // partition type, so it falls back to an always-true filter: files under the spec
-        // are not partition-pruned but still receive the row filter. Any other resolution
-        // failure is unexpected and propagates. The fallback is cached by spec id like any
-        // other filter; this is safe only because the cache lives per-scan in `PlanContext`
-        // with a fixed schema and predicate. Hoisting it to table or catalog scope would
-        // pin a spec to always-true even for a later scan whose schema could resolve it.
-        // TODO(https://github.com/apache/iceberg-rust/issues/2844): derive partition types from
-        // transforms where possible to restore pruning on a historical spec's still-live fields,
-        // which also makes the fallback per-term (dropped fields only) instead of per-spec.
-        let has_dropped_source_column = partition_spec
-            .fields()
-            .iter()
-            .any(|field| schema.field_by_id(field.source_id).is_none());
-
-        let partition_filter = if has_dropped_source_column {
-            BoundPredicate::AlwaysTrue
-        } else {
-            let partition_type = partition_spec.partition_type(schema)?;
-            let partition_fields = partition_type.fields().to_owned();
-            let partition_schema = Arc::new(
-                Schema::builder()
-                    .with_schema_id(partition_spec.spec_id())
-                    .with_fields(partition_fields)
-                    .build()?,
-            );
-
-            let mut inclusive_projection = InclusiveProjection::new(partition_spec.clone());
-
-            inclusive_projection
-                .project(&filter)?
-                .rewrite_not()
-                .bind(partition_schema.clone(), case_sensitive)?
-        };
+        // A spec that references a dropped source column falls back to an always-true
+        // filter: files under the spec are not partition-pruned but still receive the row
+        // filter. The fallback is cached by spec id like any other filter; this is safe only
+        // because the cache lives per-scan in `PlanContext` with a fixed schema and
+        // predicate. Hoisting it to table or catalog scope would pin a spec to always-true
+        // even for a later scan whose schema could resolve it.
+        let partition_filter =
+            project_partition_filter(schema, partition_spec, &filter, case_sensitive)?;
+        let has_dropped_source_column = partition_filter.is_none();
+        let partition_filter = partition_filter.unwrap_or(BoundPredicate::AlwaysTrue);
 
         let mut write = self.0.write().map_err(|_| {
             Error::new(
