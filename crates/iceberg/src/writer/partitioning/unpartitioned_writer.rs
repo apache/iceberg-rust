@@ -163,7 +163,7 @@ mod tests {
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             file_io,
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
         let writer_builder = DataFileWriterBuilder::new(rolling_writer_builder);

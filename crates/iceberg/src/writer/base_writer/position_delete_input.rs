@@ -591,11 +591,7 @@ mod test {
     /// configured with the [`position_delete_schema`].
     fn writer_setup(
         temp_dir: &TempDir,
-    ) -> PositionDeleteFileWriterBuilder<
-        ParquetWriterBuilder,
-        DefaultLocationGenerator,
-        DefaultFileNameGenerator,
-    > {
+    ) -> PositionDeleteFileWriterBuilder<ParquetWriterBuilder, DefaultFileNameGenerator> {
         let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
             temp_dir.path().to_str().unwrap().to_string(),
@@ -609,7 +605,7 @@ mod test {
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             file_io,
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
         PositionDeleteFileWriterBuilder::new(rolling_writer_builder)

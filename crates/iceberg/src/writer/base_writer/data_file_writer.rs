@@ -22,37 +22,35 @@ use arrow_array::RecordBatch;
 use crate::error::invalid_data;
 use crate::spec::{DataContentType, DataFile, PartitionKey};
 use crate::writer::file_writer::FileWriterBuilder;
-use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
+use crate::writer::file_writer::location_generator::FileNameGenerator;
 use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileWriterBuilder};
 use crate::writer::{CurrentFileStatus, IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `DataFileWriter`.
 #[derive(Debug)]
-pub struct DataFileWriterBuilder<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
-    inner: RollingFileWriterBuilder<B, L, F>,
+pub struct DataFileWriterBuilder<B: FileWriterBuilder, F: FileNameGenerator> {
+    inner: RollingFileWriterBuilder<B, F>,
 }
 
-impl<B, L, F> DataFileWriterBuilder<B, L, F>
+impl<B, F> DataFileWriterBuilder<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
     /// Create a new `DataFileWriterBuilder` using a `RollingFileWriterBuilder`.
-    pub fn new(inner: RollingFileWriterBuilder<B, L, F>) -> Self {
+    pub fn new(inner: RollingFileWriterBuilder<B, F>) -> Self {
         Self { inner }
     }
 }
 
 #[async_trait::async_trait]
-impl<B, L, F> IcebergWriterBuilder for DataFileWriterBuilder<B, L, F>
+impl<B, F> IcebergWriterBuilder for DataFileWriterBuilder<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
-    type R = DataFileWriter<B, L, F>;
+    type R = DataFileWriter<B, F>;
 
     async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(DataFileWriter {
@@ -64,16 +62,15 @@ where
 
 /// A writer write data is within one spec/partition.
 #[derive(Debug)]
-pub struct DataFileWriter<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
-    inner: Option<RollingFileWriter<B, L, F>>,
+pub struct DataFileWriter<B: FileWriterBuilder, F: FileNameGenerator> {
+    inner: Option<RollingFileWriter<B, F>>,
     partition_key: Option<PartitionKey>,
 }
 
 #[async_trait::async_trait]
-impl<B, L, F> IcebergWriter for DataFileWriter<B, L, F>
+impl<B, F> IcebergWriter for DataFileWriter<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
@@ -112,10 +109,9 @@ where
     }
 }
 
-impl<B, L, F> CurrentFileStatus for DataFileWriter<B, L, F>
+impl<B, F> CurrentFileStatus for DataFileWriter<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
     fn current_file_path(&self) -> String {
@@ -180,7 +176,7 @@ mod test {
         let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             pw,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
 
@@ -266,7 +262,7 @@ mod test {
         let rolling_file_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
 

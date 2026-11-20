@@ -16,6 +16,7 @@
 // under the License.
 
 use std::fmt::{Debug, Formatter};
+use std::sync::Arc;
 
 use arrow_array::RecordBatch;
 
@@ -27,23 +28,33 @@ use crate::writer::file_writer::{FileWriter, FileWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for [`RollingFileWriter`].
-#[derive(Clone, Debug)]
-pub struct RollingFileWriterBuilder<
-    B: FileWriterBuilder,
-    L: LocationGenerator,
-    F: FileNameGenerator,
-> {
+#[derive(Clone)]
+pub struct RollingFileWriterBuilder<B: FileWriterBuilder, F: FileNameGenerator> {
     inner_builder: B,
     target_file_size: usize,
     file_io: FileIO,
-    location_generator: L,
+    location_generator: Arc<dyn LocationGenerator>,
     file_name_generator: F,
 }
 
-impl<B, L, F> RollingFileWriterBuilder<B, L, F>
+impl<B, F> Debug for RollingFileWriterBuilder<B, F>
+where
+    B: FileWriterBuilder + Debug,
+    F: FileNameGenerator + Debug,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RollingFileWriterBuilder")
+            .field("inner_builder", &self.inner_builder)
+            .field("target_file_size", &self.target_file_size)
+            .field("file_io", &self.file_io)
+            .field("file_name_generator", &self.file_name_generator)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<B, F> RollingFileWriterBuilder<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
     /// Creates a new `RollingFileWriterBuilder` with the specified target file size.
@@ -63,7 +74,7 @@ where
         inner_builder: B,
         target_file_size: usize,
         file_io: FileIO,
-        location_generator: L,
+        location_generator: Arc<dyn LocationGenerator>,
         file_name_generator: F,
     ) -> Self {
         Self {
@@ -90,7 +101,7 @@ where
     pub fn new_with_default_file_size(
         inner_builder: B,
         file_io: FileIO,
-        location_generator: L,
+        location_generator: Arc<dyn LocationGenerator>,
         file_name_generator: F,
     ) -> Self {
         Self {
@@ -103,7 +114,7 @@ where
     }
 
     /// Build a new [`RollingFileWriter`].
-    pub fn build(&self) -> RollingFileWriter<B, L, F> {
+    pub fn build(&self) -> RollingFileWriter<B, F> {
         RollingFileWriter {
             inner: None,
             inner_builder: self.inner_builder.clone(),
@@ -122,20 +133,19 @@ where
 /// This writer wraps another file writer that tracks the amount of data written.
 /// When the data size exceeds the target size, it closes the current file and
 /// starts writing to a new one.
-pub struct RollingFileWriter<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> {
+pub struct RollingFileWriter<B: FileWriterBuilder, F: FileNameGenerator> {
     inner: Option<B::R>,
     inner_builder: B,
     target_file_size: usize,
     data_file_builders: Vec<DataFileBuilder>,
     file_io: FileIO,
-    location_generator: L,
+    location_generator: Arc<dyn LocationGenerator>,
     file_name_generator: F,
 }
 
-impl<B, L, F> Debug for RollingFileWriter<B, L, F>
+impl<B, F> Debug for RollingFileWriter<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -146,10 +156,9 @@ where
     }
 }
 
-impl<B, L, F> RollingFileWriter<B, L, F>
+impl<B, F> RollingFileWriter<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
     /// Determines if the writer should roll over to a new file.
@@ -239,9 +248,7 @@ where
     }
 }
 
-impl<B: FileWriterBuilder, L: LocationGenerator, F: FileNameGenerator> CurrentFileStatus
-    for RollingFileWriter<B, L, F>
-{
+impl<B: FileWriterBuilder, F: FileNameGenerator> CurrentFileStatus for RollingFileWriter<B, F> {
     fn current_file_path(&self) -> String {
         self.inner.as_ref().unwrap().current_file_path()
     }
@@ -271,7 +278,7 @@ mod tests {
     use crate::arrow::test_utils::read_encrypted_parquet;
     use crate::encryption::StandardKeyMetadata;
     use crate::io::FileIO;
-    use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, Type};
+    use crate::spec::{DataFileFormat, NestedField, PartitionKey, PrimitiveType, Schema, Type};
     use crate::test_utils::make_encryption_manager;
     use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
     use crate::writer::file_writer::ParquetWriterBuilder;
@@ -304,6 +311,57 @@ mod tests {
         ])
     }
 
+    /// Puts every file directly under `memory:///custom`.
+    struct FixedDirectory;
+
+    impl LocationGenerator for FixedDirectory {
+        fn generate_location(&self, _: Option<&PartitionKey>, file_name: &str) -> String {
+            format!("memory:///custom/{file_name}")
+        }
+    }
+
+    /// Writes one row with `builder` and returns the data file's path.
+    async fn written_path(
+        builder: RollingFileWriterBuilder<ParquetWriterBuilder, DefaultFileNameGenerator>,
+    ) -> Result<String> {
+        let batch = RecordBatch::try_new(Arc::new(make_test_arrow_schema()), vec![
+            Arc::new(Int32Array::from(vec![1])),
+            Arc::new(StringArray::from(vec!["Alice"])),
+        ])?;
+        let mut writer = DataFileWriterBuilder::new(builder).build(None).await?;
+        writer.write(batch).await?;
+        let data_files = writer.close().await?;
+        Ok(data_files[0].file_path().to_string())
+    }
+
+    #[tokio::test]
+    async fn test_rolling_writer_uses_given_location_generator() -> Result<()> {
+        let schema = Arc::new(make_test_schema()?);
+        let new = RollingFileWriterBuilder::new(
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema.clone()),
+            1024 * 1024,
+            FileIO::new_with_memory(),
+            Arc::new(FixedDirectory),
+            DefaultFileNameGenerator::new("new".to_string(), None, DataFileFormat::Parquet),
+        );
+        let default_size = RollingFileWriterBuilder::new_with_default_file_size(
+            ParquetWriterBuilder::new(WriterProperties::builder().build(), schema),
+            FileIO::new_with_memory(),
+            Arc::new(FixedDirectory),
+            DefaultFileNameGenerator::new("default".to_string(), None, DataFileFormat::Parquet),
+        );
+
+        assert_eq!(
+            written_path(new).await?,
+            "memory:///custom/new-00000.parquet"
+        );
+        assert_eq!(
+            written_path(default_size).await?,
+            "memory:///custom/default-00000.parquet"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_rolling_writer_basic() -> Result<()> {
         let temp_dir = TempDir::new()?;
@@ -326,7 +384,7 @@ mod tests {
             parquet_writer_builder,
             1024 * 1024,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
 
@@ -384,7 +442,7 @@ mod tests {
             parquet_writer_builder,
             1024,
             file_io,
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
 
@@ -470,7 +528,7 @@ mod tests {
             parquet_writer_builder,
             1024,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
 
