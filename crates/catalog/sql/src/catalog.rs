@@ -1588,8 +1588,7 @@ mod tests {
         assert_eq!(err.kind(), ErrorKind::TableNotFound);
     }
 
-    #[tokio::test]
-    async fn test_unregister_table_rejects_changed_metadata_location() {
+    async fn unregister_table_setup(namespace: &str, table: &str) -> (SqlCatalog, TableIdent) {
         let db_path = temp_path();
         let uri = format!("sqlite:{db_path}");
         sqlx::Sqlite::create_database(&uri).await.unwrap();
@@ -1604,10 +1603,16 @@ mod tests {
             )
             .await
             .unwrap();
-        let namespace = NamespaceIdent::new("unregister_conflict".into());
+        let namespace = NamespaceIdent::new(namespace.to_string());
         create_namespace(&catalog, &namespace).await;
-        let table_ident = TableIdent::new(namespace, "table".into());
+        let table_ident = TableIdent::new(namespace, table.to_string());
         create_table(&catalog, &table_ident).await;
+        (catalog, table_ident)
+    }
+
+    #[tokio::test]
+    async fn test_unregister_table_rejects_changed_metadata_location() {
+        let (catalog, table_ident) = unregister_table_setup("unregister_conflict", "table").await;
 
         let stale_location = catalog
             .load_table(&table_ident)
@@ -1623,8 +1628,8 @@ mod tests {
                 vec![
                     Some("new-location"),
                     Some("iceberg"),
-                    Some("unregister_conflict"),
-                    Some("table"),
+                    Some(&table_ident.namespace().join(".")),
+                    Some(table_ident.name()),
                 ],
                 None,
             )
@@ -1642,25 +1647,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_unregister_table_keeps_table_when_metadata_read_fails() {
-        let db_path = temp_path();
-        let uri = format!("sqlite:{db_path}");
-        sqlx::Sqlite::create_database(&uri).await.unwrap();
-        let catalog = SqlCatalogBuilder::default()
-            .with_storage_factory(Arc::new(LocalFsStorageFactory))
-            .load(
-                "iceberg",
-                HashMap::from([
-                    (SQL_CATALOG_PROP_URI.to_string(), uri),
-                    (SQL_CATALOG_PROP_WAREHOUSE.to_string(), temp_path()),
-                ]),
-            )
-            .await
-            .unwrap();
-        let namespace = NamespaceIdent::new("unregister_read_fails".into());
-        create_namespace(&catalog, &namespace).await;
-        let table_ident = TableIdent::new(namespace, "table".into());
-        create_table(&catalog, &table_ident).await;
-
+        let (catalog, table_ident) = unregister_table_setup("unregister_read_fails", "table").await;
         catalog
             .execute(
                 "UPDATE iceberg_tables SET metadata_location = ?
@@ -1668,8 +1655,8 @@ mod tests {
                 vec![
                     Some("new-location"),
                     Some("iceberg"),
-                    Some("unregister_read_fails"),
-                    Some("table"),
+                    Some(&table_ident.namespace().join(".")),
+                    Some(table_ident.name()),
                 ],
                 None,
             )
