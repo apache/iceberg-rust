@@ -159,11 +159,18 @@ impl ArrowReader {
         let leaf_field_id_set: HashSet<i32> = leaf_field_ids.iter().copied().collect();
         // Keep presence leaves here too, or a map whose value struct lost every child
         // keeps only its key and fails conversion.
-        let presence: BTreeSet<usize> =
-            presence_leaves(fields, &projected.struct_ids, &leaf_field_id_set)
-                .into_iter()
-                .flat_map(|candidate| candidate.leaves)
-                .collect();
+        let presence_candidates =
+            presence_leaves(fields, &projected.struct_ids, &leaf_field_id_set);
+        // A presence leaf inside a Variant has no field id, so its group is tagged as a
+        // variant below for the type check, the same way a projected variant is.
+        let presence_variant_ids: HashSet<i32> = presence_candidates
+            .iter()
+            .filter_map(|candidate| candidate.variant)
+            .collect();
+        let presence: BTreeSet<usize> = presence_candidates
+            .into_iter()
+            .flat_map(|candidate| candidate.leaves)
+            .collect();
 
         let projected_variant_ids: HashSet<i32> = leaf_field_ids
             .iter()
@@ -183,8 +190,8 @@ impl ArrowReader {
         // Tagging the projected variants with the `arrow.parquet.variant` extension lets
         // `arrow_schema_to_schema` fold each storage struct into `Type::Variant` without
         // descending into its id-less sub-fields.
-        let (variant_leaves, tagged_fields) = if projected_variant_ids.is_empty() {
-            (HashMap::new(), fields.clone())
+        let variant_leaves = if projected_variant_ids.is_empty() {
+            HashMap::new()
         } else {
             let mut leaf_idx_to_variant_field_id = HashMap::new();
             let mut leaf_idx = 0usize;
@@ -195,10 +202,16 @@ impl ArrowReader {
                 &projected_variant_ids,
                 &mut leaf_idx_to_variant_field_id,
             )?;
-            (
-                leaf_idx_to_variant_field_id,
-                Self::attach_variant_extensions(fields, &projected_variant_ids),
-            )
+            leaf_idx_to_variant_field_id
+        };
+        let tagged_variant_ids: HashSet<i32> = projected_variant_ids
+            .union(&presence_variant_ids)
+            .copied()
+            .collect();
+        let tagged_fields = if tagged_variant_ids.is_empty() {
+            fields.clone()
+        } else {
+            Self::attach_variant_extensions(fields, &tagged_variant_ids)
         };
 
         // Pre-project only the fields that have been selected, possibly avoiding converting
@@ -635,6 +648,8 @@ struct PresenceCandidate {
     repetition: u32,
     /// Leaf indexes to read: one leaf, or a whole map.
     leaves: Range<usize>,
+    /// Field id of the Variant group holding the leaf, if any.
+    variant: Option<i32>,
 }
 
 /// One file leaf under each projected struct that no selected leaf covers, so the
@@ -688,6 +703,27 @@ impl PresenceWalk<'_> {
             other => other,
         };
         let id = parquet_field_id(field);
+        // A Variant's `metadata` and `value` leaves have no field ids; only the group does.
+        // The group is covered when the variant itself is selected. Otherwise its required
+        // `metadata` leaf can carry the presence of the enclosing struct.
+        if let DataType::Struct(children) = data_type
+            && let Some(variant_id) = id
+            && is_variant_storage(field, children, variant_id)
+        {
+            let start = self.index;
+            self.index += children.len();
+            let covered = self.leaf_field_ids.contains(&variant_id);
+            let leaf = children
+                .find("metadata")
+                .map(|(pos, _)| start + pos)
+                .filter(|_| in_projected && !covered)
+                .map(|idx| PresenceCandidate {
+                    repetition,
+                    leaves: idx..idx + 1,
+                    variant: Some(variant_id),
+                });
+            return (covered, leaf);
+        }
         let (covered, best) = match data_type {
             DataType::Struct(children) => {
                 let projected = id.is_some_and(|id| self.projected_structs.contains(&id));
@@ -735,6 +771,7 @@ impl PresenceWalk<'_> {
                 let leaf = readable.then_some(PresenceCandidate {
                     repetition: repetition + 1,
                     leaves: start..self.index,
+                    variant: None,
                 });
                 (covered, leaf)
             }
@@ -747,6 +784,7 @@ impl PresenceWalk<'_> {
                 let leaf = readable.then_some(PresenceCandidate {
                     repetition,
                     leaves: start..self.index,
+                    variant: None,
                 });
                 (covered, leaf)
             }
@@ -754,6 +792,16 @@ impl PresenceWalk<'_> {
         let best = best.filter(|_| !covered && id.is_some());
         (covered, best)
     }
+}
+
+/// Whether `field` (with field id `id`) is an unshredded Variant group: `metadata` and
+/// `value` bytes with no field ids of their own. The table schema may no longer have the
+/// variant, so this goes by the file's layout.
+fn is_variant_storage(field: &Field, children: &Fields, id: i32) -> bool {
+    children
+        .iter()
+        .all(|child| parquet_field_id(child).is_none())
+        && validate_unshredded_variant(field, id).is_ok()
 }
 
 /// Apply name mapping to Arrow schema for Parquet files lacking field IDs.
@@ -4002,6 +4050,110 @@ message schema {
             // Struct equality skips children under a null parent, so pin `payload`'s own nulls.
             assert_eq!(nested.as_struct().column(0).nulls(), payload_nulls.as_ref());
         }
+    }
+
+    /// A struct whose only file child is a dropped Variant keeps its validity when a new
+    /// child replaces it. The Variant's `metadata` leaf has no field id, but it is the
+    /// only leaf that can carry the struct's presence (#3706).
+    #[tokio::test]
+    async fn test_variant_dropped_child_preserves_parent_presence() {
+        use arrow_array::{Int32Array, StructArray};
+        use arrow_buffer::NullBuffer;
+        // (parent nulls, variant nulls): every row present; a null parent row; a present
+        // parent holding a null variant, which must still read as present.
+        let cases = [
+            (None, None),
+            (Some(NullBuffer::from(vec![true, false, true])), None),
+            (None, Some(NullBuffer::from(vec![true, true, false]))),
+        ];
+        for (parent_nulls, variant_nulls) in cases {
+            let tmp = TempDir::new().unwrap();
+            let variant_field = Field::new("old", DataType::Struct(variant_arrow_fields()), true)
+                .with_metadata(field_id_meta(3));
+            let children = Fields::from(vec![variant_field]);
+            let variant = StructArray::new(
+                variant_arrow_fields(),
+                variant_struct_array().as_struct().columns().to_vec(),
+                variant_nulls,
+            );
+            let source = Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(1)),
+                Field::new("s", DataType::Struct(children.clone()), true)
+                    .with_metadata(field_id_meta(2)),
+            ]));
+            let path = write_variant_parquet(
+                source,
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+                    Arc::new(StructArray::new(
+                        children,
+                        vec![Arc::new(variant) as ArrayRef],
+                        parent_nulls.clone(),
+                    )) as ArrayRef,
+                ],
+                tmp.path().to_str().unwrap(),
+            );
+            let target = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                        NestedField::optional(
+                            2,
+                            "s",
+                            Type::Struct(StructType::new(vec![
+                                NestedField::optional(
+                                    4,
+                                    "new",
+                                    Type::Primitive(PrimitiveType::Int),
+                                )
+                                .into(),
+                            ])),
+                        )
+                        .into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+
+            let batches = read_variant(target, &path, vec![1, 2]).await;
+            assert_eq!(batches.len(), 1);
+            assert_id_values(batches[0].column(0));
+            let s = batches[0].column(1).as_struct();
+            assert_eq!(
+                s.nulls(),
+                parent_nulls.as_ref(),
+                "present structs must survive replacement of their Variant child"
+            );
+            assert_eq!(s.column(0).null_count(), 3);
+        }
+    }
+
+    /// A selected Variant already covers its parent, so no extra presence leaf is read.
+    #[test]
+    fn test_selected_variant_covers_parent_presence() {
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false).with_metadata(field_id_meta(1)),
+            Field::new(
+                "s",
+                DataType::Struct(Fields::from(vec![
+                    variant_arrow_field("v", 3),
+                    Field::new("x", DataType::Int32, true).with_metadata(field_id_meta(4)),
+                ])),
+                true,
+            )
+            .with_metadata(field_id_meta(2)),
+        ]));
+        let structs = HashSet::from([2]);
+        // Only `id` selected: the struct needs a presence leaf, the Variant's `metadata`
+        // (leaf 1) comes first and is chosen.
+        let chosen = super::presence_leaves(arrow_schema.fields(), &structs, &HashSet::from([1]));
+        assert_eq!(chosen.len(), 1);
+        assert_eq!(chosen[0].leaves, 1..2);
+        assert_eq!(chosen[0].variant, Some(3));
+        // The Variant is selected: the struct is covered.
+        let chosen =
+            super::presence_leaves(arrow_schema.fields(), &structs, &HashSet::from([1, 3]));
+        assert!(chosen.is_empty());
     }
 
     #[tokio::test]
