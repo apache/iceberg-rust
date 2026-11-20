@@ -194,6 +194,7 @@ impl<'de> serde_core::de::Deserialize<'de> for iceberg_catalog_rest::ListTablesR
 pub fn iceberg_catalog_rest::ListTablesResponse::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub struct iceberg_catalog_rest::LoadTableResult
 pub iceberg_catalog_rest::LoadTableResult::config: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
+pub iceberg_catalog_rest::LoadTableResult::labels: core::option::Option<iceberg::catalog::labels::Labels>
 pub iceberg_catalog_rest::LoadTableResult::metadata: iceberg::spec::table_metadata::TableMetadata
 pub iceberg_catalog_rest::LoadTableResult::metadata_location: core::option::Option<alloc::string::String>
 pub iceberg_catalog_rest::LoadTableResult::storage_credentials: core::option::Option<alloc::vec::Vec<iceberg_catalog_rest::StorageCredential>>
