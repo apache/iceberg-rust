@@ -21,6 +21,7 @@
 
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Not;
+use std::sync::{Arc, OnceLock};
 
 use array_init::array_init;
 use fnv::FnvHashSet;
@@ -32,7 +33,7 @@ use crate::expr::visitors::bound_predicate_visitor::visit as visit_bound;
 use crate::expr::visitors::predicate_visitor::visit;
 use crate::expr::visitors::rewrite_not::RewriteNotVisitor;
 use crate::expr::{Bind, BoundReference, PredicateOperator, Reference};
-use crate::spec::{Datum, PrimitiveLiteral, SchemaRef};
+use crate::spec::{Datum, PrimitiveLiteral, PrimitiveType, SchemaRef};
 use crate::{Error, ErrorKind};
 
 /// Logical expression, such as `AND`, `OR`, `NOT`.
@@ -245,7 +246,55 @@ pub struct SetExpression<T> {
     /// Term of this predicate, for example, `a` in `a in (1, 2, 3)`.
     term: T,
     /// Literals of this predicate, for example, `(1, 2, 3)` in `a in (1, 2, 3)`.
-    literals: FnvHashSet<Datum>,
+    literals: Arc<SetLiterals>,
+}
+
+// File tasks clone the bound predicate. Keep the lookup with its immutable literals
+// so every reader using that predicate can share the same index.
+#[derive(Serialize, Deserialize)]
+#[serde(transparent)]
+struct SetLiterals {
+    values: FnvHashSet<Datum>,
+    #[serde(skip)]
+    index: OnceLock<Option<Arc<SetIndex>>>,
+}
+
+impl PartialEq for SetLiterals {
+    fn eq(&self, other: &Self) -> bool {
+        self.values == other.values
+    }
+}
+
+pub(crate) enum SetIndex {
+    Int(FnvHashSet<i32>),
+    Long(FnvHashSet<i64>),
+    String(FnvHashSet<String>),
+}
+
+impl SetIndex {
+    fn new(values: &FnvHashSet<Datum>) -> Option<Self> {
+        let mut index = match values.iter().next()?.data_type() {
+            PrimitiveType::Int => Self::Int(FnvHashSet::default()),
+            PrimitiveType::Long => Self::Long(FnvHashSet::default()),
+            PrimitiveType::String => Self::String(FnvHashSet::default()),
+            _ => return None,
+        };
+        for datum in values {
+            match (&mut index, datum.data_type(), datum.literal()) {
+                (Self::Int(set), PrimitiveType::Int, PrimitiveLiteral::Int(value)) => {
+                    set.insert(*value);
+                }
+                (Self::Long(set), PrimitiveType::Long, PrimitiveLiteral::Long(value)) => {
+                    set.insert(*value);
+                }
+                (Self::String(set), PrimitiveType::String, PrimitiveLiteral::String(value)) => {
+                    set.insert(value.clone());
+                }
+                _ => return None,
+            }
+        }
+        Some(index)
+    }
 }
 
 impl<T: Debug> Debug for SetExpression<T> {
@@ -253,7 +302,7 @@ impl<T: Debug> Debug for SetExpression<T> {
         f.debug_struct("SetExpression")
             .field("op", &self.op)
             .field("term", &self.term)
-            .field("literal", &self.literals)
+            .field("literal", self.literals())
             .finish()
     }
 }
@@ -276,7 +325,14 @@ impl<T> SetExpression<T> {
     /// ```
     pub fn new(op: PredicateOperator, term: T, literals: FnvHashSet<Datum>) -> Self {
         debug_assert!(op.is_set());
-        Self { op, term, literals }
+        Self {
+            op,
+            term,
+            literals: Arc::new(SetLiterals {
+                values: literals,
+                index: OnceLock::new(),
+            }),
+        }
     }
 
     /// Return the operator of this predicate.
@@ -286,7 +342,19 @@ impl<T> SetExpression<T> {
 
     /// Return the hash set of values compared against the term in this expression.
     pub fn literals(&self) -> &FnvHashSet<Datum> {
-        &self.literals
+        &self.literals.values
+    }
+
+    pub(crate) fn membership_index(&self) -> Option<Arc<SetIndex>> {
+        // Short lists benefit from Arrow's vectorized scalar comparisons.
+        const MIN_INDEX_SIZE: usize = 32;
+        if self.literals().len() < MIN_INDEX_SIZE {
+            return None;
+        }
+        self.literals
+            .index
+            .get_or_init(|| SetIndex::new(self.literals()).map(Arc::new))
+            .clone()
     }
 
     /// Return the term of this predicate.
@@ -300,17 +368,17 @@ impl<T: Bind> Bind for SetExpression<T> {
 
     fn bind(&self, schema: SchemaRef, case_sensitive: bool) -> Result<Self::Bound> {
         let bound_term = self.term.bind(schema.clone(), case_sensitive)?;
-        Ok(SetExpression::new(
-            self.op,
-            bound_term,
-            self.literals.clone(),
-        ))
+        Ok(SetExpression {
+            op: self.op,
+            term: bound_term,
+            literals: Arc::clone(&self.literals),
+        })
     }
 }
 
 impl<T: Display + Debug> Display for SetExpression<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut literal_strs = self.literals.iter().map(|l| format!("{l}"));
+        let mut literal_strs = self.literals().iter().map(|l| format!("{l}"));
 
         write!(f, "{} {} ({})", self.term, self.op, literal_strs.join(", "))
     }
@@ -457,8 +525,9 @@ impl Bind for Predicate {
             Predicate::Set(expr) => {
                 let bound_expr = expr.bind(schema, case_sensitive)?;
                 let bound_literals = bound_expr
-                    .literals
-                    .into_iter()
+                    .literals()
+                    .iter()
+                    .cloned()
                     .map(|l| l.to(&bound_expr.term.field().field_type))
                     .collect::<Result<FnvHashSet<Datum>>>()?;
 
@@ -640,11 +709,10 @@ impl Predicate {
                 expr.term,
                 expr.literal,
             )),
-            Predicate::Set(expr) => Predicate::Set(SetExpression::new(
-                expr.op.negate(),
-                expr.term,
-                expr.literals,
-            )),
+            Predicate::Set(expr) => Predicate::Set(SetExpression {
+                op: expr.op.negate(),
+                ..expr
+            }),
         }
     }
     /// Simplifies the expression by removing `NOT` predicates,
@@ -751,11 +819,10 @@ impl BoundPredicate {
                 expr.term,
                 expr.literal,
             )),
-            BoundPredicate::Set(expr) => BoundPredicate::Set(SetExpression::new(
-                expr.op.negate(),
-                expr.term,
-                expr.literals,
-            )),
+            BoundPredicate::Set(expr) => BoundPredicate::Set(SetExpression {
+                op: expr.op.negate(),
+                ..expr
+            }),
         }
     }
 
@@ -820,8 +887,26 @@ mod tests {
     use std::sync::Arc;
 
     use crate::expr::Predicate::{AlwaysFalse, AlwaysTrue};
-    use crate::expr::{Bind, BoundPredicate, Reference};
+    use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
+
+    #[test]
+    fn cloned_set_predicates_share_the_index_and_serialize_as_literals() {
+        let predicate = Reference::new("key").is_in((0..64).map(Datum::int));
+        let encoded = serde_json::to_value(&predicate).unwrap();
+        assert_eq!(encoded["Set"]["literals"].as_array().unwrap().len(), 64);
+        let restored: Predicate = serde_json::from_value(encoded.clone()).unwrap();
+        let clone = predicate.clone().not().rewrite_not();
+        let (Predicate::Set(original), Predicate::Set(negated)) = (&predicate, &clone) else {
+            panic!("expected set predicates");
+        };
+        assert!(Arc::ptr_eq(
+            &original.membership_index().unwrap(),
+            &negated.membership_index().unwrap()
+        ));
+        assert_eq!(predicate, restored);
+        assert_eq!(serde_json::to_value(&predicate).unwrap(), encoded);
+    }
 
     #[test]
     fn test_logical_or_rewrite_not() {
