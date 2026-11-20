@@ -54,14 +54,16 @@
 //!
 //! Run with: `cargo bench -p iceberg --bench arrow_reader`
 
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 
+use arrow_array::cast::AsArray;
+use arrow_array::types::Int64Type;
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, StringArray};
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use futures::{TryStreamExt, stream};
 use iceberg::Runtime;
-use iceberg::arrow::ArrowReaderBuilder;
-use iceberg::expr::{Bind, Reference};
+use iceberg::arrow::{ArrowReaderBuilder, ArrowReaderOptions};
+use iceberg::expr::{Bind, BoundPredicate, Reference};
 use iceberg::io::FileIO;
 use iceberg::scan::{FileScanTask, FileScanTaskStream};
 use iceberg::spec::{
@@ -125,15 +127,20 @@ fn write_files(
     let batch =
         RecordBatch::try_new(arrow_schema.clone(), vec![ids, names]).expect("build record batch");
 
+    write_batches(dir, std::iter::repeat_n(batch, num_files))
+}
+
+fn write_batches(dir: &TempDir, batches: impl Iterator<Item = RecordBatch>) -> Vec<String> {
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
         .build();
 
-    (0..num_files)
-        .map(|i| {
+    batches
+        .enumerate()
+        .map(|(i, batch)| {
             let path = format!("{}/data_{i}.parquet", dir.path().to_str().unwrap());
             let file = std::fs::File::create(&path).expect("create parquet file");
-            let mut writer = ArrowWriter::try_new(file, arrow_schema.clone(), Some(props.clone()))
+            let mut writer = ArrowWriter::try_new(file, batch.schema(), Some(props.clone()))
                 .expect("create arrow writer");
             writer.write(&batch).expect("write batch");
             writer.close().expect("close writer");
@@ -193,38 +200,34 @@ fn write_multi_row_group_file(
 /// Build a whole-file `FileScanTask` for each path (no predicate, no deletes —
 /// the projection-only path, which isolates per-task setup overhead).
 fn tasks_for(paths: &[String], schema: &SchemaRef) -> Vec<FileScanTask> {
-    paths.iter().map(|p| base_task(p, schema)).collect()
+    whole_file_tasks(paths, schema, ROWS_PER_FILE, None, None)
 }
 
-/// A whole-file projection-only task for a single path.
-fn base_task(path: &str, schema: &SchemaRef) -> FileScanTask {
-    let size = std::fs::metadata(path).expect("stat parquet file").len();
-    FileScanTask {
-        file_size_in_bytes: size,
-        start: 0,
-        length: size,
-        record_count: Some(ROWS_PER_FILE as u64),
-        data_file_path: path.to_string(),
-        data_file_format: DataFileFormat::Parquet,
-        schema: schema.clone(),
-        project_field_ids: vec![1, 2],
-        predicate: None,
-        deletes: vec![],
-        partition: None,
-        partition_spec: None,
-        name_mapping: None,
-        case_sensitive: false,
-    }
-}
-
-/// Like [`tasks_for`] but attaches a name mapping (migrated-table path).
-fn tasks_with_name_mapping(paths: &[String], schema: &SchemaRef) -> Vec<FileScanTask> {
-    let mapping = name_mapping();
+fn whole_file_tasks(
+    paths: &[String],
+    schema: &SchemaRef,
+    rows_per_file: usize,
+    predicate: Option<&BoundPredicate>,
+    mapping: Option<&Arc<NameMapping>>,
+) -> Vec<FileScanTask> {
     paths
         .iter()
-        .map(|p| FileScanTask {
-            name_mapping: Some(mapping.clone()),
-            ..base_task(p, schema)
+        .map(|path| {
+            let size = std::fs::metadata(path).expect("stat parquet file").len();
+            FileScanTask::builder()
+                .with_file_size_in_bytes(size)
+                .with_start(0)
+                .with_length(size)
+                .with_record_count(Some(rows_per_file as u64))
+                .with_data_file_path(path.clone())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2])
+                .with_predicate(predicate.cloned())
+                .with_name_mapping(mapping.cloned())
+                .with_case_sensitive(false)
+                .build()
+                .expect("build whole-file task")
         })
         .collect()
 }
@@ -239,22 +242,17 @@ fn same_file_split_tasks(path: &str, schema: &SchemaRef, num_splits: u64) -> Vec
         .map(|i| {
             let start = i * chunk;
             let length = chunk.min(size.saturating_sub(start));
-            FileScanTask {
-                file_size_in_bytes: size,
-                start,
-                length,
-                record_count: None,
-                data_file_path: path.to_string(),
-                data_file_format: DataFileFormat::Parquet,
-                schema: schema.clone(),
-                project_field_ids: vec![1, 2],
-                predicate: None,
-                deletes: vec![],
-                partition: None,
-                partition_spec: None,
-                name_mapping: None,
-                case_sensitive: false,
-            }
+            FileScanTask::builder()
+                .with_file_size_in_bytes(size)
+                .with_start(start)
+                .with_length(length)
+                .with_data_file_path(path.to_string())
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(schema.clone())
+                .with_project_field_ids(vec![1, 2])
+                .with_case_sensitive(false)
+                .build()
+                .expect("build split task")
         })
         .collect()
 }
@@ -266,33 +264,30 @@ fn tasks_with_predicate(paths: &[String], schema: &SchemaRef) -> Vec<FileScanTas
         .less_than(Datum::long(ROWS_PER_FILE as i64 / 2))
         .bind(schema.clone(), true)
         .expect("bind predicate");
-    paths
-        .iter()
-        .map(|p| FileScanTask {
-            predicate: Some(predicate.clone()),
-            ..base_task(p, schema)
-        })
-        .collect()
+    whole_file_tasks(paths, schema, ROWS_PER_FILE, Some(&predicate), None)
 }
 
-/// Read every task to completion, draining all record batches. `filtering`
-/// turns on row-group filtering and row selection (only meaningful when the
-/// tasks carry a predicate).
+fn reader_options(concurrency: usize, filtering: bool) -> ArrowReaderOptions {
+    ArrowReaderOptions::builder()
+        .with_data_file_concurrency_limit(concurrency)
+        .with_row_group_filtering_enabled(filtering)
+        .with_row_selection_enabled(filtering)
+        .build()
+}
+
+/// Read every task to completion, draining all record batches.
 ///
 /// Asserts that exactly `expected_rows` rows come back: a configuration that
 /// reads too few rows — or duplicates rows, like the sub-row-group-split bug
 /// in #2614 — would otherwise time faster and read as a performance win.
 async fn read_all(
     tasks: Vec<FileScanTask>,
-    concurrency: usize,
-    filtering: bool,
+    options: ArrowReaderOptions,
     expected_rows: usize,
-) {
+) -> Vec<RecordBatch> {
     let file_io = FileIO::new_with_fs();
     let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-        .with_data_file_concurrency_limit(concurrency)
-        .with_row_group_filtering_enabled(filtering)
-        .with_row_selection_enabled(filtering)
+        .with_options(options)
         .build();
 
     let task_stream: FileScanTaskStream = Box::pin(stream::iter(tasks.into_iter().map(Ok)));
@@ -311,7 +306,7 @@ async fn read_all(
         "benchmark read returned the wrong number of rows; timings would be meaningless"
     );
 
-    criterion::black_box(batches);
+    batches
 }
 
 /// Read every task to completion and return the total number of bytes fetched
@@ -325,7 +320,11 @@ async fn read_all(
 async fn read_all_bytes(tasks: Vec<FileScanTask>, concurrency: usize, expected_rows: usize) -> u64 {
     let file_io = FileIO::new_with_fs();
     let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-        .with_data_file_concurrency_limit(concurrency)
+        .with_options(
+            ArrowReaderOptions::builder()
+                .with_data_file_concurrency_limit(concurrency)
+                .build(),
+        )
         .build();
 
     let task_stream: FileScanTaskStream = Box::pin(stream::iter(tasks.into_iter().map(Ok)));
@@ -366,7 +365,11 @@ fn bench_many_small_files(c: &mut Criterion) {
             |b, _| {
                 b.to_async(&tokio).iter(|| {
                     let tasks = tasks_for(&paths, &iceberg_schema);
-                    read_all(tasks, num_cpus_limit(), false, num_files * ROWS_PER_FILE)
+                    read_all(
+                        tasks,
+                        reader_options(num_cpus_limit(), false),
+                        num_files * ROWS_PER_FILE,
+                    )
                 });
             },
         );
@@ -393,7 +396,11 @@ fn bench_concurrency(c: &mut Criterion) {
             |b, &concurrency| {
                 b.to_async(&tokio).iter(|| {
                     let tasks = tasks_for(&paths, &iceberg_schema);
-                    read_all(tasks, concurrency, false, num_files * ROWS_PER_FILE)
+                    read_all(
+                        tasks,
+                        reader_options(concurrency, false),
+                        num_files * ROWS_PER_FILE,
+                    )
                 });
             },
         );
@@ -417,8 +424,18 @@ fn bench_migrated_table(c: &mut Criterion) {
     group.throughput(Throughput::Elements(num_files as u64));
     group.bench_function("name_mapping", |b| {
         b.to_async(&tokio).iter(|| {
-            let tasks = tasks_with_name_mapping(&paths, &iceberg_schema);
-            read_all(tasks, num_cpus_limit(), false, num_files * ROWS_PER_FILE)
+            let tasks = whole_file_tasks(
+                &paths,
+                &iceberg_schema,
+                ROWS_PER_FILE,
+                None,
+                Some(&name_mapping()),
+            );
+            read_all(
+                tasks,
+                reader_options(num_cpus_limit(), false),
+                num_files * ROWS_PER_FILE,
+            )
         });
     });
     group.finish();
@@ -464,7 +481,7 @@ fn bench_same_file_splits(c: &mut Criterion) {
                     let tasks = same_file_split_tasks(&path, &iceberg_schema, num_splits);
                     // `total_rows` doubles as the #2614 duplication guard: N splits
                     // of one file must reassemble it exactly once.
-                    read_all(tasks, num_cpus_limit(), false, total_rows)
+                    read_all(tasks, reader_options(num_cpus_limit(), false), total_rows)
                 });
             },
         );
@@ -491,12 +508,75 @@ fn bench_with_predicate(c: &mut Criterion) {
             // `id < ROWS_PER_FILE / 2` matches exactly half the rows per file.
             read_all(
                 tasks,
-                num_cpus_limit(),
-                true,
+                reader_options(num_cpus_limit(), true),
                 num_files * (ROWS_PER_FILE / 2),
             )
         });
     });
+    const ROWS: usize = 262_144;
+    let options = ArrowReaderOptions::builder()
+        .with_batch_size(8192)
+        .with_data_file_concurrency_limit(1)
+        .with_row_group_filtering_enabled(true)
+        .with_row_selection_enabled(true)
+        .build();
+    group.throughput(Throughput::Elements(ROWS as u64));
+    for keys in [400, 5000] {
+        let ids = Int64Array::from_iter_values(0..ROWS as i64);
+        let names = StringArray::from_iter_values((0..ROWS).map(|id| {
+            if id % 2 == 0 {
+                format!("user-key-{}", (id / 2) % keys)
+            } else {
+                "user-key--1".to_owned()
+            }
+        }));
+        let batch =
+            RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(ids), Arc::new(names)])
+                .expect("build string IN batch");
+        let predicate =
+            Reference::new("name").is_in((0..keys).map(|i| Datum::string(format!("user-key-{i}"))));
+        let bind = || {
+            predicate
+                .bind(iceberg_schema.clone(), true)
+                .expect("bind string IN")
+        };
+
+        for (files, layout) in [(1, "string_in_1_file"), (64, "string_in_64_files")] {
+            let dir = TempDir::new().unwrap();
+            let rows_per_file = ROWS / files;
+            let paths = write_batches(
+                &dir,
+                (0..files).map(|i| batch.slice(i * rows_per_file, rows_per_file)),
+            );
+            let scan = |bound| {
+                let tasks =
+                    whole_file_tasks(&paths, &iceberg_schema, rows_per_file, Some(&bound), None);
+                read_all(tasks, options.clone(), ROWS / 2)
+            };
+            let verify = Once::new();
+            group.bench_function(BenchmarkId::new(layout, keys), |b| {
+                verify.call_once(|| {
+                    let batches = tokio.block_on(scan(bind()));
+                    let mut ids: Vec<_> = batches
+                        .iter()
+                        .flat_map(|batch| {
+                            batch
+                                .column(0)
+                                .as_primitive::<Int64Type>()
+                                .values()
+                                .iter()
+                                .copied()
+                        })
+                        .collect();
+                    ids.sort_unstable();
+                    assert!(ids.into_iter().eq((0..ROWS as i64).step_by(2)));
+                });
+                // A fresh bound predicate includes any first-use index construction in the scan time.
+                b.to_async(&tokio)
+                    .iter_batched(bind, scan, BatchSize::PerIteration);
+            });
+        }
+    }
     group.finish();
 }
 
