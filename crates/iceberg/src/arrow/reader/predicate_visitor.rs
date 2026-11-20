@@ -30,6 +30,7 @@ use arrow_buffer::BooleanBuffer;
 use arrow_cast::cast::cast;
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, DataType};
+use arrow_select::take::take;
 use arrow_string::like::starts_with;
 use fnv::FnvHashSet;
 use once_cell::unsync::OnceCell;
@@ -266,9 +267,8 @@ impl PredicateConverter<'_> {
         };
         Ok(Box::new(move |batch| {
             let column = project_column(&batch, idx)?;
-            if let Some(result) = index
-                .as_ref()
-                .and_then(|index| probe_set(index, &column, negated))
+            if let Some(index) = &index
+                && let Some(result) = probe_set(index, column.as_ref(), negated)?
             {
                 return Ok(result);
             }
@@ -331,8 +331,18 @@ fn project_column(
     }
 }
 
-fn probe_set(index: &SetIndex, column: &ArrayRef, negated: bool) -> Option<BooleanArray> {
-    Some(match (index, column.data_type()) {
+fn probe_set(
+    index: &SetIndex,
+    column: &dyn Array,
+    negated: bool,
+) -> std::result::Result<Option<BooleanArray>, ArrowError> {
+    if let Some(dict) = column.as_any_dictionary_opt() {
+        let Some(values) = probe_set(index, dict.values().as_ref(), negated)? else {
+            return Ok(None);
+        };
+        return Ok(Some(take(&values, dict.keys(), None)?.as_boolean().clone()));
+    }
+    Ok(Some(match (index, column.data_type()) {
         (SetIndex::Int(keys), DataType::Int32) => {
             BooleanArray::from_unary(column.as_primitive::<Int32Type>(), |x| {
                 keys.contains(&x) ^ negated
@@ -352,8 +362,8 @@ fn probe_set(index: &SetIndex, column: &ArrayRef, negated: bool) -> Option<Boole
         (SetIndex::String(keys), DataType::Utf8View) => {
             BooleanArray::from_unary(column.as_string_view(), |s| keys.contains(s) ^ negated)
         }
-        _ => return None,
-    })
+        _ => return Ok(None),
+    }))
 }
 
 fn compute_is_nan(array: &ArrayRef) -> std::result::Result<BooleanArray, ArrowError> {
@@ -705,9 +715,9 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use parquet::arrow::ArrowSchemaConverter;
 
-    use super::{CollectFieldIdVisitor, PredicateConverter, constant_bool_array};
+    use super::{CollectFieldIdVisitor, PredicateConverter, constant_bool_array, probe_set};
     use crate::expr::visitors::bound_predicate_visitor::visit;
-    use crate::expr::{Bind, Predicate, Reference};
+    use crate::expr::{Bind, Predicate, Reference, SetIndex};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     fn table_schema_simple() -> SchemaRef {
@@ -895,11 +905,40 @@ mod tests {
                 Datum::string("a long string outside the view"),
             ])
             .collect::<Vec<_>>();
-        for ty in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        for ty in [
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        ] {
             check_set_filter(
                 cast(&strings, &ty).unwrap(),
                 PrimitiveType::String,
                 literals.clone(),
+            );
+        }
+    }
+
+    #[test]
+    fn dictionary_set_probes_preserve_null_keys_and_values() {
+        use arrow_array::types::Int32Type;
+        use arrow_array::{DictionaryArray, Int32Array, StringArray};
+
+        let values = Arc::new(StringArray::from(vec![
+            Some("hit"),
+            None,
+            Some("miss"),
+            Some("unused"),
+        ]));
+        let keys = Int32Array::from(vec![Some(0), Some(2), None, Some(1), Some(0)]);
+        let dictionary = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        let index = SetIndex::String([String::from("hit")].into_iter().collect());
+        let matches = [Some(true), Some(false), None, None, Some(true)];
+        for negated in [false, true] {
+            let expected = BooleanArray::from_iter(matches.map(|v| v.map(|hit| hit ^ negated)));
+            assert_eq!(
+                probe_set(&index, &dictionary, negated).unwrap(),
+                Some(expected)
             );
         }
     }
