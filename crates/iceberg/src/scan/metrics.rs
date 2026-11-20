@@ -16,6 +16,9 @@
 // under the License.
 
 use std::sync::atomic::AtomicU64;
+use std::time::Duration;
+
+use crate::metrics::ScanMetrics;
 
 #[derive(Debug, Default)]
 pub(super) struct PlanningCounters {
@@ -35,6 +38,34 @@ pub(super) struct PlanningCounters {
     pub(super) equality_delete_files: AtomicU64,
     pub(super) positional_delete_files: AtomicU64,
     pub(super) dvs: AtomicU64,
+}
+
+impl PlanningCounters {
+    pub(super) fn scan_metrics(&self, total_planning_duration: Duration) -> ScanMetrics {
+        use std::sync::atomic::Ordering;
+
+        ScanMetrics {
+            total_planning_duration,
+            total_data_manifests: self.total_data_manifests.load(Ordering::Relaxed),
+            total_delete_manifests: self.total_delete_manifests.load(Ordering::Relaxed),
+            skipped_data_manifests: self.skipped_data_manifests.load(Ordering::Relaxed),
+            skipped_delete_manifests: self.skipped_delete_manifests.load(Ordering::Relaxed),
+            scanned_data_manifests: self.scanned_data_manifests.load(Ordering::Relaxed),
+            scanned_delete_manifests: self.scanned_delete_manifests.load(Ordering::Relaxed),
+            result_data_files: self.result_data_files.load(Ordering::Relaxed),
+            skipped_data_files: self.skipped_data_files.load(Ordering::Relaxed),
+            total_file_size_in_bytes: self.total_file_size_in_bytes.load(Ordering::Relaxed),
+            result_delete_files: self.result_delete_files.load(Ordering::Relaxed),
+            skipped_delete_files: self.skipped_delete_files.load(Ordering::Relaxed),
+            total_delete_file_size_in_bytes: self
+                .total_delete_file_size_in_bytes
+                .load(Ordering::Relaxed),
+            indexed_delete_files: self.indexed_delete_files.load(Ordering::Relaxed),
+            equality_delete_files: self.equality_delete_files.load(Ordering::Relaxed),
+            positional_delete_files: self.positional_delete_files.load(Ordering::Relaxed),
+            dvs: self.dvs.load(Ordering::Relaxed),
+        }
+    }
 }
 
 #[cfg(test)]

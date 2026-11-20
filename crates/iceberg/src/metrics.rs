@@ -31,6 +31,12 @@ use crate::spec::SchemaId;
 ///
 /// Implementations must handle reporting failures internally so they do not affect the operation
 /// that produced the report.
+///
+/// Scan reports are submitted after clean stream exhaustion. Failed or dropped planning streams
+/// and tables without snapshots do not report. Reports describe planning, not data-file reads.
+/// Callbacks run on the table's I/O runtime with the originating tracing dispatcher. Planning
+/// does not wait for delivery, which can be lost if the runtime shuts down. Unwinding callback
+/// panics do not propagate into planning.
 #[async_trait]
 pub trait MetricsReporter: Debug + Send + Sync {
     /// Reports the metrics for a completed table operation.
@@ -46,7 +52,11 @@ pub enum MetricsReport {
 }
 
 /// Information and metrics collected while planning a table scan.
+///
+/// Projection lists selected source fields and requested metadata columns without expanding
+/// nested types or adding fields referenced only by filters.
 #[derive(Debug)]
+#[cfg_attr(test, derive(Clone, PartialEq))]
 pub struct ScanReport {
     pub(crate) table_ident: TableIdent,
     pub(crate) snapshot_id: i64,
@@ -79,12 +89,12 @@ impl ScanReport {
         self.filter.as_ref()
     }
 
-    /// Returns the names of the projected fields.
+    /// Returns the resolved names of the selected fields.
     pub fn projected_field_names(&self) -> &[String] {
         &self.projected_field_names
     }
 
-    /// Returns the IDs of the projected fields.
+    /// Returns the IDs of the selected fields.
     pub fn projected_field_ids(&self) -> &[i32] {
         &self.projected_field_ids
     }
@@ -102,6 +112,7 @@ impl ScanReport {
 
 /// Metrics collected while planning a table scan.
 #[derive(Debug)]
+#[cfg_attr(test, derive(Clone, PartialEq))]
 pub struct ScanMetrics {
     pub(crate) total_planning_duration: Duration,
     pub(crate) total_data_manifests: u64,
@@ -124,6 +135,8 @@ pub struct ScanMetrics {
 
 impl ScanMetrics {
     /// Returns the total duration of scan planning.
+    ///
+    /// Includes time awaiting stream consumption and excludes reporter delivery.
     pub fn total_planning_duration(&self) -> Duration {
         self.total_planning_duration
     }

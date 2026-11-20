@@ -22,12 +22,14 @@ use cache::*;
 mod context;
 use context::*;
 mod metrics;
+mod report;
 mod task;
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use arrow_array::RecordBatch;
 use futures::channel::mpsc::{Sender, channel};
@@ -45,12 +47,13 @@ use crate::io::FileIO;
 use crate::metadata_columns::{
     RESERVED_FIELD_ID_PARTITION, get_metadata_field_id, is_metadata_column_name,
 };
+use crate::metrics::MetricsReporter;
 use crate::runtime::Runtime;
 use crate::spec::{DataContentType, Schema, SchemaRef, SnapshotRef, SortOrderRef, StructType};
 use crate::table::Table;
 use crate::util::available_parallelism;
 use crate::util::snapshot::snapshot_id_as_of_time;
-use crate::{Error, ErrorKind, Result};
+use crate::{Error, ErrorKind, Result, TableIdent};
 
 /// A stream of arrow [`RecordBatch`]es.
 pub type ArrowRecordBatchStream = BoxStream<'static, Result<RecordBatch>>;
@@ -178,6 +181,7 @@ enum SnapshotSelection {
 /// Builder to create table scan.
 pub struct TableScanBuilder<'a> {
     table: &'a Table,
+    metrics_reporter: Option<Arc<dyn MetricsReporter>>,
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
     column_stats_names: Option<Vec<String>>,
@@ -194,6 +198,7 @@ impl<'a> TableScanBuilder<'a> {
 
         Self {
             table,
+            metrics_reporter: table.metrics_reporter(),
             column_names: None,
             column_stats_names: None,
             snapshot_selection: None,
@@ -202,6 +207,12 @@ impl<'a> TableScanBuilder<'a> {
             concurrency_limit_manifest_entries: num_cpus,
             concurrency_limit_manifest_files: num_cpus,
         }
+    }
+
+    /// Overrides the table's metrics reporter for this scan.
+    pub fn with_metrics_reporter(mut self, reporter: Arc<dyn MetricsReporter>) -> Self {
+        self.metrics_reporter = Some(reporter);
+        self
     }
 
     /// Sets the scan's case sensitivity
@@ -357,6 +368,8 @@ impl<'a> TableScanBuilder<'a> {
             None => {
                 let Some(current_snapshot_id) = self.table.metadata().current_snapshot() else {
                     return Ok(TableScan {
+                        table_ident: self.table.identifier().clone(),
+                        metrics_reporter: self.metrics_reporter,
                         column_names: self.column_names,
                         file_io: self.table.file_io().clone(),
                         plan_context: None,
@@ -422,6 +435,8 @@ impl<'a> TableScanBuilder<'a> {
         };
 
         Ok(TableScan {
+            table_ident: self.table.identifier().clone(),
+            metrics_reporter: self.metrics_reporter,
             column_names: self.column_names,
             file_io: self.table.file_io().clone(),
             plan_context: Some(plan_context),
@@ -435,6 +450,8 @@ impl<'a> TableScanBuilder<'a> {
 /// Table scan.
 #[derive(Debug)]
 pub struct TableScan {
+    table_ident: TableIdent,
+    metrics_reporter: Option<Arc<dyn MetricsReporter>>,
     /// A [PlanContext], if this table has at least one snapshot, otherwise None.
     ///
     /// If this is None, then the scan contains no rows.
@@ -480,6 +497,7 @@ impl TableScan {
             return Ok(Box::pin(futures::stream::empty()));
         };
 
+        let started = Instant::now();
         let concurrency_limit_manifest_files = self.concurrency_limit_manifest_files;
         let concurrency_limit_manifest_entries = self.concurrency_limit_manifest_entries;
 
@@ -594,7 +612,19 @@ impl TableScan {
             });
         }
 
-        Ok(planned_file_rx.boxed())
+        let tasks = planned_file_rx.boxed();
+        Ok(match &self.metrics_reporter {
+            Some(reporter) => report::report_on_completion(
+                tasks,
+                metrics,
+                self.table_ident.clone(),
+                plan_context,
+                reporter.clone(),
+                self.runtime.clone(),
+                started,
+            ),
+            None => tasks,
+        })
     }
 
     /// Returns an [`ArrowRecordBatchStream`] using the supplied reader settings.
