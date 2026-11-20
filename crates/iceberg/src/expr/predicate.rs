@@ -889,25 +889,36 @@ mod tests {
     use std::sync::Arc;
 
     use crate::expr::Predicate::{AlwaysFalse, AlwaysTrue};
-    use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
+    use crate::expr::{Bind, BoundPredicate, LogicalExpression, PredicateOperator, Reference};
     use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     #[test]
     fn cloned_set_predicates_share_the_index_and_serialize_as_literals() {
-        let predicate = Reference::new("key").is_in((0..64).map(Datum::int));
+        let predicate = Reference::new("bar")
+            .is_in((0..64).map(Datum::int))
+            .bind(table_schema_simple(), true)
+            .unwrap();
         let encoded = serde_json::to_value(&predicate).unwrap();
         assert_eq!(encoded["Set"]["literals"].as_array().unwrap().len(), 64);
-        let restored: Predicate = serde_json::from_value(encoded.clone()).unwrap();
-        let clone = predicate.clone().not().rewrite_not();
-        let (Predicate::Set(original), Predicate::Set(negated)) = (&predicate, &clone) else {
+        let BoundPredicate::Set(original) = &predicate else {
             panic!("expected set predicates");
         };
-        assert!(Arc::ptr_eq(
-            &original.membership_index().unwrap(),
-            &negated.membership_index().unwrap()
-        ));
-        assert_eq!(predicate, restored);
+        let index = original.membership_index().unwrap();
+        let negated = BoundPredicate::Not(LogicalExpression::new([Box::new(predicate.clone())]))
+            .rewrite_not();
+        let BoundPredicate::Set(negated) = negated else {
+            panic!("expected a negated set predicate");
+        };
+        assert_eq!(negated.op(), PredicateOperator::NotIn);
+        assert!(Arc::ptr_eq(&index, &negated.membership_index().unwrap()));
+
         assert_eq!(serde_json::to_value(&predicate).unwrap(), encoded);
+        let restored: BoundPredicate = serde_json::from_value(encoded).unwrap();
+        assert_eq!(predicate, restored);
+        let BoundPredicate::Set(restored) = restored else {
+            panic!("expected a restored set predicate");
+        };
+        assert!(!Arc::ptr_eq(&index, &restored.membership_index().unwrap()));
     }
 
     #[test]
