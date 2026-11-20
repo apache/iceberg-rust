@@ -24,21 +24,23 @@ use std::sync::Arc;
 
 use arrow_arith::boolean::{and, and_kleene, is_not_null, is_null, not, or, or_kleene};
 use arrow_array::cast::AsArray;
-use arrow_array::types::{Float32Type, Float64Type};
+use arrow_array::types::{Float32Type, Float64Type, Int32Type, Int64Type};
 use arrow_array::{Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatch, Scalar};
 use arrow_buffer::BooleanBuffer;
 use arrow_cast::cast::cast;
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, DataType};
+use arrow_select::take::take;
 use arrow_string::like::starts_with;
 use fnv::FnvHashSet;
+use once_cell::unsync::OnceCell;
 use parquet::schema::types::SchemaDescriptor;
 
 use crate::arrow::get_arrow_datum;
 use crate::error::{Result, invalid_data};
 use crate::expr::visitors::bound_predicate_visitor::BoundPredicateVisitor;
-use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::Datum;
+use crate::expr::{BoundPredicate, BoundReference, SetIndex};
+use crate::spec::{Datum, PrimitiveType};
 
 /// A visitor to collect field ids from bound predicates.
 pub(super) struct CollectFieldIdVisitor {
@@ -236,6 +238,66 @@ impl PredicateConverter<'_> {
         }
     }
 
+    fn set_predicate(
+        &mut self,
+        reference: &BoundReference,
+        predicate: &BoundPredicate,
+        negated: bool,
+    ) -> Result<Box<PredicateResult>> {
+        let Some(idx) = self.bound_reference(reference)? else {
+            return Ok(Box::new(move |batch| {
+                Ok(constant_bool_array(negated, batch.num_rows()))
+            }));
+        };
+        let BoundPredicate::Set(set) = predicate else {
+            unreachable!("set visitor receives a set predicate")
+        };
+        // The scan benchmark crosses over from scalar comparisons to hashing at different list sizes.
+        let index = match (
+            reference.field().field_type.as_primitive_type(),
+            set.literals().len(),
+        ) {
+            (Some(PrimitiveType::String), 4..)
+            | (Some(PrimitiveType::Int), 8..)
+            | (Some(PrimitiveType::Long), 16..) => set.membership_index(),
+            _ => None,
+        };
+        let set = set.clone();
+        let arrow_literals = move || {
+            set.literals()
+                .iter()
+                .map(get_arrow_datum)
+                .collect::<Result<Vec<_>>>()
+        };
+        let scalars = if index.is_some() {
+            OnceCell::new()
+        } else {
+            OnceCell::with_value(arrow_literals()?)
+        };
+        Ok(Box::new(move |batch| {
+            let column = project_column(&batch, idx)?;
+            if let Some(index) = &index
+                && let Some(result) = probe_set(index, column.as_ref(), negated)?
+            {
+                return Ok(result);
+            }
+            // Schema evolution can give a file a different physical type from the bound literals.
+            let scalars = scalars
+                .get_or_try_init(&arrow_literals)
+                .map_err(|err| ArrowError::ExternalError(Box::new(err)))?;
+            let mut acc = constant_bool_array(negated, batch.num_rows());
+            for scalar in scalars {
+                let scalar = try_cast_literal(scalar, column.data_type())?;
+                acc = if negated {
+                    and(&acc, &neq(&column, scalar.as_ref())?)?
+                } else {
+                    or(&acc, &eq(&column, scalar.as_ref())?)?
+                };
+            }
+            Ok(acc)
+        }))
+    }
+
     /// Build an Arrow predicate that always returns true.
     fn build_always_true(&self) -> Result<Box<PredicateResult>> {
         Ok(Box::new(|batch| {
@@ -276,6 +338,41 @@ fn project_column(
         )),
         _ => Ok(column.clone()),
     }
+}
+
+fn probe_set(
+    index: &SetIndex,
+    column: &dyn Array,
+    negated: bool,
+) -> std::result::Result<Option<BooleanArray>, ArrowError> {
+    if let Some(dict) = column.as_any_dictionary_opt() {
+        let Some(values) = probe_set(index, dict.values().as_ref(), negated)? else {
+            return Ok(None);
+        };
+        return Ok(Some(take(&values, dict.keys(), None)?.as_boolean().clone()));
+    }
+    Ok(Some(match (index, column.data_type()) {
+        (SetIndex::Int(keys), DataType::Int32) => {
+            BooleanArray::from_unary(column.as_primitive::<Int32Type>(), |x| {
+                keys.contains(&x) ^ negated
+            })
+        }
+        (SetIndex::Long(keys), DataType::Int64) => {
+            BooleanArray::from_unary(column.as_primitive::<Int64Type>(), |x| {
+                keys.contains(&x) ^ negated
+            })
+        }
+        (SetIndex::String(keys), DataType::Utf8) => {
+            BooleanArray::from_unary(column.as_string::<i32>(), |s| keys.contains(s) ^ negated)
+        }
+        (SetIndex::String(keys), DataType::LargeUtf8) => {
+            BooleanArray::from_unary(column.as_string::<i64>(), |s| keys.contains(s) ^ negated)
+        }
+        (SetIndex::String(keys), DataType::Utf8View) => {
+            BooleanArray::from_unary(column.as_string_view(), |s| keys.contains(s) ^ negated)
+        }
+        _ => return Ok(None),
+    }))
 }
 
 fn compute_is_nan(array: &ArrayRef) -> std::result::Result<BooleanArray, ArrowError> {
@@ -581,60 +678,19 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
     fn r#in(
         &mut self,
         reference: &BoundReference,
-        literals: &FnvHashSet<Datum>,
-        _predicate: &BoundPredicate,
+        _literals: &FnvHashSet<Datum>,
+        predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
-            let literals: Vec<_> = literals
-                .iter()
-                .map(|lit| get_arrow_datum(lit).unwrap())
-                .collect();
-
-            Ok(Box::new(move |batch| {
-                // update this if arrow ever adds a native is_in kernel
-                let left = project_column(&batch, idx)?;
-
-                let mut acc = constant_bool_array(false, batch.num_rows());
-                for literal in &literals {
-                    let literal = try_cast_literal(literal, left.data_type())?;
-                    acc = or(&acc, &eq(&left, literal.as_ref())?)?
-                }
-
-                Ok(acc)
-            }))
-        } else {
-            // A missing column, treating it as null.
-            self.build_always_false()
-        }
+        self.set_predicate(reference, predicate, false)
     }
 
     fn not_in(
         &mut self,
         reference: &BoundReference,
-        literals: &FnvHashSet<Datum>,
-        _predicate: &BoundPredicate,
+        _literals: &FnvHashSet<Datum>,
+        predicate: &BoundPredicate,
     ) -> Result<Box<PredicateResult>> {
-        if let Some(idx) = self.bound_reference(reference)? {
-            let literals: Vec<_> = literals
-                .iter()
-                .map(|lit| get_arrow_datum(lit).unwrap())
-                .collect();
-
-            Ok(Box::new(move |batch| {
-                // update this if arrow ever adds a native not_in kernel
-                let left = project_column(&batch, idx)?;
-                let mut acc = constant_bool_array(true, batch.num_rows());
-                for literal in &literals {
-                    let literal = try_cast_literal(literal, left.data_type())?;
-                    acc = and(&acc, &neq(&left, literal.as_ref())?)?
-                }
-
-                Ok(acc)
-            }))
-        } else {
-            // A missing column, treating it as null.
-            self.build_always_true()
-        }
+        self.set_predicate(reference, predicate, true)
     }
 }
 
@@ -664,15 +720,14 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
-    use arrow_array::{Array, BooleanArray, RecordBatch};
+    use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch};
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
-    use parquet::schema::parser::parse_message_type;
-    use parquet::schema::types::SchemaDescriptor;
+    use parquet::arrow::ArrowSchemaConverter;
 
-    use super::{CollectFieldIdVisitor, PredicateConverter, constant_bool_array};
+    use super::{CollectFieldIdVisitor, PredicateConverter, constant_bool_array, probe_set};
     use crate::expr::visitors::bound_predicate_visitor::visit;
-    use crate::expr::{Bind, Predicate, Reference};
-    use crate::spec::{NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::expr::{Bind, BoundPredicate, Predicate, Reference, SetIndex};
+    use crate::spec::{Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type};
 
     fn table_schema_simple() -> SchemaRef {
         Arc::new(
@@ -767,18 +822,16 @@ mod tests {
         schema: SchemaRef,
         batch: RecordBatch,
     ) -> BooleanArray {
+        let id = schema
+            .field_by_name(batch.schema().field(0).name())
+            .unwrap()
+            .id;
         let bound = predicate.bind(schema, true).unwrap();
 
-        // Build a trivial Parquet schema with one float column at field id 4
-        let message_type = "
-            message schema {
-              optional float qux = 4;
-            }
-        ";
-        let parquet_type = parse_message_type(message_type).expect("parse schema");
-        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
-
-        let column_map = HashMap::from([(4i32, 0usize)]);
+        let parquet_schema = ArrowSchemaConverter::new()
+            .convert(&batch.schema())
+            .unwrap();
+        let column_map = HashMap::from([(id, 0)]);
         let column_indices = vec![0usize];
 
         let mut converter = PredicateConverter {
@@ -789,6 +842,160 @@ mod tests {
 
         let mut predicate_fn = visit(&mut converter, &bound).unwrap();
         predicate_fn(batch).unwrap()
+    }
+
+    fn key_schema(ty: PrimitiveType) -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_fields([NestedField::optional(1, "key", Type::Primitive(ty)).into()])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn check_set_filter(column: ArrayRef, ty: PrimitiveType, literals: Vec<Datum>) {
+        let schema = key_schema(ty);
+        let batch = RecordBatch::try_from_iter([("key", column)])
+            .unwrap()
+            .slice(1, 4);
+        let key = Reference::new("key");
+        let matches = [Some(true), None, Some(false), Some(true)];
+        assert_eq!(
+            apply_predicate_to_batch(
+                key.clone().is_in(literals.clone()),
+                schema.clone(),
+                batch.clone()
+            ),
+            BooleanArray::from_iter(matches)
+        );
+        assert_eq!(
+            apply_predicate_to_batch(key.is_not_in(literals), schema, batch),
+            BooleanArray::from_iter(matches.map(|v| v.map(|matched| !matched)))
+        );
+    }
+
+    #[test]
+    fn integer_set_filters_preserve_nulls_and_physical_casts() {
+        use arrow_array::{Int32Array, Int64Array};
+
+        let values = [Some(-1), Some(0), None, Some(-1), Some(63)];
+        let ints: ArrayRef = Arc::new(Int32Array::from_iter(values));
+        check_set_filter(
+            ints.clone(),
+            PrimitiveType::Int,
+            (0..64).map(Datum::int).collect(),
+        );
+        let longs: ArrayRef = Arc::new(Int64Array::from_iter(values.map(|v| v.map(i64::from))));
+        check_set_filter(
+            longs,
+            PrimitiveType::Long,
+            (0..64).map(Datum::long).collect(),
+        );
+        // An older file can still contain Int32 after the table column is promoted.
+        check_set_filter(
+            ints,
+            PrimitiveType::Long,
+            (0..64).map(Datum::long).collect(),
+        );
+    }
+
+    #[test]
+    fn string_set_filters_match_across_arrow_encodings() {
+        use arrow_array::StringArray;
+        use arrow_cast::cast::cast;
+
+        let strings: ArrayRef = Arc::new(StringArray::from(vec![
+            None,
+            Some(""),
+            None,
+            Some("another long string"),
+            Some("a long string outside the view"),
+        ]));
+        let literals = (0..64)
+            .map(|i| Datum::string(i.to_string()))
+            .chain([
+                Datum::string(""),
+                Datum::string("a long string outside the view"),
+            ])
+            .collect::<Vec<_>>();
+        for ty in [
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        ] {
+            check_set_filter(
+                cast(&strings, &ty).unwrap(),
+                PrimitiveType::String,
+                literals.clone(),
+            );
+        }
+    }
+
+    #[test]
+    fn set_index_probes_supported_column_types() {
+        use arrow_array::{Int32Array, Int64Array, StringArray};
+        use arrow_cast::cast::cast;
+
+        let index = |ty, literals: Vec<Datum>| {
+            let BoundPredicate::Set(set) = Reference::new("key")
+                .is_in(literals)
+                .bind(key_schema(ty), true)
+                .unwrap()
+            else {
+                panic!("expected a bound set predicate");
+            };
+            set.membership_index().unwrap()
+        };
+        let int_index = index(PrimitiveType::Int, (0..64).map(Datum::int).collect());
+        let long_index = index(PrimitiveType::Long, (0..64).map(Datum::long).collect());
+        let string_index = index(
+            PrimitiveType::String,
+            (0..64).map(|i| Datum::string(i.to_string())).collect(),
+        );
+        let ints = Int32Array::from(vec![1, 100]);
+        let longs = Int64Array::from(vec![1, 100]);
+        let strings = StringArray::from(vec!["1", "100"]);
+        let expected = Some(BooleanArray::from(vec![true, false]));
+        assert_eq!(probe_set(&int_index, &ints, false).unwrap(), expected);
+        assert_eq!(probe_set(&long_index, &longs, false).unwrap(), expected);
+        assert_eq!(probe_set(&long_index, &ints, false).unwrap(), None);
+        for ty in [
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        ] {
+            let column = cast(&strings, &ty).unwrap();
+            assert_eq!(
+                probe_set(&string_index, column.as_ref(), false).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn dictionary_set_probes_preserve_null_keys_and_values() {
+        use arrow_array::types::Int32Type;
+        use arrow_array::{DictionaryArray, Int32Array, StringArray};
+
+        let values = Arc::new(StringArray::from(vec![
+            Some("hit"),
+            None,
+            Some("miss"),
+            Some("unused"),
+        ]));
+        let keys = Int32Array::from(vec![Some(0), Some(2), None, Some(1), Some(0)]);
+        let dictionary = DictionaryArray::<Int32Type>::try_new(keys, values).unwrap();
+        let index = SetIndex::String([String::from("hit")].into_iter().collect());
+        let matches = [Some(true), Some(false), None, None, Some(true)];
+        for negated in [false, true] {
+            let expected = BooleanArray::from_iter(matches.map(|v| v.map(|hit| hit ^ negated)));
+            assert_eq!(
+                probe_set(&index, &dictionary, negated).unwrap(),
+                Some(expected)
+            );
+        }
     }
 
     #[test]

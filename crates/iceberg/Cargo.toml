@@ -58,6 +58,7 @@ derive_builder = { workspace = true }
 fastnum = { workspace = true }
 flate2 = { workspace = true }
 fnv = { workspace = true }
+foldhash = { workspace = true }
 form_urlencoded = { workspace = true }
 futures = { workspace = true }
 iceberg-property-macro = { workspace = true }
