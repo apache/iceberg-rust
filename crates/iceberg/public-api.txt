@@ -3483,6 +3483,7 @@ pub fn iceberg::table::Table::encryption_manager(&self) -> core::option::Option<
 pub fn iceberg::table::Table::file_io(&self) -> &iceberg::io::FileIO
 pub fn iceberg::table::Table::identifier(&self) -> &iceberg::TableIdent
 pub fn iceberg::table::Table::inspect(&self) -> iceberg::inspect::MetadataTable<'_>
+pub fn iceberg::table::Table::location_generator(&self) -> iceberg::Result<iceberg::writer::file_writer::location_generator::TableLocationGenerator>
 pub fn iceberg::table::Table::manifest_list_reader(&self, snapshot: &iceberg::spec::SnapshotRef) -> iceberg::spec::ManifestListReader
 pub fn iceberg::table::Table::manifest_reader(&self) -> iceberg::spec::ManifestReader
 pub fn iceberg::table::Table::metadata(&self) -> &iceberg::spec::TableMetadata
@@ -3692,8 +3693,6 @@ pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGe
 impl iceberg::writer::file_writer::location_generator::LocationGenerator for iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator
 pub fn iceberg::writer::file_writer::location_generator::ObjectStorageLocationGenerator::generate_location(&self, partition_key: core::option::Option<&iceberg::spec::PartitionKey>, file_name: &str) -> alloc::string::String
 pub struct iceberg::writer::file_writer::location_generator::TableLocationGenerator
-impl iceberg::writer::file_writer::location_generator::TableLocationGenerator
-pub fn iceberg::writer::file_writer::location_generator::TableLocationGenerator::new(table_metadata: &iceberg::spec::TableMetadata) -> iceberg::Result<Self>
 impl core::clone::Clone for iceberg::writer::file_writer::location_generator::TableLocationGenerator
 pub fn iceberg::writer::file_writer::location_generator::TableLocationGenerator::clone(&self) -> iceberg::writer::file_writer::location_generator::TableLocationGenerator
 impl core::fmt::Debug for iceberg::writer::file_writer::location_generator::TableLocationGenerator

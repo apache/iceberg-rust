@@ -27,9 +27,7 @@ use crate::table::Table;
 use crate::writer::IcebergWriterBuilder;
 use crate::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use crate::writer::file_writer::ParquetWriterBuilder;
-use crate::writer::file_writer::location_generator::{
-    DefaultFileNameGenerator, TableLocationGenerator,
-};
+use crate::writer::file_writer::location_generator::DefaultFileNameGenerator;
 use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 
 /// Builds a boxed replacement-data-file writer.
@@ -44,7 +42,7 @@ use crate::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 /// write to it once a source file is known to have changed.
 ///
 /// File locations follow the layout selected by the table properties; see
-/// [`TableLocationGenerator`].
+/// [`Table::location_generator`].
 pub(crate) async fn build_replacement_writer(
     table: &Table,
     write_schema: SchemaRef,
@@ -70,7 +68,7 @@ pub(crate) async fn build_replacement_writer(
         parquet_builder = parquet_builder.with_encryption_manager(encryption_manager.clone());
     }
 
-    let location_generator = TableLocationGenerator::new(table.metadata())?;
+    let location_generator = table.location_generator()?;
     let file_name_generator = DefaultFileNameGenerator::new(
         format!("cow-rewrite-{}", Uuid::now_v7()),
         None,
