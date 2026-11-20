@@ -69,12 +69,13 @@ mod tests {
         .build()
     }
 
-    /// Number of upload parts S3 recorded for `key`. A multipart upload reports
-    /// a `<md5>-<part-count>` ETag; a single-request upload reports a bare MD5.
+    /// Number of upload parts S3 recorded for `key`, or `None` for a single-request
+    /// upload. A multipart upload reports a `<md5>-<part-count>` ETag; a single-request
+    /// upload reports a bare MD5.
     ///
     /// A server-side encrypted object can report an ETag without the suffix, so
     /// this helper holds only for the object store fixture these tests run against.
-    async fn upload_part_count(key: &str) -> usize {
+    async fn upload_part_count(key: &str) -> Option<usize> {
         let mut config = opendal::services::S3Config::default();
         config.endpoint = Some(get_object_store_endpoint());
         config.access_key_id = Some(OBJECT_STORE_ACCESS_KEY_ID.to_string());
@@ -92,12 +93,11 @@ mod tests {
             .etag()
             .expect("object store reports an ETag")
             .trim_matches('"');
-        match etag.rsplit_once('-') {
-            Some((_, parts)) => parts
+        etag.rsplit_once('-').map(|(_, parts)| {
+            parts
                 .parse()
-                .unwrap_or_else(|e| panic!("unexpected ETag format {etag}: {e}")),
-            None => 1,
-        }
+                .unwrap_or_else(|e| panic!("unexpected ETag format {etag}: {e}"))
+        })
     }
 
     fn roundtrip_file_io(file_io: &FileIO) -> FileIO {
@@ -181,7 +181,7 @@ mod tests {
             .unwrap();
         writer.close().await.unwrap();
 
-        assert_eq!(upload_part_count(&key).await, PARTS);
+        assert_eq!(upload_part_count(&key).await, Some(PARTS));
         file_io.delete(&path).await.unwrap();
     }
 
@@ -206,7 +206,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(upload_part_count(&key).await, PARTS);
+        assert_eq!(upload_part_count(&key).await, Some(PARTS));
         file_io.delete(&path).await.unwrap();
     }
 
@@ -230,7 +230,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(upload_part_count(&key).await, 1);
+        assert_eq!(upload_part_count(&key).await, None);
         file_io.delete(&path).await.unwrap();
     }
 
