@@ -40,7 +40,7 @@ use crate::arrow::get_arrow_datum;
 use crate::error::{Result, invalid_data};
 use crate::expr::visitors::bound_predicate_visitor::BoundPredicateVisitor;
 use crate::expr::{BoundPredicate, BoundReference, SetIndex};
-use crate::spec::Datum;
+use crate::spec::{Datum, PrimitiveType};
 
 /// A visitor to collect field ids from bound predicates.
 pub(super) struct CollectFieldIdVisitor {
@@ -252,7 +252,16 @@ impl PredicateConverter<'_> {
         let BoundPredicate::Set(set) = predicate else {
             unreachable!("set visitor receives a set predicate")
         };
-        let index = set.membership_index();
+        // The scan benchmark crosses over from scalar comparisons to hashing at different list sizes.
+        let index = match (
+            reference.field().field_type.as_primitive_type(),
+            set.literals().len(),
+        ) {
+            (Some(PrimitiveType::String), 4..)
+            | (Some(PrimitiveType::Int), 8..)
+            | (Some(PrimitiveType::Long), 16..) => set.membership_index(),
+            _ => None,
+        };
         let set = set.clone();
         let arrow_literals = move || {
             set.literals()

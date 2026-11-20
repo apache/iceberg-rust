@@ -348,11 +348,6 @@ impl<T> SetExpression<T> {
     }
 
     pub(crate) fn membership_index(&self) -> Option<Arc<SetIndex>> {
-        // Short lists benefit from Arrow's vectorized scalar comparisons.
-        const MIN_INDEX_SIZE: usize = 32;
-        if self.literals().len() < MIN_INDEX_SIZE {
-            return None;
-        }
         self.literals
             .index
             .get_or_init(|| SetIndex::new(self.literals()).map(Arc::new))
