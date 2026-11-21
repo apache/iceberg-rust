@@ -37,7 +37,7 @@ use super::predicate_visitor::residual_for_missing_fields;
 use super::row_lineage::synthesize_row_id_column;
 use super::{
     ArrowFileReader, ArrowReader, ParquetReadOptions, add_fallback_field_ids_to_arrow_schema,
-    apply_name_mapping_to_arrow_schema, coerce_fixed_size_lists, find_leaf_by_field_id,
+    apply_name_mapping_to_arrow_schema, coerce_list_layouts, find_leaf_by_field_id,
 };
 use crate::arrow::build_partition_constant;
 use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
@@ -710,12 +710,10 @@ impl FileScanTaskReader {
         // addFallbackIds() followed by pruneColumnsFallback() for position-based fallback.
         // The fast path returns early without materializing an owned schema.
         //
-        // Rewrite FixedSizeList hints to List before name mapping / fallback IDs so
-        // parquet-rs uses the 3-level LIST reader. Same placement as #3467's list-view rewrite.
-        let without_fixed_size_lists = coerce_fixed_size_lists(arrow_metadata.schema());
-        let file_schema = without_fixed_size_lists
-            .as_ref()
-            .unwrap_or(arrow_metadata.schema());
+        // Rewrite fixed-size lists and list views to lists first, so everything below,
+        // including the emitted batches, sees `List` or `LargeList`.
+        let coerced_lists = coerce_list_layouts(arrow_metadata.schema());
+        let file_schema = coerced_lists.as_ref().unwrap_or(arrow_metadata.schema());
         let arrow_schema = if missing_field_ids {
             let schema = if let Some(name_mapping) = task.name_mapping() {
                 apply_name_mapping_to_arrow_schema(Arc::clone(file_schema), name_mapping)?
@@ -728,7 +726,7 @@ impl FileScanTaskReader {
             coerce_int96_timestamps(&schema, task.schema()).unwrap_or(schema)
         } else if let Some(coerced) = coerce_int96_timestamps(file_schema, task.schema()) {
             coerced
-        } else if without_fixed_size_lists.is_some() || install_row_number {
+        } else if coerced_lists.is_some() || install_row_number {
             Arc::clone(file_schema)
         } else {
             return Ok(arrow_metadata);
@@ -3480,6 +3478,94 @@ mod tests {
                 .build()
                 .unwrap(),
         )
+    }
+
+    /// Regression test for #3393: list views are read as lists, so their elements and the
+    /// columns after them project correctly.
+    #[tokio::test]
+    async fn test_read_list_view_columns() {
+        use arrow_array::types::Int32Type;
+        use arrow_array::{ListViewArray, StructArray};
+        use arrow_buffer::ScalarBuffer;
+
+        use crate::spec::{ListType, StructType};
+
+        let with_id = |field: Field, id: i32| {
+            field.with_metadata(HashMap::from([(
+                PARQUET_FIELD_ID_META_KEY.to_string(),
+                id.to_string(),
+            )]))
+        };
+        let int = |id, name: &str| {
+            NestedField::optional(id, name, Type::Primitive(PrimitiveType::Int)).into()
+        };
+
+        // 2: lv list_view<3: struct<4: a int, 5: b int>>, then 1: id int.
+        let a = Arc::new(with_id(Field::new("a", DataType::Int32, true), 4));
+        let b = Arc::new(with_id(Field::new("b", DataType::Int32, true), 5));
+        let structs = StructArray::new(
+            vec![a, b].into(),
+            vec![
+                Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![-10, -20, -30])) as ArrayRef,
+            ],
+            None,
+        );
+        let element = Arc::new(with_id(
+            Field::new("element", structs.data_type().clone(), true),
+            3,
+        ));
+        let lv = ListViewArray::new(
+            element.clone(),
+            ScalarBuffer::from(vec![0, 1, 2]),
+            ScalarBuffer::from(vec![1, 1, 1]),
+            Arc::new(structs),
+            None,
+        );
+        let file_schema = Arc::new(ArrowSchema::new(vec![
+            with_id(Field::new("lv", DataType::ListView(element), true), 2),
+            with_id(Field::new("id", DataType::Int32, true), 1),
+        ]));
+        let batch = RecordBatch::try_new(file_schema.clone(), vec![
+            Arc::new(lv) as ArrayRef,
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        ])
+        .unwrap();
+        let tmp_dir = TempDir::new().unwrap();
+        let path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
+        let file = File::create(&path).unwrap();
+        let mut writer = ArrowWriter::try_new(file, file_schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let element_type = Type::Struct(StructType::new(vec![int(4, "a"), int(5, "b")]));
+        let element_field = NestedField::list_element(3, element_type, false).into();
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(2, "lv", Type::List(ListType::new(element_field))).into(),
+                    int(1, "id"),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let (result, _) = scan_task(metadata_projection_task(path, schema, vec![2, 1])).await;
+
+        let lv = result[0].column(0).as_list::<i32>();
+        assert_eq!(lv.value_offsets(), &[0, 1, 2, 3]);
+        let structs = lv.values().as_struct();
+        assert_eq!(
+            structs.column(0).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![10, 20, 30])
+        );
+        assert_eq!(
+            structs.column(1).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![-10, -20, -30])
+        );
+        assert_eq!(
+            result[0].column(1).as_primitive::<Int32Type>(),
+            &Int32Array::from(vec![1, 2, 3])
+        );
     }
 
     /// Builds a scan task over `file_path` projecting `project_field_ids`.
