@@ -772,47 +772,60 @@ impl Transform {
     /// imply a boundary shift (`Eq`, `LessThanOrEq`, `GreaterThanOrEq`,
     /// `StartsWith`, `NotStartsWith`), the original datum is returned
     /// unmodified.
+    ///
+    /// When the adjusted boundary is not representable in the literal's type
+    /// (for example `x < i32::MIN`), the shift is skipped by returning `None`
+    /// instead of overflowing, which would panic in debug builds and wrap in
+    /// release builds.
     fn adjust_boundary(op: &PredicateOperator, datum: &Datum) -> Result<Option<Datum>> {
         let adjusted_boundary = match op {
             PredicateOperator::LessThan => match (datum.data_type(), datum.literal()) {
-                (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Some(Datum::int(v - 1)),
-                (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Some(Datum::long(v - 1)),
+                (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => v.checked_sub(1).map(Datum::int),
+                (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => {
+                    v.checked_sub(1).map(Datum::long)
+                }
                 (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(_)) => {
                     Some(Self::try_decrement_number(datum)?)
                 }
-                (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Some(Datum::date(v - 1)),
+                (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
+                    v.checked_sub(1).map(Datum::date)
+                }
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
-                    Some(Datum::timestamp_micros(v - 1))
+                    v.checked_sub(1).map(Datum::timestamp_micros)
                 }
                 (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
-                    Some(Datum::timestamptz_micros(v - 1))
+                    v.checked_sub(1).map(Datum::timestamptz_micros)
                 }
                 (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
-                    Some(Datum::timestamp_nanos(v - 1))
+                    v.checked_sub(1).map(Datum::timestamp_nanos)
                 }
                 (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
-                    Some(Datum::timestamptz_nanos(v - 1))
+                    v.checked_sub(1).map(Datum::timestamptz_nanos)
                 }
                 _ => Some(datum.to_owned()),
             },
             PredicateOperator::GreaterThan => match (datum.data_type(), datum.literal()) {
-                (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => Some(Datum::int(v + 1)),
-                (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => Some(Datum::long(v + 1)),
+                (PrimitiveType::Int, PrimitiveLiteral::Int(v)) => v.checked_add(1).map(Datum::int),
+                (PrimitiveType::Long, PrimitiveLiteral::Long(v)) => {
+                    v.checked_add(1).map(Datum::long)
+                }
                 (PrimitiveType::Decimal { .. }, PrimitiveLiteral::Int128(_)) => {
                     Some(Self::try_increment_number(datum)?)
                 }
-                (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => Some(Datum::date(v + 1)),
+                (PrimitiveType::Date, PrimitiveLiteral::Int(v)) => {
+                    v.checked_add(1).map(Datum::date)
+                }
                 (PrimitiveType::Timestamp, PrimitiveLiteral::Long(v)) => {
-                    Some(Datum::timestamp_micros(v + 1))
+                    v.checked_add(1).map(Datum::timestamp_micros)
                 }
                 (PrimitiveType::Timestamptz, PrimitiveLiteral::Long(v)) => {
-                    Some(Datum::timestamptz_micros(v + 1))
+                    v.checked_add(1).map(Datum::timestamptz_micros)
                 }
                 (PrimitiveType::TimestampNs, PrimitiveLiteral::Long(v)) => {
-                    Some(Datum::timestamp_nanos(v + 1))
+                    v.checked_add(1).map(Datum::timestamp_nanos)
                 }
                 (PrimitiveType::TimestamptzNs, PrimitiveLiteral::Long(v)) => {
-                    Some(Datum::timestamptz_nanos(v + 1))
+                    v.checked_add(1).map(Datum::timestamptz_nanos)
                 }
                 _ => Some(datum.to_owned()),
             },
@@ -1339,5 +1352,79 @@ mod tests {
                 "null"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod boundary_overflow_tests {
+    use super::Transform;
+    use crate::expr::PredicateOperator;
+    use crate::spec::Datum;
+
+    #[test]
+    fn adjust_boundary_does_not_overflow_at_type_extremes() {
+        for (op, datum) in [
+            (PredicateOperator::LessThan, Datum::int(i32::MIN)),
+            (PredicateOperator::LessThan, Datum::long(i64::MIN)),
+            (PredicateOperator::LessThan, Datum::date(i32::MIN)),
+            (
+                PredicateOperator::LessThan,
+                Datum::timestamp_micros(i64::MIN),
+            ),
+            (
+                PredicateOperator::LessThan,
+                Datum::timestamptz_micros(i64::MIN),
+            ),
+            (
+                PredicateOperator::LessThan,
+                Datum::timestamp_nanos(i64::MIN),
+            ),
+            (
+                PredicateOperator::LessThan,
+                Datum::timestamptz_nanos(i64::MIN),
+            ),
+            (PredicateOperator::GreaterThan, Datum::int(i32::MAX)),
+            (PredicateOperator::GreaterThan, Datum::long(i64::MAX)),
+            (PredicateOperator::GreaterThan, Datum::date(i32::MAX)),
+            (
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_micros(i64::MAX),
+            ),
+            (
+                PredicateOperator::GreaterThan,
+                Datum::timestamptz_micros(i64::MAX),
+            ),
+            (
+                PredicateOperator::GreaterThan,
+                Datum::timestamp_nanos(i64::MAX),
+            ),
+            (
+                PredicateOperator::GreaterThan,
+                Datum::timestamptz_nanos(i64::MAX),
+            ),
+        ] {
+            assert_eq!(
+                Transform::adjust_boundary(&op, &datum).unwrap(),
+                None,
+                "adjust_boundary must skip unrepresentable boundaries: {op:?} {datum:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn adjust_boundary_still_shifts_representable_values() {
+        assert_eq!(
+            Transform::adjust_boundary(&PredicateOperator::LessThan, &Datum::int(5)).unwrap(),
+            Some(Datum::int(4))
+        );
+        assert_eq!(
+            Transform::adjust_boundary(&PredicateOperator::GreaterThan, &Datum::date(-1)).unwrap(),
+            Some(Datum::date(0))
+        );
+        // Operators that do not shift keep the original datum.
+        assert_eq!(
+            Transform::adjust_boundary(&PredicateOperator::Eq, &Datum::long(7)).unwrap(),
+            Some(Datum::long(7))
+        );
     }
 }
