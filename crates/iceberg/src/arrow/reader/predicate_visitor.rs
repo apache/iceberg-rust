@@ -885,10 +885,9 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
     }
 }
 
-/// The row filter evaluates batches converted to the table schema, but a literal can still use
-/// another Arrow representation of the same type (e.g. `Binary` for a `LargeBinary` column).
-/// The compute kernels need the exact type, so cast the literal, failing rather than letting a
-/// lossy cast turn it into null.
+/// The row filter converts its batches to the table schema, so a literal already has the
+/// column's Arrow type unless the two differ in representation only. Cast it in that case,
+/// failing rather than letting a lossy cast turn it into null.
 fn try_cast_literal(
     literal: &Arc<dyn ArrowDatum + Send + Sync>,
     column_type: &DataType,
@@ -914,7 +913,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
-    use arrow_array::{Array, BooleanArray, Int32Array, RecordBatch};
+    use arrow_array::{Array, ArrayRef, BooleanArray, Int32Array, RecordBatch};
     use arrow_schema::{ArrowError, DataType, Field, Schema as ArrowSchema};
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
@@ -922,6 +921,7 @@ mod tests {
     use super::{
         CollectFieldIdVisitor, PredicateConverter, constant_bool_array, residual_for_missing_fields,
     };
+    use crate::arrow::reader::projection::build_field_id_map;
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::spec::{
@@ -1017,24 +1017,19 @@ mod tests {
         }
     }
 
+    /// Evaluates `predicate`, bound to `schema`, on `batch` read from a Parquet file of
+    /// `message_type`.
     fn apply_predicate_to_batch(
         predicate: Predicate,
         schema: SchemaRef,
+        message_type: &str,
         batch: RecordBatch,
-    ) -> BooleanArray {
+    ) -> Result<BooleanArray, ArrowError> {
         let bound = predicate.bind(schema, true).unwrap();
-
-        // Build a trivial Parquet schema with one float column at field id 4
-        let message_type = "
-            message schema {
-              optional float qux = 4;
-            }
-        ";
         let parquet_type = parse_message_type(message_type).expect("parse schema");
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
-
-        let column_map = HashMap::from([(4i32, 0usize)]);
-        let column_indices = vec![0usize];
+        let column_map = build_field_id_map(&parquet_schema).unwrap().unwrap();
+        let column_indices: Vec<usize> = (0..parquet_schema.num_columns()).collect();
 
         let mut converter = PredicateConverter {
             parquet_schema: &parquet_schema,
@@ -1043,13 +1038,14 @@ mod tests {
         };
 
         let mut predicate_fn = visit(&mut converter, &bound).unwrap();
-        predicate_fn(batch).unwrap()
+        predicate_fn(batch)
     }
 
     #[test]
     fn test_predicate_converter_nan() {
         use arrow_array::Float32Array;
 
+        const QUX: &str = "message schema { optional float qux = 4; }";
         let schema = table_schema_simple();
         let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "qux",
@@ -1064,7 +1060,8 @@ mod tests {
         ))])
         .unwrap();
         let result =
-            apply_predicate_to_batch(Reference::new("qux").is_nan(), schema.clone(), batch);
+            apply_predicate_to_batch(Reference::new("qux").is_nan(), schema.clone(), QUX, batch)
+                .unwrap();
         assert_eq!(
             [
                 result.value(0),
@@ -1079,7 +1076,9 @@ mod tests {
         // not_nan: non-null-propagating per Java's implementation - NULL → true
         let batch =
             RecordBatch::try_new(arrow_schema, vec![Arc::new(Float32Array::from(values))]).unwrap();
-        let result = apply_predicate_to_batch(Reference::new("qux").is_not_nan(), schema, batch);
+        let result =
+            apply_predicate_to_batch(Reference::new("qux").is_not_nan(), schema, QUX, batch)
+                .unwrap();
         assert_eq!(
             [
                 result.value(0),
@@ -1352,31 +1351,15 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let predicate = Reference::new("x")
-            .less_than(Datum::long(i64::from(i32::MAX) + 1))
-            .bind(schema, true)
-            .unwrap();
-        let parquet_type = parse_message_type("message schema { required int32 x = 1; }").unwrap();
-        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
-        let column_map = HashMap::from([(1, 0)]);
-        let column_indices = vec![0];
-        let mut converter = PredicateConverter {
-            parquet_schema: &parquet_schema,
-            column_map: &column_map,
-            column_indices: &column_indices,
-        };
-        let mut predicate_fn = visit(&mut converter, &predicate).unwrap();
-
         // An `int` batch that was not converted to the table's `long`.
-        let batch = RecordBatch::try_new(
-            Arc::new(ArrowSchema::new(vec![Field::new(
-                "x",
-                DataType::Int32,
-                false,
-            )])),
-            vec![Arc::new(Int32Array::from(vec![1]))],
-        )
-        .unwrap();
-        assert!(matches!(predicate_fn(batch), Err(ArrowError::CastError(_))));
+        let column = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("x", column)]).unwrap();
+        let result = apply_predicate_to_batch(
+            Reference::new("x").less_than(Datum::long(i64::from(i32::MAX) + 1)),
+            schema,
+            "message schema { required int32 x = 1; }",
+            batch,
+        );
+        assert!(matches!(result, Err(ArrowError::CastError(_))));
     }
 }
