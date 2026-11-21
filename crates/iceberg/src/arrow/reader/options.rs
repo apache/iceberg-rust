@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
 
@@ -63,6 +65,9 @@ pub struct ArrowReaderOptions {
     bloom_filter_enabled: bool,
     /// I/O tuning applied when reading Parquet files.
     parquet_options: ParquetReadOptions,
+    /// Top-level `string` field ids to read as `Dictionary(Int32, Utf8)`.
+    #[builder(setter(transform = |ids: impl IntoIterator<Item = i32>| ids.into_iter().collect()))]
+    dictionary_field_ids: BTreeSet<i32>,
 }
 
 impl Default for ArrowReaderOptions {
@@ -119,6 +124,25 @@ impl ArrowReaderOptions {
     /// Returns the configured parquet options.
     pub fn parquet_options(&self) -> &ParquetReadOptions {
         &self.parquet_options
+    }
+
+    /// Returns the ids of fields read as `Dictionary(Int32, Utf8)` instead of `Utf8`.
+    ///
+    /// Only top-level `string` fields are supported; reads fail for an id that is
+    /// unknown to the scanned schema, nested, or not a `string`. Ids that are not
+    /// projected have no effect. Defaults to none.
+    ///
+    /// Dictionary-encoded Parquet columns keep their dictionaries, which avoids copying
+    /// each value. Plain-encoded or high-cardinality columns are dictionary-encoded per
+    /// batch instead, which can remove the benefit or make reads slower.
+    ///
+    /// Dictionary contents and keys can differ between batches and between files, so
+    /// keys are not global identifiers for values.
+    ///
+    /// Readers that predate this option ignore it when deserializing, so every reading
+    /// host must support it.
+    pub fn dictionary_field_ids(&self) -> &BTreeSet<i32> {
+        &self.dictionary_field_ids
     }
 
     pub(super) fn with_parquet_options(mut self, value: ParquetReadOptions) -> Self {
@@ -284,6 +308,33 @@ mod tests {
         );
         let decoded: ParquetReadOptions = serde_json::from_value(encoded).unwrap();
         assert_eq!(decoded, options);
+    }
+
+    #[test]
+    fn dictionary_field_ids_round_trip() {
+        let options = ArrowReaderOptions::builder()
+            .with_dictionary_field_ids([4, 2])
+            .build();
+        let decoded: ArrowReaderOptions =
+            serde_json::from_value(serde_json::to_value(&options).unwrap()).unwrap();
+        assert_eq!(decoded, options);
+    }
+
+    #[test]
+    fn missing_dictionary_field_ids_default_to_empty() {
+        let decoded: ArrowReaderOptions = serde_json::from_str("{}").unwrap();
+        assert!(decoded.dictionary_field_ids().is_empty());
+    }
+
+    #[test]
+    fn dictionary_field_ids_serialize_sorted_without_duplicates() {
+        let options = ArrowReaderOptions::builder()
+            .with_dictionary_field_ids([3, 2, 3])
+            .build();
+        assert_eq!(
+            serde_json::to_value(options).unwrap()["dictionary_field_ids"],
+            serde_json::json!([2, 3]),
+        );
     }
 
     #[test]

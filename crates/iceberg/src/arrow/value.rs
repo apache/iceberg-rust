@@ -17,12 +17,13 @@
 
 use std::sync::Arc;
 
+use arrow_array::types::Int32Type;
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Decimal128Array,
-    FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array,
-    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray,
-    StructArray, Time64MicrosecondArray, TimestampMicrosecondArray, TimestampNanosecondArray,
-    new_null_array,
+    DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, Float32Array, Float64Array,
+    Int32Array, Int64Array, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray,
+    MapArray, StringArray, StructArray, Time64MicrosecondArray, TimestampMicrosecondArray,
+    TimestampNanosecondArray, new_null_array,
 };
 use arrow_buffer::BooleanBuffer;
 use arrow_schema::{DataType, FieldRef, TimeUnit};
@@ -621,6 +622,13 @@ pub(crate) fn create_primitive_array_repeated(
         return Ok(new_null_array(data_type, num_rows));
     }
     Ok(match (data_type, prim_lit) {
+        (DataType::Dictionary(key_type, value_type), Some(_)) if **key_type == DataType::Int32 => {
+            let values = create_primitive_array_single_element(value_type, prim_lit)?;
+            Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![0; num_rows]),
+                values,
+            )?)
+        }
         // --- Primitive Some arms ---
         (DataType::Boolean, Some(PrimitiveLiteral::Boolean(value))) => {
             let buffer = if *value {

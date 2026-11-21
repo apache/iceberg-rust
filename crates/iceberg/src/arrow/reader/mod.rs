@@ -34,6 +34,8 @@ const DEFAULT_RANGE_FETCH_CONCURRENCY: usize = 10;
 /// Matches DataFusion's default `ParquetOptions::metadata_size_hint`.
 const DEFAULT_METADATA_SIZE_HINT: usize = 512 * 1024;
 
+#[cfg(test)]
+mod dictionary_tests;
 mod file_reader;
 mod options;
 mod pipeline;
@@ -158,6 +160,7 @@ mod tests {
                             .with_range_fetch_concurrency(99)
                             .build(),
                     )
+                    .with_dictionary_field_ids([4, 2])
                     .build(),
             )
             .with_options(ArrowReaderOptions::default())
@@ -184,6 +187,7 @@ mod tests {
             .with_row_selection_enabled(true)
             .with_bloom_filter_enabled(true)
             .with_parquet_options(parquet)
+            .with_dictionary_field_ids([4, 2])
             .build();
         let reader = ArrowReaderBuilder::new(FileIO::new_with_memory(), test_runtime())
             .with_options(options.clone())

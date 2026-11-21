@@ -21,7 +21,7 @@
 //! of transformed Arrow `RecordBatch`es.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
@@ -44,6 +44,7 @@ use crate::arrow::caching_delete_file_loader::CachingDeleteFileLoader;
 use crate::arrow::int96::coerce_int96_timestamps;
 use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
 use crate::arrow::scan_metrics::{CountingFileRead, ScanMetrics, ScanResult};
+use crate::arrow::schema::{validate_dictionary_field_ids, with_dictionary_fields};
 use crate::encryption::StandardKeyMetadata;
 use crate::error::{Result, invalid_data};
 use crate::expr::BoundPredicate;
@@ -83,6 +84,7 @@ impl ArrowReader {
             row_selection_enabled: self.options.row_selection_enabled(),
             bloom_filter_enabled: self.options.bloom_filter_enabled(),
             parquet_read_options: self.options.parquet_options().clone(),
+            dictionary_field_ids: Arc::new(self.options.dictionary_field_ids().clone()),
             scan_metrics: scan_metrics.clone(),
             runtime: self.runtime,
         };
@@ -139,6 +141,7 @@ struct FileScanTaskReader {
     row_selection_enabled: bool,
     bloom_filter_enabled: bool,
     parquet_read_options: ParquetReadOptions,
+    dictionary_field_ids: Arc<BTreeSet<i32>>,
     scan_metrics: ScanMetrics,
     runtime: Runtime,
 }
@@ -156,11 +159,12 @@ fn candidate_row_groups(
 
 impl FileScanTaskReader {
     async fn process(self, task: FileScanTask) -> Result<ArrowRecordBatchStream> {
+        validate_dictionary_field_ids(task.schema(), &self.dictionary_field_ids)?;
+
         // A known-empty data file contributes no rows, regardless of predicates or deletes.
         if task.record_count() == Some(0) {
             return Ok(Box::pin(futures::stream::empty()));
         }
-
         let should_load_page_index = (self.row_selection_enabled && task.predicate().is_some())
             || !task.deletes().is_empty();
 
@@ -236,6 +240,7 @@ impl FileScanTaskReader {
             &task,
             missing_field_ids,
             install_row_number,
+            &self.dictionary_field_ids,
         )?;
 
         // Build the stream reader, reusing the already-opened file reader
@@ -361,7 +366,8 @@ impl FileScanTaskReader {
         // that come back from the file, such as type promotion, default column insertion,
         // column re-ordering, partition constants, and virtual field addition (like _file)
         let mut record_batch_transformer_builder =
-            RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids());
+            RecordBatchTransformerBuilder::new(task.schema_ref(), task.project_field_ids())
+                .with_dictionary_field_ids(Arc::clone(&self.dictionary_field_ids));
 
         // Add the _file metadata column if it's in the projected fields
         if task.project_field_ids().contains(&RESERVED_FIELD_ID_FILE) {
@@ -700,6 +706,7 @@ impl FileScanTaskReader {
         task: &FileScanTask,
         missing_field_ids: bool,
         install_row_number: bool,
+        dictionary_field_ids: &BTreeSet<i32>,
     ) -> Result<ArrowReaderMetadata> {
         // Schema resolution follows the Iceberg Column Projection rule:
         // "Columns in Iceberg data files are selected by field id."
@@ -728,10 +735,18 @@ impl FileScanTaskReader {
             coerce_int96_timestamps(&schema, task.schema()).unwrap_or(schema)
         } else if let Some(coerced) = coerce_int96_timestamps(file_schema, task.schema()) {
             coerced
-        } else if without_fixed_size_lists.is_some() || install_row_number {
+        } else if without_fixed_size_lists.is_some()
+            || install_row_number
+            || !dictionary_field_ids.is_empty()
+        {
             Arc::clone(file_schema)
         } else {
             return Ok(arrow_metadata);
+        };
+        let arrow_schema = if dictionary_field_ids.is_empty() {
+            arrow_schema
+        } else {
+            Arc::new(with_dictionary_fields(&arrow_schema, dictionary_field_ids)?)
         };
 
         let mut options = ArrowReaderOptions::new().with_schema(Arc::clone(&arrow_schema));

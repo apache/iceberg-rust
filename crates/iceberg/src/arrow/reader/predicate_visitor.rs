@@ -896,6 +896,12 @@ fn try_cast_literal(
     column_type: &DataType,
 ) -> std::result::Result<Arc<dyn ArrowDatum + Send + Sync>, ArrowError> {
     let literal_array = literal.get().0;
+    // The comparison kernels unwrap dictionary columns, so match the dictionary's value type
+    // instead of casting the literal to a dictionary for every batch.
+    let column_type = match column_type {
+        DataType::Dictionary(_, value_type) => value_type.as_ref(),
+        column_type => column_type,
+    };
 
     // No cast required
     if literal_array.data_type() == column_type {
@@ -911,13 +917,20 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
-    use arrow_array::{Array, BooleanArray, RecordBatch};
+    use arrow_array::types::Int32Type;
+    use arrow_array::{
+        Array, ArrayRef, BooleanArray, Datum as ArrowDatum, DictionaryArray, RecordBatch, Scalar,
+        StringArray,
+    };
+    use arrow_ord::cmp::eq;
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use arrow_string::like::starts_with;
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
 
     use super::{
-        CollectFieldIdVisitor, PredicateConverter, constant_bool_array, residual_for_missing_fields,
+        CollectFieldIdVisitor, PredicateConverter, constant_bool_array,
+        residual_for_missing_fields, try_cast_literal,
     };
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
@@ -1087,6 +1100,44 @@ mod tests {
             [true, false, true, true]
         );
         assert!(!result.is_null(2));
+    }
+
+    fn dictionary_strings() -> ArrayRef {
+        Arc::new(
+            [Some("a"), Some("b"), None, Some("ab")]
+                .into_iter()
+                .collect::<DictionaryArray<Int32Type>>(),
+        )
+    }
+
+    fn string_literal(value: &str) -> Arc<dyn ArrowDatum + Send + Sync> {
+        Arc::new(Scalar::new(StringArray::from(vec![value])))
+    }
+
+    #[test]
+    fn test_dictionary_column_literal_keeps_value_type() {
+        let literal = try_cast_literal(&string_literal("a"), dictionary_strings().data_type());
+        assert_eq!(literal.unwrap().get().0.data_type(), &DataType::Utf8);
+    }
+
+    #[test]
+    fn test_dictionary_column_eq_accepts_value_type_literal() {
+        let column = dictionary_strings();
+        let literal = try_cast_literal(&string_literal("a"), column.data_type()).unwrap();
+        assert_eq!(
+            eq(&column, literal.as_ref()).unwrap(),
+            BooleanArray::from(vec![Some(true), Some(false), None, Some(false)])
+        );
+    }
+
+    #[test]
+    fn test_dictionary_column_starts_with_accepts_value_type_literal() {
+        let column = dictionary_strings();
+        let literal = try_cast_literal(&string_literal("a"), column.data_type()).unwrap();
+        assert_eq!(
+            starts_with(&column, literal.as_ref()).unwrap(),
+            BooleanArray::from(vec![Some(true), Some(false), None, Some(true)])
+        );
     }
 
     /// Returns the residual of `predicate` for a data file that stores only field 1.
