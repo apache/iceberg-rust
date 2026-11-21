@@ -253,6 +253,7 @@ impl CustomAwsCredentialLoader {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use iceberg::Result;
@@ -261,14 +262,17 @@ mod tests {
         S3_RETRY_MIN_WAIT_MS, S3_RETRY_NUM_RETRIES,
     };
     use opendal::layers::RetryLayer;
+    use opendal::services::S3Config;
 
     use super::{
-        MULTIPART_PART_SIZE_DEFAULT, MULTIPART_PART_SIZE_MAX, MULTIPART_PART_SIZE_MIN,
-        s3_client_config, s3_config_parse, s3_multipart_part_size_parse,
+        AwsCredential, CustomAwsCredentialLoader, MULTIPART_PART_SIZE_DEFAULT,
+        MULTIPART_PART_SIZE_MAX, MULTIPART_PART_SIZE_MIN, ProvideCredential,
+        default_multipart_part_size, s3_client_config, s3_config_parse,
+        s3_multipart_part_size_parse,
     };
     use crate::{
         OPENDAL_RETRY_MAX_WAIT_MS, OPENDAL_RETRY_MIN_WAIT_MS, OPENDAL_RETRY_NUM_RETRIES,
-        OpenDalClientConfig,
+        OpenDalClientConfig, OpenDalStorage, OpenDalStorageFactory,
     };
 
     fn parse_with(prop: Option<&str>) -> bool {
@@ -409,8 +413,6 @@ mod tests {
     fn test_other_backends_ignore_the_s3_retry_properties() {
         use iceberg::io::{StorageConfig, StorageFactory};
 
-        use crate::OpenDalStorageFactory;
-
         let config = StorageConfig::new().with_props([
             (S3_RETRY_NUM_RETRIES.to_string(), "abc".to_string()),
             (OPENDAL_RETRY_NUM_RETRIES.to_string(), "5".to_string()),
@@ -418,5 +420,55 @@ mod tests {
         let storage = OpenDalStorageFactory::Memory.build(&config).unwrap();
         let json = serde_json::to_string(&storage).unwrap();
         assert!(json.contains(r#""retry_num_retries":5"#), "{json}");
+    }
+
+    #[test]
+    fn test_relativize_path_s3() {
+        let storage = OpenDalStorage::S3 {
+            config: Arc::new(S3Config::default()),
+            multipart_part_size: default_multipart_part_size(),
+            customized_credential_load: None,
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        // All S3-family schemes are accepted by the same storage instance.
+        // Custom schemes for S3-compatible stores (e.g., `minio://`) are also
+        // accepted because the path's scheme is used as-is for prefix matching.
+        for scheme in ["s3", "s3a", "s3n", "minio"] {
+            assert_eq!(
+                storage
+                    .relativize_path(&format!("{scheme}://my-bucket/path/to/file.parquet"))
+                    .unwrap(),
+                "path/to/file.parquet"
+            );
+        }
+    }
+
+    #[derive(Debug)]
+    struct EmptyCredentialLoader;
+
+    impl ProvideCredential for EmptyCredentialLoader {
+        type Credential = AwsCredential;
+
+        async fn provide_credential(
+            &self,
+            _ctx: &reqsign_core::Context,
+        ) -> reqsign_core::Result<Option<AwsCredential>> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn test_s3_factory_custom_credential_loader_serialization_fails() {
+        let file_io = iceberg::io::FileIOBuilder::new(Arc::new(OpenDalStorageFactory::S3 {
+            customized_credential_load: Some(CustomAwsCredentialLoader::new(EmptyCredentialLoader)),
+        }))
+        .build();
+
+        let err = file_io.serialize_all().unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("custom AWS credential loaders cannot be serialized")
+        );
     }
 }
