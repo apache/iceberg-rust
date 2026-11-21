@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use iceberg::spec::{Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
 use iceberg::{
-    Error, ErrorKind, Namespace, NamespaceIdent, TableIdent, TableRequirement, TableUpdate,
+    Error, ErrorKind, Labels, Namespace, NamespaceIdent, TableIdent, TableRequirement, TableUpdate,
 };
 use serde_derive::{Deserialize, Serialize};
 
@@ -229,6 +229,9 @@ pub struct LoadTableResult {
     /// before falling back to credentials in the `config` field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_credentials: Option<Vec<StorageCredential>>,
+    /// Labels the catalog attaches to the table and its fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<Labels>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -322,6 +325,8 @@ pub struct RegisterTableRequest {
 
 #[cfg(test)]
 mod tests {
+    use iceberg::FieldLabels;
+
     use super::*;
 
     #[test]
@@ -504,5 +509,54 @@ mod tests {
         // than silently dropping it).
         let json = r#"{"overrides":{},"defaults":{},"endpoints":["GET_v1/namespaces"]}"#;
         assert!(serde_json::from_str::<CatalogConfig>(json).is_err());
+    }
+
+    fn load_table_result_json() -> serde_json::Value {
+        serde_json::from_str(include_str!("../testdata/load_table_response.json")).unwrap()
+    }
+
+    #[test]
+    fn load_table_result_round_trips_labels() {
+        let labels_json = serde_json::json!({
+            "object-labels": {"owner": "finance"},
+            "fields": [{"field-id": 1, "labels": {"classification": "pii"}}]
+        });
+        let mut json = load_table_result_json();
+        json["labels"] = labels_json.clone();
+
+        let result: LoadTableResult = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            result.labels,
+            Some(Labels {
+                object_labels: HashMap::from([("owner".to_string(), "finance".to_string())]),
+                fields: vec![FieldLabels {
+                    field_id: 1,
+                    labels: HashMap::from([("classification".to_string(), "pii".to_string())]),
+                }],
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(&result).unwrap()["labels"],
+            labels_json
+        );
+    }
+
+    #[test]
+    fn load_table_result_without_labels_has_none() {
+        let without_labels = load_table_result_json();
+        let mut null_labels = load_table_result_json();
+        null_labels["labels"] = serde_json::Value::Null;
+
+        for json in [without_labels, null_labels] {
+            let result: LoadTableResult = serde_json::from_value(json).unwrap();
+            assert_eq!(result.labels, None);
+            assert!(
+                !serde_json::to_value(&result)
+                    .unwrap()
+                    .as_object()
+                    .unwrap()
+                    .contains_key("labels")
+            );
+        }
     }
 }

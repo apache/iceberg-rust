@@ -1353,6 +1353,9 @@ impl SessionCatalog for RestSessionCatalog {
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
         }
+        if let Some(labels) = response.labels {
+            table_builder = table_builder.labels(labels);
+        }
 
         if let Some(metadata_location) = response.metadata_location {
             table_builder.metadata_location(metadata_location).build()
@@ -1449,6 +1452,9 @@ impl SessionCatalog for RestSessionCatalog {
             .runtime(self.runtime.clone());
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
+        }
+        if let Some(labels) = response.labels {
+            table_builder = table_builder.labels(labels);
         }
 
         let table = if let Some(metadata_location) = response.metadata_location {
@@ -1600,6 +1606,9 @@ impl SessionCatalog for RestSessionCatalog {
             .runtime(self.runtime.clone());
         if let Some(kms_client) = self.kms_client.clone() {
             table_builder = table_builder.kms_client(kms_client);
+        }
+        if let Some(labels) = response.labels {
+            table_builder = table_builder.labels(labels);
         }
         table_builder.build()
     }
@@ -1888,6 +1897,7 @@ mod tests {
         UnboundPartitionField, UnboundPartitionSpec,
     };
     use iceberg::transaction::{ApplyTransactionAction, Transaction};
+    use iceberg::{FieldLabels, Labels};
     use iceberg_test_utils::test_runtime;
     use mockito::{Matcher, Mock, Server, ServerGuard};
     use serde_json::json;
@@ -5330,8 +5340,109 @@ mod tests {
             table.metadata_location().unwrap()
         );
 
+        assert_eq!(table.labels(), None);
+
         config_mock.assert_async().await;
         register_table_mock.assert_async().await;
+    }
+
+    fn testdata_with_labels(file_name: &str) -> String {
+        let file = File::open(format!(
+            "{}/testdata/{file_name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let mut body: serde_json::Value = serde_json::from_reader(BufReader::new(file)).unwrap();
+        body["labels"] = json!({
+            "object-labels": {"owner": "finance"},
+            "fields": [{"field-id": 1, "labels": {"classification": "pii"}}]
+        });
+        body.to_string()
+    }
+
+    fn expected_labels() -> Labels {
+        Labels {
+            object_labels: HashMap::from([("owner".to_string(), "finance".to_string())]),
+            fields: vec![FieldLabels {
+                field_id: 1,
+                labels: HashMap::from([("classification".to_string(), "pii".to_string())]),
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn test_load_table_with_labels() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let load = server
+            .mock("GET", "/v1/namespaces/ns1/tables/test1")
+            .with_status(200)
+            .with_body(testdata_with_labels("load_table_response.json"))
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        let table = catalog
+            .load_table(&SessionContext::empty(), &test_table_ident())
+            .await
+            .unwrap();
+
+        assert_eq!(table.labels(), Some(&expected_labels()));
+        load.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_table_with_labels() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let create = server
+            .mock("POST", "/v1/namespaces/ns1/tables")
+            .with_status(200)
+            .with_body(testdata_with_labels("create_table_response.json"))
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+        let creation = TableCreation::builder()
+            .name("test1".to_string())
+            .schema(Schema::builder().build().unwrap())
+            .build();
+
+        let table = catalog
+            .create_table(
+                &SessionContext::empty(),
+                &NamespaceIdent::from_strs(["ns1"]).unwrap(),
+                creation,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(table.labels(), Some(&expected_labels()));
+        create.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_register_table_with_labels() {
+        let mut server = Server::new_async().await;
+        let _config = create_config_mock(&mut server).await;
+        let register = server
+            .mock("POST", "/v1/namespaces/ns1/register")
+            .with_status(200)
+            .with_body(testdata_with_labels("load_table_response.json"))
+            .create_async()
+            .await;
+        let catalog = session_catalog(RestCatalogConfig::builder().uri(server.url()).build());
+
+        let table = catalog
+            .register_table(
+                &SessionContext::empty(),
+                &test_table_ident(),
+                "s3://warehouse/database/table/metadata/00001-5f2f8166-244c-4eae-ac36-384ecdec81fc.gz.metadata.json".to_string(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(table.labels(), Some(&expected_labels()));
+        register.assert_async().await;
     }
 
     #[tokio::test]

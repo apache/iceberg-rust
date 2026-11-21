@@ -17,6 +17,7 @@
 
 //! Catalog API for Apache Iceberg
 
+mod labels;
 pub mod memory;
 mod metadata_location;
 mod session;
@@ -32,6 +33,7 @@ use std::sync::Arc;
 
 use _serde::{deserialize_snapshot, serialize_snapshot};
 use async_trait::async_trait;
+pub use labels::*;
 pub use memory::MemoryCatalog;
 pub use metadata_location::*;
 #[cfg(test)]
