@@ -199,7 +199,7 @@ mod tests {
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
 
@@ -314,7 +314,7 @@ mod tests {
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
 
@@ -445,7 +445,7 @@ mod tests {
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
 
@@ -550,7 +550,7 @@ mod tests {
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
 

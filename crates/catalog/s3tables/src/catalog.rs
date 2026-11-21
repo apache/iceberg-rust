@@ -1322,7 +1322,7 @@ mod tests {
         let rw = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             table.file_io().clone(),
-            location_generator,
+            Arc::new(location_generator),
             file_name_generator,
         );
         let mut writer = DataFileWriterBuilder::new(rw).build(None).await.unwrap();
