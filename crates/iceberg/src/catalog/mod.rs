@@ -121,6 +121,12 @@ pub trait Catalog: Debug + Sync + Send {
     /// Register an existing table to the catalog.
     async fn register_table(&self, table: &TableIdent, metadata_location: String) -> Result<Table>;
 
+    /// Unregister a table without deleting its data or metadata files.
+    ///
+    /// The returned table contains the last committed metadata and its location,
+    /// which can be passed to [`Catalog::register_table`] to register it again.
+    async fn unregister_table(&self, table: &TableIdent) -> Result<Table>;
+
     /// Update a table to the catalog.
     async fn update_table(&self, commit: TableCommit) -> Result<Table>;
 }
