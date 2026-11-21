@@ -3480,92 +3480,137 @@ mod tests {
         )
     }
 
-    /// Regression test for #3393: list views are read as lists, so their elements and the
-    /// columns after them project correctly.
+    /// Regression test for https://github.com/apache/iceberg-rust/issues/3393: list views are
+    /// read as lists, with embedded field IDs, through a name mapping, and with fallback IDs.
     #[tokio::test]
     async fn test_read_list_view_columns() {
         use arrow_array::types::Int32Type;
-        use arrow_array::{ListViewArray, StructArray};
-        use arrow_buffer::ScalarBuffer;
+        use arrow_array::{LargeListViewArray, ListViewArray, StructArray};
 
-        use crate::spec::{ListType, StructType};
+        use crate::spec::{ListType, MappedField, NameMapping, StructType};
 
-        let with_id = |field: Field, id: i32| {
-            field.with_metadata(HashMap::from([(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                id.to_string(),
-            )]))
+        // Writes `1: lv list_view<3: struct<4: a int, 5: b int>>, 2: id int` with the IDs, or
+        // without them and as a `LargeListView`. The IDs follow the column order, so fallback
+        // IDs match them too.
+        let tmp_dir = TempDir::new().unwrap();
+        let write = |with_ids: bool| {
+            let field = |name: &str, data_type, id: i32| {
+                let id = with_ids.then(|| (PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string()));
+                Arc::new(
+                    Field::new(name, data_type, true)
+                        .with_metadata(id.into_iter().collect::<HashMap<_, _>>()),
+                )
+            };
+            let structs = Arc::new(StructArray::new(
+                vec![
+                    field("a", DataType::Int32, 4),
+                    field("b", DataType::Int32, 5),
+                ]
+                .into(),
+                vec![
+                    Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![-10, -20, -30])) as ArrayRef,
+                ],
+                None,
+            ));
+            let element = field("element", structs.data_type().clone(), 3);
+            let (lv_type, lv): (_, ArrayRef) = if with_ids {
+                let lv = ListViewArray::new(
+                    element.clone(),
+                    vec![0, 1, 2].into(),
+                    vec![1; 3].into(),
+                    structs,
+                    None,
+                );
+                (DataType::ListView(element), Arc::new(lv))
+            } else {
+                let lv = LargeListViewArray::new(
+                    element.clone(),
+                    vec![0, 1, 2].into(),
+                    vec![1; 3].into(),
+                    structs,
+                    None,
+                );
+                (DataType::LargeListView(element), Arc::new(lv))
+            };
+            let schema = Arc::new(ArrowSchema::new(vec![
+                field("lv", lv_type, 1),
+                field("id", DataType::Int32, 2),
+            ]));
+            let batch = RecordBatch::try_new(schema.clone(), vec![
+                lv,
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+            ])
+            .unwrap();
+            let path = format!("{}/{with_ids}.parquet", tmp_dir.path().to_str().unwrap());
+            let mut writer =
+                ArrowWriter::try_new(File::create(&path).unwrap(), schema, None).unwrap();
+            writer.write(&batch).unwrap();
+            writer.close().unwrap();
+            path
         };
+
         let int = |id, name: &str| {
             NestedField::optional(id, name, Type::Primitive(PrimitiveType::Int)).into()
         };
-
-        // 2: lv list_view<3: struct<4: a int, 5: b int>>, then 1: id int.
-        let a = Arc::new(with_id(Field::new("a", DataType::Int32, true), 4));
-        let b = Arc::new(with_id(Field::new("b", DataType::Int32, true), 5));
-        let structs = StructArray::new(
-            vec![a, b].into(),
-            vec![
-                Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
-                Arc::new(Int32Array::from(vec![-10, -20, -30])) as ArrayRef,
-            ],
-            None,
-        );
-        let element = Arc::new(with_id(
-            Field::new("element", structs.data_type().clone(), true),
-            3,
-        ));
-        let lv = ListViewArray::new(
-            element.clone(),
-            ScalarBuffer::from(vec![0, 1, 2]),
-            ScalarBuffer::from(vec![1, 1, 1]),
-            Arc::new(structs),
-            None,
-        );
-        let file_schema = Arc::new(ArrowSchema::new(vec![
-            with_id(Field::new("lv", DataType::ListView(element), true), 2),
-            with_id(Field::new("id", DataType::Int32, true), 1),
-        ]));
-        let batch = RecordBatch::try_new(file_schema.clone(), vec![
-            Arc::new(lv) as ArrayRef,
-            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
-        ])
-        .unwrap();
-        let tmp_dir = TempDir::new().unwrap();
-        let path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
-        let file = File::create(&path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, file_schema, None).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
         let element_type = Type::Struct(StructType::new(vec![int(4, "a"), int(5, "b")]));
-        let element_field = NestedField::list_element(3, element_type, false).into();
+        let element = NestedField::list_element(3, element_type, false).into();
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
-                    NestedField::optional(2, "lv", Type::List(ListType::new(element_field))).into(),
-                    int(1, "id"),
+                    NestedField::optional(1, "lv", Type::List(ListType::new(element))).into(),
+                    int(2, "id"),
                 ])
                 .build()
                 .unwrap(),
         );
-        let (result, _) = scan_task(metadata_projection_task(path, schema, vec![2, 1])).await;
+        let mapped =
+            |id, name: &str, fields| MappedField::new(Some(id), vec![name.to_string()], fields);
+        let name_mapping = Arc::new(NameMapping::new(vec![
+            mapped(1, "lv", vec![mapped(3, "element", vec![
+                mapped(4, "a", vec![]),
+                mapped(5, "b", vec![]),
+            ])]),
+            mapped(2, "id", vec![]),
+        ]));
+        let task = |path: String, name_mapping| {
+            FileScanTask::builder()
+                .with_file_size_in_bytes(std::fs::metadata(&path).unwrap().len())
+                .with_start(0)
+                .with_length(0)
+                .with_data_file_path(path)
+                .with_data_file_format(DataFileFormat::Parquet)
+                .with_schema(Arc::clone(&schema))
+                .with_project_field_ids(vec![1, 2])
+                .with_name_mapping(name_mapping)
+                .with_case_sensitive(false)
+                .build()
+                .unwrap()
+        };
 
-        let lv = result[0].column(0).as_list::<i32>();
-        assert_eq!(lv.value_offsets(), &[0, 1, 2, 3]);
-        let structs = lv.values().as_struct();
-        assert_eq!(
-            structs.column(0).as_primitive::<Int32Type>(),
-            &Int32Array::from(vec![10, 20, 30])
-        );
-        assert_eq!(
-            structs.column(1).as_primitive::<Int32Type>(),
-            &Int32Array::from(vec![-10, -20, -30])
-        );
-        assert_eq!(
-            result[0].column(1).as_primitive::<Int32Type>(),
-            &Int32Array::from(vec![1, 2, 3])
-        );
+        let without_ids = write(false);
+        let values = [
+            Int32Array::from(vec![10, 20, 30]),
+            Int32Array::from(vec![-10, -20, -30]),
+        ];
+        // Fallback IDs are top-level only, so the struct's fields read as null.
+        let nulls = [Int32Array::new_null(3), Int32Array::new_null(3)];
+        for (task, [a, b]) in [
+            (task(write(true), None), &values),
+            (task(without_ids.clone(), Some(name_mapping)), &values),
+            (task(without_ids, None), &nulls),
+        ] {
+            let (result, _) = scan_task(task).await;
+            let lv = result[0].column(0).as_list::<i32>();
+            assert_eq!(lv.value_offsets(), &[0, 1, 2, 3]);
+            let structs = lv.values().as_struct();
+            assert_eq!(structs.column(0).as_primitive::<Int32Type>(), a);
+            assert_eq!(structs.column(1).as_primitive::<Int32Type>(), b);
+            assert_eq!(
+                result[0].column(1).as_primitive::<Int32Type>(),
+                &Int32Array::from(vec![1, 2, 3])
+            );
+        }
     }
 
     /// Builds a scan task over `file_path` projecting `project_field_ids`.

@@ -758,7 +758,8 @@ impl PresenceWalk<'_> {
 /// The key difference is Java operates on Parquet MessageType, while we operate on Arrow Schema.
 ///
 /// # Arguments
-/// * `arrow_schema` - Arrow schema from Parquet file (without field IDs)
+/// * `arrow_schema` - Arrow schema from Parquet file (without field IDs), after
+///   `coerce_list_layouts` has rewritten its list views
 /// * `name_mapping` - Name mapping from table metadata (TableProperties.DEFAULT_NAME_MAPPING)
 ///
 /// # Returns
@@ -849,8 +850,13 @@ fn apply_name_mapping_to_field(
                 .with_data_type(DataType::Struct(entry_fields));
             DataType::Map(Arc::new(entries), *sorted)
         }
-        // List views were already rewritten to lists by `coerce_list_layouts`.
-        other => other.clone(),
+        other => {
+            debug_assert!(
+                !matches!(other, DataType::ListView(_) | DataType::LargeListView(_)),
+                "`coerce_list_layouts` must rewrite list views before name mapping"
+            );
+            other.clone()
+        }
     };
 
     let mut field = field.as_ref().clone().with_data_type(data_type);
@@ -4193,7 +4199,7 @@ message schema {
         );
 
         // An `ARROW:schema` hint can wrap leaves in types `filter_leaves` descends through,
-        // so the walk must count leaves the same way. Presence for `h` is `d` at leaf 4.
+        // so the walk must count leaves the same way. Presence for `h` is `d` at leaf 6.
         let parquet_schema = SchemaDescriptor::new(Arc::new(
             parse_message_type(
                 "
@@ -4212,6 +4218,14 @@ message schema {
                         optional group element = 26 {
                           optional int32 p = 27;
                           optional int32 q = 28;
+                        }
+                      }
+                    }
+                    optional group llv (LIST) = 40 {
+                      repeated group list {
+                        optional group element = 41 {
+                          optional int32 p = 42;
+                          optional int32 q = 43;
                         }
                       }
                     }
@@ -4241,6 +4255,7 @@ message schema {
             DataType::Struct(Fields::from(vec![
                 field("fl", DataType::FixedSizeList(element(22), 2), 21),
                 field("lv", DataType::ListView(element(26)), 25),
+                field("llv", DataType::LargeListView(element(41)), 40),
                 field(
                     "d",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -4279,7 +4294,7 @@ message schema {
                 false
             )
             .unwrap(),
-            ProjectionMask::leaves(&parquet_schema, vec![4])
+            ProjectionMask::leaves(&parquet_schema, vec![6])
         );
     }
 
@@ -4478,7 +4493,7 @@ message schema {
                     ])),
                     2,
                 ),
-                field("nested", list(element(large_list(ints(9)), 8)), 7),
+                field("nested", large_list(element(list(ints(9)), 8)), 7),
                 field("fixed", fixed(element(list(ints(12)), 11)), 10),
                 field("list", DataType::List(element(fixed(ints(15)), 14)), 13),
                 field(
