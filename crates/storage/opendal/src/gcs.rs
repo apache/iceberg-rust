@@ -27,7 +27,7 @@ use opendal::Operator;
 use opendal::services::GcsConfig;
 use url::Url;
 
-use crate::utils::{from_opendal_error, is_truthy};
+use crate::utils::{from_opendal_error, is_truthy, redact_path};
 
 /// Parse iceberg properties to [`GcsConfig`].
 pub(crate) fn gcs_config_parse(mut m: HashMap<String, String>) -> Result<GcsConfig> {
@@ -76,7 +76,7 @@ pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> 
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
-            format!("Invalid gcs url: {path}, bucket is required"),
+            format!("Invalid gcs url: {}, bucket is required", redact_path(path)),
         )
     })?;
 

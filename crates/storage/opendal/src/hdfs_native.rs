@@ -30,7 +30,7 @@ use tokio::runtime::Runtime;
 use url::Url;
 
 use crate::OpenDalClientConfig;
-use crate::utils::from_opendal_error;
+use crate::utils::{from_opendal_error, redact_path};
 
 /// Hadoop's default filesystem, which serves authority-less paths.
 const FS_DEFAULT_FS: &str = "fs.defaultFS";
@@ -84,7 +84,7 @@ fn hdfs_native_name_node_list(property: &str, value: &str) -> Result<Vec<String>
                     ErrorKind::DataInvalid,
                     format!(
                         "Invalid `{property}` entry: {}, expected host:port (hdfs:// optional)",
-                        hdfs_native_redact(entry)
+                        redact_path(entry)
                     ),
                 )
             })
@@ -232,7 +232,7 @@ fn hdfs_native_config_parse_with(
                         ErrorKind::DataInvalid,
                         format!(
                             "Invalid `{HDFS_HOST}`/`{HDFS_PORT}`: {}, expected a host name or IP and a port",
-                            hdfs_native_redact(&format!("{host}:{port}"))
+                            redact_path(&format!("{host}:{port}"))
                         ),
                     )
                 })?;
@@ -264,33 +264,11 @@ fn hdfs_native_config_parse_with(
     Ok(cfg)
 }
 
-/// `s` with everything between its scheme and its last `@` masked, so an
-/// error message never echoes userinfo, even a password holding a raw `/`,
-/// `?`, `#` or `://` that a URL parser would split elsewhere. An `@` further
-/// along the path is masked the same way, which only costs context.
-fn hdfs_native_redact(s: &str) -> String {
-    // Only a real scheme is kept; anything else before `://` may be userinfo.
-    let (scheme, rest) = match s.split_once("://") {
-        Some((scheme, rest))
-            if scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) =>
-        {
-            (format!("{scheme}://"), rest)
-        }
-        _ => (String::new(), s),
-    };
-    match rest.rsplit_once('@') {
-        Some((_, after)) => format!("{scheme}***@{after}"),
-        None => s.to_string(),
-    }
-}
-
 /// A `DataInvalid` error for an HDFS path, its userinfo masked.
 fn hdfs_native_invalid_path(path: &str, reason: impl std::fmt::Display) -> Error {
     Error::new(
         ErrorKind::DataInvalid,
-        format!("Invalid hdfs path: {}, {reason}", hdfs_native_redact(path)),
+        format!("Invalid hdfs path: {}, {reason}", redact_path(path)),
     )
 }
 
@@ -392,7 +370,7 @@ fn hdfs_native_default_name_node(config: &HdfsNativeConfig) -> Result<Option<Str
             ErrorKind::DataInvalid,
             format!(
                 "Invalid `{FS_DEFAULT_FS}`: {} is not an HDFS host:port, a logical nameservice requires `{HDFS_NAME_NODE}`",
-                hdfs_native_redact(default_fs)
+                redact_path(default_fs)
             ),
         )
     })
@@ -1080,13 +1058,14 @@ mod tests {
                 config_err("hadoop.fs.defaultFS", "hdfs://alice:s3cret@nn:8020"),
                 "hdfs://***@nn:8020",
             ),
-            // A raw `/`, `#` or `://` in the password, or a second `@`, must
-            // not move where the masking stops.
+            // A raw `/` or `://` in the password, or a second `@`, must not
+            // move where the masking stops. A `#` before the `@` keeps only
+            // the scheme.
             (
                 path_err("hdfs://alice:s3/cret@nn:8020/x"),
                 "hdfs://***@nn:8020/x",
             ),
-            (path_err("s3://alice:12#cret@b/x"), "s3://***@b/x"),
+            (path_err("s3://alice:12#cret@b/x"), "s3://***"),
             (
                 path_err("hdfs://alice@corp:s3cret@nn:bad/x"),
                 "hdfs://***@nn:bad/x",

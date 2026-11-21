@@ -29,7 +29,7 @@ use opendal::services::AzdlsConfig;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::utils::from_opendal_error;
+use crate::utils::{from_opendal_error, redact_path};
 
 /// Local version of `ensure_data_valid` macro since the iceberg crate's macro
 /// uses `$crate::error::Error` paths that don't resolve from external crates
@@ -255,7 +255,7 @@ impl FromStr for AzureStoragePath {
         ensure_data_valid!(
             !filesystem.is_empty(),
             "AzureStoragePath: No container or filesystem name in path: {}",
-            path
+            redact_path(path)
         );
 
         let (account_name, storage_service, endpoint_suffix) = parse_azure_storage_endpoint(&url)?;
@@ -541,6 +541,17 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_azure_storage_path_error_masks_userinfo_and_drops_query() {
+        assert_eq!(
+            "abfss://:SECRET@acct.dfs.core.windows.net/p?sv=1&sig=x"
+                .parse::<AzureStoragePath>()
+                .unwrap_err()
+                .to_string(),
+            "DataInvalid => AzureStoragePath: No container or filesystem name in path: abfss://***@acct.dfs.core.windows.net/p"
+        );
     }
 
     #[test]
