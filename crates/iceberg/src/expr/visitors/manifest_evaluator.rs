@@ -190,7 +190,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
                     &reference.field().field_type,
-                );
+                )?;
                 if datum <= &bound {
                     ROWS_CANNOT_MATCH
                 } else {
@@ -213,7 +213,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
                     &reference.field().field_type,
-                );
+                )?;
                 if datum < &bound {
                     ROWS_CANNOT_MATCH
                 } else {
@@ -236,7 +236,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
                     &reference.field().field_type,
-                );
+                )?;
                 if datum >= &bound {
                     ROWS_CANNOT_MATCH
                 } else {
@@ -259,7 +259,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
                 let bound = ManifestFilterVisitor::bytes_to_datum(
                     bound_bytes,
                     &reference.field().field_type,
-                );
+                )?;
                 if datum > &bound {
                     ROWS_CANNOT_MATCH
                 } else {
@@ -286,7 +286,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             let lower_bound = ManifestFilterVisitor::bytes_to_datum(
                 lower_bound_bytes,
                 &reference.field().field_type,
-            );
+            )?;
             if &lower_bound > datum {
                 return ROWS_CANNOT_MATCH;
             }
@@ -296,7 +296,7 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             let upper_bound = ManifestFilterVisitor::bytes_to_datum(
                 upper_bound_bytes,
                 &reference.field().field_type,
-            );
+            )?;
             if &upper_bound < datum {
                 return ROWS_CANNOT_MATCH;
             }
@@ -412,12 +412,20 @@ impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
             return ROWS_MIGHT_MATCH;
         }
 
-        let lower_bound = field.lower_bound.as_ref().map(|bound| {
-            ManifestFilterVisitor::bytes_to_datum(bound, reference.field().field_type.as_ref())
-        });
-        let upper_bound = field.upper_bound.as_ref().map(|bound| {
-            ManifestFilterVisitor::bytes_to_datum(bound, reference.field().field_type.as_ref())
-        });
+        let lower_bound = field
+            .lower_bound
+            .as_ref()
+            .map(|bound| {
+                ManifestFilterVisitor::bytes_to_datum(bound, reference.field().field_type.as_ref())
+            })
+            .transpose()?;
+        let upper_bound = field
+            .upper_bound
+            .as_ref()
+            .map(|bound| {
+                ManifestFilterVisitor::bytes_to_datum(bound, reference.field().field_type.as_ref())
+            })
+            .transpose()?;
 
         if super::all_literals_outside_bounds(lower_bound.as_ref(), upper_bound.as_ref(), literals)
         {
@@ -469,9 +477,14 @@ impl ManifestFilterVisitor<'_> {
         Ok(bound)
     }
 
-    fn bytes_to_datum(bytes: &ByteBuf, t: &Type) -> Datum {
-        let p = t.as_primitive_type().unwrap();
-        Datum::try_from_bytes(bytes, p.clone()).unwrap()
+    fn bytes_to_datum(bytes: &ByteBuf, t: &Type) -> Result<Datum> {
+        let p = t.as_primitive_type().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Partition summary bound for non-primitive type {t}"),
+            )
+        })?;
+        Datum::try_from_bytes(bytes, p.clone())
     }
 }
 
@@ -481,8 +494,8 @@ mod test {
     use std::sync::Arc;
 
     use fnv::FnvHashSet;
+    use serde_bytes::ByteBuf;
 
-    use crate::Result;
     use crate::expr::visitors::manifest_evaluator::ManifestEvaluator;
     use crate::expr::{
         BinaryExpression, Bind, Predicate, PredicateOperator, Reference, SetExpression,
@@ -492,6 +505,7 @@ mod test {
         Datum, FieldSummary, ManifestContentType, ManifestFile, NestedField, PrimitiveType, Schema,
         SchemaRef, Type,
     };
+    use crate::{ErrorKind, Result};
 
     const INT_MIN_VALUE: i32 = 30;
     const INT_MAX_VALUE: i32 = 79;
@@ -1366,6 +1380,67 @@ mod test {
                 .eval(&manifest_file)?,
             "Should read: id equal to lower bound (30 == 30)"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_malformed_bound_returns_error() -> Result<()> {
+        let case_sensitive = true;
+        let schema = create_schema()?;
+        // An int bound has 4 bytes.
+        let malformed: Option<ByteBuf> = Some(vec![1, 2, 3].into());
+        let lower = Some(Datum::int(INT_MIN_VALUE).to_bytes()?);
+        let upper = Some(Datum::int(INT_MAX_VALUE).to_bytes()?);
+        let cases = [
+            // (lower bound, upper bound, operators that read the malformed bound)
+            (malformed.clone(), upper, [
+                PredicateOperator::LessThan,
+                PredicateOperator::LessThanOrEq,
+            ]),
+            (lower, malformed, [
+                PredicateOperator::GreaterThan,
+                PredicateOperator::GreaterThanOrEq,
+            ]),
+        ];
+
+        for (lower_bound, upper_bound, ops) in cases {
+            let manifest_file = create_manifest_file(vec![FieldSummary {
+                contains_null: false,
+                contains_nan: None,
+                lower_bound,
+                upper_bound,
+            }]);
+
+            let mut filters: Vec<Predicate> = ops
+                .into_iter()
+                .chain([PredicateOperator::Eq])
+                .map(|op| {
+                    Predicate::Binary(BinaryExpression::new(
+                        op,
+                        Reference::new("id"),
+                        Datum::int(INT_MIN_VALUE + 1),
+                    ))
+                })
+                .collect();
+            filters.push(Predicate::Set(SetExpression::new(
+                PredicateOperator::In,
+                Reference::new("id"),
+                FnvHashSet::from_iter(vec![
+                    Datum::int(INT_MIN_VALUE + 1),
+                    Datum::int(INT_MIN_VALUE + 2),
+                ]),
+            )));
+
+            for filter in filters {
+                let bound = filter.bind(schema.clone(), case_sensitive)?;
+                let err = ManifestEvaluator::builder(bound.clone())
+                    .build()
+                    .eval(&manifest_file)
+                    .expect_err(&format!("{bound} should fail on a malformed bound"));
+                assert_eq!(err.kind(), ErrorKind::DataInvalid, "{bound}: {err}");
+            }
+        }
 
         Ok(())
     }
