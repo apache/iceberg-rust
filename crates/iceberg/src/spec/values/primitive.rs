@@ -123,6 +123,11 @@ impl PrimitiveLiteral {
 
     /// Widens this literal to `target` for the value promotions `int` -> `long`
     /// and `float` -> `double`, returning `None` when `target` does not promote it.
+    ///
+    /// A bare literal does not know its source type, so this does not cover
+    /// `date` -> `timestamp` / `timestamp_ns` (an `int` literal may or may not be a
+    /// date). Use [`Datum::promote_to`](crate::spec::Datum::promote_to), which
+    /// matches on the source type as well and adds that promotion.
     pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Option<PrimitiveLiteral> {
         match (self, target) {
             (PrimitiveLiteral::Int(_), PrimitiveType::Long)

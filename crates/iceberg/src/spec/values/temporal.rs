@@ -46,6 +46,21 @@ pub(crate) mod date {
     pub(crate) fn date_from_naive_date(date: NaiveDate) -> i32 {
         (date - unix_epoch().date_naive()).num_days() as i32
     }
+
+    pub(crate) const MICROSECONDS_PER_DAY: i64 = 86_400_000_000;
+    pub(crate) const NANOSECONDS_PER_DAY: i64 = 86_400_000_000_000;
+
+    /// Midnight UTC of `days` since the epoch, in microseconds, or `None` if it
+    /// overflows `i64`.
+    pub(crate) fn days_to_microseconds(days: i32) -> Option<i64> {
+        i64::from(days).checked_mul(MICROSECONDS_PER_DAY)
+    }
+
+    /// Midnight UTC of `days` since the epoch, in nanoseconds, or `None` if it
+    /// overflows `i64` (dates outside roughly the years 1678–2262).
+    pub(crate) fn days_to_nanoseconds(days: i32) -> Option<i64> {
+        i64::from(days).checked_mul(NANOSECONDS_PER_DAY)
+    }
 }
 
 pub(crate) mod time {
