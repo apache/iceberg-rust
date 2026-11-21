@@ -456,10 +456,17 @@ impl Bind for Predicate {
             }
             Predicate::Set(expr) => {
                 let bound_expr = expr.bind(schema, case_sensitive)?;
+                // A literal outside the field type's range equals no value of the field.
                 let bound_literals = bound_expr
                     .literals
                     .into_iter()
                     .map(|l| l.to(&bound_expr.term.field().field_type))
+                    .filter(|l| {
+                        !matches!(
+                            l.as_ref().map(Datum::literal),
+                            Ok(PrimitiveLiteral::AboveMax | PrimitiveLiteral::BelowMin)
+                        )
+                    })
                     .collect::<Result<FnvHashSet<Datum>>>()?;
 
                 match &bound_expr.op {
@@ -1388,6 +1395,62 @@ mod tests {
         let expr = Reference::new("bar").is_in(vec![Datum::int(10), Datum::string("abcd")]);
         let bound_expr = expr.bind(schema, true);
         assert!(bound_expr.is_err());
+    }
+
+    #[test]
+    fn test_bind_in_drops_out_of_range_literals() {
+        let schema = table_schema_simple();
+        // int32 holds -2147483648 to 2147483647
+        let expr = Reference::new("bar").is_in([
+            Datum::long(10),
+            Datum::long(20),
+            Datum::long(2147483648i64),
+            Datum::long(-2147483649i64),
+        ]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar IN (20, 10)");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_in_one_literal_in_range() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_in([Datum::long(10), Datum::long(2147483648i64)]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar = 10");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_in_only_out_of_range_literals() {
+        let schema = table_schema_simple();
+        let expr =
+            Reference::new("bar").is_in([Datum::long(2147483648i64), Datum::long(-2147483649i64)]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "False");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_not_in_drops_out_of_range_literals() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_not_in([
+            Datum::long(10),
+            Datum::long(20),
+            Datum::long(2147483648i64),
+        ]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "bar NOT IN (20, 10)");
+        test_bound_predicate_serialize_diserialize(bound_expr);
+    }
+
+    #[test]
+    fn test_bind_not_in_only_out_of_range_literals() {
+        let schema = table_schema_simple();
+        let expr = Reference::new("bar").is_not_in([Datum::long(2147483648i64)]);
+        let bound_expr = expr.bind(schema, true).unwrap();
+        assert_eq!(&format!("{bound_expr}"), "True");
+        test_bound_predicate_serialize_diserialize(bound_expr);
     }
 
     #[test]
