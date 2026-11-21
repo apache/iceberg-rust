@@ -610,8 +610,8 @@ impl fmt::Display for StructType {
     }
 }
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Eq, Clone)]
-#[serde(try_from = "SerdeNestedField", into = "SerdeNestedField")]
+#[derive(Debug, PartialEq, Deserialize, Eq, Clone)]
+#[serde(try_from = "SerdeNestedField")]
 /// A struct is a tuple of typed values. Each field in the tuple is named and has an integer id that is unique in the table schema.
 /// Each field can be either optional or required, meaning that values can (or cannot) be null. Fields may be any type.
 /// Fields may have an optional comment or doc string. Fields can have default values.
@@ -675,11 +675,20 @@ impl TryFrom<SerdeNestedField> for NestedField {
     }
 }
 
-impl From<NestedField> for SerdeNestedField {
-    fn from(value: NestedField) -> Self {
-        let initial_default = value.initial_default.map(|x| x.try_into_json(&value.field_type).expect("We should have checked this in NestedField::with_initial_default, it can't be converted to json value"));
-        let write_default = value.write_default.map(|x| x.try_into_json(&value.field_type).expect("We should have checked this in NestedField::with_write_default, it can't be converted to json value"));
-        SerdeNestedField {
+impl TryFrom<NestedField> for SerdeNestedField {
+    type Error = crate::Error;
+
+    fn try_from(value: NestedField) -> Result<Self> {
+        let initial_default = value
+            .initial_default
+            .map(|default| default.try_into_json(&value.field_type))
+            .transpose()?;
+        let write_default = value
+            .write_default
+            .map(|default| default.try_into_json(&value.field_type))
+            .transpose()?;
+
+        Ok(SerdeNestedField {
             id: value.id,
             name: value.name,
             required: value.required,
@@ -687,7 +696,18 @@ impl From<NestedField> for SerdeNestedField {
             doc: value.doc,
             initial_default,
             write_default,
-        }
+        })
+    }
+}
+
+impl Serialize for NestedField {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where S: Serializer {
+        // A default value that does not fit the field type makes the field
+        // unrepresentable as JSON, which must be reported rather than panic.
+        SerdeNestedField::try_from(self.clone())
+            .map_err(<S::Error as serde::ser::Error>::custom)?
+            .serialize(serializer)
     }
 }
 
@@ -1003,6 +1023,24 @@ mod tests {
         let raw_json_value = serde_json::from_str::<serde_json::Value>(json).unwrap();
 
         assert_eq!(parsed_json_value, raw_json_value);
+    }
+
+    #[test]
+    fn serialize_field_with_type_mismatched_default_returns_error() {
+        let field = NestedField::new(1, "f", Type::Primitive(PrimitiveType::Float), false)
+            .with_initial_default(Literal::string("1e39"));
+        let err = serde_json::to_string(&field).unwrap_err();
+        assert!(
+            err.to_string().contains("doesn't fit to the iceberg type"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn serialize_field_with_type_mismatched_write_default_returns_error() {
+        let field = NestedField::new(1, "f", Type::Primitive(PrimitiveType::Float), false)
+            .with_write_default(Literal::string("1e39"));
+        assert!(serde_json::to_string(&field).is_err());
     }
 
     #[test]
