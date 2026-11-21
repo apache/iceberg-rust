@@ -252,7 +252,8 @@
 //!
 //! Wraps the data file writer to handle unsorted data by maintaining multiple active writers.
 //! Use this when your data is not pre-sorted by partition key. Writes to different partitions
-//! can happen in any order, even interleaved.
+//! can happen in any order, even interleaved. See [`FanoutWriter`](partitioning::fanout_writer::FanoutWriter)
+//! for the partition limit and its memory and file-size tradeoffs.
 //!
 //! ```rust, no_run
 //! # // Same setup as the simple example above...
@@ -284,7 +285,9 @@
 //! use iceberg::writer::partitioning::PartitioningWriter;
 //! use iceberg::spec::{Literal, PartitionKey, Struct};
 //!
-//! let mut fanout_writer = FanoutWriter::new(data_file_writer_builder);
+//! let mut fanout_writer = FanoutWriter::new_with_table_properties(
+//!     data_file_writer_builder, &table.metadata().table_properties(),
+//! )?;
 //!
 //! // Create partition keys for different regions
 //! let schema = table.metadata().current_schema().clone();
@@ -402,6 +405,8 @@ pub trait IcebergWriterBuilder<I = DefaultInput, O = DefaultOutput>: Send + Sync
     /// The associated writer type.
     type R: IcebergWriter<I, O>;
     /// Build the iceberg writer with an optional partition key.
+    ///
+    /// Repeated builds for the same partition must write to distinct file paths.
     async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R>;
 }
 
