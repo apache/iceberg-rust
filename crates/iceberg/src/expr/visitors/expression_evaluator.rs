@@ -44,7 +44,12 @@ impl ExpressionEvaluator {
     /// to see if this [`DataFile`] could possibly contain data that matches
     /// the scan's filter.
     pub(crate) fn eval(&self, data_file: &DataFile) -> Result<bool> {
-        let mut visitor = ExpressionEvaluatorVisitor::new(data_file.partition());
+        self.eval_partition(data_file.partition())
+    }
+
+    /// Evaluate this [`ExpressionEvaluator`]'s partition filter against a partition [`Struct`].
+    pub(crate) fn eval_partition(&self, partition: &Struct) -> Result<bool> {
+        let mut visitor = ExpressionEvaluatorVisitor::new(partition);
 
         visit(&mut visitor, &self.partition_filter)
     }
