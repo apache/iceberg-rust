@@ -31,6 +31,7 @@ use crate::scan::TableScanBuilder;
 use crate::spec::{
     ManifestListReader, ManifestReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef,
 };
+use crate::writer::file_writer::location_generator::TableLocationGenerator;
 use crate::{Result, TableIdent};
 
 /// Builder to create table scan.
@@ -333,6 +334,17 @@ impl Table {
     /// Create a reader for the table.
     pub fn reader_builder(&self) -> ArrowReaderBuilder {
         ArrowReaderBuilder::new(self.file_io.clone(), self.runtime().clone())
+    }
+
+    /// Creates the location generator for the layout selected by the table properties.
+    ///
+    /// Java's `write.location-provider.impl` is not supported and is ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a table property that determines the layout has an invalid value.
+    pub fn location_generator(&self) -> Result<TableLocationGenerator> {
+        TableLocationGenerator::new(self.metadata())
     }
 }
 
