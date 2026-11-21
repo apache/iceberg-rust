@@ -17,10 +17,12 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use futures::channel::mpsc::Sender;
 use futures::{SinkExt, TryFutureExt};
 
+use super::metrics::PlanningCounters;
 use crate::delete_file_index::DeleteFileIndex;
 use crate::expr::{Bind, BoundPredicate, Predicate};
 use crate::io::object_cache::ObjectCache;
@@ -39,6 +41,7 @@ use crate::{Error, ErrorKind, Result};
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestFileContext {
     manifest_file: ManifestFile,
+    metrics: Arc<PlanningCounters>,
 
     sender: Sender<ManifestEntryContext>,
 
@@ -60,6 +63,7 @@ pub(crate) struct ManifestFileContext {
 /// to process it in a thread-safe manner
 pub(crate) struct ManifestEntryContext {
     pub manifest_entry: ManifestEntryRef,
+    pub metrics: Arc<PlanningCounters>,
 
     pub expression_evaluator_cache: Arc<ExpressionEvaluatorCache>,
     pub field_ids: Arc<Vec<i32>>,
@@ -104,6 +108,7 @@ impl ManifestFileContext {
         let ManifestFileContext {
             object_cache,
             manifest_file,
+            metrics,
             bound_predicates,
             snapshot_schema,
             field_ids,
@@ -118,6 +123,11 @@ impl ManifestFileContext {
             column_stats_columns,
         } = self;
 
+        let scanned = match manifest_file.content {
+            ManifestContentType::Data => &metrics.scanned_data_manifests,
+            ManifestContentType::Deletes => &metrics.scanned_delete_manifests,
+        };
+        scanned.fetch_add(1, Ordering::Relaxed);
         let manifest = object_cache.get_manifest(&manifest_file).await?;
 
         // A manifest written under an older schema stores partition values in that
@@ -164,6 +174,7 @@ impl ManifestFileContext {
 
             let manifest_entry_context = ManifestEntryContext {
                 manifest_entry,
+                metrics: metrics.clone(),
                 expression_evaluator_cache: expression_evaluator_cache.clone(),
                 field_ids: field_ids.clone(),
                 partition_spec_id: manifest_file.partition_spec_id,
@@ -200,11 +211,24 @@ impl ManifestEntryContext {
                 self.manifest_entry.sequence_number(),
             )
             .await?;
+        let data_file_size = self.manifest_entry.file_size_in_bytes();
+        let delete_file_size = deletes
+            .iter()
+            .map(|delete| {
+                if delete.is_deletion_vector() {
+                    delete.content_size_in_bytes().unwrap_or(0)
+                } else {
+                    delete.file_size_in_bytes().unwrap_or(0)
+                }
+            })
+            .sum::<u64>();
+        let delete_files = deletes.len() as u64;
+        let metrics = self.metrics.clone();
 
-        FileScanTask::builder()
-            .with_file_size_in_bytes(self.manifest_entry.file_size_in_bytes())
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(data_file_size)
             .with_start(0)
-            .with_length(self.manifest_entry.file_size_in_bytes())
+            .with_length(data_file_size)
             .with_record_count(Some(self.manifest_entry.record_count()))
             .with_first_row_id(self.manifest_entry.data_file().first_row_id())
             .with_data_sequence_number(self.manifest_entry.sequence_number())
@@ -228,7 +252,21 @@ impl ManifestEntryContext {
             .with_column_stats(self.column_stats_columns.as_deref().map(|columns| {
                 FileScanTaskColumnStats::from_data_file(self.manifest_entry.data_file(), columns)
             }))
-            .build()
+            .build()?;
+
+        metrics.result_data_files.fetch_add(1, Ordering::Relaxed);
+        metrics
+            .total_file_size_in_bytes
+            .fetch_add(data_file_size, Ordering::Relaxed);
+        if delete_files != 0 {
+            metrics
+                .result_delete_files
+                .fetch_add(delete_files, Ordering::Relaxed);
+            metrics
+                .total_delete_file_size_in_bytes
+                .fetch_add(delete_file_size, Ordering::Relaxed);
+        }
+        Ok(task)
     }
 
     /// Consume this `ManifestEntryContext`, returning a COW rewrite file candidate.
@@ -319,6 +357,7 @@ impl PlanContext {
         tx_data: Sender<ManifestEntryContext>,
         delete_file_idx: DeleteFileIndex,
         delete_file_tx: Sender<ManifestEntryContext>,
+        metrics: Arc<PlanningCounters>,
     ) -> Result<Box<impl Iterator<Item = Result<ManifestFileContext>> + 'static>> {
         let mut manifest_files = manifest_list.entries().iter().collect::<Vec<_>>();
         // Sort manifest files to process delete manifests first.
@@ -332,6 +371,18 @@ impl PlanContext {
             ManifestContentType::Data => 1,
         });
 
+        let delete_manifests = manifest_files
+            .iter()
+            .filter(|manifest| manifest.content == ManifestContentType::Deletes)
+            .count() as u64;
+        metrics
+            .total_delete_manifests
+            .store(delete_manifests, Ordering::Relaxed);
+        metrics.total_data_manifests.store(
+            manifest_files.len() as u64 - delete_manifests,
+            Ordering::Relaxed,
+        );
+
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in manifest_files {
@@ -339,6 +390,9 @@ impl PlanContext {
             let has_live_files =
                 manifest_file.has_added_files() || manifest_file.has_existing_files();
             if is_delete && !has_live_files {
+                metrics
+                    .skipped_delete_manifests
+                    .fetch_add(1, Ordering::Relaxed);
                 continue;
             }
             let tx = if is_delete {
@@ -360,6 +414,12 @@ impl PlanContext {
                     )
                     .eval(manifest_file)?
                 {
+                    let skipped = if is_delete {
+                        &metrics.skipped_delete_manifests
+                    } else {
+                        &metrics.skipped_data_manifests
+                    };
+                    skipped.fetch_add(1, Ordering::Relaxed);
                     continue;
                 }
 
@@ -369,6 +429,9 @@ impl PlanContext {
             };
 
             if !has_live_files {
+                metrics
+                    .skipped_data_manifests
+                    .fetch_add(1, Ordering::Relaxed);
                 continue;
             }
             let mfc = self.create_manifest_file_context(
@@ -376,6 +439,7 @@ impl PlanContext {
                 partition_bound_predicate,
                 tx,
                 delete_file_idx.clone(),
+                metrics.clone(),
             );
 
             filtered_mfcs.push(Ok(mfc));
@@ -390,6 +454,7 @@ impl PlanContext {
         partition_filter: Option<Arc<BoundPredicate>>,
         sender: Sender<ManifestEntryContext>,
         delete_file_index: DeleteFileIndex,
+        metrics: Arc<PlanningCounters>,
     ) -> ManifestFileContext {
         let bound_predicates =
             if let (Some(ref partition_bound_predicate), Some(snapshot_bound_predicate)) =
@@ -405,6 +470,7 @@ impl PlanContext {
 
         ManifestFileContext {
             manifest_file: manifest_file.clone(),
+            metrics,
             bound_predicates,
             sender,
             object_cache: self.object_cache.clone(),
