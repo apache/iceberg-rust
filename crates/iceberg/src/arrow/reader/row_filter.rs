@@ -239,13 +239,17 @@ impl ArrowReader {
 
 /// The top-level fields holding `leaf_ids`, pruned to those leaves, and their ids in leaf order
 /// (the filter batch's column order). Only these fields are converted, so the transformer's
-/// per-file setup does not grow with the table's width.
+/// per-file setup does not grow with the table's width. Fails for a leaf that is not in
+/// `snapshot_schema`, because skipping it would shift the columns the predicate reads.
 fn filter_schema(snapshot_schema: &Schema, leaf_ids: &[i32]) -> Result<(Schema, Vec<i32>)> {
     let mut roots: Vec<NestedFieldRef> = Vec::with_capacity(leaf_ids.len());
-    for accessor in leaf_ids
-        .iter()
-        .filter_map(|id| snapshot_schema.accessor_by_field_id(*id))
-    {
+    for &id in leaf_ids {
+        let accessor = snapshot_schema.accessor_by_field_id(id).ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!("Predicate field id {id} is not in the scan schema"),
+            )
+        })?;
         let root = &snapshot_schema.as_struct().fields()[accessor.position()];
         if !roots.iter().any(|r| r.id == root.id) {
             roots.push(Arc::clone(root));
@@ -553,7 +557,7 @@ mod tests {
     }
 
     /// The filter schema holds each filter leaf's top-level field, pruned to the filter leaves,
-    /// with root ids in leaf order.
+    /// with root ids in leaf order. A leaf missing from the schema fails.
     #[test]
     fn test_filter_schema_prunes_nested_roots() {
         let person = |fields: Vec<NestedFieldRef>| {
@@ -582,6 +586,7 @@ mod tests {
             );
             assert_eq!(root_ids, expected_root_ids, "{leaf_ids:?}");
         }
+        assert!(filter_schema(&schema, &[3, 9]).is_err());
     }
 
     /// A file written before a type promotion keeps the old physical type, so the row
