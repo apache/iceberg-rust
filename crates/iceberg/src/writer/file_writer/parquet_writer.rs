@@ -17,28 +17,30 @@
 
 //! The module contains the file writer for parquet file format.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use arrow_schema::SchemaRef as ArrowSchemaRef;
+use arrow_schema::{DataType, Field, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use itertools::Itertools;
-use parquet::arrow::AsyncArrowWriter;
+use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::async_writer::AsyncFileWriter as ArrowAsyncFileWriter;
-use parquet::basic::{BrotliLevel, Compression, GzipLevel, ZstdLevel};
+use parquet::arrow::{ArrowSchemaConverter, AsyncArrowWriter};
+use parquet::basic::{BrotliLevel, Compression, GzipLevel, LogicalType, ZstdLevel};
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use parquet::file::properties::{CdcOptions, WriterProperties};
 use parquet::file::statistics::Statistics;
 use parquet::geospatial::bounding_box::BoundingBox;
+use parquet::schema::types::{SchemaDescriptor, Type as ParquetType, TypePtr};
 use parquet_geospatial::interval::{Interval, IntervalTrait, WraparoundInterval};
 
 use super::{FileWriter, FileWriterBuilder};
 use crate::arrow::{
     ArrowFileReader, DEFAULT_MAP_FIELD_NAME, FieldMatchMode, NanValueCountVisitor,
-    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum,
+    get_parquet_stat_max_as_datum, get_parquet_stat_min_as_datum, is_variant_field,
 };
 use crate::compression::CompressionCodec;
 use crate::encryption::{EncryptionManager, StandardKeyMetadata};
@@ -188,6 +190,11 @@ impl FileWriterBuilder for ParquetWriterBuilder {
 struct IndexByParquetPathName {
     name_to_id: HashMap<String, i32>,
 
+    /// Parquet paths of the `value` leaves of variant columns. Such a leaf adds to the column
+    /// size of its variant and to nothing else: the value and null counts of a variant come
+    /// from its `metadata` leaf, which is set in every non-null row.
+    variant_value_paths: HashSet<String>,
+
     field_names: Vec<String>,
 
     field_id: i32,
@@ -198,6 +205,7 @@ impl IndexByParquetPathName {
     pub fn new() -> Self {
         Self {
             name_to_id: HashMap::new(),
+            variant_value_paths: HashSet::new(),
             field_names: Vec::new(),
             field_id: 0,
         }
@@ -206,6 +214,22 @@ impl IndexByParquetPathName {
     /// Retrieves the internal field ID
     pub fn get(&self, name: &str) -> Option<&i32> {
         self.name_to_id.get(name)
+    }
+
+    /// Whether `name` is the `value` leaf of a variant column.
+    pub fn is_variant_value(&self, name: &str) -> bool {
+        self.variant_value_paths.contains(name)
+    }
+
+    fn insert_leaf(&mut self, full_name: String) -> Result<()> {
+        let field_id = self.field_id;
+        if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
+            return Err(invalid_data!(
+                "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
+            ));
+        }
+        self.name_to_id.insert(full_name, field_id);
+        Ok(())
     }
 }
 
@@ -286,23 +310,134 @@ impl SchemaVisitor for IndexByParquetPathName {
 
     fn primitive(&mut self, _p: &PrimitiveType) -> Result<Self::T> {
         let full_name = self.field_names.iter().map(String::as_str).join(".");
-        let field_id = self.field_id;
-        if let Some(existing_field_id) = self.name_to_id.get(full_name.as_str()) {
-            return Err(invalid_data!(
-                "Invalid schema: multiple fields for name {full_name}: {field_id} and {existing_field_id}"
-            ));
-        } else {
-            self.name_to_id.insert(full_name, field_id);
-        }
-
-        Ok(())
+        self.insert_leaf(full_name)
     }
 
     fn variant(&mut self, _v: &VariantType) -> Result<Self::T> {
-        Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "Writing variant columns to Parquet is not supported yet",
-        ))
+        // An unshredded variant is a group of a `metadata` and a `value` leaf. The leaves have
+        // no field ids of their own, so both map to the id of the variant field.
+        let group_name = self.field_names.iter().map(String::as_str).join(".");
+        self.insert_leaf(format!("{group_name}.metadata"))?;
+        let value_name = format!("{group_name}.value");
+        self.insert_leaf(value_name.clone())?;
+        self.variant_value_paths.insert(value_name);
+        Ok(())
+    }
+}
+
+/// Builds the Parquet schema for `arrow_schema` as the Arrow writer would, then annotates
+/// every variant group with the `VARIANT` logical type, specification version 1.
+///
+/// The Arrow writer only adds the annotation itself with the `variant_experimental` feature of
+/// `parquet`, which also changes how every `parquet` user in the build reads `VARIANT` groups.
+/// Walking the schema here keeps the feature off and sets the version, which the writer of
+/// parquet 60 omits.
+fn variant_parquet_schema(
+    arrow_schema: &ArrowSchemaRef,
+    props: &WriterProperties,
+) -> Result<SchemaDescriptor> {
+    let schema = ArrowSchemaConverter::new()
+        .with_coerce_types(props.coerce_types())
+        .convert(arrow_schema)
+        .map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to build parquet schema.").with_source(err)
+        })?;
+    let root = schema.root_schema();
+    let fields = arrow_schema
+        .fields()
+        .iter()
+        .zip(root.get_fields())
+        .map(|(field, parquet_field)| annotate_variant_groups(field, parquet_field))
+        .collect::<Result<Vec<_>>>()?;
+    let root = ParquetType::group_type_builder(root.name())
+        .with_fields(fields)
+        .build()
+        .map_err(|err| {
+            Error::new(ErrorKind::Unexpected, "Failed to build parquet schema.").with_source(err)
+        })?;
+    Ok(SchemaDescriptor::new(Arc::new(root)))
+}
+
+/// Returns `parquet_type`, the conversion of `field`, with the `VARIANT` logical type on every
+/// group that `field` marks as a variant. Other nodes are returned as they are.
+fn annotate_variant_groups(field: &Field, parquet_type: &TypePtr) -> Result<TypePtr> {
+    let rebuild = |logical_type: Option<LogicalType>, fields: Vec<TypePtr>| {
+        let info = parquet_type.get_basic_info();
+        ParquetType::group_type_builder(parquet_type.name())
+            .with_repetition(info.repetition())
+            .with_id(info.has_id().then(|| info.id()))
+            .with_logical_type(logical_type)
+            .with_fields(fields)
+            .build()
+            .map(Arc::new)
+            .map_err(|err| {
+                Error::new(ErrorKind::Unexpected, "Failed to build parquet schema.")
+                    .with_source(err)
+            })
+    };
+    let unchanged = |fields: Vec<TypePtr>| {
+        rebuild(
+            parquet_type.get_basic_info().logical_type_ref().cloned(),
+            fields,
+        )
+    };
+    if is_variant_field(field) {
+        return rebuild(
+            Some(LogicalType::variant(Some(1))),
+            parquet_type.get_fields().to_vec(),
+        );
+    }
+    match field.data_type() {
+        DataType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .zip(parquet_type.get_fields())
+                .map(|(field, parquet_field)| annotate_variant_groups(field, parquet_field))
+                .collect::<Result<Vec<_>>>()?;
+            unchanged(fields)
+        }
+        DataType::List(element)
+        | DataType::LargeList(element)
+        | DataType::FixedSizeList(element, _)
+        | DataType::ListView(element)
+        | DataType::LargeListView(element) => {
+            // `group name (LIST) { repeated group list { element } }`
+            let list = &parquet_type.get_fields()[0];
+            let element = annotate_variant_groups(element, &list.get_fields()[0])?;
+            let list = ParquetType::group_type_builder(list.name())
+                .with_repetition(list.get_basic_info().repetition())
+                .with_fields(vec![element])
+                .build()
+                .map(Arc::new)
+                .map_err(|err| {
+                    Error::new(ErrorKind::Unexpected, "Failed to build parquet schema.")
+                        .with_source(err)
+                })?;
+            unchanged(vec![list])
+        }
+        DataType::Map(entries, _) => {
+            // `group name (MAP) { repeated group key_value { key; value } }`
+            let DataType::Struct(entry_fields) = entries.data_type() else {
+                return Ok(Arc::clone(parquet_type));
+            };
+            let key_value = &parquet_type.get_fields()[0];
+            let fields = entry_fields
+                .iter()
+                .zip(key_value.get_fields())
+                .map(|(field, parquet_field)| annotate_variant_groups(field, parquet_field))
+                .collect::<Result<Vec<_>>>()?;
+            let key_value = ParquetType::group_type_builder(key_value.name())
+                .with_repetition(key_value.get_basic_info().repetition())
+                .with_fields(fields)
+                .build()
+                .map(Arc::new)
+                .map_err(|err| {
+                    Error::new(ErrorKind::Unexpected, "Failed to build parquet schema.")
+                        .with_source(err)
+                })?;
+            unchanged(vec![key_value])
+        }
+        _ => Ok(Arc::clone(parquet_type)),
     }
 }
 
@@ -443,6 +578,11 @@ impl MinMaxColAggregator {
             // Ignore the field if it is not in schema.
             return Ok(());
         };
+        if let Type::Variant(_) = ty {
+            // An unshredded variant has no bounds: its leaves hold encoded bytes, which the
+            // Parquet statistics compare as binary. Bounds of shredded fields are future work.
+            return Ok(());
+        }
         let Type::Primitive(ty) = ty else {
             return Err(Error::new(
                 ErrorKind::Unexpected,
@@ -597,6 +737,12 @@ impl ParquetWriter {
 
                     *per_col_size.entry(field_id).or_insert(0) +=
                         column_chunk_metadata.compressed_size() as u64;
+                    if index_by_parquet_path.is_variant_value(&parquet_path) {
+                        // Both leaves of a variant map to one field id. Only `metadata`
+                        // counts the rows, as in iceberg-java; counting `value` too would
+                        // double the counts.
+                        continue;
+                    }
                     *per_col_val_num.entry(field_id).or_insert(0) +=
                         column_chunk_metadata.num_values() as u64;
 
@@ -749,17 +895,18 @@ impl FileWriter for ParquetWriter {
             writer
         } else {
             let arrow_schema: ArrowSchemaRef = Arc::new(self.schema.as_ref().try_into()?);
+            let parquet_schema = variant_parquet_schema(&arrow_schema, &self.writer_properties)?;
             let inner_writer = self.output_file.writer().await?;
             let async_writer = AsyncFileWriter::new(inner_writer);
-            let writer = AsyncArrowWriter::try_new(
-                async_writer,
-                arrow_schema.clone(),
-                Some(self.writer_properties.clone()),
-            )
-            .map_err(|err| {
-                Error::new(ErrorKind::Unexpected, "Failed to build parquet writer.")
-                    .with_source(err)
-            })?;
+            let options = ArrowWriterOptions::new()
+                .with_properties(self.writer_properties.clone())
+                .with_parquet_schema(parquet_schema);
+            let writer =
+                AsyncArrowWriter::try_new_with_options(async_writer, arrow_schema.clone(), options)
+                    .map_err(|err| {
+                        Error::new(ErrorKind::Unexpected, "Failed to build parquet writer.")
+                            .with_source(err)
+                    })?;
             self.inner_writer = Some(writer);
             self.inner_writer.as_mut().unwrap()
         };
@@ -1061,18 +1208,329 @@ mod tests {
     }
 
     #[test]
-    fn test_index_by_parquet_path_variant_is_unsupported() {
-        // Writing variant columns to Parquet is not supported yet; indexing a schema that
-        // contains one must error rather than silently miss-map columns.
+    fn test_index_by_parquet_path_variant() {
+        // Both leaves of a variant group map to the id of the variant field, at the top level
+        // and inside a struct, a list and a map.
         let schema = Schema::builder()
             .with_fields(vec![
                 NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+                NestedField::optional(
+                    2,
+                    "s",
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(3, "sv", Type::Variant(VariantType)).into(),
+                    ])),
+                )
+                .into(),
+                NestedField::optional(
+                    4,
+                    "l",
+                    Type::List(ListType::new(
+                        NestedField::list_element(5, Type::Variant(VariantType), true).into(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    6,
+                    "m",
+                    Type::Map(MapType::new(
+                        NestedField::map_key_element(7, Type::Primitive(PrimitiveType::String))
+                            .into(),
+                        NestedField::map_value_element(8, Type::Variant(VariantType), true).into(),
+                    )),
+                )
+                .into(),
             ])
             .build()
             .unwrap();
         let mut visitor = IndexByParquetPathName::new();
-        let err = visit_schema(&schema, &mut visitor).unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        visit_schema(&schema, &mut visitor).unwrap();
+        let expect = HashMap::from([
+            ("v.metadata".to_string(), 1),
+            ("v.value".to_string(), 1),
+            ("s.sv.metadata".to_string(), 3),
+            ("s.sv.value".to_string(), 3),
+            ("l.list.element.metadata".to_string(), 5),
+            ("l.list.element.value".to_string(), 5),
+            ("m.key_value.key".to_string(), 7),
+            ("m.key_value.value.metadata".to_string(), 8),
+            ("m.key_value.value.value".to_string(), 8),
+        ]);
+        assert_eq!(visitor.name_to_id, expect);
+        assert!(visitor.is_variant_value("v.value"));
+        assert!(visitor.is_variant_value("m.key_value.value.value"));
+        assert!(!visitor.is_variant_value("v.metadata"));
+        assert!(!visitor.is_variant_value("m.key_value.key"));
+    }
+
+    /// Makes one variant from each JSON row in the Arrow layout of the Iceberg table type.
+    /// `None` makes a null row.
+    fn variants_from_json(rows: &[Option<&str>]) -> ArrayRef {
+        let json = Arc::new(arrow_array::StringArray::from(rows.to_vec())) as ArrayRef;
+        let variants = ArrayRef::from(parquet_variant_compute::json_to_variant(&json).unwrap());
+        let table_type = crate::arrow::type_to_arrow_type(&Type::Variant(VariantType)).unwrap();
+        arrow_cast::cast(&variants, &table_type).unwrap()
+    }
+
+    /// Renders every row of a variant column as JSON. A null row renders as `None`.
+    fn variants_to_json(column: &ArrayRef) -> Vec<Option<String>> {
+        let variants = parquet_variant_compute::VariantArray::try_new(column.as_ref()).unwrap();
+        let json = parquet_variant_compute::variant_to_json(&ArrayRef::from(variants)).unwrap();
+        (0..json.len())
+            .map(|i| (!json.is_null(i)).then(|| json.value(i).to_string()))
+            .collect()
+    }
+
+    /// Writes unshredded variant columns at the top level and inside a struct, a list and a
+    /// map, checks the Parquet schema and the data file metrics, and reads the rows back
+    /// through the Iceberg reader.
+    #[tokio::test]
+    async fn test_parquet_writer_variant_roundtrip() -> Result<()> {
+        use arrow_array::{ListArray, StringArray};
+        use arrow_buffer::{NullBuffer, OffsetBuffer};
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_io = FileIO::new_with_fs();
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(2, "v", Type::Variant(VariantType)).into(),
+                    NestedField::optional(
+                        3,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(4, "sv", Type::Variant(VariantType)).into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        5,
+                        "l",
+                        Type::List(ListType::new(
+                            NestedField::list_element(6, Type::Variant(VariantType), false).into(),
+                        )),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        7,
+                        "m",
+                        Type::Map(MapType::new(
+                            NestedField::map_key_element(8, Type::Primitive(PrimitiveType::String))
+                                .into(),
+                            NestedField::map_value_element(9, Type::Variant(VariantType), false)
+                                .into(),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()?,
+        );
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema)?);
+        let rows = [
+            Some(r#"{"a":1,"b":"x"}"#),
+            Some("[1,2,3]"),
+            None,
+            Some("null"),
+            Some(r#""text""#),
+            Some("-123456789012"),
+        ];
+        let v = variants_from_json(&rows);
+        let sv = variants_from_json(&[
+            Some("1"),
+            Some("2"),
+            Some("3"),
+            Some("4"),
+            Some("5"),
+            Some("6"),
+        ]);
+        let DataType::Struct(s_fields) = arrow_schema.field(2).data_type() else {
+            unreachable!()
+        };
+        let s = Arc::new(StructArray::new(s_fields.clone(), vec![sv], None)) as ArrayRef;
+        // `l`: [[10, 11], [], null, [12], [null], ["x"]]; 5 elements, one of them null.
+        let DataType::List(l_element) = arrow_schema.field(3).data_type() else {
+            unreachable!()
+        };
+        let l_values =
+            variants_from_json(&[Some("10"), Some("11"), Some("12"), None, Some(r#""x""#)]);
+        let l = Arc::new(ListArray::new(
+            l_element.clone(),
+            OffsetBuffer::new(vec![0, 2, 2, 2, 3, 4, 5].into()),
+            l_values,
+            Some(NullBuffer::from(vec![true, true, false, true, true, true])),
+        )) as ArrayRef;
+        // `m`: {"k0": 20, "k1": 21}, {}, {"k2": null}, {"k3": "y"}, null, {}; 4 entries.
+        let DataType::Map(m_entries, _) = arrow_schema.field(4).data_type() else {
+            unreachable!()
+        };
+        let DataType::Struct(m_entry_fields) = m_entries.data_type() else {
+            unreachable!()
+        };
+        let m_keys = Arc::new(StringArray::from(vec!["k0", "k1", "k2", "k3"])) as ArrayRef;
+        let m_values = variants_from_json(&[Some("20"), Some("21"), None, Some(r#""y""#)]);
+        let m = Arc::new(MapArray::new(
+            m_entries.clone(),
+            OffsetBuffer::new(vec![0, 2, 2, 3, 4, 4, 4].into()),
+            StructArray::new(m_entry_fields.clone(), vec![m_keys, m_values], None),
+            Some(NullBuffer::from(vec![true, true, true, true, false, true])),
+            false,
+        )) as ArrayRef;
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+            v.clone(),
+            s,
+            l.clone(),
+            m.clone(),
+        ])?;
+
+        let output = file_io.new_output(temp_dir.path().join("v.parquet").to_str().unwrap())?;
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(4))
+            .build();
+        let mut writer = ParquetWriterBuilder::new(props, schema.clone())
+            .build(output)
+            .await?;
+        writer.write(&batch).await?;
+        let data_file = writer
+            .close()
+            .await?
+            .into_iter()
+            .next()
+            .unwrap()
+            .content(DataContentType::Data)
+            .partition(Struct::empty())
+            .partition_spec_id(0)
+            .build()
+            .unwrap();
+
+        // Metrics: the counts of a variant come from its `metadata` leaf and it has no bounds.
+        // Under a list or a map, the counts are those of any Parquet leaf: an empty or null
+        // container adds one value and one null, as the `m` keys (id 8) show.
+        assert_eq!(data_file.record_count(), 6);
+        assert_eq!(
+            *data_file.value_counts(),
+            HashMap::from([(1, 6), (2, 6), (4, 6), (6, 7), (8, 7), (9, 7)])
+        );
+        assert_eq!(
+            *data_file.null_value_counts(),
+            HashMap::from([(1, 0), (2, 1), (4, 0), (6, 3), (8, 3), (9, 4)])
+        );
+        assert_eq!(
+            *data_file.lower_bounds(),
+            HashMap::from([(1, Datum::int(1)), (8, Datum::string("k0"))])
+        );
+        assert_eq!(
+            *data_file.upper_bounds(),
+            HashMap::from([(1, Datum::int(6)), (8, Datum::string("k3"))])
+        );
+
+        // Parquet schema: every variant group carries the `VARIANT` logical type, version 1, and
+        // the field id of the Iceberg field; its leaves are binary and have no field id. The
+        // column size of a variant is the size of both leaves.
+        let input = file_io.new_input(data_file.file_path())?;
+        let mut parquet_reader =
+            ArrowFileReader::new(input.metadata().await?, input.reader().await?);
+        let metadata = parquet_reader.get_metadata(None).await?;
+        assert_eq!(metadata.num_row_groups(), 2);
+        let root = metadata.file_metadata().schema_descr().root_schema();
+        let top = root.get_fields();
+        let variant_groups = [
+            (top[1].clone(), 2, "v"),
+            (top[2].get_fields()[0].clone(), 4, "s.sv"),
+            (
+                top[3].get_fields()[0].get_fields()[0].clone(),
+                6,
+                "l.list.element",
+            ),
+            (
+                top[4].get_fields()[0].get_fields()[1].clone(),
+                9,
+                "m.key_value.value",
+            ),
+        ];
+        for (group, field_id, path) in variant_groups {
+            let info = group.get_basic_info();
+            assert_eq!(info.id(), field_id, "{path}");
+            assert_eq!(
+                info.logical_type_ref(),
+                Some(&LogicalType::variant(Some(1))),
+                "{path}"
+            );
+            let leaves: Vec<_> = group
+                .get_fields()
+                .iter()
+                .map(|leaf| {
+                    (
+                        leaf.name(),
+                        leaf.get_physical_type(),
+                        leaf.get_basic_info().has_id(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                leaves,
+                vec![
+                    ("metadata", parquet::basic::Type::BYTE_ARRAY, false),
+                    ("value", parquet::basic::Type::BYTE_ARRAY, false),
+                ],
+                "{path}"
+            );
+            let leaf_sizes: u64 = metadata
+                .row_groups()
+                .iter()
+                .flat_map(|row_group| row_group.columns())
+                .filter(|column| {
+                    let leaf_path = column.column_descr().path().string();
+                    leaf_path == format!("{path}.metadata") || leaf_path == format!("{path}.value")
+                })
+                .map(|column| column.compressed_size() as u64)
+                .sum();
+            assert!(leaf_sizes > 0, "{path}");
+            assert_eq!(data_file.column_sizes()[&field_id], leaf_sizes, "{path}");
+        }
+
+        // Read back through the Iceberg reader.
+        let task = FileScanTask::builder()
+            .with_file_size_in_bytes(data_file.file_size_in_bytes())
+            .with_start(0)
+            .with_length(0)
+            .with_data_file_path(data_file.file_path.clone())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(vec![1, 2, 3, 5, 7])
+            .with_case_sensitive(false)
+            .build()?;
+        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
+        let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
+        let batches: Vec<RecordBatch> = reader.read(tasks)?.stream().try_collect().await?;
+        let read_back = concat_batches(batches[0].schema_ref(), &batches)?;
+        assert_eq!(read_back.num_rows(), 6);
+        assert_eq!(
+            read_back.schema().field(1).extension_type_name(),
+            Some("arrow.parquet.variant")
+        );
+        assert_eq!(read_back.column(1).data_type(), v.data_type());
+        assert_eq!(
+            variants_to_json(read_back.column(1)),
+            rows.iter()
+                .map(|row| row.map(str::to_string))
+                .collect::<Vec<_>>()
+        );
+        let sv = read_back
+            .column(2)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap()
+            .column(0)
+            .clone();
+        assert_eq!(
+            variants_to_json(&sv),
+            (1..=6).map(|i| Some(i.to_string())).collect::<Vec<_>>()
+        );
+        assert_eq!(read_back.column(3), &l);
+        assert_eq!(read_back.column(4), &m);
+        Ok(())
     }
 
     #[tokio::test]
@@ -2950,7 +3408,7 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let parquet_schema = parquet::arrow::ArrowSchemaConverter::new()
+        let parquet_schema = ArrowSchemaConverter::new()
             .convert(&schema_to_arrow_schema(&schema).unwrap())
             .unwrap();
         let column = ColumnChunkMetaData::builder(parquet_schema.column(0))
@@ -3082,7 +3540,7 @@ mod tests {
                 .build()
                 .expect("Failed to create schema"),
         );
-        let parquet_schema = parquet::arrow::ArrowSchemaConverter::new()
+        let parquet_schema = ArrowSchemaConverter::new()
             .convert(&schema_to_arrow_schema(&schema).unwrap())
             .unwrap();
         let mut min_max_agg = MinMaxColAggregator::new(schema);
@@ -3125,7 +3583,7 @@ mod tests {
                 .build()
                 .expect("Failed to create schema"),
         );
-        let parquet_schema = parquet::arrow::ArrowSchemaConverter::new()
+        let parquet_schema = ArrowSchemaConverter::new()
             .convert(&schema_to_arrow_schema(&schema).unwrap())
             .unwrap();
         let mut min_max_agg = MinMaxColAggregator::new(schema);
