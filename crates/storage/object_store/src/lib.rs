@@ -46,7 +46,7 @@ use iceberg::{Error, ErrorKind, Result};
 use object_store::path::Path as ObjectStorePath;
 use object_store::{MultipartUpload, ObjectStore, ObjectStoreExt, PutPayload};
 #[cfg(feature = "object_store-s3")]
-use s3::{build_s3_store, parse_s3_url};
+use s3::{S3RetrySettings, build_s3_store, parse_s3_url};
 use serde::{Deserialize, Serialize};
 use tokio::task::JoinSet;
 
@@ -88,42 +88,56 @@ pub(crate) const DEFAULT_PART_SIZE_BYTES: usize = 32 * 1024 * 1024;
 /// Minimum part size allowed by the AWS S3 MultipartUpload API specification (5 MiB).
 pub(crate) const MIN_PART_SIZE_BYTES: usize = 5 * 1024 * 1024;
 
-fn parse_delete_batch_size(config: &StorageConfig) -> usize {
-    if let Some(val) = config.get(S3_DELETE_BATCH_SIZE) {
-        match val.parse::<usize>() {
-            Ok(parsed) if parsed > 0 => parsed.clamp(1, S3_MAX_DELETE_BATCH_SIZE),
-            _ => {
-                tracing::warn!(
-                    val = %val,
-                    "Invalid s3.delete.batch-size; falling back to default 250"
-                );
-                DEFAULT_DELETE_BATCH_SIZE
-            }
-        }
-    } else {
-        DEFAULT_DELETE_BATCH_SIZE
+fn parse_delete_batch_size(config: &StorageConfig) -> Result<usize> {
+    let Some(val) = config.get(S3_DELETE_BATCH_SIZE) else {
+        return Ok(DEFAULT_DELETE_BATCH_SIZE);
+    };
+    let batch_size = val.parse::<usize>().map_err(|e| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid {S3_DELETE_BATCH_SIZE}: {val}: {e}"),
+        )
+    })?;
+    if batch_size == 0 {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid {S3_DELETE_BATCH_SIZE}: batch size must be greater than 0"),
+        ));
     }
+    Ok(batch_size.clamp(1, S3_MAX_DELETE_BATCH_SIZE))
 }
 
 fn default_delete_batch_size() -> usize {
     DEFAULT_DELETE_BATCH_SIZE
 }
 
-fn parse_part_size_bytes(config: &StorageConfig) -> usize {
-    if let Some(val) = config.get(S3_MULTIPART_PART_SIZE_BYTES) {
-        match val.parse::<usize>() {
-            Ok(parsed) if parsed >= MIN_PART_SIZE_BYTES => parsed,
-            _ => {
-                tracing::warn!(
-                    val = %val,
-                    "Invalid s3.multipart.part-size-bytes (must be >= 5 MiB); falling back to default 32 MiB"
-                );
-                DEFAULT_PART_SIZE_BYTES
-            }
-        }
-    } else {
-        DEFAULT_PART_SIZE_BYTES
+fn parse_part_size_bytes(config: &StorageConfig) -> Result<usize> {
+    let Some(val) = config.get(S3_MULTIPART_PART_SIZE_BYTES) else {
+        return Ok(DEFAULT_PART_SIZE_BYTES);
+    };
+    let part_size = val.parse::<usize>().map_err(|e| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {val}: {e}"),
+        )
+    })?;
+    if part_size < MIN_PART_SIZE_BYTES {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {part_size} bytes is below the S3 minimum part size of 5 MiB"
+            ),
+        ));
     }
+    if part_size > i32::MAX as usize {
+        return Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Invalid {S3_MULTIPART_PART_SIZE_BYTES}: {part_size} bytes is above the maximum allowed by Java spec"
+            ),
+        ));
+    }
+    Ok(part_size)
 }
 
 fn default_part_size_bytes() -> usize {
@@ -155,21 +169,15 @@ impl StorageFactory for ObjectStoreStorageFactory {
             #[cfg(feature = "object_store-s3")]
             ObjectStoreStorageFactory::S3 => {
                 let s3_config = S3Config::try_from(config)?;
-                let delete_batch_size = parse_delete_batch_size(config);
-                let part_size_bytes = parse_part_size_bytes(config);
-                tracing::info!(
-                    batch_size = delete_batch_size,
-                    part_size_bytes = part_size_bytes,
-                    "Initialized S3 storage with delete batch size {} and multipart part size {} bytes (configure via '{}' and '{}' to adjust)",
-                    delete_batch_size,
-                    part_size_bytes,
-                    S3_DELETE_BATCH_SIZE,
-                    S3_MULTIPART_PART_SIZE_BYTES
-                );
+                s3::validate_s3_config(&s3_config)?;
+                let delete_batch_size = parse_delete_batch_size(config)?;
+                let part_size_bytes = parse_part_size_bytes(config)?;
+                let retry_settings = S3RetrySettings::parse(config)?;
                 Ok(Arc::new(ObjectStoreStorage::S3(S3Storage {
                     config: Arc::new(s3_config),
                     delete_batch_size,
                     part_size_bytes,
+                    retry_settings,
                     store_cache: Arc::new(DashMap::new()),
                 })))
             }
@@ -180,15 +188,45 @@ impl StorageFactory for ObjectStoreStorageFactory {
 type StoreCache = Arc<DashMap<String, Arc<dyn ObjectStore>>>;
 
 /// `object_store` S3 storage state.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct S3Storage {
     config: Arc<S3Config>,
     #[serde(default = "default_delete_batch_size")]
     delete_batch_size: usize,
     #[serde(default = "default_part_size_bytes")]
     part_size_bytes: usize,
+    #[serde(default)]
+    retry_settings: S3RetrySettings,
     #[serde(skip, default)]
     store_cache: StoreCache,
+}
+
+impl std::fmt::Debug for S3Storage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3Storage")
+            .field("endpoint", &self.config.endpoint)
+            .field("region", &self.config.region)
+            .field("access_key_id", &self.config.access_key_id)
+            .field(
+                "secret_access_key",
+                &self.config.secret_access_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "session_token",
+                &self.config.session_token.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "server_side_encryption_customer_key",
+                &self
+                    .config
+                    .server_side_encryption_customer_key
+                    .as_ref()
+                    .map(|_| "[REDACTED]"),
+            )
+            .field("delete_batch_size", &self.delete_batch_size)
+            .field("part_size_bytes", &self.part_size_bytes)
+            .finish_non_exhaustive()
+    }
 }
 
 /// `object_store`-based storage implementation.
@@ -240,7 +278,9 @@ impl ObjectStoreStorage {
                 let store = s3
                     .store_cache
                     .entry(parsed.bucket.clone())
-                    .or_try_insert_with(|| build_s3_store(&s3.config, &parsed.bucket))?
+                    .or_try_insert_with(|| {
+                        build_s3_store(&s3.config, &s3.retry_settings, &parsed.bucket)
+                    })?
                     .value()
                     .clone();
 
@@ -315,19 +355,11 @@ impl Storage for ObjectStoreStorage {
 
     async fn writer(&self, path: &str) -> Result<Box<dyn FileWrite>> {
         let target = self.get_store_and_path(path)?;
-        let upload = target
-            .store
-            .put_multipart(&target.path)
-            .await
-            .map_err(from_object_store_error)?;
-        Ok(Box::new(ObjectStoreWriter {
-            upload: Some(upload),
-            buffer: BytesMut::new(),
-            tasks: JoinSet::new(),
-            parts_submitted: 0,
-            bytes_written: 0,
-            part_size_bytes: self.part_size_bytes(),
-        }))
+        Ok(Box::new(ObjectStoreWriter::new(
+            target.store,
+            target.path,
+            self.part_size_bytes(),
+        )))
     }
 
     async fn delete(&self, path: &str) -> Result<()> {
@@ -429,15 +461,47 @@ const MAX_CONCURRENT_PART_UPLOADS: usize = 8;
 
 /// Writer that implements `FileWrite` using `object_store` multipart upload.
 struct ObjectStoreWriter {
+    store: Arc<dyn ObjectStore>,
+    path: ObjectStorePath,
     upload: Option<Box<dyn MultipartUpload>>,
     buffer: BytesMut,
     tasks: JoinSet<object_store::Result<()>>,
     parts_submitted: usize,
     bytes_written: u64,
     part_size_bytes: usize,
+    closed: bool,
 }
 
 impl ObjectStoreWriter {
+    fn new(store: Arc<dyn ObjectStore>, path: ObjectStorePath, part_size_bytes: usize) -> Self {
+        Self {
+            store,
+            path,
+            upload: None,
+            buffer: BytesMut::new(),
+            tasks: JoinSet::new(),
+            parts_submitted: 0,
+            bytes_written: 0,
+            part_size_bytes,
+            closed: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_mock_upload(upload: Box<dyn MultipartUpload>, part_size_bytes: usize) -> Self {
+        Self {
+            store: Arc::new(object_store::memory::InMemory::new()),
+            path: ObjectStorePath::from("mock_test"),
+            upload: Some(upload),
+            buffer: BytesMut::new(),
+            tasks: JoinSet::new(),
+            parts_submitted: 0,
+            bytes_written: 0,
+            part_size_bytes,
+            closed: false,
+        }
+    }
+
     /// Aborts all in-flight task uploads, drains the join set to ensure no
     /// requests race the abort call, and then aborts the multipart upload session.
     async fn drain_and_abort(
@@ -580,13 +644,30 @@ impl Drop for ObjectStoreWriter {
 #[async_trait]
 impl FileWrite for ObjectStoreWriter {
     async fn write(&mut self, bs: Bytes) -> Result<()> {
-        let upload = self.upload.as_mut().ok_or_else(|| {
-            Error::new(
+        if self.closed {
+            return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "Writer has already been closed",
-            )
-        })?;
+            ));
+        }
         self.bytes_written += bs.len() as u64;
+
+        if self.upload.is_none() {
+            if self.buffer.len() + bs.len() < self.part_size_bytes {
+                self.buffer.extend_from_slice(&bs);
+                return Ok(());
+            }
+
+            // Exceeded threshold: initialize multipart upload session
+            let upload = self
+                .store
+                .put_multipart(&self.path)
+                .await
+                .map_err(from_object_store_error)?;
+            self.upload = Some(upload);
+        }
+
+        let upload = self.upload.as_mut().unwrap();
         if let Err(e) = Self::append_bytes(
             &mut self.buffer,
             &mut self.tasks,
@@ -604,12 +685,26 @@ impl FileWrite for ObjectStoreWriter {
     }
 
     async fn close(&mut self) -> Result<FileMetadata> {
-        let upload = self.upload.as_mut().ok_or_else(|| {
-            Error::new(
+        if self.closed {
+            return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "Writer has already been closed",
-            )
-        })?;
+            ));
+        }
+        self.closed = true;
+
+        if self.upload.is_none() {
+            let payload = PutPayload::from_bytes(std::mem::take(&mut self.buffer).freeze());
+            self.store
+                .put(&self.path, payload)
+                .await
+                .map_err(from_object_store_error)?;
+            return Ok(FileMetadata {
+                size: self.bytes_written,
+            });
+        }
+
+        let upload = self.upload.as_mut().unwrap();
 
         // Flush any remaining buffered data, or emit an empty part if 0 parts
         // have been sent (S3 requires at least 1 part to complete a multipart upload).
@@ -659,12 +754,6 @@ impl FileWrite for ObjectStoreWriter {
 
         // Successfully completed upload; clear so Drop won't attempt abort.
         let _ = self.upload.take();
-        // TODO: Once cancellation safety across async close() paths is fully verified in production/integration tests, this trace can be removed.
-        tracing::info!(
-            bytes_written = self.bytes_written,
-            parts = self.parts_submitted,
-            "Successfully completed multipart upload and released upload ownership"
-        );
 
         Ok(FileMetadata {
             size: self.bytes_written,
@@ -682,14 +771,71 @@ mod tests {
             config: Arc::new(S3Config::default()),
             delete_batch_size: DEFAULT_DELETE_BATCH_SIZE,
             part_size_bytes: DEFAULT_PART_SIZE_BYTES,
+            retry_settings: S3RetrySettings::default(),
             store_cache: Arc::new(DashMap::new()),
         })
+    }
+
+    #[cfg(feature = "object_store-s3")]
+    #[test]
+    fn test_storage_factory_eagerly_rejects_unsupported_config() {
+        let factory = ObjectStoreStorageFactory::S3;
+
+        let mut role_props = std::collections::HashMap::new();
+        role_props.insert(
+            "client.assume-role.arn".to_string(),
+            "arn:aws:iam::123456789012:role/test".to_string(),
+        );
+        let err = factory
+            .build(&StorageConfig::from_props(role_props))
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+
+        let mut ec2_props = std::collections::HashMap::new();
+        ec2_props.insert("s3.disable-ec2-metadata".to_string(), "true".to_string());
+        let err = factory
+            .build(&StorageConfig::from_props(ec2_props))
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+    }
+
+    #[cfg(feature = "object_store-s3")]
+    #[test]
+    fn test_s3_storage_debug_redacts_credentials() {
+        let storage = ObjectStoreStorage::S3(S3Storage {
+            config: Arc::new(
+                S3Config::builder()
+                    .endpoint("http://localhost:9000")
+                    .region("us-east-1")
+                    .access_key_id("my_access_key")
+                    .secret_access_key("super_secret_key_123")
+                    .session_token("session_token_xyz")
+                    .server_side_encryption_customer_key("ssec_key_456")
+                    .build(),
+            ),
+            delete_batch_size: DEFAULT_DELETE_BATCH_SIZE,
+            part_size_bytes: DEFAULT_PART_SIZE_BYTES,
+            retry_settings: S3RetrySettings::default(),
+            store_cache: Arc::new(DashMap::new()),
+        });
+
+        let debug_str = format!("{storage:?}");
+        assert!(!debug_str.contains("super_secret_key_123"));
+        assert!(!debug_str.contains("session_token_xyz"));
+        assert!(!debug_str.contains("ssec_key_456"));
+        assert!(debug_str.contains("[REDACTED]"));
+        assert!(debug_str.contains("my_access_key"));
+        assert!(debug_str.contains("us-east-1"));
+        assert!(debug_str.contains("http://localhost:9000"));
     }
 
     #[test]
     fn test_parse_part_size_bytes_default() {
         let config = StorageConfig::new();
-        assert_eq!(parse_part_size_bytes(&config), DEFAULT_PART_SIZE_BYTES);
+        assert_eq!(
+            parse_part_size_bytes(&config).unwrap(),
+            DEFAULT_PART_SIZE_BYTES
+        );
     }
 
     #[test]
@@ -700,24 +846,28 @@ mod tests {
             (64 * 1024 * 1024).to_string(),
         );
         let config = StorageConfig::from_props(props);
-        assert_eq!(parse_part_size_bytes(&config), 64 * 1024 * 1024);
+        assert_eq!(parse_part_size_bytes(&config).unwrap(), 64 * 1024 * 1024);
     }
 
     #[test]
-    fn test_parse_part_size_bytes_below_minimum_fallback() {
+    fn test_parse_part_size_bytes_below_minimum_rejected() {
         let mut props = std::collections::HashMap::new();
         props.insert(
             S3_MULTIPART_PART_SIZE_BYTES.to_string(),
             "1048576".to_string(), // 1 MiB (< 5 MiB)
         );
         let config = StorageConfig::from_props(props);
-        assert_eq!(parse_part_size_bytes(&config), DEFAULT_PART_SIZE_BYTES);
+        let err = parse_part_size_bytes(&config).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
     }
 
     #[test]
     fn test_parse_delete_batch_size_default() {
         let config = StorageConfig::new();
-        assert_eq!(parse_delete_batch_size(&config), DEFAULT_DELETE_BATCH_SIZE);
+        assert_eq!(
+            parse_delete_batch_size(&config).unwrap(),
+            DEFAULT_DELETE_BATCH_SIZE
+        );
     }
 
     #[test]
@@ -725,7 +875,7 @@ mod tests {
         let mut props = std::collections::HashMap::new();
         props.insert(S3_DELETE_BATCH_SIZE.to_string(), "500".to_string());
         let config = StorageConfig::from_props(props);
-        assert_eq!(parse_delete_batch_size(&config), 500);
+        assert_eq!(parse_delete_batch_size(&config).unwrap(), 500);
     }
 
     #[test]
@@ -733,26 +883,28 @@ mod tests {
         let mut props = std::collections::HashMap::new();
         props.insert(S3_DELETE_BATCH_SIZE.to_string(), "5000".to_string());
         let config = StorageConfig::from_props(props);
-        assert_eq!(parse_delete_batch_size(&config), S3_MAX_DELETE_BATCH_SIZE);
+        assert_eq!(
+            parse_delete_batch_size(&config).unwrap(),
+            S3_MAX_DELETE_BATCH_SIZE
+        );
     }
 
     #[test]
-    fn test_parse_delete_batch_size_invalid_fallback() {
+    fn test_parse_delete_batch_size_invalid_rejected() {
         let mut props = std::collections::HashMap::new();
         props.insert(
             S3_DELETE_BATCH_SIZE.to_string(),
             "invalid_number".to_string(),
         );
         let config = StorageConfig::from_props(props);
-        assert_eq!(parse_delete_batch_size(&config), DEFAULT_DELETE_BATCH_SIZE);
+        let err = parse_delete_batch_size(&config).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
 
         let mut props_zero = std::collections::HashMap::new();
         props_zero.insert(S3_DELETE_BATCH_SIZE.to_string(), "0".to_string());
         let config_zero = StorageConfig::from_props(props_zero);
-        assert_eq!(
-            parse_delete_batch_size(&config_zero),
-            DEFAULT_DELETE_BATCH_SIZE
-        );
+        let err_zero = parse_delete_batch_size(&config_zero).unwrap_err();
+        assert_eq!(err_zero.kind(), ErrorKind::DataInvalid);
     }
 
     #[cfg(feature = "object_store-s3")]
@@ -883,14 +1035,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_writer_already_closed_errors() {
-        let mut writer = ObjectStoreWriter {
-            upload: None,
-            buffer: BytesMut::new(),
-            tasks: JoinSet::new(),
-            parts_submitted: 0,
-            bytes_written: 0,
-            part_size_bytes: MIN_PART_SIZE_BYTES,
-        };
+        let mut writer = ObjectStoreWriter::with_mock_upload(
+            Box::new(MockMultipartUpload {
+                parts_count: Arc::new(AtomicUsize::new(0)),
+                completed: Arc::new(AtomicBool::new(false)),
+                abort_count: Arc::new(AtomicUsize::new(0)),
+                fail_part: false,
+                fail_complete: false,
+            }),
+            MIN_PART_SIZE_BYTES,
+        );
+        writer.closed = true;
         let write_err = writer.write(Bytes::from_static(b"data")).await.unwrap_err();
         assert_eq!(write_err.kind(), ErrorKind::PreconditionFailed);
         assert_eq!(write_err.message(), "Writer has already been closed");
@@ -944,6 +1099,7 @@ mod tests {
                 Ok(PutResult {
                     e_tag: None,
                     version: None,
+                    extensions: Default::default(),
                 })
             }
         }
@@ -975,14 +1131,7 @@ mod tests {
             fail_complete,
         });
 
-        let writer = ObjectStoreWriter {
-            upload: Some(upload),
-            buffer: BytesMut::new(),
-            tasks: JoinSet::new(),
-            parts_submitted: 0,
-            bytes_written: 0,
-            part_size_bytes: MIN_PART_SIZE_BYTES,
-        };
+        let writer = ObjectStoreWriter::with_mock_upload(upload, MIN_PART_SIZE_BYTES);
 
         (writer, parts_count, completed, abort_count)
     }
@@ -1021,6 +1170,38 @@ mod tests {
         assert_eq!(parts.load(Ordering::SeqCst), 1);
         assert!(completed.load(Ordering::SeqCst));
         assert_eq!(abort_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn test_writer_empty_file_uses_single_put() {
+        let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let path = ObjectStorePath::from("empty.parquet");
+        let mut writer = ObjectStoreWriter::new(store.clone(), path.clone(), MIN_PART_SIZE_BYTES);
+
+        let meta = writer.close().await.unwrap();
+        assert_eq!(meta.size, 0);
+
+        let head = store.head(&path).await.unwrap();
+        assert_eq!(head.size, 0);
+    }
+
+    #[tokio::test]
+    async fn test_writer_small_file_uses_single_put() {
+        let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
+        let path = ObjectStorePath::from("small.parquet");
+        let mut writer = ObjectStoreWriter::new(store.clone(), path.clone(), MIN_PART_SIZE_BYTES);
+
+        writer
+            .write(Bytes::from_static(b"hello world"))
+            .await
+            .unwrap();
+        assert!(writer.upload.is_none());
+
+        let meta = writer.close().await.unwrap();
+        assert_eq!(meta.size, 11);
+
+        let bytes = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(bytes, Bytes::from_static(b"hello world"));
     }
 
     #[tokio::test]
@@ -1143,6 +1324,7 @@ mod tests {
                 Ok(PutResult {
                     e_tag: None,
                     version: None,
+                    extensions: Default::default(),
                 })
             }
 
@@ -1156,14 +1338,7 @@ mod tests {
             max_in_flight: max_in_flight.clone(),
         });
 
-        let mut writer = ObjectStoreWriter {
-            upload: Some(upload),
-            buffer: BytesMut::new(),
-            tasks: JoinSet::new(),
-            parts_submitted: 0,
-            bytes_written: 0,
-            part_size_bytes: MIN_PART_SIZE_BYTES,
-        };
+        let mut writer = ObjectStoreWriter::with_mock_upload(upload, MIN_PART_SIZE_BYTES);
 
         // Write 20 parts (100 MiB) in a single write call
         writer
@@ -1197,6 +1372,7 @@ mod tests {
             Ok(PutResult {
                 e_tag: None,
                 version: None,
+                extensions: Default::default(),
             })
         }
 
@@ -1212,14 +1388,7 @@ mod tests {
         let upload = Box::new(PanickingMockUpload {
             abort_count: abort_count.clone(),
         });
-        let mut writer = ObjectStoreWriter {
-            upload: Some(upload),
-            buffer: BytesMut::new(),
-            tasks: JoinSet::new(),
-            parts_submitted: 0,
-            bytes_written: 0,
-            part_size_bytes: MIN_PART_SIZE_BYTES,
-        };
+        let mut writer = ObjectStoreWriter::with_mock_upload(upload, MIN_PART_SIZE_BYTES);
         writer
             .write(Bytes::from(vec![0u8; 6 * 1024 * 1024]))
             .await
@@ -1244,14 +1413,7 @@ mod tests {
         let upload = Box::new(PanickingMockUpload {
             abort_count: abort_count.clone(),
         });
-        let mut writer = ObjectStoreWriter {
-            upload: Some(upload),
-            buffer: BytesMut::new(),
-            tasks: JoinSet::new(),
-            parts_submitted: 0,
-            bytes_written: 0,
-            part_size_bytes: MIN_PART_SIZE_BYTES,
-        };
+        let mut writer = ObjectStoreWriter::with_mock_upload(upload, MIN_PART_SIZE_BYTES);
         // Writing 10 parts (> MAX_CONCURRENT_PART_UPLOADS of 8) forces drain_capacity inside write()
         let write_res = writer
             .write(Bytes::from(vec![0u8; 10 * 5 * 1024 * 1024]))
@@ -1319,6 +1481,7 @@ mod tests {
                 Ok(PutResult {
                     e_tag: None,
                     version: None,
+                    extensions: Default::default(),
                 })
             }
 
@@ -1339,14 +1502,7 @@ mod tests {
             part_index: Arc::new(AtomicUsize::new(0)),
         });
 
-        let mut writer = ObjectStoreWriter {
-            upload: Some(upload),
-            buffer: BytesMut::new(),
-            tasks: JoinSet::new(),
-            parts_submitted: 0,
-            bytes_written: 0,
-            part_size_bytes: MIN_PART_SIZE_BYTES,
-        };
+        let mut writer = ObjectStoreWriter::with_mock_upload(upload, MIN_PART_SIZE_BYTES);
 
         // Write 2 parts: part 0 fails, sibling part 1 is live in-flight
         let _ = writer.write(Bytes::from(vec![0u8; 11 * 1024 * 1024])).await;

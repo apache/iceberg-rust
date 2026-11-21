@@ -17,12 +17,16 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
-use iceberg::io::S3Config;
+use iceberg::io::{
+    S3_RETRY_MAX_WAIT_MS, S3_RETRY_MIN_WAIT_MS, S3_RETRY_NUM_RETRIES, S3Config, StorageConfig,
+};
 use iceberg::{Error, ErrorKind, Result};
-use object_store::ObjectStore;
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+use object_store::{ObjectStore, RetryConfig};
 use percent_encoding::percent_decode_str;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 /// Parsed components of an S3 URL.
@@ -145,8 +149,29 @@ fn configure_sse(mut builder: AmazonS3Builder, config: &S3Config) -> Result<Amaz
     Ok(builder)
 }
 
-/// Build an `AmazonS3` store from iceberg's `S3Config` for a given bucket.
-pub(crate) fn build_s3_store(config: &S3Config, bucket: &str) -> Result<Arc<dyn ObjectStore>> {
+/// Resolve the endpoint URL for `AmazonS3Builder::with_endpoint`.
+///
+/// When virtual hosted style is enabled, `object_store` requires the bucket to be present
+/// in the endpoint URL (otherwise it uses the endpoint as-is and drops the bucket from requests).
+/// If not already present, we prepend the bucket as a subdomain: `http://{bucket}.{host}`.
+pub(crate) fn resolve_bucket_endpoint(
+    endpoint: &str,
+    bucket: &str,
+    enable_virtual_host_style: bool,
+) -> String {
+    if enable_virtual_host_style {
+        if endpoint.contains(&format!("//{bucket}.")) {
+            endpoint.to_string()
+        } else {
+            endpoint.replace("//", &format!("//{bucket}."))
+        }
+    } else {
+        endpoint.to_string()
+    }
+}
+
+/// Validate S3 configuration for unsupported options.
+pub(crate) fn validate_s3_config(config: &S3Config) -> Result<()> {
     if config.role_arn.is_some() {
         return Err(Error::new(
             ErrorKind::FeatureUnsupported,
@@ -159,17 +184,111 @@ pub(crate) fn build_s3_store(config: &S3Config, bucket: &str) -> Result<Arc<dyn 
             "S3 disable_ec2_metadata is not supported by object_store backend",
         ));
     }
-    if config.disable_config_load {
-        return Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            "S3 disable_config_load is not supported by object_store backend",
-        ));
+    Ok(())
+}
+
+/// Parsed S3 retry policy configuration.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct S3RetrySettings {
+    pub(crate) num_retries: Option<usize>,
+    pub(crate) min_wait_ms: Option<u64>,
+    pub(crate) max_wait_ms: Option<u64>,
+}
+
+impl S3RetrySettings {
+    pub(crate) fn parse(config: &StorageConfig) -> Result<Self> {
+        let num_retries = if let Some(val) = config.get(S3_RETRY_NUM_RETRIES) {
+            Some(val.parse::<usize>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid {S3_RETRY_NUM_RETRIES}: {val}: {e}"),
+                )
+            })?)
+        } else {
+            None
+        };
+
+        let min_wait_ms = if let Some(val) = config.get(S3_RETRY_MIN_WAIT_MS) {
+            let ms = val.parse::<u64>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid {S3_RETRY_MIN_WAIT_MS}: {val}: {e}"),
+                )
+            })?;
+            if ms == 0 {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid {S3_RETRY_MIN_WAIT_MS}: {val}: wait must be positive"),
+                ));
+            }
+            Some(ms)
+        } else {
+            None
+        };
+
+        let max_wait_ms = if let Some(val) = config.get(S3_RETRY_MAX_WAIT_MS) {
+            let ms = val.parse::<u64>().map_err(|e| {
+                Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid {S3_RETRY_MAX_WAIT_MS}: {val}: {e}"),
+                )
+            })?;
+            if ms == 0 {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    format!("Invalid {S3_RETRY_MAX_WAIT_MS}: {val}: wait must be positive"),
+                ));
+            }
+            Some(ms)
+        } else {
+            None
+        };
+
+        Ok(Self {
+            num_retries,
+            min_wait_ms,
+            max_wait_ms,
+        })
     }
 
-    let mut builder = AmazonS3Builder::from_env().with_bucket_name(bucket);
+    pub(crate) fn to_retry_config(&self) -> Option<RetryConfig> {
+        if self.num_retries.is_none() && self.min_wait_ms.is_none() && self.max_wait_ms.is_none() {
+            return None;
+        }
+
+        let mut retry = RetryConfig::default();
+        if let Some(n) = self.num_retries {
+            retry.max_retries = n;
+        }
+        if let Some(min) = self.min_wait_ms {
+            retry.backoff.init_backoff = Duration::from_millis(min);
+        }
+        if let Some(max) = self.max_wait_ms {
+            retry.backoff.max_backoff = Duration::from_millis(max);
+        }
+        Some(retry)
+    }
+}
+
+/// Build an `AmazonS3` store from iceberg's `S3Config` for a given bucket.
+pub(crate) fn build_s3_store(
+    config: &S3Config,
+    retry_settings: &S3RetrySettings,
+    bucket: &str,
+) -> Result<Arc<dyn ObjectStore>> {
+    validate_s3_config(config)?;
+
+    let mut builder = if config.disable_config_load {
+        AmazonS3Builder::new()
+    } else {
+        AmazonS3Builder::from_env()
+    }
+    .with_bucket_name(bucket);
 
     if let Some(ref endpoint) = config.endpoint {
-        builder = builder.with_endpoint(endpoint);
+        let endpoint_url =
+            resolve_bucket_endpoint(endpoint, bucket, config.enable_virtual_host_style);
+        builder = builder.with_endpoint(endpoint_url);
         if endpoint.starts_with("http://") {
             builder = builder.with_allow_http(true);
         }
@@ -189,6 +308,10 @@ pub(crate) fn build_s3_store(config: &S3Config, bucket: &str) -> Result<Arc<dyn 
     builder = builder.with_virtual_hosted_style_request(config.enable_virtual_host_style);
     if config.allow_anonymous {
         builder = builder.with_skip_signature(true);
+    }
+
+    if let Some(retry) = retry_settings.to_retry_config() {
+        builder = builder.with_retry(retry);
     }
 
     builder = configure_sse(builder, config)?;
@@ -334,13 +457,38 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_bucket_endpoint_virtual_hosted() {
+        assert_eq!(
+            resolve_bucket_endpoint("http://localhost:9000", "my-bucket", true),
+            "http://my-bucket.localhost:9000"
+        );
+        assert_eq!(
+            resolve_bucket_endpoint("https://s3.amazonaws.com", "my-bucket", true),
+            "https://my-bucket.s3.amazonaws.com"
+        );
+        // Already contains bucket prefix
+        assert_eq!(
+            resolve_bucket_endpoint("https://my-bucket.s3.amazonaws.com", "my-bucket", true),
+            "https://my-bucket.s3.amazonaws.com"
+        );
+    }
+
+    #[test]
+    fn test_resolve_bucket_endpoint_path_style() {
+        assert_eq!(
+            resolve_bucket_endpoint("http://localhost:9000", "my-bucket", false),
+            "http://localhost:9000"
+        );
+    }
+
+    #[test]
     fn test_build_s3_store_kms_encryption() {
         let config = S3Config::builder()
             .region("us-east-1")
             .server_side_encryption("aws:kms")
             .server_side_encryption_aws_kms_key_id("arn:aws:kms:us-east-1:123456789012:key/test")
             .build();
-        assert!(build_s3_store(&config, "my-bucket").is_ok());
+        assert!(build_s3_store(&config, &S3RetrySettings::default(), "my-bucket").is_ok());
     }
 
     #[test]
@@ -349,7 +497,7 @@ mod tests {
             .region("us-east-1")
             .server_side_encryption_customer_key("MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=")
             .build();
-        assert!(build_s3_store(&config, "my-bucket").is_ok());
+        assert!(build_s3_store(&config, &S3RetrySettings::default(), "my-bucket").is_ok());
     }
 
     #[test]
@@ -358,7 +506,7 @@ mod tests {
             .region("us-east-1")
             .role_arn("arn:aws:iam::123456789012:role/test-role")
             .build();
-        let err = build_s3_store(&config, "my-bucket").unwrap_err();
+        let err = build_s3_store(&config, &S3RetrySettings::default(), "my-bucket").unwrap_err();
         assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
     }
 
@@ -368,17 +516,65 @@ mod tests {
             .region("us-east-1")
             .disable_ec2_metadata(true)
             .build();
-        let err = build_s3_store(&config, "my-bucket").unwrap_err();
+        let err = build_s3_store(&config, &S3RetrySettings::default(), "my-bucket").unwrap_err();
         assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
     }
 
     #[test]
-    fn test_build_s3_store_unsupported_disable_config_load() {
+    fn test_build_s3_store_disable_config_load() {
         let config = S3Config::builder()
             .region("us-east-1")
             .disable_config_load(true)
             .build();
-        let err = build_s3_store(&config, "my-bucket").unwrap_err();
-        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(build_s3_store(&config, &S3RetrySettings::default(), "my-bucket").is_ok());
+    }
+
+    #[test]
+    fn test_s3_retry_settings_parse() {
+        let mut props = std::collections::HashMap::new();
+        props.insert(S3_RETRY_NUM_RETRIES.to_string(), "5".to_string());
+        props.insert(S3_RETRY_MIN_WAIT_MS.to_string(), "1000".to_string());
+        props.insert(S3_RETRY_MAX_WAIT_MS.to_string(), "10000".to_string());
+
+        let settings = S3RetrySettings::parse(&StorageConfig::from_props(props)).unwrap();
+        assert_eq!(settings.num_retries, Some(5));
+        assert_eq!(settings.min_wait_ms, Some(1000));
+        assert_eq!(settings.max_wait_ms, Some(10000));
+
+        let retry = settings.to_retry_config().unwrap();
+        assert_eq!(retry.max_retries, 5);
+        assert_eq!(retry.backoff.init_backoff, Duration::from_millis(1000));
+        assert_eq!(retry.backoff.max_backoff, Duration::from_millis(10000));
+    }
+
+    #[test]
+    fn test_s3_retry_settings_zero_retries() {
+        let mut props = std::collections::HashMap::new();
+        props.insert(S3_RETRY_NUM_RETRIES.to_string(), "0".to_string());
+        let settings = S3RetrySettings::parse(&StorageConfig::from_props(props)).unwrap();
+        assert_eq!(settings.num_retries, Some(0));
+        let retry = settings.to_retry_config().unwrap();
+        assert_eq!(retry.max_retries, 0);
+    }
+
+    #[test]
+    fn test_s3_retry_settings_invalid_values() {
+        let mut props_invalid_num = std::collections::HashMap::new();
+        props_invalid_num.insert(S3_RETRY_NUM_RETRIES.to_string(), "-1".to_string());
+        assert_eq!(
+            S3RetrySettings::parse(&StorageConfig::from_props(props_invalid_num))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::DataInvalid
+        );
+
+        let mut props_zero_wait = std::collections::HashMap::new();
+        props_zero_wait.insert(S3_RETRY_MIN_WAIT_MS.to_string(), "0".to_string());
+        assert_eq!(
+            S3RetrySettings::parse(&StorageConfig::from_props(props_zero_wait))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::DataInvalid
+        );
     }
 }

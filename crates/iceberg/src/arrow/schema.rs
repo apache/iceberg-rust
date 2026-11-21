@@ -104,6 +104,71 @@ impl ExtensionType for VariantExtensionType {
     }
 }
 
+/// Whether `field` carries the [`VariantExtensionType`].
+pub(crate) fn is_variant_field(field: &Field) -> bool {
+    field.extension_type_name() == Some(VariantExtensionType::NAME)
+}
+
+/// Whether `data_type` can hold a variant's `metadata` or `value` bytes.
+fn is_variant_binary(data_type: &DataType) -> bool {
+    match data_type {
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => true,
+        DataType::Dictionary(_, value_type) => is_variant_binary(value_type),
+        _ => false,
+    }
+}
+
+/// Checks that `field` stores a variant unshredded: `metadata` and `value` bytes, matched by
+/// name, with a required `metadata`.
+pub(crate) fn validate_unshredded_variant(field: &Field, variant_field_id: i32) -> Result<()> {
+    let invalid = |problem: String| {
+        invalid_data!(
+            "Variant column `{}` (field id {variant_field_id}) {problem}",
+            field.name()
+        )
+    };
+    let DataType::Struct(subfields) = field.data_type() else {
+        return Err(invalid(format!(
+            "must be stored as a group, found {}",
+            field.data_type()
+        )));
+    };
+    if subfields.find("typed_value").is_some() {
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            format!(
+                "Reading shredded variant column `{}` (field id {variant_field_id}) is not supported yet, see https://github.com/apache/iceberg-rust/issues/3606",
+                field.name()
+            ),
+        ));
+    }
+    for name in ["metadata", "value"] {
+        match subfields.find(name) {
+            Some((_, subfield)) if !is_variant_binary(subfield.data_type()) => {
+                return Err(invalid(format!(
+                    "has a non-binary `{name}` field: {}",
+                    subfield.data_type()
+                )));
+            }
+            // The Parquet and Arrow variant specs require `metadata`, and the table type reads
+            // it as non-nullable.
+            Some((_, subfield)) if name == "metadata" && subfield.is_nullable() => {
+                return Err(invalid(
+                    "has an optional `metadata` field, which must be required".to_string(),
+                ));
+            }
+            Some(_) => {}
+            None => return Err(invalid(format!("is missing the `{name}` field"))),
+        }
+    }
+    if subfields.len() != 2 {
+        return Err(invalid(
+            "has fields other than `metadata` and `value`".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 fn to_arrow_wkb_edges(algorithm: EdgeInterpolationAlgorithm) -> WkbEdges {
     match algorithm {
         EdgeInterpolationAlgorithm::Spherical => WkbEdges::Spherical,
@@ -155,6 +220,10 @@ fn iceberg_crs_from_wkb_metadata(metadata: &WkbMetadata) -> Result<String> {
             "Geospatial CRS metadata must be a string or PROJJSON object",
         )),
     }
+}
+
+fn arrow_crs_from_iceberg(crs: &str) -> Option<&str> {
+    (!crs.eq_ignore_ascii_case(UNSET_GEOSPATIAL_CRS)).then_some(crs)
 }
 
 /// A post order arrow schema visitor.
@@ -410,7 +479,7 @@ pub(super) fn try_get_field_id_from_metadata(field: &Field) -> Result<Option<i32
         .transpose()
 }
 
-pub(super) fn get_field_id_from_metadata(field: &FieldRef) -> Result<i32> {
+pub(super) fn get_field_id_from_metadata(field: &Field) -> Result<i32> {
     try_get_field_id_from_metadata(field)?
         .ok_or_else(|| invalid_data!("Field id not found in metadata"))
 }
@@ -759,12 +828,12 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                 arrow_field.try_with_extension_type(UuidExtensionType)?;
             }
             Type::Primitive(PrimitiveType::Geometry(geometry)) => {
-                let metadata = WkbMetadata::new(Some(geometry.crs()), None);
+                let metadata = WkbMetadata::new(arrow_crs_from_iceberg(geometry.crs()), None);
                 arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
             }
             Type::Primitive(PrimitiveType::Geography(geography)) => {
                 let metadata = WkbMetadata::new(
-                    Some(geography.crs()),
+                    arrow_crs_from_iceberg(geography.crs()),
                     Some(to_arrow_wkb_edges(geography.algorithm())),
                 );
                 arrow_field.try_with_extension_type(WkbType::new(Some(metadata)))?;
@@ -890,7 +959,8 @@ impl SchemaVisitor for ToArrowSchemaConverter {
                     .map(DataType::FixedSizeBinary)
                     .unwrap_or(DataType::LargeBinary),
             )),
-            PrimitiveType::Binary | PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
+            PrimitiveType::Binary => Ok(ArrowSchemaOrFieldOrType::Type(DataType::Binary)),
+            PrimitiveType::Geometry(_) | PrimitiveType::Geography(_) => {
                 Ok(ArrowSchemaOrFieldOrType::Type(DataType::LargeBinary))
             }
         }
@@ -2015,8 +2085,8 @@ mod tests {
                 false,
                 "12",
             ),
-            simple_field("l", DataType::LargeBinary, false, "13"),
-            simple_field("o", DataType::LargeBinary, false, "22"),
+            simple_field("l", DataType::Binary, false, "13"),
+            simple_field("o", DataType::Binary, false, "22"),
             simple_field("m", DataType::FixedSizeBinary(10), false, "11"),
             simple_field(
                 "list",
@@ -2044,7 +2114,7 @@ mod tests {
                 "fixed_list",
                 DataType::List(Arc::new(simple_field(
                     "element",
-                    DataType::LargeBinary,
+                    DataType::Binary,
                     false,
                     "26",
                 ))),
@@ -2607,6 +2677,47 @@ mod tests {
                 GeometryType::new(Some(UNSET_GEOSPATIAL_CRS.to_string())).unwrap()
             ))
         );
+    }
+
+    #[test]
+    fn test_geospatial_arrow_unset_crs_export() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(
+                    1,
+                    "geom",
+                    Type::Primitive(PrimitiveType::Geometry(
+                        GeometryType::new(Some(UNSET_GEOSPATIAL_CRS.to_string())).unwrap(),
+                    )),
+                )
+                .into(),
+                NestedField::optional(
+                    2,
+                    "geog",
+                    Type::Primitive(PrimitiveType::Geography(
+                        GeographyType::new(
+                            Some(UNSET_GEOSPATIAL_CRS.to_string()),
+                            IcebergEdgeInterpolationAlgorithm::Spherical,
+                        )
+                        .unwrap(),
+                    )),
+                )
+                .into(),
+            ])
+            .build()
+            .unwrap();
+        let arrow_schema = schema_to_arrow_schema(&schema).unwrap();
+        for field in arrow_schema.fields() {
+            assert!(
+                field
+                    .try_extension_type::<WkbType>()
+                    .unwrap()
+                    .metadata()
+                    .crs
+                    .is_none()
+            );
+        }
+        assert_eq!(arrow_schema_to_schema(&arrow_schema).unwrap(), schema);
     }
 
     #[test]

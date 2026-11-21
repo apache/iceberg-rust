@@ -35,7 +35,46 @@ use crate::spec::{FormatVersion, Literal, RawLiteral, Type};
 use crate::{Error, metadata_columns};
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct ManifestEntryV2 {
+#[serde(transparent)]
+pub(super) struct ManifestEntryV2(ManifestEntryV2V3);
+
+impl ManifestEntryV2 {
+    pub fn try_from(value: ManifestEntry, partition_type: &Type) -> Result<Self, Error> {
+        ManifestEntryV2V3::try_from(value, partition_type, FormatVersion::V2).map(Self)
+    }
+
+    pub fn try_into(
+        self,
+        partition_spec_id: i32,
+        partition_type: &Type,
+        schema: &Schema,
+    ) -> Result<ManifestEntry, Error> {
+        self.0.try_into(partition_spec_id, partition_type, schema)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(transparent)]
+pub(super) struct ManifestEntryV3(ManifestEntryV2V3);
+
+impl ManifestEntryV3 {
+    pub fn try_from(value: ManifestEntry, partition_type: &Type) -> Result<Self, Error> {
+        ManifestEntryV2V3::try_from(value, partition_type, FormatVersion::V3).map(Self)
+    }
+
+    pub fn try_into(
+        self,
+        partition_spec_id: i32,
+        partition_type: &Type,
+        schema: &Schema,
+    ) -> Result<ManifestEntry, Error> {
+        self.0.try_into(partition_spec_id, partition_type, schema)
+    }
+}
+
+/// The manifest entry layout shared by format versions 2 and 3.
+#[derive(Serialize, Deserialize)]
+struct ManifestEntryV2V3 {
     status: i32,
     snapshot_id: Option<i64>,
     sequence_number: Option<i64>,
@@ -43,18 +82,22 @@ pub(super) struct ManifestEntryV2 {
     data_file: DataFileSerde,
 }
 
-impl ManifestEntryV2 {
-    pub fn try_from(value: ManifestEntry, partition_type: &Type) -> Result<Self, Error> {
+impl ManifestEntryV2V3 {
+    fn try_from(
+        value: ManifestEntry,
+        partition_type: &Type,
+        format_version: FormatVersion,
+    ) -> Result<Self, Error> {
         Ok(Self {
             status: value.status as i32,
             snapshot_id: value.snapshot_id,
             sequence_number: value.sequence_number,
             file_sequence_number: value.file_sequence_number,
-            data_file: DataFileSerde::try_from(value.data_file, partition_type, FormatVersion::V2)?,
+            data_file: DataFileSerde::try_from(value.data_file, partition_type, format_version)?,
         })
     }
 
-    pub fn try_into(
+    fn try_into(
         self,
         partition_spec_id: i32,
         partition_type: &Type,
@@ -338,7 +381,7 @@ mod tests {
     use std::io::Cursor;
     use std::sync::Arc;
 
-    use crate::avro::define_named_types_repeatedly;
+    use crate::avro::{assert_deflate_codec, define_named_types_repeatedly};
     use crate::spec::manifest::_serde::{I64Entry, parse_i64_entry};
     use crate::spec::{
         DataContentType, DataFile, DataFileFormat, Datum, FormatVersion, Literal, NestedField,
@@ -423,6 +466,7 @@ mod tests {
             FormatVersion::V2,
         )
         .unwrap();
+        assert_deflate_codec(&buffer);
 
         let actual_data_file = read_data_files_from_avro(
             &mut Cursor::new(buffer),
@@ -495,6 +539,7 @@ mod tests {
             FormatVersion::V1,
         )
         .unwrap();
+        assert_deflate_codec(&buffer);
 
         let actual_data_file = read_data_files_from_avro(
             &mut Cursor::new(buffer),

@@ -214,6 +214,7 @@ impl Transaction {
             )))
             .with_max_times(props.commit_num_retries()?)
             .with_factor(2.0)
+            .with_jitter()
             .build())
     }
 
@@ -264,8 +265,8 @@ mod tests {
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Struct, TableMetadata,
-        TableProperties,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, PartitionSpec, Struct,
+        TableMetadata, TableProperties, Transform,
     };
     use crate::table::{StaticTable, Table};
     use crate::test_utils::{make_encrypted_table, test_runtime};
@@ -350,6 +351,27 @@ mod tests {
             .runtime(test_runtime())
             .build()
             .unwrap()
+    }
+
+    pub(super) fn with_bucket_partition_spec(table: Table) -> Table {
+        let spec = PartitionSpec::builder(table.metadata().current_schema().clone())
+            .add_partition_field("x", "x", Transform::Identity)
+            .unwrap()
+            .add_partition_field("y", "y_bucket", Transform::Bucket(16))
+            .unwrap()
+            .build()
+            .unwrap()
+            .into_unbound();
+        let metadata = table
+            .metadata()
+            .clone()
+            .into_builder(None)
+            .add_default_partition_spec(spec)
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+        table.with_metadata(Arc::new(metadata))
     }
 
     async fn make_v2_minimal_readonly_table() -> Table {
@@ -565,6 +587,18 @@ mod tests {
             assert_eq!(err.message(), "Commit conflict");
             assert!(err.retryable(), "Error should be retryable");
         }
+    }
+
+    #[test]
+    fn test_commit_backoff_is_jittered() {
+        let table = setup_test_table("4");
+        let delays = || {
+            Transaction::build_backoff(table.metadata().table_properties())
+                .unwrap()
+                .collect::<Vec<_>>()
+        };
+
+        assert_ne!(delays(), delays());
     }
 
     #[tokio::test]

@@ -42,6 +42,8 @@ Once your changes are ready you must submit your branch as a [pull request](http
 
 With coding agents, the number of open PRs now far exceeds our review capacity. To help reviewers focus on fewer PRs, users without write access are limited to **3 open, non-draft PRs** at a time. If you've reached the limit, wait for existing PRs to be merged, close some of them, or convert some to drafts until you have fewer than three open PRs before opening another.
 
+Contributors who have shown sustained engagement with the project can be exempted from the limit. The exemptions are listed under `bypass_users` in [`.asf.yaml`](https://github.com/apache/iceberg-rust/blob/main/.asf.yaml). Exempt contributors should open lower-priority or blocked PRs as drafts so reviewers can see where to focus.
+
 #### Title
 
 The pull request title must follow the format outlined in the [conventional commits spec](https://www.conventionalcommits.org). [Conventional commits](https://www.conventionalcommits.org) is a standardized format for commit messages. iceberg-rust only requires this format for commits on the `main` branch. And because iceberg-rust squashes commits before merging branches, this means that only the pull request title must conform to this format.

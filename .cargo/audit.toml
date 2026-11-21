@@ -32,6 +32,12 @@ ignore = [
   # 1.0.10, but cargo-audit flags it by version number. Remove once sqlx moves
   # to webpki-roots 1.x directly.
   "RUSTSEC-2026-0381",
+  # Bundled SQLite can expose memory when opening an attacker-controlled
+  # database and WAL file. SQLite is enabled only by dev-dependencies here,
+  # and tests create their own databases.
+  # sqlx 0.8.6 and 0.9.0 exclude the patched libsqlite3-sys >= 0.39.0.
+  # Remove once sqlx supports it and the lockfile uses a patched version.
+  "RUSTSEC-2026-0459",
   # `zstd` < 0.14.3 / `zstd-safe` < 8.2.0 memory-safety bugs.
   #
   # Fixed only in zstd 0.14, but parquet 59 and apache-avro 0.22 require
@@ -49,16 +55,4 @@ ignore = [
   "RUSTSEC-2026-0398",
   # Requires the `legacy` feature, which is off.
   "RUSTSEC-2026-0403",
-  # `quick-xml` < 0.41.0 has quadratic duplicate-attribute validation and
-  # unbounded namespace-declaration allocation (parser DoS).
-  #
-  # It is transitive through object_store 0.13.2 (DataFusion 53 / Parquet 58),
-  # OpenDAL 0.57.0, and reqsign-aws-v4 3.0.0. Their released compatible
-  # versions cannot select the fixed quick-xml >=0.41.0 release.
-  #
-  # Per SECURITY-THREAT-MODEL.md, malformed-input parser CPU/memory DoS is
-  # hardening rather than an Iceberg Rust trust-boundary vulnerability. Remove
-  # once the transitive dependency set permits quick-xml >=0.41.0.
-  "RUSTSEC-2026-0194",
-  "RUSTSEC-2026-0195",
 ]
