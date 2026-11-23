@@ -45,6 +45,7 @@
 
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::{Bytes, BytesMut};
 
@@ -144,14 +145,15 @@ pub struct AesGcmFileRead {
     num_blocks: u64,
     /// Size of the last cipher block (may be smaller than `CIPHER_BLOCK_SIZE`).
     last_cipher_block_size: u32,
+    /// Whether a read has checked the AGS1 header, which no block authenticates.
+    header_checked: AtomicBool,
 }
 
 impl AesGcmFileRead {
     /// Creates a new `AesGcmFileRead` for decrypting an AGS1 stream.
     ///
     /// Computes the plaintext size and block layout from the encrypted file
-    /// length. No I/O is performed; reads that cover the first block check
-    /// the AGS1 header.
+    /// length. No I/O is performed; the first read checks the AGS1 header.
     ///
     /// # Arguments
     ///
@@ -203,6 +205,7 @@ impl AesGcmFileRead {
             plain_stream_size,
             num_blocks,
             last_cipher_block_size,
+            header_checked: AtomicBool::new(false),
         })
     }
 
@@ -278,8 +281,8 @@ impl FileRead for AesGcmFileRead {
     /// 2. **Single I/O read** — calculates the contiguous byte range in the
     ///    encrypted file that covers all needed blocks (including their 12-byte
     ///    nonces and 16-byte GCM tags) and fetches them in one call to the inner
-    ///    `FileRead`. When block 0 is needed, the 8-byte AGS1 header is fetched
-    ///    with it and checked before any block is decrypted.
+    ///    `FileRead`. The first read also checks the 8-byte AGS1 header, fetched
+    ///    in the same call when block 0 is needed and separately otherwise.
     ///
     /// 3. **Decrypt per block** — iterates over each cipher block in the response,
     ///    decrypts it with AES-GCM using the per-block AAD (`aad_prefix || block_index`),
@@ -319,8 +322,18 @@ impl FileRead for AesGcmFileRead {
         let first_block = range.start / PLAIN_BLOCK_SIZE as u64;
         let last_block = range.end.saturating_sub(1) / PLAIN_BLOCK_SIZE as u64;
 
-        // The header is not authenticated, so it is read and checked along with the first block.
-        let header_length = if first_block == 0 {
+        let check_header = !self.header_checked.load(Ordering::Relaxed);
+        if check_header && first_block != 0 {
+            let header = self.inner.read(0..GCM_STREAM_HEADER_LENGTH as u64).await?;
+            check_stream_header(header[..].try_into().map_err(|_| {
+                invalid_data!(
+                    "Invalid encrypted read length: expected {GCM_STREAM_HEADER_LENGTH} bytes, got {}",
+                    header.len()
+                )
+            })?)?;
+            self.header_checked.store(true, Ordering::Relaxed);
+        }
+        let header_length = if check_header && first_block == 0 {
             GCM_STREAM_HEADER_LENGTH as u64
         } else {
             0
@@ -339,11 +352,12 @@ impl FileRead for AesGcmFileRead {
                 all_encrypted.len()
             ));
         }
-        let all_encrypted = if first_block == 0 {
+        let all_encrypted = if header_length != 0 {
             let (header, blocks) = all_encrypted
                 .split_first_chunk()
                 .ok_or_else(|| invalid_data!("Encrypted read is shorter than the AGS1 header"))?;
             check_stream_header(header)?;
+            self.header_checked.store(true, Ordering::Relaxed);
             blocks
         } else {
             &all_encrypted[..]
@@ -975,7 +989,13 @@ mod tests {
         let key = b"0123456789abcdef";
         let aad_prefix = b"test-aad-prefix!";
 
-        for plaintext in [b"".as_slice(), b"sensitive data".as_slice()] {
+        let multi_block = vec![7u8; PLAIN_BLOCK_SIZE as usize + 10];
+        let past_first_block = PLAIN_BLOCK_SIZE as u64..PLAIN_BLOCK_SIZE as u64 + 10;
+        for (plaintext, range) in [
+            (b"".as_slice(), 0..0),
+            (b"sensitive data".as_slice(), 0..14),
+            (multi_block.as_slice(), past_first_block),
+        ] {
             let encrypted = encrypt_ags1(plaintext, &make_cipher(key), aad_prefix);
             for (header, message) in [
                 (
@@ -997,11 +1017,59 @@ mod tests {
                 )
                 .unwrap();
 
-                let err = reader.read(0..plaintext.len() as u64).await.unwrap_err();
+                let err = reader.read(range.clone()).await.unwrap_err();
                 assert_eq!(err.kind(), ErrorKind::DataInvalid);
                 assert_eq!(err.message(), message);
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_header_is_checked_once() {
+        struct RecordingRead {
+            data: Bytes,
+            ranges: Arc<std::sync::Mutex<Vec<Range<u64>>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl FileRead for RecordingRead {
+            async fn read(&self, range: Range<u64>) -> Result<Bytes> {
+                self.ranges.lock().unwrap().push(range.clone());
+                Ok(self.data.slice(range.start as usize..range.end as usize))
+            }
+        }
+
+        let key = b"0123456789abcdef";
+        let aad_prefix = b"test-aad-prefix!";
+        let plaintext = vec![7u8; PLAIN_BLOCK_SIZE as usize + 10];
+        let encrypted = encrypt_ags1(&plaintext, &make_cipher(key), aad_prefix);
+        let ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let reader = AesGcmFileRead::new(
+            Box::new(RecordingRead {
+                data: Bytes::from(encrypted.clone()),
+                ranges: ranges.clone(),
+            }),
+            Arc::new(make_cipher(key)),
+            aad_prefix.as_slice().into(),
+            encrypted.len() as u64,
+        )
+        .unwrap();
+
+        let past_first_block = PLAIN_BLOCK_SIZE as u64..PLAIN_BLOCK_SIZE as u64 + 10;
+        reader.read(past_first_block.clone()).await.unwrap();
+        reader.read(past_first_block).await.unwrap();
+        reader.read(0..10).await.unwrap();
+
+        let header = 0..u64::from(GCM_STREAM_HEADER_LENGTH);
+        let second_block =
+            u64::from(GCM_STREAM_HEADER_LENGTH + CIPHER_BLOCK_SIZE)..encrypted.len() as u64;
+        let first_block = header.end..second_block.start;
+        assert_eq!(*ranges.lock().unwrap(), vec![
+            header,
+            second_block.clone(),
+            second_block,
+            first_block
+        ]);
     }
 
     #[tokio::test]
