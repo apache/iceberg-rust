@@ -16,6 +16,7 @@ pub mod iceberg::arrow::record_batch_partition_splitter
 pub struct iceberg::arrow::record_batch_partition_splitter::RecordBatchPartitionSplitter
 impl iceberg::arrow::RecordBatchPartitionSplitter
 pub fn iceberg::arrow::RecordBatchPartitionSplitter::split(&self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<alloc::vec::Vec<(iceberg::spec::PartitionKey, arrow_array::record_batch::RecordBatch)>>
+pub fn iceberg::arrow::RecordBatchPartitionSplitter::split_with_partition_values(&self, batch: &arrow_array::record_batch::RecordBatch, partition_values: &arrow_array::array::struct_array::StructArray) -> iceberg::Result<alloc::vec::Vec<(iceberg::spec::PartitionKey, arrow_array::record_batch::RecordBatch)>>
 pub fn iceberg::arrow::RecordBatchPartitionSplitter::try_new(iceberg_schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpecRef, calculator: core::option::Option<iceberg::arrow::PartitionValueCalculator>) -> iceberg::Result<Self>
 pub fn iceberg::arrow::RecordBatchPartitionSplitter::try_new_with_computed_values(iceberg_schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpecRef) -> iceberg::Result<Self>
 pub fn iceberg::arrow::RecordBatchPartitionSplitter::try_new_with_precomputed_values(iceberg_schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpecRef) -> iceberg::Result<Self>
@@ -142,6 +143,7 @@ pub fn iceberg::arrow::PartitionValueCalculator::fmt(&self, f: &mut core::fmt::F
 pub struct iceberg::arrow::RecordBatchPartitionSplitter
 impl iceberg::arrow::RecordBatchPartitionSplitter
 pub fn iceberg::arrow::RecordBatchPartitionSplitter::split(&self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<alloc::vec::Vec<(iceberg::spec::PartitionKey, arrow_array::record_batch::RecordBatch)>>
+pub fn iceberg::arrow::RecordBatchPartitionSplitter::split_with_partition_values(&self, batch: &arrow_array::record_batch::RecordBatch, partition_values: &arrow_array::array::struct_array::StructArray) -> iceberg::Result<alloc::vec::Vec<(iceberg::spec::PartitionKey, arrow_array::record_batch::RecordBatch)>>
 pub fn iceberg::arrow::RecordBatchPartitionSplitter::try_new(iceberg_schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpecRef, calculator: core::option::Option<iceberg::arrow::PartitionValueCalculator>) -> iceberg::Result<Self>
 pub fn iceberg::arrow::RecordBatchPartitionSplitter::try_new_with_computed_values(iceberg_schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpecRef) -> iceberg::Result<Self>
 pub fn iceberg::arrow::RecordBatchPartitionSplitter::try_new_with_precomputed_values(iceberg_schema: iceberg::spec::SchemaRef, partition_spec: iceberg::spec::PartitionSpecRef) -> iceberg::Result<Self>
