@@ -23,7 +23,7 @@ use futures::{StreamExt, TryStreamExt, stream};
 
 use crate::Result;
 use crate::io::FileIO;
-use crate::spec::{ManifestFile, ManifestReader, TableMetadata};
+use crate::spec::{ManifestFile, TableMetadata};
 use crate::table::Table;
 
 const DELETE_CONCURRENCY: usize = 10;
@@ -62,7 +62,7 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
 
     // Delete data files only if gc.enabled is true, to avoid corrupting shared tables
     if metadata.table_properties().gc_enabled()? {
-        delete_data_files(io, &manifests_to_delete).await?;
+        delete_data_files(table_info, &manifests_to_delete).await?;
     }
 
     // Delete manifest files
@@ -145,12 +145,13 @@ pub async fn delete_removed_metadata_files(io: &FileIO, base: &TableMetadata, ne
 
 /// Reads manifests concurrently and deletes the data files referenced within.
 async fn delete_data_files(
-    io: &FileIO,
+    table: &Table,
     manifest_files: &HashMap<String, ManifestFile>,
 ) -> Result<()> {
+    let io = table.file_io();
     stream::iter(manifest_files.values().map(Ok))
         .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_file| async move {
-            let manifest = ManifestReader::new(io.clone()).read(manifest_file).await?;
+            let manifest = table.manifest_reader().read(manifest_file).await?;
             let data_file_paths = manifest
                 .entries()
                 .iter()
