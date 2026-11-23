@@ -38,10 +38,9 @@ iceberg-kms = { version = "x.y.z", features = ["aws"] }
 `encryption.kms-type` catalog property. Built-in values follow Iceberg Java:
 `aws`, `azure`, and `gcp`. Currently, only `aws` has a Rust implementation.
 
-The built-in mappings are fixed. Applications using a custom KMS provider can
-supply their own implementation of `KmsClientFactory` directly to the catalog
-builder. This replaces Java's reflection-based `encryption.kms-impl` extension
-point.
+`encryption.kms-impl` is accepted when it names one of Iceberg Java's built-in
+client classes. Applications using a custom KMS provider supply their own
+implementation of `KmsClientFactory` directly to the catalog builder.
 
 See the [API documentation](https://docs.rs/iceberg-kms/latest) for
 provider-specific configuration and usage.

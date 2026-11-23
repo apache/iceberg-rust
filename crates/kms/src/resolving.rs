@@ -29,31 +29,38 @@ use crate::aws::AwsKmsClientFactory;
 pub const ENCRYPTION_KMS_TYPE: &str = "encryption.kms-type";
 /// [`ENCRYPTION_KMS_TYPE`] value selecting AWS Key Management Service.
 pub const ENCRYPTION_KMS_TYPE_AWS: &str = "aws";
-/// [`ENCRYPTION_KMS_TYPE`] value selecting Azure Key Vault.
-pub const ENCRYPTION_KMS_TYPE_AZURE: &str = "azure";
-/// [`ENCRYPTION_KMS_TYPE`] value selecting Google Cloud Key Management Service.
-pub const ENCRYPTION_KMS_TYPE_GCP: &str = "gcp";
+const ENCRYPTION_KMS_TYPE_AZURE: &str = "azure";
+const ENCRYPTION_KMS_TYPE_GCP: &str = "gcp";
 
 const ENCRYPTION_KMS_IMPL: &str = "encryption.kms-impl";
+// Iceberg Java's built-in implementations, accepted so that catalog properties
+// can be shared with Java.
+const ENCRYPTION_KMS_IMPL_AWS: &str = "org.apache.iceberg.aws.AwsKeyManagementClient";
+const ENCRYPTION_KMS_IMPL_AZURE: &str =
+    "org.apache.iceberg.azure.keymanagement.AzureKeyManagementClient";
+const ENCRYPTION_KMS_IMPL_GCP: &str = "org.apache.iceberg.gcp.GcpKeyManagementClient";
 
-/// A KMS client factory that resolves an implementation from catalog properties.
+/// A KMS client factory that selects a built-in implementation from catalog
+/// properties.
 ///
-/// The factory reads [`ENCRYPTION_KMS_TYPE`] and delegates client creation to the
-/// corresponding provider factory. These built-in mappings are fixed: custom
-/// implementations should instead be supplied directly through
+/// The implementation is selected by [`ENCRYPTION_KMS_TYPE`], using Iceberg
+/// Java's type names, or by `encryption.kms-impl` naming one of Iceberg Java's
+/// built-in client classes. Provider implementations must be enabled through
+/// their crate features; the `aws` feature provides the `aws` type. Custom
+/// implementations are supplied directly through
 /// [`CatalogBuilder::with_kms_client_factory`](iceberg::CatalogBuilder::with_kms_client_factory).
 ///
-/// Provider implementations must be enabled through their corresponding crate
-/// features. The `aws` feature currently provides the `aws` KMS type.
+/// Catalog properties returned later by a REST catalog server are not
+/// available when the KMS client is created, so the selecting property must be
+/// supplied by the application.
 ///
-/// Unlike Iceberg Java, this factory does not load class names from
-/// `encryption.kms-impl`. Rust applications use the `KmsClientFactory` trait as
-/// the custom implementation extension point. Configuring `encryption.kms-impl`
-/// is rejected with guidance to supply a custom factory directly.
+/// # Errors
 ///
-/// Catalog properties returned later by a REST catalog server are not currently
-/// available when the KMS client is created. Until REST initialization is
-/// updated, `encryption.kms-type` must be supplied by the application.
+/// [`create_kms_client`](KmsClientFactory::create_kms_client) returns:
+///
+/// - [`ErrorKind::DataInvalid`] if neither property is set, or both are.
+/// - [`ErrorKind::FeatureUnsupported`] if the selected implementation is
+///   unknown, not implemented, or not enabled through its crate feature.
 ///
 /// # Example
 ///
@@ -64,20 +71,25 @@ const ENCRYPTION_KMS_IMPL: &str = "encryption.kms-impl";
 /// use std::sync::Arc;
 ///
 /// use iceberg::CatalogBuilder;
-/// use iceberg_catalog_rest::{REST_CATALOG_PROP_URI, RestCatalogBuilder};
-/// use iceberg_kms::{ENCRYPTION_KMS_TYPE, ResolvingKmsClientFactory};
+/// use iceberg::io::CLIENT_REGION;
+/// use iceberg::memory::{MEMORY_CATALOG_WAREHOUSE, MemoryCatalogBuilder};
+/// use iceberg_kms::{ENCRYPTION_KMS_TYPE, ENCRYPTION_KMS_TYPE_AWS, ResolvingKmsClientFactory};
 ///
 /// # async fn example() -> iceberg::Result<()> {
 /// let properties = HashMap::from([
 ///     (
-///         REST_CATALOG_PROP_URI.to_string(),
-///         "https://catalog.example.com".to_string(),
+///         MEMORY_CATALOG_WAREHOUSE.to_string(),
+///         "s3://bucket/warehouse".to_string(),
 ///     ),
-///     (ENCRYPTION_KMS_TYPE.to_string(), "aws".to_string()),
+///     (
+///         ENCRYPTION_KMS_TYPE.to_string(),
+///         ENCRYPTION_KMS_TYPE_AWS.to_string(),
+///     ),
+///     (CLIENT_REGION.to_string(), "eu-west-2".to_string()),
 /// ]);
-/// let catalog = RestCatalogBuilder::default()
+/// let catalog = MemoryCatalogBuilder::default()
 ///     .with_kms_client_factory(Arc::new(ResolvingKmsClientFactory::new()))
-///     .load("rest", properties)
+///     .load("catalog", properties)
 ///     .await?;
 /// # let _ = catalog;
 /// # Ok(())
@@ -118,28 +130,7 @@ impl KmsClientFactory for ResolvingKmsClientFactory {
         &self,
         properties: &HashMap<String, String>,
     ) -> Result<Arc<dyn KeyManagementClient>> {
-        let kms_type = properties.get(ENCRYPTION_KMS_TYPE);
-        let kms_impl = properties.get(ENCRYPTION_KMS_IMPL);
-
-        if let Some(kms_impl) = kms_impl {
-            return Err(Error::new(
-                ErrorKind::FeatureUnsupported,
-                format!(
-                    "KMS implementation class '{kms_impl}' is not supported; provide a custom KmsClientFactory instead"
-                ),
-            ));
-        }
-
-        let kms_type = kms_type
-            .filter(|kms_type| !kms_type.is_empty())
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!("Missing required catalog property '{ENCRYPTION_KMS_TYPE}'"),
-                )
-            })?;
-
-        match kms_type.to_ascii_lowercase().as_str() {
+        match kms_type(properties)?.as_str() {
             ENCRYPTION_KMS_TYPE_AWS => {
                 #[cfg(feature = "aws")]
                 {
@@ -153,11 +144,11 @@ impl KmsClientFactory for ResolvingKmsClientFactory {
                     ))
                 }
             }
-            ENCRYPTION_KMS_TYPE_AZURE | ENCRYPTION_KMS_TYPE_GCP => Err(Error::new(
+            kms_type @ (ENCRYPTION_KMS_TYPE_AZURE | ENCRYPTION_KMS_TYPE_GCP) => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 format!("KMS type '{kms_type}' is not implemented by this version of iceberg-kms"),
             )),
-            _ => Err(Error::new(
+            kms_type => Err(Error::new(
                 ErrorKind::FeatureUnsupported,
                 format!("Unsupported KMS type: {kms_type}"),
             )),
@@ -165,16 +156,104 @@ impl KmsClientFactory for ResolvingKmsClientFactory {
     }
 }
 
+/// Returns the lowercase KMS type selected by the catalog properties.
+fn kms_type(properties: &HashMap<String, String>) -> Result<String> {
+    let kms_type = properties
+        .get(ENCRYPTION_KMS_TYPE)
+        .filter(|kms_type| !kms_type.is_empty());
+    let kms_impl = properties
+        .get(ENCRYPTION_KMS_IMPL)
+        .filter(|kms_impl| !kms_impl.is_empty());
+
+    match (kms_type, kms_impl) {
+        (Some(kms_type), None) => Ok(kms_type.to_ascii_lowercase()),
+        (None, Some(kms_impl)) => match kms_impl.as_str() {
+            ENCRYPTION_KMS_IMPL_AWS => Ok(ENCRYPTION_KMS_TYPE_AWS.to_string()),
+            ENCRYPTION_KMS_IMPL_AZURE => Ok(ENCRYPTION_KMS_TYPE_AZURE.to_string()),
+            ENCRYPTION_KMS_IMPL_GCP => Ok(ENCRYPTION_KMS_TYPE_GCP.to_string()),
+            _ => Err(Error::new(
+                ErrorKind::FeatureUnsupported,
+                format!(
+                    "KMS implementation class '{kms_impl}' is not supported; provide a custom KmsClientFactory instead"
+                ),
+            )),
+        },
+        (Some(kms_type), Some(kms_impl)) => Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!(
+                "Cannot set both '{ENCRYPTION_KMS_TYPE}' ({kms_type}) and '{ENCRYPTION_KMS_IMPL}' ({kms_impl})"
+            ),
+        )),
+        (None, None) => Err(Error::new(
+            ErrorKind::DataInvalid,
+            format!("Missing required catalog property '{ENCRYPTION_KMS_TYPE}'"),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "aws")]
-    use aws_config::{BehaviorVersion, SdkConfig};
-
     use super::*;
+
+    fn properties(properties: &[(&str, &str)]) -> HashMap<String, String> {
+        properties
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn test_kms_type_resolution() {
+        for (input, expected) in [
+            (vec![(ENCRYPTION_KMS_TYPE, "aws")], "aws"),
+            (vec![(ENCRYPTION_KMS_TYPE, "AWS")], "aws"),
+            (vec![(ENCRYPTION_KMS_IMPL, ENCRYPTION_KMS_IMPL_AWS)], "aws"),
+            (
+                vec![(ENCRYPTION_KMS_IMPL, ENCRYPTION_KMS_IMPL_AZURE)],
+                "azure",
+            ),
+            (vec![(ENCRYPTION_KMS_IMPL, ENCRYPTION_KMS_IMPL_GCP)], "gcp"),
+        ] {
+            assert_eq!(
+                kms_type(&properties(&input)).unwrap(),
+                expected,
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_kms_type_resolution_errors() {
+        for (input, expected) in [
+            (vec![], ErrorKind::DataInvalid),
+            (vec![(ENCRYPTION_KMS_TYPE, "")], ErrorKind::DataInvalid),
+            (
+                vec![
+                    (ENCRYPTION_KMS_TYPE, "aws"),
+                    (ENCRYPTION_KMS_IMPL, ENCRYPTION_KMS_IMPL_AWS),
+                ],
+                ErrorKind::DataInvalid,
+            ),
+            (
+                vec![(ENCRYPTION_KMS_IMPL, "com.example.CustomKmsClient")],
+                ErrorKind::FeatureUnsupported,
+            ),
+        ] {
+            assert_eq!(
+                kms_type(&properties(&input)).unwrap_err().kind(),
+                expected,
+                "{input:?}"
+            );
+        }
+    }
 
     #[cfg(feature = "aws")]
     #[tokio::test]
-    async fn test_resolves_aws_case_insensitively() {
+    async fn test_aws_type_delegates_properties_to_aws_factory() {
+        use aws_config::{BehaviorVersion, SdkConfig};
+
+        use crate::aws::KMS_ENCRYPTION_ALGORITHM_SPEC;
+
         let factory = ResolvingKmsClientFactory::new().with_aws_factory(
             AwsKmsClientFactory::new().with_sdk_config(
                 SdkConfig::builder()
@@ -182,80 +261,48 @@ mod tests {
                     .build(),
             ),
         );
-        let properties = HashMap::from([(ENCRYPTION_KMS_TYPE.to_string(), "AWS".to_string())]);
+        let properties = properties(&[
+            (ENCRYPTION_KMS_TYPE, ENCRYPTION_KMS_TYPE_AWS),
+            (KMS_ENCRYPTION_ALGORITHM_SPEC, "RSAES_OAEP_SHA_256"),
+        ]);
 
         let client = factory.create_kms_client(&properties).await.unwrap();
 
-        assert!(client.supports_key_generation());
+        assert!(!client.supports_key_generation());
     }
 
     #[tokio::test]
-    async fn test_rejects_missing_kms_type() {
-        let error = ResolvingKmsClientFactory::new()
-            .create_kms_client(&HashMap::new())
-            .await
-            .unwrap_err();
-
-        assert_eq!(error.kind(), ErrorKind::DataInvalid);
-        assert!(error.to_string().contains(ENCRYPTION_KMS_TYPE));
-    }
-
-    #[tokio::test]
-    async fn test_rejects_unsupported_kms_type() {
-        let properties =
-            HashMap::from([(ENCRYPTION_KMS_TYPE.to_string(), "unsupported".to_string())]);
-        let error = ResolvingKmsClientFactory::new()
-            .create_kms_client(&properties)
-            .await
-            .unwrap_err();
-
-        assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
-        assert!(error.to_string().contains("unsupported"));
-    }
-
-    #[tokio::test]
-    async fn test_reports_unimplemented_built_in_kms_types() {
-        for kms_type in [ENCRYPTION_KMS_TYPE_AZURE, ENCRYPTION_KMS_TYPE_GCP] {
-            let properties =
-                HashMap::from([(ENCRYPTION_KMS_TYPE.to_string(), kms_type.to_string())]);
-            let error = ResolvingKmsClientFactory::new()
-                .create_kms_client(&properties)
+    async fn test_reject_unsupported_and_unimplemented_kms_types() {
+        for kms_type in [
+            "unsupported",
+            ENCRYPTION_KMS_TYPE_AZURE,
+            ENCRYPTION_KMS_TYPE_GCP,
+        ] {
+            let Err(error) = ResolvingKmsClientFactory::new()
+                .create_kms_client(&properties(&[(ENCRYPTION_KMS_TYPE, kms_type)]))
                 .await
-                .unwrap_err();
+            else {
+                panic!("KMS type '{kms_type}' must be rejected");
+            };
 
             assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
-            assert!(error.to_string().contains(kms_type));
+            assert!(error.message().contains(kms_type), "{error}");
         }
-    }
-
-    #[tokio::test]
-    async fn test_rejects_java_kms_impl() {
-        let properties = HashMap::from([(
-            ENCRYPTION_KMS_IMPL.to_string(),
-            "com.example.CustomKmsClient".to_string(),
-        )]);
-        let error = ResolvingKmsClientFactory::new()
-            .create_kms_client(&properties)
-            .await
-            .unwrap_err();
-
-        assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
-        assert!(error.to_string().contains("custom KmsClientFactory"));
     }
 
     #[cfg(not(feature = "aws"))]
     #[tokio::test]
-    async fn test_reports_disabled_built_in_kms_type() {
-        let properties = HashMap::from([(
-            ENCRYPTION_KMS_TYPE.to_string(),
-            ENCRYPTION_KMS_TYPE_AWS.to_string(),
-        )]);
-        let error = ResolvingKmsClientFactory::new()
-            .create_kms_client(&properties)
+    async fn test_reject_aws_type_without_aws_feature() {
+        let Err(error) = ResolvingKmsClientFactory::new()
+            .create_kms_client(&properties(&[(
+                ENCRYPTION_KMS_TYPE,
+                ENCRYPTION_KMS_TYPE_AWS,
+            )]))
             .await
-            .unwrap_err();
+        else {
+            panic!("the aws type must require the aws feature");
+        };
 
         assert_eq!(error.kind(), ErrorKind::FeatureUnsupported);
-        assert!(error.to_string().contains(ENCRYPTION_KMS_TYPE_AWS));
     }
 }

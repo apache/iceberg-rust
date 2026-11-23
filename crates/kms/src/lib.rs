@@ -28,7 +28,4 @@ pub mod aws;
 
 mod resolving;
 
-pub use resolving::{
-    ENCRYPTION_KMS_TYPE, ENCRYPTION_KMS_TYPE_AWS, ENCRYPTION_KMS_TYPE_AZURE,
-    ENCRYPTION_KMS_TYPE_GCP, ResolvingKmsClientFactory,
-};
+pub use resolving::{ENCRYPTION_KMS_TYPE, ENCRYPTION_KMS_TYPE_AWS, ResolvingKmsClientFactory};
