@@ -20,14 +20,14 @@
 # Install
 
 <div class="warning">
-Cargo 1.75.0 or later is required to build.
+Rust 1.95 or later is required to build.
 </div>
 
 Add `iceberg` and `iceberg-catalog-rest` into `Cargo.toml` dependencies:
 
 ```toml
-iceberg = "0.6.0"
-iceberg-catalog-rest = "0.6.0"
+iceberg = "0.11.0"
+iceberg-catalog-rest = "0.11.0"
 ```
 
 using `cargo add`:
