@@ -19,10 +19,10 @@ use std::sync::Arc;
 
 use arrow_array::{Array, ArrayRef, RecordBatch, StructArray, make_array};
 use arrow_buffer::NullBuffer;
+use arrow_cast::cast;
 use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
-use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
-use crate::arrow::schema::schema_to_arrow_schema;
+use crate::arrow::schema::{schema_to_arrow_schema, try_get_field_id_from_metadata};
 use crate::error::{Result, invalid_data};
 use crate::spec::Schema as IcebergSchema;
 use crate::{Error, ErrorKind};
@@ -95,16 +95,7 @@ impl RecordBatchProjector {
         let arrow_schema_with_ids = Arc::new(schema_to_arrow_schema(&iceberg_schema)?);
 
         let field_id_fetch_func = |field: &Field| -> Result<Option<i64>> {
-            if let Some(value) = field.metadata().get(PARQUET_FIELD_ID_META_KEY) {
-                let field_id = value.parse::<i32>().map_err(|e| {
-                    invalid_data!("Failed to parse field id")
-                        .with_context("value", value)
-                        .with_source(e)
-                })?;
-                Ok(Some(field_id as i64))
-            } else {
-                Ok(None)
-            }
+            Ok(try_get_field_id_from_metadata(field)?.map(|id| id as i64))
         };
 
         let searchable_field_func = |_field: &Field| -> bool { true };
@@ -170,8 +161,21 @@ impl RecordBatchProjector {
     /// Do projection with columns
     pub fn project_column(&self, batch: &[ArrayRef]) -> Result<Vec<ArrayRef>> {
         let mut columns = Vec::with_capacity(self.field_indices.len());
-        for index_vec in &self.field_indices {
-            columns.push(Self::get_column_by_field_index(batch, index_vec)?);
+        for (index_vec, field) in self
+            .field_indices
+            .iter()
+            .zip(self.projected_schema.fields())
+        {
+            let column = Self::get_column_by_field_index(batch, index_vec)?;
+            let column = match (column.data_type(), field.data_type()) {
+                (DataType::LargeBinary, DataType::Binary) => cast(&column, &DataType::Binary)
+                    .map_err(|err| {
+                        invalid_data!("Failed to cast column {} to Binary", field.name())
+                            .with_source(err)
+                    })?,
+                _ => column,
+            };
+            columns.push(column);
         }
         Ok(columns)
     }

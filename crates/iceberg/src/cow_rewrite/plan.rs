@@ -151,7 +151,7 @@ mod tests {
         for file in files {
             assert_eq!(file.scan_task.deletes().len(), 1);
             assert_eq!(
-                file.scan_task.deletes()[0].file_path,
+                file.scan_task.deletes()[0].file_path(),
                 format!("{}/del.parquet", fixture.table_location)
             );
         }

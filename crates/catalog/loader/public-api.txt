@@ -2,6 +2,9 @@ pub mod iceberg_catalog_loader
 pub struct iceberg_catalog_loader::CatalogLoader<'a>
 impl iceberg_catalog_loader::CatalogLoader<'_>
 pub async fn iceberg_catalog_loader::CatalogLoader<'_>::load(self, name: alloc::string::String, props: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::error::Result<alloc::sync::Arc<dyn iceberg::catalog::Catalog>>
+pub fn iceberg_catalog_loader::CatalogLoader<'_>::with_kms_client_factory(self, kms_client_factory: alloc::sync::Arc<dyn iceberg::encryption::kms::factory::KmsClientFactory>) -> Self
+pub fn iceberg_catalog_loader::CatalogLoader<'_>::with_runtime(self, runtime: iceberg::runtime::Runtime) -> Self
+pub fn iceberg_catalog_loader::CatalogLoader<'_>::with_storage_factory(self, storage_factory: alloc::sync::Arc<dyn iceberg::io::storage::StorageFactory>) -> Self
 impl<'a> core::convert::From<&'a str> for iceberg_catalog_loader::CatalogLoader<'a>
 pub fn iceberg_catalog_loader::CatalogLoader<'a>::from(s: &'a str) -> Self
 pub trait iceberg_catalog_loader::BoxedCatalogBuilder: core::marker::Send

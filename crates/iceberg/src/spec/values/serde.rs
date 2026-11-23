@@ -18,16 +18,21 @@
 //\! Serialization and deserialization support for Iceberg values
 
 pub(crate) mod _serde {
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
     use serde::de::Visitor;
     use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
     use serde::{Deserialize, Serialize};
     use serde_bytes::ByteBuf;
     use serde_derive::{Deserialize as DeserializeDerive, Serialize as SerializeDerive};
+    use uuid::Uuid;
+    use uuid::fmt::Hyphenated;
 
     use crate::Error;
     use crate::error::invalid_data;
     use crate::spec::values::{Literal, Map, PrimitiveLiteral, Struct};
-    use crate::spec::{MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, PrimitiveType, Type};
+    use crate::spec::{MAP_KEY_FIELD_NAME, MAP_VALUE_FIELD_NAME, PrimitiveType, StructType, Type};
 
     #[derive(SerializeDerive, DeserializeDerive, Debug)]
     #[serde(transparent)]
@@ -44,6 +49,53 @@ pub(crate) mod _serde {
         pub fn try_into(self, ty: &Type) -> Result<Option<Literal>, Error> {
             self.0.try_into(ty)
         }
+
+        /// Matches the fields of a record to `struct_type` by name, the way Avro
+        /// schema resolution matches record fields. The result has
+        /// `struct_type`'s fields in its order, with null for an optional field the
+        /// record lacks. Record fields that `struct_type` lacks are dropped. Values
+        /// other than records are returned unchanged.
+        ///
+        /// Fields aren't matched by field ID. A writer that stores a field under
+        /// another name, such as Java replacing characters that Avro names don't
+        /// allow, reads as a missing field.
+        pub fn project_by_name(self, struct_type: &StructType) -> Result<Self, Error> {
+            let (mut required, optional) = match self.0 {
+                RawLiteralEnum::Record(Record { required, optional }) => (required, optional),
+                other => return Ok(Self(other)),
+            };
+            required.extend(
+                optional
+                    .into_iter()
+                    .map(|(name, value)| (name, value.unwrap_or(RawLiteralEnum::Null))),
+            );
+            let fields = struct_type.fields();
+            let required = if required.len() == fields.len()
+                && required
+                    .iter()
+                    .zip(fields)
+                    .all(|((name, _), field)| *name == field.name)
+            {
+                required
+            } else {
+                let mut values: HashMap<String, RawLiteralEnum> = required.into_iter().collect();
+                fields
+                    .iter()
+                    .map(|field| match values.remove(&field.name) {
+                        Some(value) => Ok((field.name.clone(), value)),
+                        None if field.required => Err(invalid_data!(
+                            "Record has no value for required field {}",
+                            field.name
+                        )),
+                        None => Ok((field.name.clone(), RawLiteralEnum::Null)),
+                    })
+                    .collect::<Result<_, Error>>()?
+            };
+            Ok(Self(RawLiteralEnum::Record(Record {
+                required,
+                optional: Vec::new(),
+            })))
+        }
     }
 
     #[derive(SerializeDerive, Clone, Debug)]
@@ -57,6 +109,11 @@ pub(crate) mod _serde {
         Double(f64),
         String(String),
         Bytes(ByteBuf),
+        // apache-avro accepts only `Value::Uuid` or `Value::Fixed` for the spec's `fixed`
+        // uuid schema, and a `ByteBuf` serializes to `Value::Bytes` by default.
+        // `apache_avro::serde::fixed::serialize` makes `apache_avro::to_value` produce
+        // `Value::Fixed`. Other serializers, such as serde_json, still see plain bytes.
+        Fixed(#[serde(serialize_with = "apache_avro::serde::fixed::serialize")] ByteBuf),
         List(List),
         StringMap(StringMap),
         Record(Record),
@@ -238,8 +295,16 @@ pub(crate) mod _serde {
                     PrimitiveLiteral::Float(v) => RawLiteralEnum::Float(v.0),
                     PrimitiveLiteral::Double(v) => RawLiteralEnum::Double(v.0),
                     PrimitiveLiteral::String(v) => RawLiteralEnum::String(v),
+                    PrimitiveLiteral::UInt128(v) if *ty == Type::Primitive(PrimitiveType::Uuid) => {
+                        RawLiteralEnum::Fixed(ByteBuf::from(v.to_be_bytes()))
+                    }
                     PrimitiveLiteral::UInt128(v) => {
                         RawLiteralEnum::Bytes(ByteBuf::from(v.to_be_bytes()))
+                    }
+                    PrimitiveLiteral::Binary(v)
+                        if matches!(ty, Type::Primitive(PrimitiveType::Fixed(_))) =>
+                    {
+                        RawLiteralEnum::Fixed(ByteBuf::from(v))
                     }
                     PrimitiveLiteral::Binary(v) => RawLiteralEnum::Bytes(ByteBuf::from(v)),
                     PrimitiveLiteral::Int128(v) => {
@@ -379,7 +444,10 @@ pub(crate) mod _serde {
             };
             match self {
                 RawLiteralEnum::Null => Ok(None),
-                RawLiteralEnum::Boolean(v) => Ok(Some(Literal::bool(v))),
+                RawLiteralEnum::Boolean(v) => match ty {
+                    Type::Primitive(PrimitiveType::Boolean) => Ok(Some(Literal::bool(v))),
+                    _ => Err(invalid_err("boolean")),
+                },
                 RawLiteralEnum::Int(v) => match ty {
                     Type::Primitive(PrimitiveType::Int) => Ok(Some(Literal::int(v))),
                     Type::Primitive(PrimitiveType::Long) => Ok(Some(Literal::long(i64::from(v)))),
@@ -415,24 +483,31 @@ pub(crate) mod _serde {
                     _ => Err(invalid_err("float")),
                 },
                 RawLiteralEnum::Double(v) => match ty {
-                    Type::Primitive(PrimitiveType::Float) => {
-                        let v_32 = v as f32;
-                        if v_32.is_finite() {
-                            let v_64 = f64::from(v_32);
-                            if (v_64 - v).abs() > f32::EPSILON as f64 {
-                                // there is a precision loss
-                                return Err(invalid_err("double"));
-                            }
-                        }
-                        Ok(Some(Literal::float(v_32)))
-                    }
+                    Type::Primitive(PrimitiveType::Float) => Ok(Some(Literal::float(v as f32))),
                     Type::Primitive(PrimitiveType::Double) => Ok(Some(Literal::double(v))),
                     _ => Err(invalid_err("double")),
                 },
                 RawLiteralEnum::String(v) => match ty {
                     Type::Primitive(PrimitiveType::String) => Ok(Some(Literal::string(v))),
+                    // apache-avro deserializes a UUID as a hyphenated string.
+                    // UUID values read via `Value` (i.e. `read_data_files_from_avro`), land here.
+                    // The hyphenated restriction matches behaviour with Java.
+                    Type::Primitive(PrimitiveType::Uuid) => Hyphenated::from_str(&v)
+                        .map(|hyphenated_uuid| Some(Literal::uuid(hyphenated_uuid.into_uuid())))
+                        .map_err(|_| {
+                            invalid_err_with_reason(
+                                "string",
+                                "UUID must be a hyphenated 8-4-4-4-12 string",
+                            )
+                        }),
                     _ => Err(invalid_err("string")),
                 },
+                // `Fixed` is only built when writing, so that apache-avro gets a fixed value.
+                // Avro fixed values are read back as `Bytes`, and uuid values as `String` or `Bytes`.
+                RawLiteralEnum::Fixed(_) => Err(invalid_err_with_reason(
+                    "fixed",
+                    "RawLiteralEnum::Fixed is only used for serialization",
+                )),
                 RawLiteralEnum::Bytes(v) => match ty {
                     Type::Primitive(PrimitiveType::Binary) => Ok(Some(Literal::binary(v.to_vec()))),
                     Type::Primitive(PrimitiveType::Fixed(expected_len)) => {
@@ -450,17 +525,10 @@ pub(crate) mod _serde {
                         }
                     }
                     Type::Primitive(PrimitiveType::Uuid) => {
-                        if v.len() == 16 {
-                            let bytes: [u8; 16] = v.as_slice().try_into().map_err(|_| {
-                                invalid_err_with_reason("bytes", "UUID must be exactly 16 bytes")
-                            })?;
-                            Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
-                        } else {
-                            Err(invalid_err_with_reason(
-                                "bytes",
-                                "UUID must be exactly 16 bytes",
-                            ))
-                        }
+                        let bytes: [u8; 16] = v.as_slice().try_into().map_err(|_| {
+                            invalid_err_with_reason("bytes", "UUID must be exactly 16 bytes")
+                        })?;
+                        Ok(Some(Literal::uuid(Uuid::from_bytes(bytes))))
                     }
                     Type::Primitive(PrimitiveType::Decimal { precision, .. }) => {
                         let required_bytes = Type::decimal_required_bytes(*precision)? as usize;
@@ -588,7 +656,7 @@ pub(crate) mod _serde {
                                 ));
                             }
                         }
-                        Ok(Some(Literal::uuid(uuid::Uuid::from_bytes(bytes))))
+                        Ok(Some(Literal::uuid(Uuid::from_bytes(bytes))))
                     }
                     Type::Primitive(PrimitiveType::Decimal {
                         precision: _,

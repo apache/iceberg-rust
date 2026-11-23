@@ -50,19 +50,19 @@ impl ExpressionEvaluator {
     }
 }
 
-/// Acts as a visitor for [`ExpressionEvaluator`] to apply
-/// evaluation logic to different parts of a data structure,
-/// specifically for data file partitions.
+/// Evaluates a [`BoundPredicate`] against one row of values, such as a
+/// [`DataFile`]'s partition [`Struct`].
 #[derive(Debug)]
-struct ExpressionEvaluatorVisitor<'a> {
-    /// Reference to a [`DataFile`]'s partition [`Struct`].
-    partition: &'a Struct,
+pub(crate) struct ExpressionEvaluatorVisitor<'a> {
+    /// Laid out like the struct the predicate was bound to, because each reference's accessor
+    /// reads its value by position.
+    row: &'a Struct,
 }
 
 impl<'a> ExpressionEvaluatorVisitor<'a> {
     /// Creates a new [`ExpressionEvaluatorVisitor`].
-    fn new(partition: &'a Struct) -> Self {
-        Self { partition }
+    pub(crate) fn new(row: &'a Struct) -> Self {
+        Self { row }
     }
 }
 
@@ -93,7 +93,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
     }
 
     fn is_null(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(_) => Ok(false),
             None => Ok(true),
         }
@@ -104,21 +104,21 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         reference: &BoundReference,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(_) => Ok(true),
             None => Ok(false),
         }
     }
 
     fn is_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(datum.is_nan()),
             None => Ok(false),
         }
     }
 
     fn not_nan(&mut self, reference: &BoundReference, _predicate: &BoundPredicate) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(!datum.is_nan()),
             None => Ok(true),
         }
@@ -130,7 +130,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum < literal),
             None => Ok(false),
         }
@@ -142,7 +142,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum <= literal),
             None => Ok(false),
         }
@@ -154,7 +154,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum > literal),
             None => Ok(false),
         }
@@ -166,7 +166,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum >= literal),
             None => Ok(false),
         }
@@ -178,7 +178,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum == literal),
             None => Ok(false),
         }
@@ -190,7 +190,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(&datum != literal),
             None => Ok(true),
         }
@@ -202,7 +202,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literal: &Datum,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        let Some(datum) = reference.accessor().get(self.partition)? else {
+        let Some(datum) = reference.accessor().get(self.row)? else {
             return Ok(false);
         };
 
@@ -227,7 +227,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(literals.contains(&datum)),
             None => Ok(false),
         }
@@ -239,7 +239,7 @@ impl BoundPredicateVisitor for ExpressionEvaluatorVisitor<'_> {
         literals: &FnvHashSet<Datum>,
         _predicate: &BoundPredicate,
     ) -> Result<bool> {
-        match reference.accessor().get(self.partition)? {
+        match reference.accessor().get(self.row)? {
             Some(datum) => Ok(!literals.contains(&datum)),
             None => Ok(true),
         }
@@ -592,6 +592,76 @@ mod tests {
         let result = expression_evaluator.eval(&data_file)?;
 
         assert!(result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_eq_signed_zero() -> Result<()> {
+        let case_sensitive = true;
+        let (partition_spec, schema) = create_partition_spec(PrimitiveType::Float)?;
+
+        let data_file = DataFile {
+            partition: Struct::from_iter([Some(Literal::float(-0.0_f32))]),
+            ..create_data_file_float()
+        };
+
+        // -0.0 and 0.0 are different values, as in iceberg-java's evaluator.
+        for (literal, expected) in [(0.0_f32, false), (-0.0_f32, true)] {
+            let predicate = Predicate::Binary(BinaryExpression::new(
+                PredicateOperator::Eq,
+                Reference::new("a"),
+                Datum::float(literal),
+            ))
+            .bind(schema.clone(), case_sensitive)?;
+
+            let expression_evaluator = create_expression_evaluator(
+                partition_spec.clone(),
+                &schema,
+                &predicate,
+                case_sensitive,
+            )?;
+
+            assert_eq!(expression_evaluator.eval(&data_file)?, expected);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_expr_in_signed_zero() -> Result<()> {
+        let case_sensitive = true;
+        let (partition_spec, schema) = create_partition_spec(PrimitiveType::Float)?;
+
+        let data_file = DataFile {
+            partition: Struct::from_iter([Some(Literal::float(-0.0_f32))]),
+            ..create_data_file_float()
+        };
+
+        // -0.0 and 0.0 are different values, so `IN` keeps both and matches only its own zero.
+        for (literals, expected) in [
+            ([0.0_f32, 1.0_f32], false),
+            ([-0.0_f32, 1.0_f32], true),
+            ([0.0_f32, -0.0_f32], true),
+        ] {
+            let predicate = Predicate::Set(SetExpression::new(
+                PredicateOperator::In,
+                Reference::new("a"),
+                FnvHashSet::from_iter(literals.map(Datum::float)),
+            ))
+            .bind(schema.clone(), case_sensitive)?;
+
+            assert!(matches!(&predicate, BoundPredicate::Set(expr) if expr.literals().len() == 2));
+
+            let expression_evaluator = create_expression_evaluator(
+                partition_spec.clone(),
+                &schema,
+                &predicate,
+                case_sensitive,
+            )?;
+
+            assert_eq!(expression_evaluator.eval(&data_file)?, expected);
+        }
 
         Ok(())
     }
