@@ -186,6 +186,8 @@ impl ArrowSchemaVisitor for Int96CoercionVisitor<'_> {
         let list_type = match list {
             DataType::List(_) => DataType::List(Arc::new(value)),
             DataType::LargeList(_) => DataType::LargeList(Arc::new(value)),
+            DataType::ListView(_) => DataType::ListView(Arc::new(value)),
+            DataType::LargeListView(_) => DataType::LargeListView(Arc::new(value)),
             DataType::FixedSizeList(_, size) => DataType::FixedSizeList(Arc::new(value), *size),
             _ => {
                 return Err(Error::new(
@@ -407,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn test_coercion_rejects_list_view() {
+    fn test_coercion_preserves_list_views() {
         let parquet = parquet_schema(
             "message schema {
                 optional group items (LIST) {
@@ -422,21 +424,35 @@ mod tests {
             ])
             .build()
             .unwrap();
-        let list_type = DataType::ListView(Arc::new(Field::new("element", DataType::Int32, true)));
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("items", list_type.clone(), true),
-            Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true)
-                .with_metadata(field_id_meta(1)),
-        ]));
-
-        let error = coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap_err();
-        assert_eq!(
-            (error.kind(), error.message()),
-            (
-                crate::ErrorKind::DataInvalid,
-                format!("Cannot visit Arrow data type: {list_type}").as_str(),
-            )
-        );
+        let element = Arc::new(Field::new("element", DataType::Int32, true));
+        for list_type in [
+            DataType::ListView(element.clone()),
+            DataType::LargeListView(element),
+        ] {
+            let list_field = Field::new("items", list_type, true)
+                .with_metadata(HashMap::from([("custom".to_string(), "value".to_string())]));
+            let timestamp = Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true)
+                .with_metadata(field_id_meta(1));
+            let metadata = HashMap::from([("schema".to_string(), "value".to_string())]);
+            let arrow_schema = Arc::new(ArrowSchema::new_with_metadata(
+                vec![list_field.clone(), timestamp.clone()],
+                metadata.clone(),
+            ));
+            let expected = Arc::new(ArrowSchema::new_with_metadata(
+                vec![
+                    list_field,
+                    timestamp.with_data_type(DataType::Timestamp(
+                        TimeUnit::Microsecond,
+                        Some(UTC_TIME_ZONE.into()),
+                    )),
+                ],
+                metadata,
+            ));
+            assert_eq!(
+                coerce_int96_timestamps(&arrow_schema, &iceberg, &parquet).unwrap(),
+                Some(expected),
+            );
+        }
     }
 
     #[test]

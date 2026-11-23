@@ -346,6 +346,9 @@ fn visit_type<V: ArrowSchemaVisitor>(r#type: &DataType, visitor: &mut V) -> Resu
         }
         DataType::List(element_field) => visit_list(r#type, element_field, visitor),
         DataType::LargeList(element_field) => visit_list(r#type, element_field, visitor),
+        DataType::ListView(element_field) | DataType::LargeListView(element_field) => {
+            visit_list(r#type, element_field, visitor)
+        }
         DataType::FixedSizeList(element_field, _) => visit_list(r#type, element_field, visitor),
         DataType::Map(field, _) => match field.data_type() {
             DataType::Struct(fields) => {

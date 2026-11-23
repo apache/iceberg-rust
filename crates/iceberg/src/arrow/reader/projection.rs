@@ -84,6 +84,8 @@ impl ArrowReader {
                 (Some(lhs), Some(rhs)) if lhs == rhs => true,
                 (Some(PrimitiveType::Int), Some(PrimitiveType::Long)) => true,
                 (Some(PrimitiveType::Float), Some(PrimitiveType::Double)) => true,
+                (Some(PrimitiveType::TimestampNs), Some(PrimitiveType::Timestamp))
+                | (Some(PrimitiveType::TimestamptzNs), Some(PrimitiveType::Timestamptz)) => true,
                 (
                     Some(PrimitiveType::Decimal {
                         precision: file_precision,
