@@ -84,6 +84,9 @@ impl ArrowReader {
                 (Some(lhs), Some(rhs)) if lhs == rhs => true,
                 (Some(PrimitiveType::Int), Some(PrimitiveType::Long)) => true,
                 (Some(PrimitiveType::Float), Some(PrimitiveType::Double)) => true,
+                // Not a spec type promotion. Migrated files (for example from `add_files`) can
+                // store `TIMESTAMP(NANOS)` under a microsecond field, and `RecordBatchTransformer`
+                // casts them to microseconds.
                 (Some(PrimitiveType::TimestampNs), Some(PrimitiveType::Timestamp))
                 | (Some(PrimitiveType::TimestamptzNs), Some(PrimitiveType::Timestamptz)) => true,
                 (

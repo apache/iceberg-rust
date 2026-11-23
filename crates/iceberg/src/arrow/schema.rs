@@ -624,8 +624,10 @@ impl ArrowSchemaVisitor for ArrowSchemaConverter {
 
     fn list(&mut self, list: &DataType, value: Self::T) -> Result<Self::T> {
         let element_field = match list {
-            DataType::List(element_field) => element_field,
-            DataType::LargeList(element_field) => element_field,
+            DataType::List(element_field)
+            | DataType::LargeList(element_field)
+            | DataType::ListView(element_field)
+            | DataType::LargeListView(element_field) => element_field,
             DataType::FixedSizeList(element_field, _) => element_field,
             _ => {
                 return Err(invalid_data!("List type must have list data type"));
@@ -1531,6 +1533,8 @@ impl ArrowSchemaVisitor for MetadataStripVisitor {
         let list_type = match list {
             DataType::List(_) => DataType::List(Arc::new(value)),
             DataType::LargeList(_) => DataType::LargeList(Arc::new(value)),
+            DataType::ListView(_) => DataType::ListView(Arc::new(value)),
+            DataType::LargeListView(_) => DataType::LargeListView(Arc::new(value)),
             DataType::FixedSizeList(_, size) => DataType::FixedSizeList(Arc::new(value), *size),
             _ => {
                 return Err(Error::new(
@@ -1933,6 +1937,36 @@ mod tests {
         let schema = iceberg_schema_for_arrow_schema_to_schema_test();
         let converted_schema = arrow_schema_to_schema(&arrow_schema).unwrap();
         pretty_assertions::assert_eq!(converted_schema, schema);
+    }
+
+    #[test]
+    fn test_arrow_schema_to_schema_reads_list_views_as_lists() {
+        let element = |id: &str| Arc::new(simple_field("item", DataType::Int32, false, id));
+        let arrow_schema = ArrowSchema::new(vec![
+            simple_field("list_view", DataType::ListView(element("2")), true, "1"),
+            simple_field(
+                "large_list_view",
+                DataType::LargeListView(element("4")),
+                true,
+                "3",
+            ),
+        ]);
+
+        let int_list = |element_id| {
+            Type::List(ListType::new(
+                NestedField::list_element(element_id, Type::Primitive(PrimitiveType::Int), true)
+                    .into(),
+            ))
+        };
+        let expected = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "list_view", int_list(2)).into(),
+                NestedField::optional(3, "large_list_view", int_list(4)).into(),
+            ])
+            .build()
+            .unwrap();
+
+        pretty_assertions::assert_eq!(arrow_schema_to_schema(&arrow_schema).unwrap(), expected);
     }
 
     #[test]
@@ -3545,5 +3579,33 @@ mod tests {
             strip_metadata_from_schema(&schema(true)).unwrap(),
             schema(false)
         );
+    }
+
+    #[test]
+    fn test_strip_metadata_keeps_list_view_types() {
+        let element = |name: &str| {
+            Arc::new(
+                Field::new(name, DataType::Int32, false)
+                    .with_metadata(HashMap::from([("k".to_string(), name.to_string())])),
+            )
+        };
+        let input = ArrowSchema::new(vec![
+            Field::new("list_view", DataType::ListView(element("item")), true)
+                .with_metadata(HashMap::from([("k".to_string(), "list_view".to_string())])),
+            Field::new(
+                "large_list_view",
+                DataType::LargeListView(element("values")),
+                false,
+            ),
+        ])
+        .with_metadata(HashMap::from([("k".to_string(), "schema".to_string())]));
+
+        let element = Arc::new(Field::new(LIST_FIELD_NAME, DataType::Int32, false));
+        let expected = ArrowSchema::new(vec![
+            Field::new("list_view", DataType::ListView(Arc::clone(&element)), true),
+            Field::new("large_list_view", DataType::LargeListView(element), false),
+        ]);
+
+        pretty_assertions::assert_eq!(strip_metadata_from_schema(&input).unwrap(), expected);
     }
 }
