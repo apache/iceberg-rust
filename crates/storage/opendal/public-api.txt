@@ -130,3 +130,6 @@ pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::serialize<__S>(&
 impl<'de> serde_core::de::Deserialize<'de> for iceberg_storage_opendal::OpenDalResolvingStorageFactory
 pub fn iceberg_storage_opendal::OpenDalResolvingStorageFactory::deserialize<__D>(__deserializer: __D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
 pub const iceberg_storage_opendal::OPENDAL_IO_TIMEOUT_MS: &str
+pub const iceberg_storage_opendal::OPENDAL_RETRY_MAX_WAIT_MS: &str
+pub const iceberg_storage_opendal::OPENDAL_RETRY_MIN_WAIT_MS: &str
+pub const iceberg_storage_opendal::OPENDAL_RETRY_NUM_RETRIES: &str

@@ -116,15 +116,20 @@ impl ArrowReader {
         field_id_map: &HashMap<i32, usize>,
         snapshot_schema: &Schema,
     ) -> Result<Option<RowSelection>> {
-        let Some(column_index) = parquet_metadata.column_index() else {
-            tracing::debug!("ColumnIndex was absent while reading this file");
+        let Some(page_index) = parquet_metadata.page_index() else {
+            tracing::debug!("PageIndex was absent while reading this file");
             return Ok(None);
         };
 
-        let Some(offset_index) = parquet_metadata.offset_index() else {
+        if !page_index.has_column_indexes() {
+            tracing::debug!("ColumnIndex was absent while reading this file");
+            return Ok(None);
+        }
+
+        if !page_index.has_offset_indexes() {
             tracing::debug!("OffsetIndex was absent while reading this file");
             return Ok(None);
-        };
+        }
 
         // If all row groups were filtered out, return an empty RowSelection (select no rows)
         //
@@ -136,14 +141,8 @@ impl ArrowReader {
 
         let mut selected_row_groups_idx = 0;
 
-        let page_index = column_index
-            .iter()
-            .enumerate()
-            .zip(offset_index)
-            .zip(parquet_metadata.row_groups());
-
         let mut results = Vec::new();
-        for (((idx, column_index), offset_index), row_group_metadata) in page_index {
+        for (idx, row_group_metadata) in parquet_metadata.row_groups().iter().enumerate() {
             if let Some(selected_row_groups) = selected_row_groups {
                 // skip row groups that aren't present in selected_row_groups
                 if idx == selected_row_groups[selected_row_groups_idx] {
@@ -155,8 +154,7 @@ impl ArrowReader {
 
             let selections_for_page = PageIndexEvaluator::eval(
                 predicate,
-                column_index,
-                offset_index,
+                &parquet_metadata.page_index_for_row_group(idx),
                 row_group_metadata,
                 field_id_map,
                 snapshot_schema,
@@ -227,6 +225,7 @@ mod tests {
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
+    use arrow_array::types::Int64Type;
     use arrow_array::{
         ArrayRef, Decimal128Array, Float32Array, Int32Array, Int64Array, LargeStringArray,
         RecordBatch, StringArray,
@@ -235,6 +234,7 @@ mod tests {
     use futures::TryStreamExt;
     use parquet::arrow::{ArrowWriter, PARQUET_FIELD_ID_META_KEY};
     use parquet::basic::Compression;
+    use parquet::file::metadata::page_index::PageIndexProvider;
     use parquet::file::metadata::{FileMetaData, ParquetMetaData, ParquetMetaDataBuilder};
     use parquet::file::properties::{EnabledStatistics, WriterProperties};
     use parquet::schema::parser::parse_message_type;
@@ -242,12 +242,15 @@ mod tests {
     use tempfile::TempDir;
 
     use crate::Runtime;
-    use crate::arrow::{ArrowReader, ArrowReaderBuilder};
+    use crate::arrow::{
+        ArrowReader, ArrowReaderBuilder, ArrowReaderOptions as ReaderOptions, ParquetReadOptions,
+    };
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, NestedField, PrimitiveType, Schema, SchemaRef, Type,
+        DataContentType, DataFileFormat, Datum, Literal, NestedField, PartitionSpec, PrimitiveType,
+        Schema, SchemaRef, Struct, Transform, Type,
     };
 
     async fn test_perform_read(
@@ -686,7 +689,11 @@ mod tests {
             .unwrap();
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_group_filtering_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(true)
+                    .build(),
+            )
             .build();
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         let result = reader
@@ -952,13 +959,52 @@ mod tests {
         Arc::new(ParquetMetaDataBuilder::new(file_meta).build())
     }
 
+    #[derive(Debug)]
+    struct TestPageIndexProvider {
+        has_column_indexes: bool,
+        has_offset_indexes: bool,
+    }
+
+    impl PageIndexProvider for TestPageIndexProvider {
+        fn has_offset_indexes(&self) -> bool {
+            self.has_offset_indexes
+        }
+
+        fn has_column_indexes(&self) -> bool {
+            self.has_column_indexes
+        }
+
+        fn column_index(
+            &self,
+            _: usize,
+            _: usize,
+        ) -> Option<&parquet::file::page_index::column_index::ColumnIndexMetaData> {
+            None
+        }
+
+        fn offset_index(
+            &self,
+            _: usize,
+            _: usize,
+        ) -> Option<&parquet::file::page_index::offset_index::OffsetIndexMetaData> {
+            None
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
     fn metadata_column_index_only() -> Arc<ParquetMetaData> {
         let msg_type = parse_message_type("message schema { REQUIRED INT32 x; }").unwrap();
         let schema_desc = Arc::new(SchemaDescriptor::new(Arc::new(msg_type)));
         let file_meta = FileMetaData::new(2, 0, None, None, schema_desc, None);
         Arc::new(
             ParquetMetaDataBuilder::new(file_meta)
-                .set_column_index(Some(vec![]))
+                .set_page_index(Some(Arc::new(TestPageIndexProvider {
+                    has_column_indexes: true,
+                    has_offset_indexes: false,
+                })))
                 .build(),
         )
     }
@@ -969,8 +1015,10 @@ mod tests {
         let file_meta = FileMetaData::new(2, 0, None, None, schema_desc, None);
         Arc::new(
             ParquetMetaDataBuilder::new(file_meta)
-                .set_column_index(Some(vec![]))
-                .set_offset_index(Some(vec![]))
+                .set_page_index(Some(Arc::new(TestPageIndexProvider {
+                    has_column_indexes: true,
+                    has_offset_indexes: true,
+                })))
                 .build(),
         )
     }
@@ -1013,7 +1061,11 @@ mod tests {
         );
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_group_filtering_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(true)
+                    .build(),
+            )
             .build();
 
         let task = FileScanTask::builder()
@@ -1081,7 +1133,9 @@ mod tests {
             let opts = ReadOptionsBuilder::new().with_page_index().build();
             let rdr = SerializedFileReader::new_with_options(f, opts).unwrap();
             assert!(
-                rdr.metadata().column_index().is_some(),
+                rdr.metadata()
+                    .page_index()
+                    .is_some_and(|page_index| page_index.has_column_indexes()),
                 "fixture must carry a column index so the page-index path runs"
             );
         }
@@ -1093,8 +1147,12 @@ mod tests {
         assert!(matches!(predicate, BoundPredicate::Not(_)));
 
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
-            .with_row_group_filtering_enabled(false)
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_group_filtering_enabled(false)
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let task = FileScanTask::builder()
@@ -1362,13 +1420,9 @@ mod tests {
             let f = File::open(&file_path).unwrap();
             let rdr = SerializedFileReader::new(f).unwrap();
             assert!(
-                rdr.metadata().column_index().is_none(),
+                rdr.metadata().page_index().is_none(),
                 "test fixture must produce a file without a column index"
             );
-            assert!(
-                rdr.metadata().offset_index().is_none(),
-                "test fixture must a product a file without offset index"
-            )
         }
 
         // Predicate: id > 2
@@ -1380,7 +1434,11 @@ mod tests {
         let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
             // Enabling row selection ()
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let file_size = std::fs::metadata(&file_path).unwrap().len();
@@ -1468,7 +1526,11 @@ mod tests {
             .unwrap();
 
         let reader_sub2 = ArrowReaderBuilder::new(file_io.clone(), Runtime::current())
-            .with_row_selection_enabled(true)
+            .with_options(
+                ReaderOptions::builder()
+                    .with_row_selection_enabled(true)
+                    .build(),
+            )
             .build();
 
         let task_sub2 = FileScanTask::builder()
@@ -1574,20 +1636,15 @@ mod tests {
     }
 
     async fn read_once(
+        reader: ArrowReader,
         file_path: &str,
         schema: Arc<Schema>,
         project_field_ids: Vec<i32>,
         predicate: Predicate,
-        bloom_enabled: bool,
+        partition: Option<(Arc<PartitionSpec>, Struct)>,
+        deletes: Vec<FileScanTaskDeleteFile>,
     ) -> (Vec<RecordBatch>, u64) {
-        let file_io = FileIO::new_with_fs();
-        let reader = ArrowReaderBuilder::new(file_io, Runtime::current())
-            .with_bloom_filter_enabled(bloom_enabled)
-            // Keep the fixed footer prefetch small so the byte measurement reflects
-            // row group I/O rather than a constant metadata read.
-            .with_metadata_size_hint(8 * 1024)
-            .build();
-
+        let (partition_spec, partition) = partition.unzip();
         let task = FileScanTask::builder()
             .with_file_size_in_bytes(std::fs::metadata(file_path).unwrap().len())
             .with_start(0)
@@ -1597,6 +1654,9 @@ mod tests {
             .with_schema(schema.clone())
             .with_project_field_ids(project_field_ids)
             .with_predicate(Some(predicate.bind(schema, true).unwrap()))
+            .with_deletes(deletes)
+            .with_partition(partition)
+            .with_partition_spec(partition_spec)
             .with_case_sensitive(false)
             .build()
             .unwrap();
@@ -1625,15 +1685,33 @@ mod tests {
         project_field_ids: Vec<i32>,
         predicate: Predicate,
     ) -> (Option<RecordBatch>, u64, u64) {
-        let (off, bytes_off) = read_once(
-            file_path,
-            schema.clone(),
-            project_field_ids.clone(),
-            predicate.clone(),
-            false,
-        )
-        .await;
-        let (on, bytes_on) = read_once(file_path, schema, project_field_ids, predicate, true).await;
+        let read = |bloom_enabled| {
+            let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                .with_options(
+                    ReaderOptions::builder()
+                        .with_bloom_filter_enabled(bloom_enabled)
+                        .build(),
+                )
+                // Keep the fixed footer prefetch small so the byte measurement reflects
+                // row group I/O rather than a constant metadata read.
+                .with_parquet_options(
+                    ParquetReadOptions::builder()
+                        .with_metadata_size_hint(8 * 1024)
+                        .build(),
+                )
+                .build();
+            read_once(
+                reader,
+                file_path,
+                schema.clone(),
+                project_field_ids.clone(),
+                predicate.clone(),
+                None,
+                vec![],
+            )
+        };
+        let (off, bytes_off) = read(false).await;
+        let (on, bytes_on) = read(true).await;
 
         let off = collapse(&off);
         let on = collapse(&on);
@@ -1998,5 +2076,169 @@ mod tests {
         )
         .await;
         assert_eq!(rows(&on), 1);
+    }
+
+    /// Writes a file that stores only field 1 (`a`), with values 1, 2, 3.
+    fn write_file_without_b() -> (String, TempDir) {
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![field_with_id(
+            "a",
+            DataType::Int64,
+            1,
+        )]));
+        let batch = RecordBatch::try_new(arrow_schema.clone(), vec![Arc::new(Int64Array::from(
+            vec![1, 2, 3],
+        ))])
+        .unwrap();
+        write_row_groups(&file_path, arrow_schema, vec![batch], false);
+        (file_path, tmp_dir)
+    }
+
+    fn schema_with_b(b: NestedField) -> SchemaRef {
+        Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "a", Type::Primitive(PrimitiveType::Long)).into(),
+                    b.into(),
+                ])
+                .build()
+                .unwrap(),
+        )
+    }
+
+    /// Reads the file from [`write_file_without_b`], in which `b` reads as 7 on every row through
+    /// `schema` or `partition`, and asserts the rows each predicate keeps. Each predicate, and each
+    /// equality delete on `b`, must keep or drop all three rows as if `b` were stored as 7.
+    async fn assert_absent_b_reads_as_7(
+        schema: SchemaRef,
+        partition: Option<(Arc<PartitionSpec>, Struct)>,
+        cases: Vec<(Predicate, usize)>,
+    ) {
+        let (file_path, tmp_dir) = write_file_without_b();
+        let read = async |row_selection_enabled, predicate, deletes| {
+            let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current())
+                .with_options(
+                    ReaderOptions::builder()
+                        .with_row_selection_enabled(row_selection_enabled)
+                        .build(),
+                )
+                .build();
+            let (batches, _) = read_once(
+                reader,
+                &file_path,
+                schema.clone(),
+                vec![1, 2],
+                predicate,
+                partition.clone(),
+                deletes,
+            )
+            .await;
+            batches
+        };
+
+        let batches = read(false, Predicate::AlwaysTrue, vec![]).await;
+        assert_eq!(
+            batches[0].column(1).as_primitive::<Int64Type>().values(),
+            &[7, 7, 7]
+        );
+
+        // The keep predicate for a deleted value `v` is `b IS NULL OR b != v`, and `b IS NOT NULL`
+        // for a deleted null.
+        let delete_field = Field::new("b", DataType::Int64, true).with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "2".to_string(),
+        )]));
+        let delete_schema = Arc::new(ArrowSchema::new(vec![delete_field]));
+        let deletes: Vec<_> = [(Some(7), 0), (Some(5), 3), (None, 3)]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (deleted_b, rows))| {
+                let delete_path =
+                    format!("{}/eq-del-{i}.parquet", tmp_dir.path().to_str().unwrap());
+                let batch = RecordBatch::try_new(delete_schema.clone(), vec![Arc::new(
+                    Int64Array::from(vec![deleted_b]),
+                )])
+                .unwrap();
+                write_row_groups(&delete_path, delete_schema.clone(), vec![batch], false);
+                let delete = FileScanTaskDeleteFile::builder()
+                    .with_file_size_in_bytes(std::fs::metadata(&delete_path).unwrap().len())
+                    .with_file_path(delete_path)
+                    .with_file_type(DataContentType::EqualityDeletes)
+                    .with_file_format(DataFileFormat::Parquet)
+                    .with_partition_spec_id(0)
+                    .with_equality_ids(Some(vec![2]))
+                    .build()
+                    .unwrap();
+                (deleted_b, delete, rows)
+            })
+            .collect();
+
+        for row_selection_enabled in [false, true] {
+            for (predicate, expected) in &cases {
+                let batches = read(row_selection_enabled, predicate.clone(), vec![]).await;
+                let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+                assert_eq!(
+                    rows, *expected,
+                    "{predicate}, row_selection_enabled = {row_selection_enabled}"
+                );
+            }
+            for (deleted_b, delete, expected) in &deletes {
+                let batches = read(row_selection_enabled, Predicate::AlwaysTrue, vec![
+                    delete.clone(),
+                ])
+                .await;
+                let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+                assert_eq!(
+                    rows, *expected,
+                    "equality delete on b = {deleted_b:?}, row_selection_enabled = {row_selection_enabled}"
+                );
+            }
+        }
+    }
+
+    /// A file written before column `b` was added with `initial-default` 7.
+    #[tokio::test]
+    async fn test_predicate_on_absent_column_uses_initial_default() {
+        let schema = schema_with_b(
+            NestedField::optional(2, "b", Type::Primitive(PrimitiveType::Long))
+                .with_initial_default(Literal::long(7)),
+        );
+        let b = || Reference::new("b");
+        assert_absent_b_reads_as_7(schema, None, vec![
+            (b().equal_to(Datum::long(7)), 3),
+            (b().is_not_null(), 3),
+            (b().is_in([Datum::long(7), Datum::long(8)]), 3),
+            (b().greater_than(Datum::long(5)), 3),
+            (b().equal_to(Datum::long(8)), 0),
+            (b().is_null(), 0),
+        ])
+        .await;
+    }
+
+    /// A file that doesn't store its identity partition column `b`, as after a Hive migration or
+    /// `add_files`, with partition value 7.
+    #[tokio::test]
+    async fn test_predicate_on_absent_identity_partition_column_uses_partition_value() {
+        let schema = schema_with_b(NestedField::optional(
+            2,
+            "b",
+            Type::Primitive(PrimitiveType::Long),
+        ));
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .add_partition_field("b", "b", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let partition = Struct::from_iter([Some(Literal::long(7))]);
+        let b = || Reference::new("b");
+        assert_absent_b_reads_as_7(schema, Some((Arc::new(partition_spec), partition)), vec![
+            (b().equal_to(Datum::long(7)), 3),
+            (b().is_not_null(), 3),
+            (b().equal_to(Datum::long(8)), 0),
+            (b().is_null(), 0),
+        ])
+        .await;
     }
 }
