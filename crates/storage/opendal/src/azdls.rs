@@ -240,9 +240,26 @@ impl AzureStoragePath {
     /// The part of `absolute_path` below the filesystem, without a leading `/`,
     /// like the relative paths of the other backends.
     pub(crate) fn relative_path<'a>(&self, absolute_path: &'a str) -> &'a str {
-        let path = &absolute_path[absolute_path.len() - self.path.len()..];
+        let path = raw_path(absolute_path);
         path.strip_prefix('/').unwrap_or(path)
     }
+}
+
+/// The path of `location` as written, between the authority and any query or fragment.
+///
+/// [`Url::path`] is percent-encoded, so it can differ from the location text.
+fn raw_path(location: &str) -> &str {
+    let after_scheme = location
+        .split_once("://")
+        .map_or(location, |(_, rest)| rest);
+    let path_start = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    let path_and_rest = &after_scheme[path_start..];
+    let path_end = path_and_rest
+        .find(['?', '#'])
+        .unwrap_or(path_and_rest.len());
+    &path_and_rest[..path_end]
 }
 
 impl FromStr for AzureStoragePath {
@@ -266,7 +283,7 @@ impl FromStr for AzureStoragePath {
             filesystem: filesystem.to_string(),
             account_name: account_name.to_string(),
             endpoint_suffix: endpoint_suffix.to_string(),
-            path: url.path().to_string(),
+            path: raw_path(path).to_string(),
         })
     }
 }
@@ -541,6 +558,65 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_azure_storage_path_relative_path() {
+        let cases = [
+            (
+                "abfss://myfs@myaccount.dfs.core.windows.net/dir/file.parquet?sv=1&sig=SECRET",
+                "dir/file.parquet",
+            ),
+            (
+                "abfss://myfs@myaccount.dfs.core.windows.net/dir/file.parquet#frag",
+                "dir/file.parquet",
+            ),
+            (
+                "abfss://myfs@myaccount.dfs.core.windows.net/dir/file.parquet?sig=SECRET#frag",
+                "dir/file.parquet",
+            ),
+            (
+                "wasbs://myfs@myaccount.blob.core.windows.net/dir/file.parquet?sig=SECRET",
+                "dir/file.parquet",
+            ),
+            (
+                "abfss://myfs@myaccount.dfs.core.windows.net/my dir/file.parquet",
+                "my dir/file.parquet",
+            ),
+            (
+                "abfss://myfs@myaccount.dfs.core.windows.net/\u{4ed3}\u{5e93}/v1.json",
+                "\u{4ed3}\u{5e93}/v1.json",
+            ),
+            (
+                "abfss://myfs@myaccount.dfs.core.windows.net/my%20dir/file.parquet",
+                "my%20dir/file.parquet",
+            ),
+            ("abfss://myfs@myaccount.dfs.core.windows.net?sig=SECRET", ""),
+            (
+                "abfss://myfs@myaccount.dfs.core.windows.net/?sig=SECRET",
+                "",
+            ),
+        ];
+
+        let actual: Vec<&str> = cases
+            .iter()
+            .map(|(location, _)| {
+                location
+                    .parse::<AzureStoragePath>()
+                    .unwrap()
+                    .relative_path(location)
+            })
+            .collect();
+        let expected: Vec<&str> = cases.iter().map(|(_, expected)| *expected).collect();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_azure_storage_path_relative_path_long_non_ascii() {
+        let relative_path = "\u{4ed3}".repeat(40);
+        let location = format!("abfss://myfs@myaccount.dfs.core.windows.net/{relative_path}");
+        let path = location.parse::<AzureStoragePath>().unwrap();
+        assert_eq!(path.relative_path(&location), relative_path);
     }
 
     #[test]
