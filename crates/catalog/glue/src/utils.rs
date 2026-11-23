@@ -208,20 +208,26 @@ pub(crate) fn get_default_table_location(
     db_name: impl AsRef<str>,
     table_name: impl AsRef<str>,
     warehouse: impl AsRef<str>,
-) -> String {
+) -> Result<String> {
     let properties = namespace.properties();
 
     match properties.get(LOCATION) {
-        Some(location) => format!("{}/{}", location, table_name.as_ref()),
+        Some(location) => Ok(format!("{}/{}", location, table_name.as_ref())),
         None => {
             let warehouse_location = warehouse.as_ref().trim_end_matches('/');
+            if warehouse_location.is_empty() {
+                return Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "Cannot derive default table location: catalog warehouse is not set and the namespace has no location",
+                ));
+            }
 
-            format!(
+            Ok(format!(
                 "{}/{}.db/{}",
                 warehouse_location,
                 db_name.as_ref(),
                 table_name.as_ref()
-            )
+            ))
         }
     }
 }
@@ -401,9 +407,26 @@ mod tests {
 
         let expected = "db_location/my_table";
         let result =
-            get_default_table_location(&namespace, db_name, table_name, "warehouse_location");
+            get_default_table_location(&namespace, db_name, table_name, "warehouse_location")?;
 
         assert_eq!(expected, result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_default_table_location_without_warehouse() -> Result<()> {
+        let properties = HashMap::from([(LOCATION.to_string(), "db_location".to_string())]);
+        let namespace =
+            Namespace::with_properties(NamespaceIdent::new("default".into()), properties);
+        let db_name = validate_namespace(namespace.name())?;
+
+        let result = get_default_table_location(&namespace, &db_name, "my_table", "")?;
+        assert_eq!("db_location/my_table", result);
+
+        let namespace = Namespace::new(NamespaceIdent::new("default".into()));
+        let error = get_default_table_location(&namespace, &db_name, "my_table", "").unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::DataInvalid);
 
         Ok(())
     }
@@ -416,7 +439,7 @@ mod tests {
 
         let expected = "warehouse_location/default.db/my_table";
         let result =
-            get_default_table_location(&namespace, db_name, table_name, "warehouse_location");
+            get_default_table_location(&namespace, db_name, table_name, "warehouse_location")?;
 
         assert_eq!(expected, result);
 
