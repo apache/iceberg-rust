@@ -104,7 +104,7 @@
 <a href=#104 id=104 data-nosnippet>104</a>    <span class="kw">type </span>T = <span class="prelude-ty">Option</span>&lt;Type&gt;;
 <a href=#105 id=105 data-nosnippet>105</a>
 <a href=#106 id=106 data-nosnippet>106</a>    <span class="kw">fn </span>schema(<span class="kw-2">&amp;mut </span><span class="self">self</span>, _schema: <span class="kw-2">&amp;</span>Schema, value: <span class="prelude-ty">Option</span>&lt;Type&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Type&gt;&gt; {
-<a href=#107 id=107 data-nosnippet>107</a>        <span class="prelude-val">Ok</span>(<span class="prelude-val">Some</span>(value.unwrap()))
+<a href=#107 id=107 data-nosnippet>107</a>        <span class="prelude-val">Ok</span>(value)
 <a href=#108 id=108 data-nosnippet>108</a>    }
 <a href=#109 id=109 data-nosnippet>109</a>
 <a href=#110 id=110 data-nosnippet>110</a>    <span class="kw">fn </span>field(<span class="kw-2">&amp;mut </span><span class="self">self</span>, field: <span class="kw-2">&amp;</span>NestedFieldRef, value: <span class="prelude-ty">Option</span>&lt;Type&gt;) -&gt; <span class="prelude-ty">Result</span>&lt;<span class="prelude-ty">Option</span>&lt;Type&gt;&gt; {
@@ -745,35 +745,38 @@
 <a href=#745 id=745 data-nosnippet>745</a>        <span class="kw">let </span>result = prune_columns(<span class="kw-2">&amp;</span>schema, selected, <span class="bool-val">true</span>);
 <a href=#746 id=746 data-nosnippet>746</a>        <span class="macro">assert!</span>(result.is_ok());
 <a href=#747 id=747 data-nosnippet>747</a>        <span class="macro">assert_eq!</span>(result.unwrap(), Type::Struct(schema.as_struct().clone()));
-<a href=#748 id=748 data-nosnippet>748</a>    }
-<a href=#749 id=749 data-nosnippet>749</a>
-<a href=#750 id=750 data-nosnippet>750</a>    <span class="attr">#[test]
-<a href=#751 id=751 data-nosnippet>751</a>    </span><span class="kw">fn </span>test_prune_columns_variant() {
-<a href=#752 id=752 data-nosnippet>752</a>        <span class="comment">// foo (String, id=1) + v (Variant, id=2).
-<a href=#753 id=753 data-nosnippet>753</a>        </span><span class="kw">let </span>schema = Schema::builder()
-<a href=#754 id=754 data-nosnippet>754</a>            .with_fields(<span class="macro">vec!</span>[
-<a href=#755 id=755 data-nosnippet>755</a>                NestedField::optional(<span class="number">1</span>, <span class="string">"foo"</span>, Primitive(PrimitiveType::String)).into(),
-<a href=#756 id=756 data-nosnippet>756</a>                NestedField::optional(<span class="number">2</span>, <span class="string">"v"</span>, Type::Variant(VariantType)).into(),
-<a href=#757 id=757 data-nosnippet>757</a>            ])
-<a href=#758 id=758 data-nosnippet>758</a>            .build()
-<a href=#759 id=759 data-nosnippet>759</a>            .unwrap();
-<a href=#760 id=760 data-nosnippet>760</a>
-<a href=#761 id=761 data-nosnippet>761</a>        <span class="comment">// A variant is a leaf (like a primitive): selecting it keeps it, the same way
-<a href=#762 id=762 data-nosnippet>762</a>        // for select_full_types true and false.
-<a href=#763 id=763 data-nosnippet>763</a>        </span><span class="kw">let </span>only_variant = Type::Struct(StructType::new(<span class="macro">vec!</span>[
-<a href=#764 id=764 data-nosnippet>764</a>            NestedField::optional(<span class="number">2</span>, <span class="string">"v"</span>, Type::Variant(VariantType)).into(),
-<a href=#765 id=765 data-nosnippet>765</a>        ]));
-<a href=#766 id=766 data-nosnippet>766</a>        <span class="kw">for </span>full <span class="kw">in </span>[<span class="bool-val">false</span>, <span class="bool-val">true</span>] {
-<a href=#767 id=767 data-nosnippet>767</a>            <span class="kw">let </span>result = prune_columns(<span class="kw-2">&amp;</span>schema, HashSet::from([<span class="number">2</span>]), full).unwrap();
-<a href=#768 id=768 data-nosnippet>768</a>            <span class="macro">assert_eq!</span>(result, only_variant, <span class="string">"select_full_types={full}"</span>);
-<a href=#769 id=769 data-nosnippet>769</a>        }
-<a href=#770 id=770 data-nosnippet>770</a>
-<a href=#771 id=771 data-nosnippet>771</a>        <span class="comment">// Selecting a sibling prunes the variant out.
-<a href=#772 id=772 data-nosnippet>772</a>        </span><span class="kw">let </span>only_foo = Type::Struct(StructType::new(<span class="macro">vec!</span>[
-<a href=#773 id=773 data-nosnippet>773</a>            NestedField::optional(<span class="number">1</span>, <span class="string">"foo"</span>, Primitive(PrimitiveType::String)).into(),
-<a href=#774 id=774 data-nosnippet>774</a>        ]));
-<a href=#775 id=775 data-nosnippet>775</a>        <span class="kw">let </span>result = prune_columns(<span class="kw-2">&amp;</span>schema, HashSet::from([<span class="number">1</span>]), <span class="bool-val">false</span>).unwrap();
-<a href=#776 id=776 data-nosnippet>776</a>        <span class="macro">assert_eq!</span>(result, only_foo);
-<a href=#777 id=777 data-nosnippet>777</a>    }
-<a href=#778 id=778 data-nosnippet>778</a>}
+<a href=#748 id=748 data-nosnippet>748</a>        <span class="comment">// Selecting nothing gives an empty struct.
+<a href=#749 id=749 data-nosnippet>749</a>        </span><span class="kw">let </span>empty = prune_columns(<span class="kw-2">&amp;</span>schema, [], <span class="bool-val">false</span>).unwrap();
+<a href=#750 id=750 data-nosnippet>750</a>        <span class="macro">assert_eq!</span>(empty, Type::Struct(StructType::default()));
+<a href=#751 id=751 data-nosnippet>751</a>    }
+<a href=#752 id=752 data-nosnippet>752</a>
+<a href=#753 id=753 data-nosnippet>753</a>    <span class="attr">#[test]
+<a href=#754 id=754 data-nosnippet>754</a>    </span><span class="kw">fn </span>test_prune_columns_variant() {
+<a href=#755 id=755 data-nosnippet>755</a>        <span class="comment">// foo (String, id=1) + v (Variant, id=2).
+<a href=#756 id=756 data-nosnippet>756</a>        </span><span class="kw">let </span>schema = Schema::builder()
+<a href=#757 id=757 data-nosnippet>757</a>            .with_fields(<span class="macro">vec!</span>[
+<a href=#758 id=758 data-nosnippet>758</a>                NestedField::optional(<span class="number">1</span>, <span class="string">"foo"</span>, Primitive(PrimitiveType::String)).into(),
+<a href=#759 id=759 data-nosnippet>759</a>                NestedField::optional(<span class="number">2</span>, <span class="string">"v"</span>, Type::Variant(VariantType)).into(),
+<a href=#760 id=760 data-nosnippet>760</a>            ])
+<a href=#761 id=761 data-nosnippet>761</a>            .build()
+<a href=#762 id=762 data-nosnippet>762</a>            .unwrap();
+<a href=#763 id=763 data-nosnippet>763</a>
+<a href=#764 id=764 data-nosnippet>764</a>        <span class="comment">// A variant is a leaf (like a primitive): selecting it keeps it, the same way
+<a href=#765 id=765 data-nosnippet>765</a>        // for select_full_types true and false.
+<a href=#766 id=766 data-nosnippet>766</a>        </span><span class="kw">let </span>only_variant = Type::Struct(StructType::new(<span class="macro">vec!</span>[
+<a href=#767 id=767 data-nosnippet>767</a>            NestedField::optional(<span class="number">2</span>, <span class="string">"v"</span>, Type::Variant(VariantType)).into(),
+<a href=#768 id=768 data-nosnippet>768</a>        ]));
+<a href=#769 id=769 data-nosnippet>769</a>        <span class="kw">for </span>full <span class="kw">in </span>[<span class="bool-val">false</span>, <span class="bool-val">true</span>] {
+<a href=#770 id=770 data-nosnippet>770</a>            <span class="kw">let </span>result = prune_columns(<span class="kw-2">&amp;</span>schema, HashSet::from([<span class="number">2</span>]), full).unwrap();
+<a href=#771 id=771 data-nosnippet>771</a>            <span class="macro">assert_eq!</span>(result, only_variant, <span class="string">"select_full_types={full}"</span>);
+<a href=#772 id=772 data-nosnippet>772</a>        }
+<a href=#773 id=773 data-nosnippet>773</a>
+<a href=#774 id=774 data-nosnippet>774</a>        <span class="comment">// Selecting a sibling prunes the variant out.
+<a href=#775 id=775 data-nosnippet>775</a>        </span><span class="kw">let </span>only_foo = Type::Struct(StructType::new(<span class="macro">vec!</span>[
+<a href=#776 id=776 data-nosnippet>776</a>            NestedField::optional(<span class="number">1</span>, <span class="string">"foo"</span>, Primitive(PrimitiveType::String)).into(),
+<a href=#777 id=777 data-nosnippet>777</a>        ]));
+<a href=#778 id=778 data-nosnippet>778</a>        <span class="kw">let </span>result = prune_columns(<span class="kw-2">&amp;</span>schema, HashSet::from([<span class="number">1</span>]), <span class="bool-val">false</span>).unwrap();
+<a href=#779 id=779 data-nosnippet>779</a>        <span class="macro">assert_eq!</span>(result, only_foo);
+<a href=#780 id=780 data-nosnippet>780</a>    }
+<a href=#781 id=781 data-nosnippet>781</a>}
 </code></pre></div></section></main></body></html>
