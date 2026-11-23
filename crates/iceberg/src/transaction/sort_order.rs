@@ -15,15 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::Arc;
-
 use async_trait::async_trait;
 
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::spec::{NullOrder, SchemaRef, SortDirection, SortField, SortOrder, Transform};
 use crate::table::Table;
-use crate::transaction::{ActionCommit, TransactionAction};
-use crate::{Error, ErrorKind, TableRequirement, TableUpdate};
+use crate::transaction::{ActionCommit, StatelessAction};
+use crate::{TableRequirement, TableUpdate};
 
 /// Represents a sort field whose construction and validation are deferred until commit time.
 /// This avoids the need to pass a `Table` reference into methods like `asc` or `desc` when
@@ -38,20 +36,14 @@ struct PendingSortField {
 
 impl PendingSortField {
     fn to_sort_field(&self, schema: &SchemaRef) -> Result<SortField> {
-        let field_id = schema.field_id_by_name(self.name.as_str()).ok_or_else(|| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot find field {} in table schema", self.name),
-            )
-        })?;
+        let field_id = schema
+            .field_id_by_name(self.name.as_str())
+            .ok_or_else(|| invalid_data!("Cannot find field {} in table schema", self.name))?;
 
         // This action intentionally refuses to author all-null (void) sort keys;
         // this policy does not restrict reading or preserving existing metadata.
         if matches!(self.transform, Transform::Unknown | Transform::Void) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Cannot sort by transform {}", self.transform),
-            ));
+            return Err(invalid_data!("Cannot sort by transform {}", self.transform));
         }
 
         Ok(SortField::builder()
@@ -64,6 +56,7 @@ impl PendingSortField {
 }
 
 /// Transaction action for replacing sort order.
+#[derive(Clone)]
 pub struct ReplaceSortOrderAction {
     pending_sort_fields: Vec<PendingSortField>,
 }
@@ -95,8 +88,9 @@ impl ReplaceSortOrderAction {
     /// Whether the transform is valid for the column's type is checked at commit time,
     /// once the table schema is available (mirroring Java's `SortOrder.Builder.build()`).
     /// `Transform::Unknown` and `Transform::Void` are rejected at commit time with
-    /// [`ErrorKind::DataInvalid`]. Rejecting `Void` is an intentional authoring policy
-    /// for this action: an all-null sort key adds no ordering information.
+    /// [`ErrorKind::DataInvalid`](crate::ErrorKind::DataInvalid). Rejecting `Void` is an
+    /// intentional authoring policy for this action: an all-null sort key adds no
+    /// ordering information.
     ///
     /// Note: `Term` is currently a plain column reference. Once it becomes
     /// transform-carrying (#2665), sort-order declaration is expected to converge on
@@ -142,8 +136,8 @@ impl ReplaceSortOrderAction {
 }
 
 #[async_trait]
-impl TransactionAction for ReplaceSortOrderAction {
-    async fn commit(self: Arc<Self>, table: &Table) -> Result<ActionCommit> {
+impl StatelessAction for ReplaceSortOrderAction {
+    async fn commit(&self, table: &Table) -> Result<ActionCommit> {
         let current_schema = table.metadata().current_schema();
         let sort_fields: Result<Vec<SortField>> = self
             .pending_sort_fields
@@ -177,16 +171,16 @@ impl TransactionAction for ReplaceSortOrderAction {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use as_any::Downcast;
 
     use crate::catalog::Catalog;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{NullOrder, SortDirection, Transform};
+    use crate::test_utils::commit_with_fresh_state;
+    use crate::transaction::action::ActionEntry;
     use crate::transaction::sort_order::{PendingSortField, ReplaceSortOrderAction};
     use crate::transaction::tests::{make_v2_table, make_v3_minimal_table_in_catalog};
-    use crate::transaction::{ApplyTransactionAction, Transaction, TransactionAction};
+    use crate::transaction::{ApplyTransactionAction, Transaction};
     use crate::{ErrorKind, TableUpdate};
 
     #[test]
@@ -202,8 +196,9 @@ mod tests {
             .unwrap();
 
         let replace_sort_order = (*tx.actions[0])
-            .downcast_ref::<ReplaceSortOrderAction>()
-            .unwrap();
+            .downcast_ref::<ActionEntry<ReplaceSortOrderAction>>()
+            .unwrap()
+            .action();
 
         assert_eq!(replace_sort_order.pending_sort_fields, vec![
             PendingSortField {
@@ -234,8 +229,9 @@ mod tests {
             .unwrap();
 
         let replace_sort_order = (*tx.actions[0])
-            .downcast_ref::<ReplaceSortOrderAction>()
-            .unwrap();
+            .downcast_ref::<ActionEntry<ReplaceSortOrderAction>>()
+            .unwrap()
+            .action();
 
         assert_eq!(replace_sort_order.pending_sort_fields, vec![
             PendingSortField {
@@ -256,13 +252,13 @@ mod tests {
     #[tokio::test]
     async fn test_replace_sort_order_with_transform_commits() {
         let table = make_v2_table();
-        let action = Arc::new(ReplaceSortOrderAction::new().asc_with_transform(
+        let action = ReplaceSortOrderAction::new().asc_with_transform(
             "x",
             Transform::Bucket(16),
             NullOrder::First,
-        ));
+        );
 
-        let mut action_commit = TransactionAction::commit(action, &table).await.unwrap();
+        let mut action_commit = commit_with_fresh_state(action, &table).await.unwrap();
         let updates = action_commit.take_updates();
 
         assert_eq!(updates.len(), 2);
@@ -277,13 +273,13 @@ mod tests {
     async fn test_replace_sort_order_rejects_incompatible_transform() {
         let table = make_v2_table();
         // `x` is a `long` column; `year` only accepts date/timestamp types.
-        let action = Arc::new(ReplaceSortOrderAction::new().asc_with_transform(
+        let action = ReplaceSortOrderAction::new().asc_with_transform(
             "x",
             Transform::Year,
             NullOrder::First,
-        ));
+        );
 
-        let err = TransactionAction::commit(action, &table)
+        let err = commit_with_fresh_state(action, &table)
             .await
             .err()
             .expect("year transform on a long column should be rejected");
@@ -298,7 +294,7 @@ mod tests {
                 ReplaceSortOrderAction::new().asc_with_transform("x", transform, NullOrder::First),
                 ReplaceSortOrderAction::new().desc_with_transform("x", transform, NullOrder::Last),
             ] {
-                let err = TransactionAction::commit(Arc::new(action), &table)
+                let err = commit_with_fresh_state(action, &table)
                     .await
                     .err()
                     .expect("unknown and void sort transforms should be rejected");

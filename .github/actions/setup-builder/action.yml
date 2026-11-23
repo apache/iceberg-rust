@@ -42,6 +42,8 @@ runs:
         echo "Installing toolchain according to rust-toolchain.toml"
         rustup show
         rustup component add rustfmt clippy
+        # Unused, and its version varies by runner image, which splits rust-cache keys.
+        rustup toolchain uninstall stable
     - name: Fixup git permissions
       # https://github.com/actions/checkout/issues/766
       shell: bash

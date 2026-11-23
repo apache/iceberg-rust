@@ -55,6 +55,11 @@
 //! }
 //! ```
 //!
+//! # Pagination
+//!
+//! Set a page size for namespace and table listings with
+//! [`RestSessionCatalogBuilder::with_page_size`] or [`REST_CATALOG_PROP_PAGE_SIZE`].
+//!
 //! # Session catalog API
 //!
 //! ```rust, no_run

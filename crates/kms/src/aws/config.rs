@@ -15,20 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::collections::HashMap;
+
+use aws_sdk_kms::config::Credentials;
 use aws_sdk_kms::types::{DataKeySpec, EncryptionAlgorithmSpec};
+use http::Uri;
+use http::uri::Scheme;
+use iceberg::io::{CLIENT_REGION, S3_ASSUME_ROLE_ARN};
 use iceberg::{Error, ErrorKind, Result};
 use iceberg_property_macro::Properties;
-
-/// Catalog property selecting an AWS profile.
-pub const AWS_PROFILE_NAME: &str = "profile_name";
-/// Catalog property selecting the AWS region.
-pub const AWS_REGION_NAME: &str = "region_name";
-/// Catalog property containing a static AWS access key ID.
-pub const AWS_ACCESS_KEY_ID: &str = "aws_access_key_id";
-/// Catalog property containing a static AWS secret access key.
-pub const AWS_SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
-/// Catalog property containing a static AWS session token.
-pub const AWS_SESSION_TOKEN: &str = "aws_session_token";
 
 /// Catalog property overriding the AWS KMS service endpoint.
 pub const KMS_ENDPOINT: &str = "kms.endpoint";
@@ -41,9 +36,16 @@ pub const KMS_DATA_KEY_SPEC: &str = "kms.data-key-spec";
 /// Default AWS KMS generated key size, matching Iceberg Java.
 pub const KMS_DATA_KEY_SPEC_DEFAULT: &str = "AES_256";
 
-#[derive(Clone, Properties)]
+// Properties shared with the Glue and S3 Tables catalogs.
+pub(crate) const AWS_PROFILE_NAME: &str = "profile_name";
+pub(crate) const AWS_REGION_NAME: &str = "region_name";
+pub(crate) const AWS_ACCESS_KEY_ID: &str = "aws_access_key_id";
+pub(crate) const AWS_SECRET_ACCESS_KEY: &str = "aws_secret_access_key";
+pub(crate) const AWS_SESSION_TOKEN: &str = "aws_session_token";
+
+#[derive(Properties)]
 pub(crate) struct AwsKmsConfig {
-    #[property(key = KMS_ENDPOINT, default = None)]
+    #[property(key = KMS_ENDPOINT, default = None, parse_with = parse_endpoint)]
     pub(crate) endpoint: Option<String>,
     #[property(
         key = KMS_ENCRYPTION_ALGORITHM_SPEC,
@@ -57,6 +59,82 @@ pub(crate) struct AwsKmsConfig {
         parse_with = parse_data_key_spec
     )]
     pub(crate) data_key_spec: DataKeySpec,
+}
+
+/// Catalog properties used to build the AWS SDK configuration when the
+/// application does not supply one.
+#[derive(Properties)]
+pub(crate) struct AwsSdkProperties {
+    #[property(
+        key = CLIENT_REGION,
+        additional_keys = [AWS_REGION_NAME],
+        default = None,
+        parse_properties_with = parse_first_present
+    )]
+    pub(crate) region: Option<String>,
+    #[property(key = AWS_PROFILE_NAME, default = None)]
+    pub(crate) profile_name: Option<String>,
+    #[property(key = AWS_ACCESS_KEY_ID, default = None)]
+    access_key_id: Option<String>,
+    #[property(key = AWS_SECRET_ACCESS_KEY, default = None)]
+    secret_access_key: Option<String>,
+    #[property(key = AWS_SESSION_TOKEN, default = None)]
+    session_token: Option<String>,
+    /// Not supported yet; rejected rather than ignored, so that the KMS client
+    /// never silently uses a different identity than the catalog's file IO.
+    #[property(key = S3_ASSUME_ROLE_ARN, default = None)]
+    pub(crate) assume_role_arn: Option<String>,
+}
+
+impl AwsSdkProperties {
+    /// Static credentials from the catalog properties, if any are set.
+    pub(crate) fn static_credentials(&self) -> Result<Option<Credentials>> {
+        match (
+            &self.access_key_id,
+            &self.secret_access_key,
+            &self.session_token,
+        ) {
+            (Some(access_key_id), Some(secret_access_key), session_token) => {
+                Ok(Some(Credentials::new(
+                    access_key_id,
+                    secret_access_key,
+                    session_token.clone(),
+                    None,
+                    "catalog-properties",
+                )))
+            }
+            (None, None, None) => Ok(None),
+            _ => Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "AWS static credentials require both '{AWS_ACCESS_KEY_ID}' and '{AWS_SECRET_ACCESS_KEY}'"
+                ),
+            )),
+        }
+    }
+}
+
+/// Accepts the endpoints the AWS SDK can apply to a request: `http` or `https`
+/// URIs with a host.
+fn parse_endpoint(value: &str) -> Result<String> {
+    let invalid = || {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("AWS KMS endpoint must be an http or https URL with a host: '{value}'"),
+        )
+    };
+    let uri = value
+        .parse::<Uri>()
+        .map_err(|source| invalid().with_source(source))?;
+    let has_supported_scheme = uri
+        .scheme()
+        .is_some_and(|scheme| *scheme == Scheme::HTTP || *scheme == Scheme::HTTPS);
+    let has_host = uri.host().is_some_and(|host| !host.is_empty());
+    if has_supported_scheme && has_host {
+        Ok(value.to_string())
+    } else {
+        Err(invalid())
+    }
 }
 
 fn parse_encryption_algorithm(value: &str) -> Result<EncryptionAlgorithmSpec> {
@@ -79,10 +157,22 @@ fn parse_data_key_spec(value: &str) -> Result<DataKeySpec> {
     })
 }
 
+/// Uses the value of the first key present, so Iceberg Java's key takes
+/// precedence over the Glue-compatible alias.
+fn parse_first_present(
+    properties: &HashMap<String, String>,
+    key: &str,
+    additional_keys: &[&str],
+    default: Option<String>,
+) -> Result<Option<String>> {
+    Ok(std::iter::once(key)
+        .chain(additional_keys.iter().copied())
+        .find_map(|key| properties.get(key).cloned())
+        .or(default))
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use super::*;
 
     #[test]
@@ -118,6 +208,59 @@ mod tests {
             EncryptionAlgorithmSpec::RsaesOaepSha256
         );
         assert_eq!(config.data_key_spec, DataKeySpec::Aes128);
+    }
+
+    #[test]
+    fn test_reject_incomplete_static_credentials() {
+        for keys in [
+            vec![AWS_ACCESS_KEY_ID],
+            vec![AWS_SECRET_ACCESS_KEY],
+            vec![AWS_SESSION_TOKEN],
+            vec![AWS_ACCESS_KEY_ID, AWS_SESSION_TOKEN],
+        ] {
+            let properties = keys
+                .iter()
+                .map(|key| (key.to_string(), "value".to_string()))
+                .collect();
+            let sdk_properties = AwsSdkProperties::from_properties(&properties).unwrap();
+            let Err(error) = sdk_properties.static_credentials() else {
+                panic!("incomplete credentials {keys:?} must be rejected");
+            };
+            assert_eq!(error.kind(), ErrorKind::DataInvalid);
+        }
+    }
+
+    #[test]
+    fn test_endpoint_validation() {
+        for endpoint in [
+            "http://localhost:4566",
+            "http://[::1]:4566",
+            "https://kms.eu-west-2.amazonaws.com",
+            "https://kms-fips.us-east-1.amazonaws.com/",
+            "HTTPS://kms.eu-west-2.amazonaws.com",
+            "http://localhost:4566/kms",
+        ] {
+            assert_eq!(parse_endpoint(endpoint).unwrap(), endpoint);
+        }
+        // Unparsable URIs make the SDK describe the request, body included, in
+        // its error.
+        for endpoint in [
+            "",
+            "localhost:4566",
+            "http://",
+            "https:///path",
+            "http://a b",
+            "http://:4566",
+            "http://%zz",
+            "http://\u{fc}.example",
+            "ftp://host",
+        ] {
+            assert_eq!(
+                parse_endpoint(endpoint).unwrap_err().kind(),
+                ErrorKind::DataInvalid,
+                "{endpoint}"
+            );
+        }
     }
 
     #[test]

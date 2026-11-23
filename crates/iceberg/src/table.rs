@@ -22,6 +22,7 @@ use std::sync::Arc;
 use crate::arrow::ArrowReaderBuilder;
 use crate::encryption::EncryptionManager;
 use crate::encryption::kms::KeyManagementClient;
+use crate::error::invalid_data;
 use crate::inspect::MetadataTable;
 use crate::io::FileIO;
 use crate::io::object_cache::ObjectCache;
@@ -30,7 +31,7 @@ use crate::scan::TableScanBuilder;
 use crate::spec::{
     ManifestListReader, ManifestReader, SchemaRef, SnapshotRef, TableMetadata, TableMetadataRef,
 };
-use crate::{Error, ErrorKind, Result, TableIdent};
+use crate::{Result, TableIdent};
 
 /// Builder to create table scan.
 pub struct TableBuilder {
@@ -135,30 +136,26 @@ impl TableBuilder {
         } = self;
 
         let Some(file_io) = file_io else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "FileIO must be provided with TableBuilder.file_io()",
+            return Err(invalid_data!(
+                "FileIO must be provided with TableBuilder.file_io()"
             ));
         };
 
         let Some(metadata) = metadata else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "TableMetadataRef must be provided with TableBuilder.metadata()",
+            return Err(invalid_data!(
+                "TableMetadataRef must be provided with TableBuilder.metadata()"
             ));
         };
 
         let Some(identifier) = identifier else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "TableIdent must be provided with TableBuilder.identifier()",
+            return Err(invalid_data!(
+                "TableIdent must be provided with TableBuilder.identifier()"
             ));
         };
 
         let Some(runtime) = runtime else {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Runtime must be provided with TableBuilder.runtime()",
+            return Err(invalid_data!(
+                "Runtime must be provided with TableBuilder.runtime()"
             ));
         };
 
@@ -169,17 +166,20 @@ impl TableBuilder {
             Arc::new(ObjectCache::with_disabled_cache(
                 file_io.clone(),
                 encryption_manager.clone(),
+                runtime.clone(),
             ))
         } else if let Some(cache_size_bytes) = cache_size_bytes {
             Arc::new(ObjectCache::new_with_capacity(
                 file_io.clone(),
                 cache_size_bytes,
                 encryption_manager.clone(),
+                runtime.clone(),
             ))
         } else {
             Arc::new(ObjectCache::new(
                 file_io.clone(),
                 encryption_manager.clone(),
+                runtime.clone(),
             ))
         };
 
@@ -222,6 +222,16 @@ impl Table {
         self
     }
 
+    /// Returns this table bound to `runtime`, sharing its manifest cache.
+    ///
+    /// Tasks such as scan planning and reads are spawned on `runtime`. A table rebuilt
+    /// through [`Table::builder`] starts with an empty cache.
+    pub fn with_runtime(mut self, runtime: Runtime) -> Self {
+        self.object_cache = Arc::new(self.object_cache.with_runtime(runtime.clone()));
+        self.runtime = runtime;
+        self
+    }
+
     /// Returns a TableBuilder to build a table
     pub fn builder() -> TableBuilder {
         TableBuilder::new()
@@ -248,12 +258,9 @@ impl Table {
 
     /// Returns current metadata location in a result.
     pub fn metadata_location_result(&self) -> Result<&str> {
-        self.metadata_location.as_deref().ok_or(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "Metadata location does not exist for table: {}",
-                self.identifier
-            ),
+        self.metadata_location.as_deref().ok_or(invalid_data!(
+            "Metadata location does not exist for table: {}",
+            self.identifier
         ))
     }
 
@@ -314,8 +321,13 @@ impl Table {
     }
 
     /// Creates a [`ManifestReader`] for loading manifests referenced by this table.
+    ///
+    /// The reader parses manifests on this table's [`Runtime::cpu`] handle, so
+    /// [`ManifestReader::read`] returns an
+    /// [`ErrorKind::Unexpected`](crate::ErrorKind::Unexpected) error once that
+    /// runtime has shut down.
     pub fn manifest_reader(&self) -> ManifestReader {
-        ManifestReader::new(self.file_io.clone())
+        ManifestReader::new(self.file_io.clone(), self.runtime.clone())
     }
 
     /// Create a reader for the table.
@@ -415,9 +427,11 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::ErrorKind;
     use crate::encryption::SensitiveBytes;
     use crate::encryption::kms::MemoryKeyManagementClient;
     use crate::spec::TableProperties;
+    use crate::test_utils::scan::TableTestFixture;
 
     fn load_test_metadata(filename: &str) -> TableMetadata {
         let path = format!(
@@ -500,6 +514,60 @@ mod tests {
             .unwrap();
         assert!(!table.readonly());
         assert_eq!(table.identifier.name(), "table");
+    }
+
+    /// `with_runtime` must move both the table's own spawns and the object
+    /// cache's manifest parses onto the new runtime, while the rebound cache
+    /// keeps serving what the original already loaded.
+    #[tokio::test]
+    async fn test_table_with_runtime_moves_work_and_keeps_object_cache() {
+        let old = tokio::runtime::Builder::new_multi_thread().build().unwrap();
+        let mut fixture = TableTestFixture::new();
+        fixture.setup_manifest_files().await;
+        // Built on `old` from the start, so its object cache is bound to `old`
+        // too; `with_runtime` on a table built elsewhere would not show that.
+        let table = Table::builder()
+            .metadata(fixture.table.metadata().clone())
+            .identifier(fixture.table.identifier().clone())
+            .file_io(fixture.table.file_io().clone())
+            .runtime(Runtime::new(&old))
+            .build()
+            .unwrap();
+
+        // Load the manifest list through the original table so it is cached.
+        let snapshot = table.metadata().current_snapshot().unwrap().clone();
+        let manifest_list = table
+            .object_cache()
+            .get_manifest_list(&snapshot, &table.metadata_ref())
+            .await
+            .unwrap();
+        // With the old runtime shut down, every spawn below succeeds only if
+        // `rebound` uses the new one.
+        old.shutdown_background();
+
+        let rebound = table.clone().with_runtime(Runtime::try_current().unwrap());
+        assert_eq!(
+            rebound.runtime().io().spawn(async { 42 }).await.unwrap(),
+            42
+        );
+
+        // The rebound cache parses a manifest it has not seen on the new runtime.
+        let manifest_file = manifest_list.entries()[0].clone();
+        rebound
+            .object_cache()
+            .get_manifest(&manifest_file)
+            .await
+            .unwrap();
+
+        // And it still holds the manifest list the original table loaded: with
+        // the file gone, only a cache hit can answer.
+        fs::remove_file(snapshot.manifest_list()).unwrap();
+        let from_cache = rebound
+            .object_cache()
+            .get_manifest_list(&snapshot, &rebound.metadata_ref())
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&manifest_list, &from_cache));
     }
 
     fn make_kms() -> Arc<dyn KeyManagementClient> {

@@ -32,6 +32,7 @@ use arrow_schema::{DataType, Field, Schema};
 use arrow_select::zip::zip;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
+use crate::error::invalid_data;
 use crate::metadata_columns::{
     RESERVED_COL_NAME_ROW_ID, RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_ROW_ID,
 };
@@ -75,9 +76,9 @@ pub(crate) fn synthesize_row_id_column(
             match column_by_field_id(&batch, RESERVED_FIELD_ID_ROW_ID) {
                 Some(id) => {
                     if id.data_type() != &DataType::Int64 {
-                        return Err(Error::new(
-                            ErrorKind::DataInvalid,
-                            format!("_row_id source must be Int64, got {}", id.data_type()),
+                        return Err(invalid_data!(
+                            "_row_id source must be Int64, got {}",
+                            id.data_type()
                         ));
                     }
 
@@ -123,13 +124,10 @@ fn append_row_id(batch: RecordBatch, row_id: ArrayRef) -> Result<RecordBatch> {
     }
 
     fields.push(Arc::new(
-        Field::new(RESERVED_COL_NAME_ROW_ID, DataType::Int64, true).with_metadata(
-            [(
-                PARQUET_FIELD_ID_META_KEY.to_string(),
-                RESERVED_FIELD_ID_ROW_ID.to_string(),
-            )]
-            .into(),
-        ),
+        Field::new(RESERVED_COL_NAME_ROW_ID, DataType::Int64, true).with_metadata([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            RESERVED_FIELD_ID_ROW_ID.to_string(),
+        )]),
     ));
     columns.push(row_id);
 
@@ -151,7 +149,7 @@ mod tests {
     fn field_with_id(name: &str, dt: DataType, id: i32) -> Arc<Field> {
         Arc::new(
             Field::new(name, dt, true)
-                .with_metadata([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())].into()),
+                .with_metadata([(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string())]),
         )
     }
 

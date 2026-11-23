@@ -25,6 +25,7 @@ mod utils;
 mod visitor;
 pub use self::visitor::*;
 pub(super) mod _serde;
+mod assign_fresh_ids;
 mod id_reassigner;
 mod index;
 mod prune_columns;
@@ -33,11 +34,12 @@ use itertools::{Itertools, zip_eq};
 use serde::{Deserialize, Serialize};
 
 use self::_serde::SchemaEnum;
+pub(crate) use self::assign_fresh_ids::assign_fresh_ids;
 use self::id_reassigner::ReassignFieldIds;
 use self::index::{IndexByName, index_by_id, index_parents};
 pub use self::prune_columns::prune_columns;
 use super::NestedField;
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::expr::accessor::StructAccessor;
 use crate::spec::FormatVersion;
 use crate::spec::datatypes::{
@@ -71,7 +73,8 @@ pub struct Schema {
     id_to_field: HashMap<i32, NestedFieldRef>,
 
     name_to_id: HashMap<String, i32>,
-    lowercase_name_to_id: HashMap<String, i32>,
+    // `None` marks a lower-cased name that resolves to more than one field.
+    lowercase_name_to_id: HashMap<String, Option<i32>>,
     id_to_name: HashMap<i32, String>,
 
     field_id_to_accessor: HashMap<i32, Arc<StructAccessor>>,
@@ -150,10 +153,13 @@ impl SchemaBuilder {
             index.indexes()
         };
 
-        let lowercase_name_to_id = name_to_id
-            .iter()
-            .map(|(k, v)| (k.to_lowercase(), *v))
-            .collect();
+        let mut lowercase_name_to_id = HashMap::new();
+        for (name, field_id) in &name_to_id {
+            lowercase_name_to_id
+                .entry(name.to_lowercase())
+                .and_modify(|existing| *existing = None)
+                .or_insert(Some(*field_id));
+        }
 
         let highest_field_id = id_to_field.keys().max().cloned().unwrap_or(0);
 
@@ -258,11 +264,8 @@ impl SchemaBuilder {
         let id_to_parent = index_parents(r#struct)?;
         for identifier_field_id in identifier_field_ids {
             let field = id_to_field.get(&identifier_field_id).ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add identifier field {identifier_field_id}: field does not exist"
-                    ),
+                invalid_data!(
+                    "Cannot add identifier field {identifier_field_id}: field does not exist"
                 )
             })?;
             ensure_data_valid!(
@@ -277,12 +280,9 @@ impl SchemaBuilder {
                     field.name
                 );
             } else {
-                return Err(Error::new(
-                    ErrorKind::DataInvalid,
-                    format!(
-                        "Cannot add field {} as an identifier field: not a primitive type field",
-                        field.name
-                    ),
+                return Err(invalid_data!(
+                    "Cannot add field {} as an identifier field: not a primitive type field",
+                    field.name
                 ));
             }
 
@@ -348,13 +348,47 @@ impl Schema {
             .and_then(|id| self.field_by_id(*id))
     }
 
-    /// Get field by field name, but in case-insensitive way.
+    /// Get field by field name in a case-insensitive way.
     ///
     /// Both full name and short name could work here.
+    /// Returns `None` if the name is missing or matches multiple fields case-insensitively.
+    /// Use [`Self::field_by_name_case_insensitive_checked`] to distinguish those cases.
     pub fn field_by_name_case_insensitive(&self, field_name: &str) -> Option<&NestedFieldRef> {
         self.lowercase_name_to_id
             .get(&field_name.to_lowercase())
-            .and_then(|id| self.field_by_id(*id))
+            .copied()
+            .flatten()
+            .and_then(|id| self.field_by_id(id))
+    }
+
+    /// Get field by field name in a case-insensitive way, reporting ambiguous names.
+    ///
+    /// Both full name and short name could work here. Returns `Ok(None)` if the name is
+    /// missing, or an error if it matches multiple fields case-insensitively. A collision
+    /// on another name does not prevent this name from resolving. This differs from Iceberg
+    /// Java, which rejects all case-insensitive lookups after a collision, and PyIceberg,
+    /// which silently keeps one of the colliding fields.
+    pub fn field_by_name_case_insensitive_checked(
+        &self,
+        field_name: &str,
+    ) -> Result<Option<&NestedFieldRef>> {
+        let lowercase_name = field_name.to_lowercase();
+        match self.lowercase_name_to_id.get(&lowercase_name) {
+            Some(Some(id)) => Ok(self.field_by_id(*id)),
+            Some(None) => {
+                let mut colliders: Vec<&str> = self
+                    .name_to_id
+                    .keys()
+                    .filter(|name| name.to_lowercase() == lowercase_name)
+                    .map(String::as_str)
+                    .collect();
+                colliders.sort_unstable();
+                Err(invalid_data!(
+                    "Multiple fields match {field_name} case-insensitively: {colliders:?}"
+                ))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Get field by alias.
@@ -504,9 +538,8 @@ impl Schema {
             .sorted_by_key(|(id, _)| *id)
             .map(|(_, msg)| msg)
             .join("\n- ");
-        Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("Invalid schema for {format_version}:\n- {message}"),
+        Err(invalid_data!(
+            "Invalid schema for {format_version}:\n- {message}"
         ))
     }
 }
@@ -628,7 +661,7 @@ mod tests {
 
     #[test]
     fn test_calc_min_compatible_format() {
-        use crate::spec::{FormatVersion, VariantType};
+        use crate::spec::{FormatVersion, GeometryType, VariantType};
 
         fn schema_with(fields: Vec<NestedFieldRef>) -> Schema {
             Schema::builder().with_fields(fields).build().unwrap()
@@ -654,6 +687,22 @@ mod tests {
         assert_eq!(unknown.calc_min_compatible_format(), FormatVersion::V3);
         assert!(
             unknown
+                .check_format_compatibility(FormatVersion::V2)
+                .is_err()
+        );
+
+        // Geospatial types are v3-only.
+        let geometry = schema_with(vec![
+            NestedField::optional(
+                1,
+                "geom",
+                Primitive(PrimitiveType::Geometry(GeometryType::default())),
+            )
+            .into(),
+        ]);
+        assert_eq!(geometry.calc_min_compatible_format(), FormatVersion::V3);
+        assert!(
+            geometry
                 .check_format_compatibility(FormatVersion::V2)
                 .is_err()
         );
@@ -978,6 +1027,40 @@ table {
                 schema.field_by_name_case_insensitive(&name).map(|f| f.id)
             );
         }
+    }
+
+    #[test]
+    fn test_schema_field_by_name_case_insensitive_checked() {
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::optional(1, "id", Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "ID", Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(3, "data", Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .expect("case-insensitive name ambiguity is valid in a schema");
+
+        assert_eq!(
+            schema
+                .field_by_name_case_insensitive_checked("DATA")
+                .unwrap()
+                .map(|field| field.id),
+            Some(3)
+        );
+        assert!(
+            schema
+                .field_by_name_case_insensitive_checked("missing")
+                .unwrap()
+                .is_none()
+        );
+
+        let error = schema
+            .field_by_name_case_insensitive_checked("Id")
+            .unwrap_err();
+        assert_eq!(error.kind(), crate::ErrorKind::DataInvalid);
+        assert!(error.message().contains("case-insensitively"), "{error}");
+        assert!(error.message().contains("[\"ID\", \"id\"]"), "{error}");
+        assert!(schema.field_by_name_case_insensitive("Id").is_none());
     }
 
     #[test]

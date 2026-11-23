@@ -15,6 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Deletion vectors: the deleted row positions of one data file, as a Puffin
+//! `deletion-vector-v1` blob decodes to. Public so an engine that reads
+//! Parquet with a reader of its own can still decode the vectors Iceberg
+//! writes.
+
 use std::ops::BitOrAssign;
 
 use bytes::Buf;
@@ -22,6 +27,7 @@ use roaring::bitmap::Iter;
 use roaring::treemap::BitmapIter;
 use roaring::{RoaringBitmap, RoaringTreemap};
 
+use crate::error::invalid_data;
 use crate::{Error, ErrorKind, Result};
 
 /// Magic bytes prefixing a serialized `deletion-vector-v1` bitmap, per the Iceberg Puffin spec.
@@ -32,24 +38,28 @@ const DV_MAGIC_BYTES: usize = 4;
 const DV_CRC_BYTES: usize = 4;
 const DV_MIN_BLOB_BYTES: usize = DV_LENGTH_PREFIX_BYTES + DV_MAGIC_BYTES + DV_CRC_BYTES;
 
+/// The deleted row positions of one data file: a set of 64-bit positions,
+/// kept as a [`RoaringTreemap`].
 #[derive(Debug, Default)]
 pub struct DeleteVector {
     inner: RoaringTreemap,
 }
 
 impl DeleteVector {
-    #[allow(unused)]
+    /// Wraps `roaring_treemap`, whose members are the deleted positions.
     pub fn new(roaring_treemap: RoaringTreemap) -> DeleteVector {
         DeleteVector {
             inner: roaring_treemap,
         }
     }
 
+    /// Iterates the deleted positions in ascending order.
     pub fn iter(&self) -> DeleteVectorIterator<'_> {
         let outer = self.inner.bitmaps();
         DeleteVectorIterator { outer, inner: None }
     }
 
+    /// Marks `pos` as deleted, returning whether it was not already.
     pub fn insert(&mut self, pos: u64) -> bool {
         self.inner.insert(pos)
     }
@@ -72,8 +82,28 @@ impl DeleteVector {
         Ok(positions.len())
     }
 
+    /// How many positions are deleted.
     pub fn len(&self) -> u64 {
         self.inner.len()
+    }
+
+    /// Whether no position is deleted.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
+    }
+
+    /// Returns the deleted positions as ascending, non-overlapping half-open ranges.
+    ///
+    /// Adjacent ranges may not be merged (a run is split at each 2^32 boundary), so callers
+    /// shouldn't assume a range is maximal. A range holding only `u64::MAX` is dropped, because a
+    /// half-open `u64` range can't hold it and no Parquet row can be there.
+    pub(crate) fn ranges(&self) -> DeleteVectorRanges<'_> {
+        DeleteVectorRanges {
+            bitmaps: self.inner.bitmaps(),
+            high_bits: 0,
+            bitmap_iter: None,
+            buffered: None,
+        }
     }
 
     /// Parses a `deletion-vector-v1` Puffin blob into a `DeleteVector`.
@@ -98,12 +128,9 @@ impl DeleteVector {
     /// comparison, or the roaring payload fails to decode.
     pub fn deserialize(blob: &[u8]) -> Result<Self> {
         if blob.len() < DV_MIN_BLOB_BYTES {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion-vector-v1 blob is {} bytes, shorter than the {DV_MIN_BLOB_BYTES}-byte minimum",
-                    blob.len()
-                ),
+            return Err(invalid_data!(
+                "deletion-vector-v1 blob is {} bytes, shorter than the {DV_MIN_BLOB_BYTES}-byte minimum",
+                blob.len()
             ));
         }
 
@@ -133,12 +160,9 @@ fn verify_length_prefix(mut prefix: &[u8], body: &[u8]) -> Result<()> {
         .with_source(e)
     })? as usize;
     if declared_len != body.len() {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "deletion-vector-v1 length prefix is {declared_len}, expected {}",
-                body.len()
-            ),
+        return Err(invalid_data!(
+            "deletion-vector-v1 length prefix is {declared_len}, expected {}",
+            body.len()
         ));
     }
     Ok(())
@@ -154,11 +178,8 @@ fn verify_crc(body: &[u8], mut crc_bytes: &[u8]) -> Result<()> {
     })?;
     let computed_crc = crc32fast::hash(body);
     if computed_crc != stored_crc {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "deletion-vector-v1 CRC mismatch: computed {computed_crc:#010x}, stored {stored_crc:#010x}"
-            ),
+        return Err(invalid_data!(
+            "deletion-vector-v1 CRC mismatch: computed {computed_crc:#010x}, stored {stored_crc:#010x}"
         ));
     }
     Ok(())
@@ -166,9 +187,8 @@ fn verify_crc(body: &[u8], mut crc_bytes: &[u8]) -> Result<()> {
 
 fn verify_magic(magic: &[u8]) -> Result<()> {
     if magic != DV_MAGIC {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!("deletion-vector-v1 magic mismatch: {magic:02x?}, expected {DV_MAGIC:02x?}"),
+        return Err(invalid_data!(
+            "deletion-vector-v1 magic mismatch: {magic:02x?}, expected {DV_MAGIC:02x?}"
         ));
     }
     Ok(())
@@ -182,21 +202,14 @@ fn verify_magic(magic: &[u8]) -> Result<()> {
 // that doesn't match what was actually written.
 fn decode_roaring_directory(mut reader: &[u8]) -> Result<RoaringTreemap> {
     let bitmap_count = reader.try_get_u64_le().map_err(|e| {
-        Error::new(
-            ErrorKind::DataInvalid,
-            "failed to decode deletion-vector-v1 roaring payload",
-        )
-        .with_source(e)
+        invalid_data!("failed to decode deletion-vector-v1 roaring payload").with_source(e)
     })?;
     // The roaring portable format restricts the bitmap count to [0, 2^32 - 1] (it is stored as a
     // u64 with the upper 32 bits reserved as zero padding).
     if bitmap_count > u32::MAX as u64 {
-        return Err(Error::new(
-            ErrorKind::DataInvalid,
-            format!(
-                "deletion-vector-v1 roaring bitmap count {bitmap_count} exceeds the {}-key maximum",
-                u32::MAX
-            ),
+        return Err(invalid_data!(
+            "deletion-vector-v1 roaring bitmap count {bitmap_count} exceeds the {}-key maximum",
+            u32::MAX
         ));
     }
 
@@ -204,30 +217,19 @@ fn decode_roaring_directory(mut reader: &[u8]) -> Result<RoaringTreemap> {
     let mut last_key: Option<u32> = None;
     for _ in 0..bitmap_count {
         let key = reader.try_get_u32_le().map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "failed to decode deletion-vector-v1 roaring payload",
-            )
-            .with_source(e)
+            invalid_data!("failed to decode deletion-vector-v1 roaring payload").with_source(e)
         })?;
         if let Some(last) = last_key
             && key <= last
         {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!(
-                    "deletion-vector-v1 roaring keys must be ordered by unsigned comparison, got key {key} after {last}"
-                ),
+            return Err(invalid_data!(
+                "deletion-vector-v1 roaring keys must be ordered by unsigned comparison, got key {key} after {last}"
             ));
         }
         last_key = Some(key);
 
         let bitmap = RoaringBitmap::deserialize_from(&mut reader).map_err(|e| {
-            Error::new(
-                ErrorKind::DataInvalid,
-                "failed to decode deletion-vector-v1 roaring payload",
-            )
-            .with_source(e)
+            invalid_data!("failed to decode deletion-vector-v1 roaring payload").with_source(e)
         })?;
         bitmaps.push((key, bitmap));
     }
@@ -237,16 +239,8 @@ fn decode_roaring_directory(mut reader: &[u8]) -> Result<RoaringTreemap> {
     Ok(RoaringTreemap::from_bitmaps(bitmaps))
 }
 
-// Ideally, we'd just wrap `roaring::RoaringTreemap`'s iterator, `roaring::treemap::Iter` here.
-// But right now, it does not have a corresponding implementation of `roaring::bitmap::Iter::advance_to`,
-// which is very handy in ArrowReader::build_deletes_row_selection.
-// There is a PR open on roaring to add this (https://github.com/RoaringBitmap/roaring-rs/pull/314)
-// and if that gets merged then we can simplify `DeleteVectorIterator` here, refactoring `advance_to`
-// to just a wrapper around the underlying iterator's method.
+/// Iterates the deleted positions of a [`DeleteVector`] in ascending order.
 pub struct DeleteVectorIterator<'a> {
-    // NB: `BitMapIter` was only exposed publicly in https://github.com/RoaringBitmap/roaring-rs/pull/316
-    // which is not yet released. As a consequence our Cargo.toml temporarily uses a git reference for
-    // the roaring dependency.
     outer: BitmapIter<'a>,
     inner: Option<DeleteVectorIteratorInner<'a>>,
 }
@@ -280,26 +274,167 @@ impl Iterator for DeleteVectorIterator<'_> {
 }
 
 impl DeleteVectorIterator<'_> {
+    /// Skips the positions below `pos`, so the next one yielded is the first
+    /// at or after it. A `pos` below the next position does nothing.
     pub fn advance_to(&mut self, pos: u64) {
         let hi = (pos >> 32) as u32;
         let lo = pos as u32;
 
-        let Some(ref mut inner) = self.inner else {
-            return;
-        };
-
-        while inner.high_bits < hi {
-            let Some((next_hi, next_bitmap)) = self.outer.next() else {
+        if let Some(inner) = &mut self.inner {
+            if inner.high_bits > hi {
                 return;
-            };
-
-            *inner = DeleteVectorIteratorInner {
-                high_bits: next_hi,
-                bitmap_iter: next_bitmap.iter(),
+            }
+            if inner.high_bits == hi {
+                inner.bitmap_iter.advance_to(lo);
+                return;
             }
         }
 
-        inner.bitmap_iter.advance_to(lo);
+        // `pos` is in a later bitmap, or nothing has been yielded yet.
+        self.inner = None;
+        for (high_bits, bitmap) in self.outer.by_ref() {
+            if high_bits < hi {
+                continue;
+            }
+            let mut bitmap_iter = bitmap.iter();
+            if high_bits == hi {
+                bitmap_iter.advance_to(lo);
+            }
+            self.inner = Some(DeleteVectorIteratorInner {
+                high_bits,
+                bitmap_iter,
+            });
+            return;
+        }
+    }
+}
+
+/// Number of consecutive positions [`DeleteVectorRanges`] walks one by one before it asks the
+/// bitmap for the rest of the run.
+///
+/// `roaring`'s `next_range` binary-searches the rest of an array container on every call, which
+/// costs more than `next` when most runs are a single position, so it only pays off for long
+/// runs. Tuned with `roaring` 0.11.4 by reading a 20M-row file with deletes in runs of 20, 100
+/// and longer, and as scattered single rows and pairs: 4 was best on runs, compared with 8, 16
+/// and 32, and no slower on scattered deletes.
+const RUN_PROBE_LEN: u32 = 4;
+
+/// What [`DeleteVectorRanges`] has taken from its bitmap iterator but not returned yet.
+enum Buffered {
+    /// Start of the next range.
+    Pos(u32),
+    /// A complete range, inclusive end.
+    Range(u32, u32),
+}
+
+/// Iterator over a [`DeleteVector`]'s deleted positions as half-open ranges, see
+/// [`DeleteVector::ranges`].
+pub(crate) struct DeleteVectorRanges<'a> {
+    bitmaps: BitmapIter<'a>,
+    /// High 32 bits of the positions in `bitmap_iter` and `buffered`.
+    high_bits: u32,
+    bitmap_iter: Option<Iter<'a>>,
+    buffered: Option<Buffered>,
+}
+
+impl DeleteVectorRanges<'_> {
+    /// Returns `None` only for a range holding nothing but `u64::MAX`, see [`DeleteVector::ranges`].
+    fn full_range(&self, start: u32, end_inclusive: u32) -> Option<(u64, u64)> {
+        let base = u64::from(self.high_bits) << 32;
+        let start = base | u64::from(start);
+        let end = (base | u64::from(end_inclusive)).saturating_add(1);
+        (start < end).then_some((start, end))
+    }
+
+    /// Skips every deleted position below `pos`. A range still buffered here that starts below
+    /// `pos` and ends after it is cut to start at `pos`; a range already returned by `next` is
+    /// the caller's to cut.
+    pub(crate) fn skip_to(&mut self, pos: u64) {
+        let hi = (pos >> 32) as u32;
+        let lo = pos as u32;
+
+        if self.bitmap_iter.is_some() && self.high_bits > hi {
+            return;
+        }
+        if let Some(iter) = self.bitmap_iter.as_mut()
+            && self.high_bits == hi
+        {
+            self.buffered = match self.buffered.take() {
+                Some(Buffered::Pos(start)) if start < lo => None,
+                Some(Buffered::Range(_, end)) if end < lo => None,
+                Some(Buffered::Range(start, end)) if start < lo => Some(Buffered::Range(lo, end)),
+                buffered => buffered,
+            };
+            iter.advance_to(lo);
+            return;
+        }
+
+        // `pos` is in a later bitmap: drop everything buffered from the current one.
+        self.bitmap_iter = None;
+        self.buffered = None;
+        for (high_bits, bitmap) in self.bitmaps.by_ref() {
+            if high_bits < hi {
+                continue;
+            }
+            let mut iter = bitmap.iter();
+            if high_bits == hi {
+                iter.advance_to(lo);
+            }
+            self.high_bits = high_bits;
+            self.bitmap_iter = Some(iter);
+            return;
+        }
+    }
+}
+
+impl Iterator for DeleteVectorRanges<'_> {
+    type Item = (u64, u64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let pending = match self.buffered.take() {
+                Some(Buffered::Range(start, end)) => return self.full_range(start, end),
+                Some(Buffered::Pos(start)) => Some(start),
+                None => None,
+            };
+
+            if let Some(iter) = self.bitmap_iter.as_mut()
+                && let Some(start) = pending.or_else(|| iter.next())
+            {
+                // Walk short runs with `next`, and ask for the rest of a long run at once.
+                let mut end = start;
+                let mut walked = 0;
+                loop {
+                    if walked == RUN_PROBE_LEN {
+                        match iter.next_range() {
+                            Some(run) if Some(*run.start()) == end.checked_add(1) => {
+                                end = *run.end();
+                            }
+                            Some(run) => {
+                                self.buffered = Some(Buffered::Range(*run.start(), *run.end()))
+                            }
+                            None => {}
+                        }
+                        break;
+                    }
+                    match iter.next() {
+                        Some(next) if Some(next) == end.checked_add(1) => {
+                            end = next;
+                            walked += 1;
+                        }
+                        next => {
+                            self.buffered = next.map(Buffered::Pos);
+                            break;
+                        }
+                    }
+                }
+                return self.full_range(start, end);
+            }
+
+            let (high_bits, bitmap) = self.bitmaps.next()?;
+            self.high_bits = high_bits;
+            self.bitmap_iter = Some(bitmap.iter());
+        }
     }
 }
 
@@ -325,9 +460,270 @@ pub(crate) fn frame_dv_blob(vector: &[u8]) -> Vec<u8> {
     blob
 }
 
+/// Deterministic pseudo-random sets mixing single positions, short and long runs, runs across
+/// 2^16 and 2^32 boundaries, and empty bitmaps between used ones.
+#[cfg(test)]
+pub(crate) fn mixed_delete_vectors() -> Vec<DeleteVector> {
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    let mut rng = StdRng::seed_from_u64(7);
+    let mut vectors = vec![DeleteVector::default()];
+    for case in 0..40u64 {
+        let mut dv = DeleteVector::default();
+        let base = if case % 4 == 0 { (1u64 << 32) - 40 } else { 0 };
+        let mut pos = base + rng.random_range(0..50);
+        for _ in 0..rng.random_range(0..60) {
+            let run = match rng.random_range(0..5) {
+                0 => 1,
+                1 => 2,
+                // one past the probe length: the rest comes from `next_range`
+                2 => u64::from(RUN_PROBE_LEN) + 1,
+                3 => rng.random_range(1..=40),
+                _ => rng.random_range(1..=70_000),
+            };
+            dv.inner.insert_range(pos..pos + run);
+            pos += run + rng.random_range(1..=30);
+        }
+        vectors.push(dv);
+    }
+    let mut boundaries = DeleteVector::default();
+    boundaries.inner.insert_range((1 << 16) - 3..(1 << 16) + 3);
+    boundaries
+        .inner
+        .insert_range((1 << 32) - 20..(1 << 32) + 20);
+    boundaries.inner.insert((2 << 32) + 7);
+    vectors.push(boundaries);
+    // High bits 0, 3 and 7, so skipping walks past empty bitmaps.
+    let mut gaps = DeleteVector::default();
+    gaps.inner.insert_range(2..12);
+    gaps.inner.insert_range((3 << 32) + 5..(3 << 32) + 70_000);
+    gaps.inner.insert((7 << 32) + 1);
+    vectors.push(gaps);
+    vectors
+}
+
 #[cfg(test)]
 mod tests {
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
     use super::*;
+
+    #[test]
+    fn test_ranges_cover_exactly_the_deleted_positions() {
+        for dv in mixed_delete_vectors() {
+            let positions: Vec<u64> = dv.iter().collect();
+            let mut expanded = Vec::new();
+            let mut last_end = None;
+            for (start, end) in dv.ranges() {
+                assert!(start < end, "empty range {start}..{end}");
+                assert!(
+                    last_end.is_none_or(|last| last <= start),
+                    "ranges out of order"
+                );
+                last_end = Some(end);
+                expanded.extend(start..end);
+            }
+            assert_eq!(expanded, positions);
+        }
+    }
+
+    #[test]
+    fn test_ranges_skip_to_matches_model() {
+        let mut rng = StdRng::seed_from_u64(7);
+
+        for dv in mixed_delete_vectors() {
+            let deleted: Vec<u64> = dv.iter().collect();
+            let max = deleted.last().copied().unwrap_or(0) + 10;
+            // `deleted[next..]` has been neither returned nor skipped, and every position below
+            // `done` has.
+            let mut next = 0;
+            let mut done = 0u64;
+            let mut ranges = dv.ranges();
+            loop {
+                match rng.random_range(0..6) {
+                    0 | 1 => {
+                        let target = done.max(deleted.get(next).copied().unwrap_or(max))
+                            + rng.random_range(0..200);
+                        ranges.skip_to(target);
+                        next = deleted.partition_point(|&p| p < target);
+                        done = target;
+                        continue;
+                    }
+                    // A target at or below `done`, near it or anywhere below: does nothing.
+                    2 => {
+                        let back = if rng.random_bool(0.5) {
+                            done.saturating_sub(rng.random_range(0..200))
+                        } else {
+                            rng.random_range(0..=done)
+                        };
+                        ranges.skip_to(back);
+                        continue;
+                    }
+                    _ => {}
+                }
+                match ranges.next() {
+                    Some((start, end)) => {
+                        assert!(start < end, "empty range {start}..{end}");
+                        let len = (end - start) as usize;
+                        assert_eq!(
+                            deleted
+                                .get(next..next + len)
+                                .map(|run| (run[0], run[len - 1])),
+                            Some((start, end - 1)),
+                            "returned {start}..{end}"
+                        );
+                        next += len;
+                        done = end;
+                    }
+                    None => {
+                        assert_eq!(next, deleted.len(), "missed {:?}", &deleted[next..]);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_advance_to_matches_model() {
+        let mut rng = StdRng::seed_from_u64(11);
+
+        for dv in mixed_delete_vectors() {
+            let deleted: Vec<u64> = dv.iter().collect();
+            let max = deleted.last().copied().unwrap_or(0) + 10;
+            let mut next = 0;
+            let mut done = 0u64;
+            let mut iter = dv.iter();
+            loop {
+                match rng.random_range(0..6) {
+                    0 => {
+                        let target = done.max(deleted.get(next).copied().unwrap_or(max))
+                            + rng.random_range(0..200);
+                        iter.advance_to(target);
+                        next = deleted.partition_point(|&p| p < target);
+                        done = target;
+                        continue;
+                    }
+                    1 => {
+                        let back = if rng.random_bool(0.5) {
+                            done.saturating_sub(rng.random_range(0..200))
+                        } else {
+                            rng.random_range(0..=done)
+                        };
+                        iter.advance_to(back);
+                        continue;
+                    }
+                    _ => {}
+                }
+                let pos = iter.next();
+                assert_eq!(pos, deleted.get(next).copied());
+                match pos {
+                    Some(pos) => {
+                        next += 1;
+                        done = pos + 1;
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_ranges_skip_to_inside_buffered_run() {
+        // After a run of exactly RUN_PROBE_LEN + 1, the following run is already buffered.
+        let probe = u64::from(RUN_PROBE_LEN);
+        let mut dv = DeleteVector::default();
+        dv.inner.insert_range(0..probe + 1);
+        dv.inner.insert_range(probe + 3..probe + 13);
+        let mut ranges = dv.ranges();
+        assert_eq!(ranges.next(), Some((0, probe + 1)));
+        ranges.skip_to(probe + 8);
+        assert_eq!(ranges.next(), Some((probe + 8, probe + 13)));
+        assert_eq!(ranges.next(), None);
+    }
+
+    #[test]
+    fn test_ranges_join_runs_across_2_16() {
+        // `roaring`'s `next_range` joins a run across containers, so these come back whole.
+        // Starting near the boundary also covers the positions walked before `next_range`.
+        for start in [(1 << 16) - 100, (1 << 16) - 2] {
+            let mut dv = DeleteVector::default();
+            dv.inner.insert_range(start..(3 << 16) + 5);
+            assert_eq!(dv.ranges().collect::<Vec<_>>(), vec![(
+                start,
+                (3 << 16) + 5
+            )]);
+        }
+    }
+
+    #[test]
+    fn test_ranges_end_at_u64_max() {
+        let dv = DeleteVector::new(RoaringTreemap::from_iter([5, u64::MAX - 2, u64::MAX - 1]));
+        assert_eq!(dv.ranges().collect::<Vec<_>>(), vec![
+            (5, 6),
+            (u64::MAX - 2, u64::MAX)
+        ]);
+
+        // `u64::MAX` itself can't end a half-open range, and no row can be there.
+        let dv = DeleteVector::new(RoaringTreemap::from_iter([5, u64::MAX - 1, u64::MAX]));
+        assert_eq!(dv.ranges().collect::<Vec<_>>(), vec![
+            (5, 6),
+            (u64::MAX - 1, u64::MAX)
+        ]);
+        let dv = DeleteVector::new(RoaringTreemap::from_iter([u64::MAX]));
+        assert_eq!(dv.ranges().next(), None);
+    }
+
+    // The cases from https://github.com/apache/iceberg-rust/issues/3400, for `skip_to` and for
+    // `advance_to`.
+    #[test]
+    fn test_ranges_skip_to_missing_later_bitmap() {
+        let dv = DeleteVector::new(RoaringTreemap::from_iter([1u64, 5, 9]));
+        let mut ranges = dv.ranges();
+        assert_eq!(ranges.next(), Some((1, 2)));
+        ranges.skip_to((1 << 32) + 5);
+        assert_eq!(ranges.next(), None);
+    }
+
+    #[test]
+    fn test_ranges_skip_to_below_current_bitmap() {
+        let high = 1u64 << 32;
+        let dv = DeleteVector::new(RoaringTreemap::from_iter([high + 1, high + 2, high + 9]));
+        let mut ranges = dv.ranges();
+        assert_eq!(ranges.next(), Some((high + 1, high + 3)));
+        ranges.skip_to(10);
+        assert_eq!(ranges.next(), Some((high + 9, high + 10)));
+        assert_eq!(ranges.next(), None);
+    }
+
+    #[test]
+    fn test_advance_to_missing_later_bitmap() {
+        let dv = DeleteVector::new(RoaringTreemap::from_iter([5u64, 7]));
+        let mut iter = dv.iter();
+        assert_eq!(iter.next(), Some(5));
+        iter.advance_to((1 << 32) + 10);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_advance_to_below_current_bitmap() {
+        let high = 1u64 << 32;
+        let dv = DeleteVector::new(RoaringTreemap::from_iter([high + 10, high + 20]));
+        let mut iter = dv.iter();
+        assert_eq!(iter.next(), Some(high + 10));
+        iter.advance_to(50);
+        assert_eq!(iter.collect::<Vec<_>>(), vec![high + 20]);
+    }
+
+    #[test]
+    fn test_advance_to_before_first_next() {
+        let dv = DeleteVector::new(RoaringTreemap::from_iter([5u64, 200]));
+        let mut iter = dv.iter();
+        iter.advance_to(100);
+        assert_eq!(iter.collect::<Vec<_>>(), vec![200]);
+    }
 
     #[test]
     fn test_insertion_and_iteration() {

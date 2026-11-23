@@ -20,8 +20,8 @@ use std::str::FromStr;
 use serde_derive::{Deserialize, Serialize};
 
 use super::ByteBuf;
-use crate::error::Result;
-use crate::{Error, ErrorKind};
+use crate::Error;
+use crate::error::{Result, invalid_data};
 
 /// Entry in a manifest list.
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
@@ -139,10 +139,7 @@ impl FromStr for ManifestContentType {
         match s {
             "data" => Ok(ManifestContentType::Data),
             "deletes" => Ok(ManifestContentType::Deletes),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid manifest content type: {s}"),
-            )),
+            _ => Err(invalid_data!("Invalid manifest content type: {s}")),
         }
     }
 }
@@ -163,9 +160,8 @@ impl TryFrom<i32> for ManifestContentType {
         match value {
             0 => Ok(ManifestContentType::Data),
             1 => Ok(ManifestContentType::Deletes),
-            _ => Err(Error::new(
-                ErrorKind::DataInvalid,
-                format!("Invalid manifest content type. Expected 0 or 1, got {value}"),
+            _ => Err(invalid_data!(
+                "Invalid manifest content type. Expected 0 or 1, got {value}"
             )),
         }
     }
@@ -208,6 +204,7 @@ mod test {
         ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec, PrimitiveType, Schema,
         SchemaRef, Type,
     };
+    use crate::test_utils::test_runtime;
 
     #[test]
     fn test_manifest_content_type_default() {
@@ -290,14 +287,20 @@ mod test {
         let key_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
             .unwrap()
             .with_aad_prefix(b"test-aad-prefix!");
-        let encoded_key_metadata = key_metadata.encode().unwrap().to_vec();
-
         let io = FileIO::new_with_memory();
         let path = "memory:///test/encrypted_manifest.avro";
-        let manifest_file = write_encrypted_manifest(&io, path, key_metadata).await;
-        assert_eq!(manifest_file.key_metadata, Some(encoded_key_metadata));
+        let manifest_file = write_encrypted_manifest(&io, path, key_metadata.clone()).await;
+        let size = io.new_input(path).unwrap().metadata().await.unwrap().size;
+        assert_eq!(manifest_file.manifest_length, size as i64);
+        assert_eq!(
+            StandardKeyMetadata::decode(manifest_file.key_metadata.as_ref().unwrap()).unwrap(),
+            key_metadata.with_file_length(size)
+        );
 
-        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        let manifest = ManifestReader::new(io, test_runtime())
+            .read(&manifest_file)
+            .await
+            .unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
             manifest.entries()[0].file_path(),
@@ -322,10 +325,11 @@ mod test {
         // returning garbage.
         let wrong_key_metadata = StandardKeyMetadata::try_new(b"fedcba9876543210")
             .unwrap()
-            .with_aad_prefix(b"test-aad-prefix!");
+            .with_aad_prefix(b"test-aad-prefix!")
+            .with_file_length(manifest_file.manifest_length as u64);
         manifest_file.key_metadata = Some(wrong_key_metadata.encode().unwrap().to_vec());
 
-        let err = ManifestReader::new(io)
+        let err = ManifestReader::new(io, test_runtime())
             .read(&manifest_file)
             .await
             .expect_err("read must fail when decrypting with the wrong key");
@@ -347,10 +351,11 @@ mod test {
         // so GCM authentication must fail even though the key is right.
         let wrong_aad_metadata = StandardKeyMetadata::try_new(b"0123456789abcdef")
             .unwrap()
-            .with_aad_prefix(b"wrong-aad-prefix");
+            .with_aad_prefix(b"wrong-aad-prefix")
+            .with_file_length(manifest_file.manifest_length as u64);
         manifest_file.key_metadata = Some(wrong_aad_metadata.encode().unwrap().to_vec());
 
-        let err = ManifestReader::new(io)
+        let err = ManifestReader::new(io, test_runtime())
             .read(&manifest_file)
             .await
             .expect_err("read must fail when decrypting with the wrong AAD prefix");
@@ -387,7 +392,10 @@ mod test {
         let manifest_file = write_manifest(&io, path).await;
         assert_eq!(manifest_file.key_metadata, None);
 
-        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        let manifest = ManifestReader::new(io, test_runtime())
+            .read(&manifest_file)
+            .await
+            .unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(
             manifest.entries()[0].file_path(),
@@ -409,7 +417,10 @@ mod test {
         // Stamp a manifest-level first_row_id, as the manifest-list writer would.
         manifest_file.first_row_id = Some(1000);
 
-        let manifest = ManifestReader::new(io).read(&manifest_file).await.unwrap();
+        let manifest = ManifestReader::new(io, test_runtime())
+            .read(&manifest_file)
+            .await
+            .unwrap();
         assert_eq!(manifest.entries().len(), 1);
         assert_eq!(manifest.entries()[0].data_file().first_row_id(), Some(1000));
     }

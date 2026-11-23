@@ -19,6 +19,7 @@ use std::collections::{HashMap, hash_map};
 
 use itertools::Itertools;
 
+use crate::error::invalid_data;
 use crate::table::Table;
 use crate::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
 
@@ -111,10 +112,7 @@ impl NamespaceState {
         namespace_ident: &NamespaceIdent,
     ) -> Result<(&mut NamespaceState, String)> {
         match namespace_ident.split_last() {
-            None => Err(Error::new(
-                ErrorKind::DataInvalid,
-                "Namespace identifier can't be empty!",
-            )),
+            None => Err(invalid_data!("Namespace identifier can't be empty!")),
             Some((child_namespace_name, parent_name_parts)) => {
                 let parent_namespace_state = if parent_name_parts.is_empty() {
                     Ok(self)

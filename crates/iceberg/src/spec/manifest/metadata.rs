@@ -21,9 +21,8 @@ use std::sync::Arc;
 use typed_builder::TypedBuilder;
 
 use super::{FormatVersion, ManifestContentType, PartitionSpec, Schema};
-use crate::error::Result;
+use crate::error::{Result, invalid_data};
 use crate::spec::{PartitionField, SchemaId, SchemaRef};
-use crate::{Error, ErrorKind};
 
 /// Meta data of a manifest that is stored in the key-value metadata of the Avro file
 #[derive(Debug, PartialEq, Clone, Eq, TypedBuilder)]
@@ -46,28 +45,17 @@ impl ManifestMetadata {
     pub fn parse(meta: &HashMap<String, Vec<u8>>) -> Result<Self> {
         let schema = Arc::new({
             let bs = meta.get("schema").ok_or_else(|| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "schema is required in manifest metadata but not found",
-                )
+                invalid_data!("schema is required in manifest metadata but not found")
             })?;
             serde_json::from_slice::<Schema>(bs).map_err(|err| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Fail to parse schema in manifest metadata",
-                )
-                .with_source(err)
+                invalid_data!("Fail to parse schema in manifest metadata").with_source(err)
             })?
         });
         let schema_id: i32 = meta
             .get("schema-id")
             .map(|bs| {
                 String::from_utf8_lossy(bs).parse().map_err(|err| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Fail to parse schema id in manifest metadata",
-                    )
-                    .with_source(err)
+                    invalid_data!("Fail to parse schema id in manifest metadata").with_source(err)
                 })
             })
             .transpose()?
@@ -75,28 +63,19 @@ impl ManifestMetadata {
         let partition_spec = {
             let fields = {
                 let bs = meta.get("partition-spec").ok_or_else(|| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "partition-spec is required in manifest metadata but not found",
-                    )
+                    invalid_data!("partition-spec is required in manifest metadata but not found")
                 })?;
                 serde_json::from_slice::<Vec<PartitionField>>(bs).map_err(|err| {
-                    Error::new(
-                        ErrorKind::DataInvalid,
-                        "Fail to parse partition spec in manifest metadata",
-                    )
-                    .with_source(err)
+                    invalid_data!("Fail to parse partition spec in manifest metadata")
+                        .with_source(err)
                 })?
             };
             let spec_id = meta
                 .get("partition-spec-id")
                 .map(|bs| {
                     String::from_utf8_lossy(bs).parse().map_err(|err| {
-                        Error::new(
-                            ErrorKind::DataInvalid,
-                            "Fail to parse partition spec id in manifest metadata",
-                        )
-                        .with_source(err)
+                        invalid_data!("Fail to parse partition spec id in manifest metadata")
+                            .with_source(err)
                     })
                 })
                 .transpose()?
@@ -108,11 +87,7 @@ impl ManifestMetadata {
         };
         let format_version = if let Some(bs) = meta.get("format-version") {
             serde_json::from_slice::<FormatVersion>(bs).map_err(|err| {
-                Error::new(
-                    ErrorKind::DataInvalid,
-                    "Fail to parse format version in manifest metadata",
-                )
-                .with_source(err)
+                invalid_data!("Fail to parse format version in manifest metadata").with_source(err)
             })?
         } else {
             FormatVersion::V1
