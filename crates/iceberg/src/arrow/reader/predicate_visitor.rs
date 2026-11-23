@@ -27,7 +27,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
 use arrow_array::{Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatch, Scalar};
 use arrow_buffer::BooleanBuffer;
-use arrow_cast::cast::{CastOptions, cast, cast_with_options};
+use arrow_cast::cast::{CastOptions, cast_with_options};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use arrow_string::like::starts_with;
@@ -906,12 +906,9 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
     }
 }
 
-/// The Arrow type of an array that the Parquet reader reads may not match the exact Arrow type
-/// that Iceberg uses for literals - but they are effectively the same logical type,
-/// i.e. LargeUtf8 and Utf8 or Utf8View and Utf8 or Utf8View and LargeUtf8.
-///
-/// The Arrow compute kernels that we use must match the type exactly, so first cast the literal
-/// into the type of the batch we read from Parquet before sending it to the compute kernel.
+/// The row filter converts its batches to the table schema, so a literal already has the
+/// column's Arrow type unless the two differ in representation only. Cast it in that case,
+/// failing rather than letting a lossy cast turn it into null.
 fn try_cast_literal(
     literal: &Arc<dyn ArrowDatum + Send + Sync>,
     column_type: &DataType,
@@ -923,7 +920,12 @@ fn try_cast_literal(
         return Ok(Arc::clone(literal));
     }
 
-    let literal_array = cast(literal_array, column_type)?;
+    // `safe: false` makes arrow return an error where the default would produce null.
+    let options = CastOptions {
+        safe: false,
+        ..Default::default()
+    };
+    let literal_array = cast_with_options(literal_array, column_type, &options)?;
     Ok(Arc::new(Scalar::new(literal_array)))
 }
 
@@ -932,14 +934,15 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
 
-    use arrow_array::{Array, BooleanArray, RecordBatch};
-    use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+    use arrow_array::{Array, ArrayRef, BooleanArray, Int32Array, RecordBatch};
+    use arrow_schema::{ArrowError, DataType, Field, Schema as ArrowSchema};
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
 
     use super::{
         CollectFieldIdVisitor, PredicateConverter, constant_bool_array, residual_for_missing_fields,
     };
+    use crate::arrow::reader::projection::build_field_id_map;
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::spec::{
@@ -1035,24 +1038,19 @@ mod tests {
         }
     }
 
+    /// Evaluates `predicate`, bound to `schema`, on `batch` read from a Parquet file of
+    /// `message_type`.
     fn apply_predicate_to_batch(
         predicate: Predicate,
         schema: SchemaRef,
+        message_type: &str,
         batch: RecordBatch,
-    ) -> BooleanArray {
+    ) -> Result<BooleanArray, ArrowError> {
         let bound = predicate.bind(schema, true).unwrap();
-
-        // Build a trivial Parquet schema with one float column at field id 4
-        let message_type = "
-            message schema {
-              optional float qux = 4;
-            }
-        ";
         let parquet_type = parse_message_type(message_type).expect("parse schema");
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
-
-        let column_map = HashMap::from([(4i32, 0usize)]);
-        let column_indices = vec![0usize];
+        let column_map = build_field_id_map(&parquet_schema).unwrap().unwrap();
+        let column_indices: Vec<usize> = (0..parquet_schema.num_columns()).collect();
 
         let mut converter = PredicateConverter {
             parquet_schema: &parquet_schema,
@@ -1061,13 +1059,14 @@ mod tests {
         };
 
         let mut predicate_fn = visit(&mut converter, &bound).unwrap();
-        predicate_fn(batch).unwrap()
+        predicate_fn(batch)
     }
 
     #[test]
     fn test_predicate_converter_nan() {
         use arrow_array::Float32Array;
 
+        const QUX: &str = "message schema { optional float qux = 4; }";
         let schema = table_schema_simple();
         let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "qux",
@@ -1082,7 +1081,8 @@ mod tests {
         ))])
         .unwrap();
         let result =
-            apply_predicate_to_batch(Reference::new("qux").is_nan(), schema.clone(), batch);
+            apply_predicate_to_batch(Reference::new("qux").is_nan(), schema.clone(), QUX, batch)
+                .unwrap();
         assert_eq!(
             [
                 result.value(0),
@@ -1097,7 +1097,9 @@ mod tests {
         // not_nan: non-null-propagating per Java's implementation - NULL → true
         let batch =
             RecordBatch::try_new(arrow_schema, vec![Arc::new(Float32Array::from(values))]).unwrap();
-        let result = apply_predicate_to_batch(Reference::new("qux").is_not_nan(), schema, batch);
+        let result =
+            apply_predicate_to_batch(Reference::new("qux").is_not_nan(), schema, QUX, batch)
+                .unwrap();
         assert_eq!(
             [
                 result.value(0),
@@ -1140,6 +1142,7 @@ mod tests {
             .unwrap();
             let micros = |v| Datum::new(primitive_type.clone(), PrimitiveLiteral::Long(v));
 
+            const TS: &str = "message schema { required int64 ts = 4; }";
             for (predicate, expected) in [
                 (Reference::new("ts").less_than(micros(1_000_500)), [
                     true, true, false,
@@ -1151,7 +1154,8 @@ mod tests {
                     false, false, true,
                 ]),
             ] {
-                let result = apply_predicate_to_batch(predicate, schema.clone(), batch.clone());
+                let result =
+                    apply_predicate_to_batch(predicate, schema.clone(), TS, batch.clone()).unwrap();
                 assert_eq!(result, BooleanArray::from(expected.to_vec()), "{tz:?}");
             }
         }
@@ -1161,6 +1165,7 @@ mod tests {
     fn test_predicate_converter_null_checks_skip_millisecond_widening() {
         use arrow_array::TimestampMillisecondArray;
 
+        const TS: &str = "message schema { optional int64 ts = 4; }";
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![
@@ -1185,7 +1190,8 @@ mod tests {
             (Reference::new("ts").is_null(), [false, true]),
             (Reference::new("ts").is_not_null(), [true, false]),
         ] {
-            let result = apply_predicate_to_batch(predicate, schema.clone(), batch.clone());
+            let result =
+                apply_predicate_to_batch(predicate, schema.clone(), TS, batch.clone()).unwrap();
             assert_eq!(result, BooleanArray::from(expected.to_vec()));
         }
     }
@@ -1437,5 +1443,28 @@ mod tests {
             );
             assert_eq!(residual, expected, "{name}");
         }
+    }
+
+    /// A literal that does not fit the column type fails the predicate instead of becoming null.
+    #[test]
+    fn test_predicate_converter_rejects_lossy_literal_cast() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        // An `int` batch that was not converted to the table's `long`.
+        let column = Arc::new(Int32Array::from(vec![1])) as ArrayRef;
+        let batch = RecordBatch::try_from_iter([("x", column)]).unwrap();
+        let result = apply_predicate_to_batch(
+            Reference::new("x").less_than(Datum::long(i64::from(i32::MAX) + 1)),
+            schema,
+            "message schema { required int32 x = 1; }",
+            batch,
+        );
+        assert!(matches!(result, Err(ArrowError::CastError(_))));
     }
 }

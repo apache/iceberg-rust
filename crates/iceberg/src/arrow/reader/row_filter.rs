@@ -23,18 +23,20 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use arrow_schema::ArrowError;
 use parquet::arrow::ProjectionMask;
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, RowFilter, RowSelection};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::schema::types::SchemaDescriptor;
 
 use super::{ArrowReader, PredicateConverter};
-use crate::error::Result;
+use crate::arrow::record_batch_transformer::RecordBatchTransformerBuilder;
+use crate::error::{Result, invalid_data};
 use crate::expr::BoundPredicate;
 use crate::expr::visitors::bound_predicate_visitor::visit;
 use crate::expr::visitors::page_index_evaluator::PageIndexEvaluator;
 use crate::expr::visitors::row_group_metrics_evaluator::RowGroupMetricsEvaluator;
-use crate::spec::Schema;
+use crate::spec::{NestedFieldRef, Schema, Type, prune_columns};
 use crate::{Error, ErrorKind};
 
 impl ArrowReader {
@@ -43,14 +45,20 @@ impl ArrowReader {
         parquet_schema: &SchemaDescriptor,
         iceberg_field_ids: &HashSet<i32>,
         field_id_map: &HashMap<i32, usize>,
+        snapshot_schema: &Schema,
     ) -> Result<RowFilter> {
-        // Collect Parquet column indices from field ids.
+        // Collect Parquet column indices from field ids, keeping each column's field id.
         // If the field id is not found in Parquet schema, it will be ignored due to schema evolution.
-        let mut column_indices = iceberg_field_ids
-            .iter()
-            .filter_map(|field_id| field_id_map.get(field_id).cloned())
-            .collect::<Vec<_>>();
-        column_indices.sort();
+        let mut columns = Vec::with_capacity(iceberg_field_ids.len());
+        columns.extend(
+            iceberg_field_ids
+                .iter()
+                .filter_map(|field_id| field_id_map.get(field_id).map(|&idx| (idx, *field_id))),
+        );
+        // Leaf order is the filter batch's column order, so the transformer below passes the
+        // batch through unchanged when no column needs converting.
+        columns.sort_unstable();
+        let (column_indices, field_ids): (Vec<_>, Vec<_>) = columns.into_iter().unzip();
 
         // The converter that converts `BoundPredicates` to `ArrowPredicates`
         let mut converter = PredicateConverter {
@@ -62,8 +70,24 @@ impl ArrowReader {
         // After collecting required leaf column indices used in the predicate,
         // creates the projection mask for the Arrow predicates.
         let projection_mask = ProjectionMask::leaves(parquet_schema, column_indices.clone());
-        let predicate_func = visit(&mut converter, predicates)?;
-        let arrow_predicate = ArrowPredicateFn::new(projection_mask, predicate_func);
+        let mut predicate_func = visit(&mut converter, predicates)?;
+        // Predicates are bound to the table schema, so convert the filter columns to it, as the
+        // reader does for its output (e.g. `int` read as `long`).
+        let filter_schema = filter_schema(snapshot_schema, &field_ids)?;
+        let root_ids: Vec<i32> = filter_schema
+            .as_struct()
+            .fields()
+            .iter()
+            .map(|f| f.id)
+            .collect();
+        let mut transformer =
+            RecordBatchTransformerBuilder::new(Arc::new(filter_schema), &root_ids).build();
+        let arrow_predicate = ArrowPredicateFn::new(projection_mask, move |batch| {
+            let batch = transformer
+                .process_record_batch(batch)
+                .map_err(|err| ArrowError::ExternalError(Box::new(err)))?;
+            predicate_func(batch)
+        });
         Ok(RowFilter::new(vec![Box::new(arrow_predicate)]))
     }
 
@@ -218,6 +242,30 @@ impl ArrowReader {
     }
 }
 
+/// The top-level fields holding `leaf_ids`, pruned to those leaves, in leaf order (the filter
+/// batch's column order). Only these fields are converted, so the transformer's per-file setup
+/// does not grow with the table's width. Fails for a leaf that is not in `snapshot_schema`,
+/// because skipping it would shift the columns the predicate reads.
+fn filter_schema(snapshot_schema: &Schema, leaf_ids: &[i32]) -> Result<Schema> {
+    let mut roots: Vec<NestedFieldRef> = Vec::with_capacity(leaf_ids.len());
+    for &id in leaf_ids {
+        let accessor = snapshot_schema
+            .accessor_by_field_id(id)
+            .ok_or_else(|| invalid_data!("Predicate field id {id} is not in the scan schema"))?;
+        let root = &snapshot_schema.as_struct().fields()[accessor.position()];
+        if !roots.iter().any(|r| r.id == root.id) {
+            roots.push(Arc::clone(root));
+        }
+    }
+    let roots = Schema::builder().with_fields(roots).build()?;
+    let Type::Struct(pruned) = prune_columns(&roots, leaf_ids.iter().copied(), false)? else {
+        unreachable!("prune_columns returns a struct");
+    };
+    Schema::builder()
+        .with_fields(pruned.fields().to_vec())
+        .build()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -227,8 +275,9 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int64Type;
     use arrow_array::{
-        Array, ArrayRef, Decimal128Array, Float32Array, Int32Array, Int64Array, LargeStringArray,
-        RecordBatch, StringArray, TimestampMillisecondArray,
+        Array, ArrayRef, Date32Array, Decimal128Array, Float32Array, Int32Array, Int64Array,
+        LargeStringArray, RecordBatch, StringArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray,
     };
     use arrow_schema::{DataType, Field, Schema as ArrowSchema};
     use futures::TryStreamExt;
@@ -241,6 +290,7 @@ mod tests {
     use parquet::schema::types::SchemaDescriptor;
     use tempfile::TempDir;
 
+    use super::filter_schema;
     use crate::Runtime;
     use crate::arrow::{
         ArrowReader, ArrowReaderBuilder, ArrowReaderOptions as ReaderOptions, ParquetReadOptions,
@@ -249,8 +299,9 @@ mod tests {
     use crate::io::FileIO;
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
     use crate::spec::{
-        DataContentType, DataFileFormat, Datum, Literal, NestedField, PartitionSpec,
-        PrimitiveLiteral, PrimitiveType, Schema, SchemaRef, Struct, Transform, Type,
+        DataContentType, DataFileFormat, Datum, Literal, NestedField, NestedFieldRef,
+        PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema, SchemaRef, Struct, StructType,
+        Transform, Type,
     };
 
     async fn test_perform_read(
@@ -461,6 +512,110 @@ mod tests {
 
             assert_eq!(result_data, expected, "predicate={predicate}");
         }
+    }
+
+    /// Writes `column` as field 1, with and without a field id, reads it back as `iceberg_type`
+    /// under `predicate`, and checks the values that survive (`None` when no row does).
+    async fn assert_promoted_reads(
+        column: ArrayRef,
+        iceberg_type: PrimitiveType,
+        predicate: Predicate,
+        expected: Option<ArrayRef>,
+    ) {
+        let tmp = TempDir::new().unwrap();
+        let schema = value_schema(Type::Primitive(iceberg_type));
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        for with_field_id in [true, false] {
+            // Without a field id, the reader assigns one by position.
+            let path = format!("{}/{with_field_id}.parquet", tmp.path().to_str().unwrap());
+            let field = if with_field_id {
+                field_with_id("v", column.data_type().clone(), 1)
+            } else {
+                Field::new("v", column.data_type().clone(), false)
+            };
+            let arrow_schema = Arc::new(ArrowSchema::new(vec![field]));
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![column.clone()]).unwrap();
+            write_row_groups(&path, arrow_schema, vec![batch], false);
+
+            let (batches, _) = read_once(
+                reader.clone(),
+                &path,
+                schema.clone(),
+                vec![1],
+                predicate.clone(),
+                None,
+                vec![],
+            )
+            .await;
+            let actual = collapse(&batches).map(|batch| Arc::clone(batch.column(0)));
+            assert_eq!(
+                actual, expected,
+                "{predicate}, with_field_id = {with_field_id}"
+            );
+        }
+    }
+
+    /// The filter schema holds each filter leaf's top-level field, pruned to the filter leaves,
+    /// in leaf order. A leaf missing from the schema fails.
+    #[test]
+    fn test_filter_schema_prunes_nested_roots() {
+        let person = |fields: Vec<NestedFieldRef>| {
+            NestedField::required(2, "person", Type::Struct(StructType::new(fields))).into()
+        };
+        let n = || NestedField::required(3, "n", Type::Primitive(PrimitiveType::Long)).into();
+        let m = || NestedField::optional(4, "m", Type::Primitive(PrimitiveType::Int)).into();
+        let id = || NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into();
+        let schema = Schema::builder()
+            .with_fields(vec![id(), person(vec![n(), m()])])
+            .build()
+            .unwrap();
+
+        for (leaf_ids, expected_fields) in [
+            (vec![3], vec![person(vec![n()])]),
+            (vec![4, 1, 3], vec![person(vec![n(), m()]), id()]),
+            (vec![], vec![]),
+        ] {
+            let filter_schema = filter_schema(&schema, &leaf_ids).unwrap();
+            assert_eq!(
+                filter_schema.as_struct().fields(),
+                expected_fields,
+                "{leaf_ids:?}"
+            );
+        }
+        assert!(filter_schema(&schema, &[3, 9]).is_err());
+    }
+
+    /// A file written before a type promotion keeps the old physical type, so the row
+    /// filter must compare its values promoted to the table type.
+    #[tokio::test]
+    async fn test_predicate_on_promoted_column() {
+        let v = || Reference::new("v");
+        // The literal is out of `int` range.
+        assert_promoted_reads(
+            Arc::new(Int32Array::from(vec![1, 2])),
+            PrimitiveType::Long,
+            v().less_than(Datum::long(i64::from(i32::MAX) + 1)),
+            Some(Arc::new(Int64Array::from(vec![1, 2]))),
+        )
+        .await;
+        // 0.1f32 promotes to a double slightly above 0.1, so it no longer equals 0.1.
+        assert_promoted_reads(
+            Arc::new(Float32Array::from(vec![0.1])),
+            PrimitiveType::Double,
+            v().equal_to(Datum::double(0.1)),
+            None,
+        )
+        .await;
+        // 2024-01-01 promotes to midnight, which is before noon on that day.
+        assert_promoted_reads(
+            Arc::new(Date32Array::from(vec![19723])),
+            PrimitiveType::Timestamp,
+            v().less_than(Datum::timestamp_from_str("2024-01-01T12:00:00").unwrap()),
+            Some(Arc::new(TimestampMicrosecondArray::from(vec![
+                1_704_067_200_000_000,
+            ]))),
+        )
+        .await;
     }
 
     /// Verifies that file splits respect byte ranges and only read specific row groups.
