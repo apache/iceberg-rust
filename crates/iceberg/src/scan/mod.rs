@@ -182,6 +182,7 @@ enum SnapshotSelection {
 pub struct TableScanBuilder<'a> {
     table: &'a Table,
     metrics_reporter: Option<Arc<dyn MetricsReporter>>,
+    report_metadata: HashMap<String, String>,
     // Defaults to none which means select all columns
     column_names: Option<Vec<String>>,
     column_stats_names: Option<Vec<String>>,
@@ -199,6 +200,7 @@ impl<'a> TableScanBuilder<'a> {
         Self {
             table,
             metrics_reporter: table.metrics_reporter(),
+            report_metadata: HashMap::new(),
             column_names: None,
             column_stats_names: None,
             snapshot_selection: None,
@@ -212,6 +214,19 @@ impl<'a> TableScanBuilder<'a> {
     /// Overrides the table's metrics reporter for this scan.
     pub fn with_metrics_reporter(mut self, reporter: Arc<dyn MetricsReporter>) -> Self {
         self.metrics_reporter = Some(reporter);
+        self
+    }
+
+    /// Sets a metadata entry attached to this scan's metrics reports.
+    ///
+    /// Repeated keys replace earlier values. Entries override library-supplied
+    /// defaults, including `iceberg-version`.
+    pub fn with_report_metadata(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.report_metadata.insert(key.into(), value.into());
         self
     }
 
@@ -418,6 +433,7 @@ impl<'a> TableScanBuilder<'a> {
 
         let plan_context = PlanContext {
             snapshot,
+            report_metadata: self.report_metadata,
             table_metadata: self.table.metadata_ref(),
             snapshot_schema: schema,
             case_sensitive: self.case_sensitive,

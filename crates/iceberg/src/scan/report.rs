@@ -28,6 +28,7 @@ use crate::metadata_columns::{
     RESERVED_COL_NAME_PARTITION, RESERVED_FIELD_ID_PARTITION, get_metadata_field,
 };
 use crate::metrics::{MetricsReport, MetricsReporter, ScanReport};
+use crate::spec::set_iceberg_version;
 use crate::{Result, Runtime, TableIdent};
 
 pub(super) fn report_on_completion<T: Send + 'static>(
@@ -63,6 +64,9 @@ pub(super) fn report_on_completion<T: Send + 'static>(
         })
         .collect();
     let dispatcher = tracing::dispatcher::get_default(Clone::clone);
+    let mut metadata = Default::default();
+    set_iceberg_version(&mut metadata);
+    metadata.extend(context.report_metadata.clone());
     let reporting = async move {
         let report = MetricsReport::Scan(ScanReport {
             table_ident,
@@ -72,7 +76,7 @@ pub(super) fn report_on_completion<T: Send + 'static>(
             projected_field_ids,
             projected_field_names,
             metrics: counters.scan_metrics(started.elapsed()),
-            metadata: Default::default(),
+            metadata,
         });
         drop(
             runtime.io().spawn(
@@ -108,6 +112,7 @@ pub(super) fn report_on_completion<T: Send + 'static>(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::time::Duration;
 
     use futures::TryStreamExt;
@@ -171,20 +176,26 @@ mod tests {
         let mut fixture = TableTestFixture::new();
         fixture.setup_promoted_partition_with_dv().await;
         let filter = Reference::new("x").less_than(Datum::long(200));
-        for cow in [false, true] {
+        for (cow, custom_metadata) in [(false, false), (false, true), (true, false), (true, true)] {
             let (reporter, mut reports) = recording_reporter();
             let table = fixture.table.clone().with_metrics_reporter(reporter);
-            let scan = table
+            let mut builder = table
                 .scan()
                 .with_case_sensitive(false)
                 .with_filter(filter.clone())
-                .select(["X", RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_PARTITION])
-                .build()
-                .unwrap();
+                .select(["X", RESERVED_COL_NAME_FILE, RESERVED_COL_NAME_PARTITION]);
+            if custom_metadata {
+                builder = builder
+                    .with_report_metadata("query-id".to_owned(), "first".to_owned())
+                    .with_report_metadata("query-id", "last")
+                    .with_report_metadata("engine-name", "my-engine")
+                    .with_report_metadata("iceberg-version", "custom-version");
+            }
+            let scan = builder.build().unwrap();
             let (left, right) = tokio::join!(consume(&scan, cow), consume(&scan, cow));
             assert_eq!((left.len(), right.len()), (1, 1));
             assert_eq!(consume(&scan, cow).await.len(), 1);
-            let expected = ScanReport {
+            let mut expected = ScanReport {
                 table_ident: table.identifier().clone(),
                 snapshot_id: scan.snapshot().unwrap().snapshot_id(),
                 schema_id: table.metadata().current_schema().schema_id(),
@@ -195,7 +206,10 @@ mod tests {
                     RESERVED_COL_NAME_FILE.into(),
                     RESERVED_COL_NAME_PARTITION.into(),
                 ],
-                metadata: Default::default(),
+                metadata: HashMap::from([(
+                    "iceberg-version".to_owned(),
+                    concat!("Apache Iceberg Rust ", env!("CARGO_PKG_VERSION")).to_owned(),
+                )]),
                 metrics: ScanMetrics {
                     total_planning_duration: Duration::ZERO,
                     total_data_manifests: 1,
@@ -216,6 +230,13 @@ mod tests {
                     dvs: 1,
                 },
             };
+            if custom_metadata {
+                expected.metadata.extend([
+                    ("query-id".to_owned(), "last".to_owned()),
+                    ("engine-name".to_owned(), "my-engine".to_owned()),
+                    ("iceberg-version".to_owned(), "custom-version".to_owned()),
+                ]);
+            }
             for _ in 0..3 {
                 let mut actual = next_report(&mut reports).await.unwrap();
                 actual.metrics.total_planning_duration = Duration::ZERO;

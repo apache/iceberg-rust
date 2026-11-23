@@ -1576,6 +1576,7 @@ pub fn iceberg::scan::TableScanBuilder<'a>::with_concurrency_limit(self, limit: 
 pub fn iceberg::scan::TableScanBuilder<'a>::with_filter(self, predicate: iceberg::expr::Predicate) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_manifest_entry_concurrency_limit(self, limit: usize) -> Self
 pub fn iceberg::scan::TableScanBuilder<'a>::with_metrics_reporter(self, reporter: alloc::sync::Arc<dyn iceberg::metrics::MetricsReporter>) -> Self
+pub fn iceberg::scan::TableScanBuilder<'a>::with_report_metadata(self, key: impl core::convert::Into<alloc::string::String>, value: impl core::convert::Into<alloc::string::String>) -> Self
 pub type iceberg::scan::ArrowRecordBatchStream = futures_core::stream::BoxStream<'static, iceberg::Result<arrow_array::record_batch::RecordBatch>>
 pub type iceberg::scan::FileScanTaskStream = futures_core::stream::BoxStream<'static, iceberg::Result<iceberg::scan::FileScanTask>>
 pub mod iceberg::sensitive

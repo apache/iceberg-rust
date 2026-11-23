@@ -292,6 +292,7 @@ impl ManifestEntryContext {
 #[derive(Debug)]
 pub(crate) struct PlanContext {
     pub snapshot: SnapshotRef,
+    pub report_metadata: HashMap<String, String>,
 
     pub table_metadata: TableMetadataRef,
     /// The schema the scan projects. For a scan of the current state, this is
