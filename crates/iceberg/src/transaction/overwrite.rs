@@ -186,8 +186,8 @@ impl TransactionAction for OverwriteAction {
 mod tests {
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, ManifestStatus,
-        Operation, Struct,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, ManifestListWriter,
+        ManifestStatus, ManifestWriterBuilder, Operation, Struct,
     };
     use crate::table::Table;
     use crate::test_utils::commit_with_fresh_state;
@@ -324,5 +324,149 @@ mod tests {
             (ManifestStatus::Deleted, "test/a.parquet".to_string()),
             (ManifestStatus::Added, "test/a.parquet".to_string()),
         ]);
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_deletes_every_live_copy_of_a_path() {
+        let catalog = new_memory_catalog().await;
+        let mut table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let file_a = test_data_file(
+            "test/a.parquet",
+            table.metadata().default_partition_spec_id(),
+        );
+        for _ in 0..2 {
+            let tx = Transaction::new(&table);
+            let action = tx
+                .fast_append()
+                .with_check_duplicate(false)
+                .add_data_files(vec![file_a.clone()]);
+            table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+        }
+
+        let tx = Transaction::new(&table);
+        let action = tx.overwrite().delete_data_files(vec![file_a]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+
+        let summary = table.metadata().current_snapshot().unwrap().summary();
+        assert_eq!(summary.additional_properties["deleted-data-files"], "2");
+        assert_eq!(summary.additional_properties["total-data-files"], "0");
+        assert_eq!(current_manifest_entries(&table).await, [
+            (ManifestStatus::Deleted, "test/a.parquet".to_string()),
+            (ManifestStatus::Deleted, "test/a.parquet".to_string()),
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_rejects_non_data_deletions() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+        for content in [
+            DataContentType::PositionDeletes,
+            DataContentType::EqualityDeletes,
+        ] {
+            let file = DataFile {
+                content,
+                ..test_data_file("test/deletes.parquet", spec_id)
+            };
+            let action = Transaction::new(&table)
+                .overwrite()
+                .delete_data_files(vec![file]);
+            let err = commit_with_fresh_state(action, &table).await.err().unwrap();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(err.message().contains("Only data content type is allowed"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_preserves_delete_manifests_and_rejects_their_paths() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let spec_id = table.metadata().default_partition_spec_id();
+        let table = append(&catalog, &table, vec![test_data_file(
+            "test/a.parquet",
+            spec_id,
+        )])
+        .await;
+        let snapshot = table.metadata().current_snapshot().unwrap();
+        let file = test_data_file("test/deletes.parquet", spec_id);
+        let output = table
+            .file_io()
+            .new_output("test/delete-manifest.avro")
+            .unwrap();
+        let mut writer = ManifestWriterBuilder::new(
+            output,
+            Some(snapshot.snapshot_id()),
+            table.metadata().current_schema().clone(),
+            table.metadata().default_partition_spec().as_ref().clone(),
+        )
+        .build_v3_deletes();
+        writer
+            .add_file(
+                DataFile {
+                    content: DataContentType::PositionDeletes,
+                    ..file.clone()
+                },
+                snapshot.sequence_number(),
+            )
+            .unwrap();
+        let delete_manifest = writer.write_manifest_file().await.unwrap();
+        let mut manifests: Vec<_> = table
+            .manifest_list_reader(snapshot)
+            .load()
+            .await
+            .unwrap()
+            .consume_entries()
+            .into_iter()
+            .collect();
+        manifests.push(delete_manifest);
+        let mut writer = ManifestListWriter::v3(
+            table
+                .file_io()
+                .new_output(snapshot.manifest_list())
+                .unwrap()
+                .writer()
+                .await
+                .unwrap(),
+            snapshot.snapshot_id(),
+            snapshot.parent_snapshot_id(),
+            snapshot.sequence_number(),
+            Some(table.metadata().next_row_id()),
+        );
+        writer.add_manifests(manifests.into_iter()).unwrap();
+        writer.close().await.unwrap();
+        let action = Transaction::new(&table)
+            .overwrite()
+            .delete_data_files(vec![file]);
+        let err = commit_with_fresh_state(action, &table).await.err().unwrap();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("test/deletes.parquet"), "{err}");
+
+        let original = table
+            .manifest_list_reader(table.metadata().current_snapshot().unwrap())
+            .load()
+            .await
+            .unwrap()
+            .entries()
+            .iter()
+            .find(|m| m.manifest_path == "test/delete-manifest.avro")
+            .unwrap()
+            .clone();
+        let tx = Transaction::new(&table);
+        let action = tx
+            .overwrite()
+            .delete_data_files([test_data_file("test/a.parquet", spec_id)]);
+        let table = action.apply(tx).unwrap().commit(&catalog).await.unwrap();
+        let manifests = table
+            .manifest_list_reader(table.metadata().current_snapshot().unwrap())
+            .load()
+            .await
+            .unwrap();
+        let preserved = manifests
+            .entries()
+            .iter()
+            .find(|m| m.manifest_path == original.manifest_path)
+            .unwrap();
+        assert_eq!(preserved, &original);
     }
 }
