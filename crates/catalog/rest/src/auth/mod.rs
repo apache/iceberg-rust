@@ -22,6 +22,7 @@ mod oauth2;
 #[cfg(feature = "sigv4")]
 mod sigv4;
 
+use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -124,8 +125,10 @@ pub trait AuthManager: Debug + Send + Sync {
 }
 
 /// Authenticates outgoing REST catalog requests.
+///
+/// [`Any`] lets [`AuthManager::contextual_session`] downcast the catalog session.
 #[async_trait]
-pub trait AuthSession: Debug + Send + Sync {
+pub trait AuthSession: Any + Debug + Send + Sync {
     /// Applies authentication to the request (adds headers, signs, ...).
     ///
     /// The request already carries the configured `header.*` values.

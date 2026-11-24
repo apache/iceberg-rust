@@ -3742,6 +3742,41 @@ mod tests {
 
     #[cfg(feature = "sigv4")]
     #[tokio::test]
+    async fn test_a_signing_manager_survives_a_failed_initialization() {
+        let mut server = Server::new_async().await;
+        let config_mock = server
+            .mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(r#"{"overrides": {}, "defaults": {}}"#)
+            .expect(2)
+            .create_async()
+            .await;
+
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(HashMap::from([(
+                REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES.to_string(),
+                "invalid".to_string(),
+            )]))
+            .build();
+        let catalog = test_catalog_with(config, test_sigv4_manager());
+
+        for _ in 0..2 {
+            let err = catalog
+                .list_namespaces(&SessionContext::empty(), None)
+                .await
+                .unwrap_err();
+            assert!(
+                err.message()
+                    .contains(REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES),
+                "{err}"
+            );
+        }
+        config_mock.assert_async().await;
+    }
+
+    #[cfg(feature = "sigv4")]
+    #[tokio::test]
     async fn test_configured_authorization_header_does_not_clobber_the_signature() {
         use mockito::{Matcher, Mock};
 

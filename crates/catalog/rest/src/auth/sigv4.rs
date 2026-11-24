@@ -17,13 +17,13 @@
 
 //! AWS SigV4 request signing for the REST catalog.
 
+use std::any::Any;
 use std::collections::HashMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use chrono::{DateTime, Utc};
-use iceberg::sensitive::SensitiveString;
 use iceberg::{Error, ErrorKind, Result, SessionContext};
 use sha2::{Digest, Sha256};
 use typed_builder::TypedBuilder;
@@ -386,6 +386,10 @@ pub const REST_CATALOG_PROP_SESSION_TOKEN: &str = "rest.session-token";
 /// Java's `REST_SIGNING_NAME_DEFAULT`: API Gateway and Lambda.
 pub const SIGNING_NAME_DEFAULT: &str = "execute-api";
 
+const SIGNER_PROPERTIES: [&str; 2] = [
+    REST_CATALOG_PROP_SIGNING_REGION,
+    REST_CATALOG_PROP_SIGNING_NAME,
+];
 const CREDENTIAL_PROPERTIES: [&str; 3] = [
     REST_CATALOG_PROP_ACCESS_KEY_ID,
     REST_CATALOG_PROP_SECRET_ACCESS_KEY,
@@ -399,35 +403,37 @@ const SIGNING_PROPERTIES: [&str; 5] = [
     REST_CATALOG_PROP_SESSION_TOKEN,
 ];
 
-/// `base` with `overrides` on top. Overriding any credential replaces the
-/// base's credentials whole: fields from two sources never form a valid
-/// credential.
+/// `signer` and `credentials` with the non-blank signing properties `overrides`
+/// on top. Overriding any credential replaces `credentials` whole: fields from
+/// two sources never form a valid credential.
 fn overlay_signing(
-    base: &HashMap<String, SensitiveString>,
-    overrides: HashMap<String, String>,
-) -> HashMap<String, String> {
+    signer: &SigV4Signer,
+    credentials: &SharedCredentialsProvider,
+    overrides: &HashMap<String, String>,
+) -> Result<(SigV4Signer, SharedCredentialsProvider)> {
+    let signer = SigV4Signer {
+        region: non_blank(overrides, REST_CATALOG_PROP_SIGNING_REGION)
+            .unwrap_or_else(|| signer.region.clone()),
+        service: non_blank(overrides, REST_CATALOG_PROP_SIGNING_NAME)
+            .unwrap_or_else(|| signer.service.clone()),
+        mode: signer.mode,
+    };
     let replaces_credentials = CREDENTIAL_PROPERTIES
         .iter()
         .any(|key| overrides.contains_key(*key));
-    let mut props: HashMap<_, _> = base
-        .iter()
-        .filter(|(k, _)| !(replaces_credentials && CREDENTIAL_PROPERTIES.contains(&k.as_str())))
-        .map(|(k, v)| (k.clone(), v.expose().to_string()))
-        .collect();
-    props.extend(overrides);
-    props
+    let credentials = if replaces_credentials {
+        credentials_from_props(overrides)?
+    } else {
+        credentials.clone()
+    };
+    Ok((signer, credentials))
 }
 
-/// The non-blank [`SIGNING_PROPERTIES`] of `props`.
-fn signing_overrides(props: &HashMap<String, String>) -> HashMap<String, String> {
-    SIGNING_PROPERTIES
-        .iter()
+/// The non-blank values of `keys` in `props`.
+fn signing_overrides(keys: &[&str], props: &HashMap<String, String>) -> HashMap<String, String> {
+    keys.iter()
         .filter_map(|key| Some((key.to_string(), non_blank(props, key)?)))
         .collect()
-}
-
-fn sensitive(props: HashMap<String, String>) -> HashMap<String, SensitiveString> {
-    props.into_iter().map(|(k, v)| (k, v.into())).collect()
 }
 
 /// Trims a property, treating blank as absent.
@@ -502,38 +508,24 @@ fn credentials_from_props(props: &HashMap<String, String>) -> Result<SharedCrede
 ///
 /// Unlike Java, properties configure static credentials only; pass a provider
 /// to [`Self::new`] for anything else. Context values override catalog ones,
-/// blank context values are ignored, and context credentials replace the
-/// catalog's as a set.
+/// and blank context values are ignored. Context credentials replace the
+/// catalog's as a set, except that a provider passed to [`Self::new`] is kept.
 ///
 /// Configure signing-relevant headers as `header.*` properties: an injected
 /// client's default headers are added after signing.
 #[derive(Debug)]
 pub struct SigV4AuthManager {
     delegate: Arc<dyn AuthManager>,
-    signing: Signing,
-    catalog: OnceLock<SigV4CatalogState>,
-}
-
-#[derive(Debug)]
-enum Signing {
-    Injected {
-        signer: SigV4Signer,
-        credentials: SharedCredentialsProvider,
-    },
-    /// The constructor's signing properties, which each session method's
-    /// properties override, as Java rebuilds `AwsProperties` in each.
-    FromProperties(HashMap<String, SensitiveString>),
-}
-
-#[derive(Debug)]
-struct SigV4CatalogState {
-    session: Arc<SigV4Session>,
-    /// The signing properties the catalog session was built from.
-    signing_properties: HashMap<String, SensitiveString>,
+    signer: SigV4Signer,
+    credentials: SharedCredentialsProvider,
+    /// The properties that override `signer` and `credentials`.
+    overridable: &'static [&'static str],
 }
 
 impl SigV4AuthManager {
-    /// Signs with `signer` and `credentials`, whatever the properties say.
+    /// Signs with `signer` and `credentials`. The signing region and name in
+    /// the properties each session method is given override `signer`'s;
+    /// credentials there are ignored.
     pub fn new(
         delegate: Arc<dyn AuthManager>,
         signer: SigV4Signer,
@@ -541,11 +533,9 @@ impl SigV4AuthManager {
     ) -> Self {
         Self {
             delegate,
-            signing: Signing::Injected {
-                signer,
-                credentials,
-            },
-            catalog: OnceLock::new(),
+            signer,
+            credentials,
+            overridable: &SIGNER_PROPERTIES,
         }
     }
 
@@ -560,44 +550,29 @@ impl SigV4AuthManager {
         delegate: Arc<dyn AuthManager>,
         props: &HashMap<String, String>,
     ) -> Result<Self> {
-        let base = signing_overrides(props);
-        from_props(&base)?;
+        let (signer, credentials) = from_props(props)?;
         Ok(Self {
             delegate,
-            signing: Signing::FromProperties(sensitive(base)),
-            catalog: OnceLock::new(),
+            signer,
+            credentials,
+            overridable: &SIGNING_PROPERTIES,
         })
     }
 
-    /// The signer and credentials for `props`, and the signing properties
-    /// they came from (empty for an injected signer).
+    /// The signer and credentials for `props`.
     fn signing_for(
         &self,
         props: &HashMap<String, String>,
-    ) -> Result<(
-        SigV4Signer,
-        SharedCredentialsProvider,
-        HashMap<String, SensitiveString>,
-    )> {
-        match &self.signing {
-            Signing::Injected {
-                signer,
-                credentials,
-            } => Ok((signer.clone(), credentials.clone(), HashMap::new())),
-            Signing::FromProperties(base) => {
-                let props = overlay_signing(base, signing_overrides(props));
-                let (signer, credentials) = from_props(&props)?;
-                Ok((signer, credentials, sensitive(props)))
-            }
-        }
+    ) -> Result<(SigV4Signer, SharedCredentialsProvider)> {
+        let overrides = signing_overrides(self.overridable, props);
+        overlay_signing(&self.signer, &self.credentials, &overrides)
     }
 }
 
-/// The non-blank [`SIGNING_PROPERTIES`] a context sets, its credentials over
-/// its properties.
-fn context_signing_overrides(context: &SessionContext) -> HashMap<String, String> {
-    SIGNING_PROPERTIES
-        .iter()
+/// The non-blank values of `keys` a context sets, its credentials over its
+/// properties.
+fn context_signing_overrides(keys: &[&str], context: &SessionContext) -> HashMap<String, String> {
+    keys.iter()
         .filter_map(|key| {
             let credential = context.credentials().get(*key).map(|v| v.expose());
             let property = context.properties().get(*key).map(String::as_str);
@@ -617,7 +592,7 @@ impl AuthManager for SigV4AuthManager {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<Box<dyn AuthSession>> {
-        let (signer, credentials, _) = self.signing_for(props)?;
+        let (signer, credentials) = self.signing_for(props)?;
         Ok(Box::new(SigV4Session {
             delegate: Arc::from(self.delegate.init_session(client, props).await?),
             signer,
@@ -630,24 +605,12 @@ impl AuthManager for SigV4AuthManager {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<Arc<dyn AuthSession>> {
-        let (signer, credentials, signing_properties) = self.signing_for(props)?;
-        let session = Arc::new(SigV4Session {
+        let (signer, credentials) = self.signing_for(props)?;
+        Ok(Arc::new(SigV4Session {
             delegate: self.delegate.catalog_session(client, props).await?,
             signer,
             credentials,
-        });
-        self.catalog
-            .set(SigV4CatalogState {
-                session: session.clone(),
-                signing_properties,
-            })
-            .map_err(|_| {
-                Error::new(
-                    ErrorKind::Unexpected,
-                    "SigV4 catalog session already initialized",
-                )
-            })?;
-        Ok(session)
+        }))
     }
 
     async fn contextual_session(
@@ -655,39 +618,22 @@ impl AuthManager for SigV4AuthManager {
         context: &SessionContext,
         catalog_session: Arc<dyn AuthSession>,
     ) -> Result<Arc<dyn AuthSession>> {
-        let catalog = self.catalog.get().ok_or_else(|| {
-            Error::new(
-                ErrorKind::Unexpected,
-                "SigV4 catalog session is not initialized",
-            )
-        })?;
-        let parent: Arc<dyn AuthSession> = catalog.session.clone();
-        if !Arc::ptr_eq(&parent, &catalog_session) {
-            return Err(Error::new(
-                ErrorKind::DataInvalid,
-                "unexpected SigV4 catalog session",
-            ));
-        }
+        let parent = (&*catalog_session as &dyn Any)
+            .downcast_ref::<SigV4Session>()
+            .ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "unexpected SigV4 catalog session")
+            })?;
 
         let delegate = self
             .delegate
-            .contextual_session(context, catalog.session.delegate.clone())
+            .contextual_session(context, parent.delegate.clone())
             .await?;
-        let overrides = match self.signing {
-            Signing::FromProperties(_) => context_signing_overrides(context),
-            Signing::Injected { .. } => HashMap::new(),
-        };
-        if overrides.is_empty() && Arc::ptr_eq(&delegate, &catalog.session.delegate) {
+        let overrides = context_signing_overrides(self.overridable, context);
+        if overrides.is_empty() && Arc::ptr_eq(&delegate, &parent.delegate) {
             return Ok(catalog_session);
         }
-        let (signer, credentials) = if !overrides.is_empty() {
-            from_props(&overlay_signing(&catalog.signing_properties, overrides))?
-        } else {
-            (
-                catalog.session.signer.clone(),
-                catalog.session.credentials.clone(),
-            )
-        };
+        let (signer, credentials) =
+            overlay_signing(&parent.signer, &parent.credentials, &overrides)?;
         Ok(Arc::new(SigV4Session {
             delegate,
             signer,
@@ -2241,8 +2187,22 @@ mod tests {
         );
     }
 
+    /// The access key, region, service and payload hash mode a session signs with.
+    async fn signing_of(session: &dyn AuthSession) -> (String, String, String, PayloadHashMode) {
+        let session = (session as &dyn Any)
+            .downcast_ref::<SigV4Session>()
+            .unwrap();
+        let credentials = session.credentials.provide_credentials().await.unwrap();
+        (
+            credentials.access_key_id().to_string(),
+            session.signer.region.clone(),
+            session.signer.service.clone(),
+            session.signer.mode,
+        )
+    }
+
     #[tokio::test]
-    async fn an_injected_signer_survives_catalog_and_context_properties() {
+    async fn properties_override_an_injected_signer_but_not_its_provider() {
         let manager = SigV4AuthManager::new(
             Arc::new(RecordingManager::default()),
             SigV4Signer::builder()
@@ -2252,30 +2212,128 @@ mod tests {
                 .build(),
             test_credentials_provider(),
         );
-        let overriding = props(&[
-            (REST_CATALOG_PROP_SIGNING_REGION, "eu-west-1"),
-            (REST_CATALOG_PROP_SIGNING_NAME, "glue"),
+        let credentials = [
             (REST_CATALOG_PROP_ACCESS_KEY_ID, "OTHER"),
             (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "other"),
-        ]);
+        ];
+        let with_credentials = |pairs: &[(&str, &str)]| props(&[pairs, &credentials].concat());
 
-        let parent = manager
-            .catalog_session(&test_client(), &overriding)
+        let init = manager
+            .init_session(&test_client(), &with_credentials(&[]))
+            .await
+            .unwrap();
+        let catalog = manager
+            .catalog_session(
+                &test_client(),
+                &with_credentials(&[(REST_CATALOG_PROP_SIGNING_REGION, "eu-west-1")]),
+            )
             .await
             .unwrap();
         let context = SessionContext::builder()
-            .properties(overriding.clone())
-            .credentials(overriding.into_iter().map(|(k, v)| (k, v.into())).collect())
+            .properties(with_credentials(&[(
+                REST_CATALOG_PROP_SIGNING_NAME,
+                "glue",
+            )]))
             .build();
-        let session = manager
-            .contextual_session(&context, parent.clone())
+        let contextual = manager
+            .contextual_session(&context, catalog.clone())
             .await
             .unwrap();
-        assert!(Arc::ptr_eq(&parent, &session));
-        let scope = scope_of(session.as_ref()).await;
-        assert!(scope.starts_with("ak/"), "{scope}");
-        assert!(scope.contains("/ap-south-1/custom/"), "{scope}");
-        assert!(!scope.contains("eu-west-1"), "{scope}");
+
+        let expected = |region: &str, service: &str| {
+            (
+                "ak".to_string(),
+                region.to_string(),
+                service.to_string(),
+                PayloadHashMode::StandardAws,
+            )
+        };
+        assert_eq!(
+            [
+                signing_of(init.as_ref()).await,
+                signing_of(catalog.as_ref()).await,
+                signing_of(contextual.as_ref()).await,
+            ],
+            [
+                expected("ap-south-1", "custom"),
+                expected("eu-west-1", "custom"),
+                expected("eu-west-1", "glue"),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn context_credentials_alone_keep_the_session_of_an_injected_provider() {
+        let manager = SigV4AuthManager::new(
+            Arc::new(RecordingManager::default()),
+            test_signer(PayloadHashMode::IcebergRest),
+            test_credentials_provider(),
+        );
+        let catalog = manager
+            .catalog_session(&test_client(), &HashMap::new())
+            .await
+            .unwrap();
+        let context = SessionContext::builder()
+            .credentials(
+                props(&[
+                    (REST_CATALOG_PROP_ACCESS_KEY_ID, "OTHER"),
+                    (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "other"),
+                ])
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+            )
+            .build();
+
+        let session = manager
+            .contextual_session(&context, catalog.clone())
+            .await
+            .unwrap();
+
+        assert!(Arc::ptr_eq(&catalog, &session));
+    }
+
+    #[tokio::test]
+    async fn a_context_derives_from_the_catalog_session_it_is_given() {
+        let manager = SigV4AuthManager::new(
+            Arc::new(RecordingManager::default()),
+            test_signer(PayloadHashMode::IcebergRest),
+            test_credentials_provider(),
+        );
+        let context = SessionContext::builder()
+            .properties(props(&[(REST_CATALOG_PROP_SIGNING_NAME, "glue")]))
+            .build();
+
+        let mut regions = Vec::new();
+        for region in ["eu-west-1", "ap-south-1"] {
+            let catalog = manager
+                .catalog_session(
+                    &test_client(),
+                    &props(&[(REST_CATALOG_PROP_SIGNING_REGION, region)]),
+                )
+                .await
+                .unwrap();
+            let session = manager.contextual_session(&context, catalog).await.unwrap();
+            regions.push(signing_of(session.as_ref()).await.1);
+        }
+
+        assert_eq!(regions, ["eu-west-1", "ap-south-1"]);
+    }
+
+    #[tokio::test]
+    async fn a_catalog_session_of_another_manager_is_rejected() {
+        let manager = SigV4AuthManager::new(
+            Arc::new(RecordingManager::default()),
+            test_signer(PayloadHashMode::IcebergRest),
+            test_credentials_provider(),
+        );
+
+        let err = manager
+            .contextual_session(&SessionContext::empty(), Arc::new(crate::auth::NoopSession))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
     }
 
     #[tokio::test]
