@@ -50,6 +50,11 @@ impl HttpRequest {
         self.inner
     }
 
+    /// A copy of the request, or `None` when its body streams.
+    pub(crate) fn try_clone(&self) -> Option<Self> {
+        self.inner.try_clone().map(Self::new)
+    }
+
     /// The request URL.
     #[cfg(feature = "sigv4")]
     pub(crate) fn url(&self) -> &Url {

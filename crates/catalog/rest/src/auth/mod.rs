@@ -16,7 +16,8 @@
 // under the License.
 
 //! Pluggable authentication for the REST catalog, mirroring Iceberg Java's
-//! `AuthManager`/`AuthSession` API.
+//! `AuthManager`/`AuthSession` API. [`AuthSession::on_unauthorized`] has no
+//! Java counterpart.
 
 mod oauth2;
 #[cfg(feature = "sigv4")]
@@ -36,6 +37,7 @@ pub use sigv4::{PayloadHashMode, SigV4Signer};
 
 use crate::client::HttpClient;
 use crate::request::HttpRequest;
+use crate::response::HttpResponse;
 
 /// `rest.auth.type` value disabling authentication.
 pub const AUTH_TYPE_NONE: &str = "none";
@@ -115,6 +117,48 @@ pub trait AuthManager: Debug + Send + Sync {
 pub trait AuthSession: Debug + Send + Sync {
     /// Applies authentication to the request (adds headers, signs, ...).
     async fn authenticate(&self, request: &mut HttpRequest) -> Result<()>;
+
+    /// Called when the catalog answers a request this session authenticated
+    /// with `401 Unauthorized` or `419 Authentication Timeout`. `request` is
+    /// the request as it was sent.
+    ///
+    /// With [`UnauthorizedAction::Retry`], this same session authenticates the
+    /// request again and it is sent once more, so a session that replaces a
+    /// rejected credential keeps it behind interior mutability (e.g. a
+    /// `Mutex`). The answer to that second attempt is returned whatever its
+    /// status, without calling this method again. The default returns
+    /// [`UnauthorizedAction::Fail`].
+    ///
+    /// Not called for a request with a streaming body, which cannot be sent
+    /// twice.
+    ///
+    /// A session that wraps another forwards this call with the request as
+    /// the inner session authenticated it, undoing its own changes such as a
+    /// moved `Authorization` header.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned to the caller in place of the response, with the
+    /// response status as its `status` context.
+    async fn on_unauthorized(
+        &self,
+        request: &HttpRequest,
+        response: &HttpResponse,
+    ) -> Result<UnauthorizedAction> {
+        let _ = (request, response);
+        Ok(UnauthorizedAction::Fail)
+    }
+}
+
+/// What happens to a request the catalog rejected, as decided by
+/// [`AuthSession::on_unauthorized`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnauthorizedAction {
+    /// The rejection is returned to the caller.
+    Fail,
+    /// The session authenticates the request again and it is sent once more.
+    Retry,
 }
 
 /// [`AuthManager`] that performs no authentication.

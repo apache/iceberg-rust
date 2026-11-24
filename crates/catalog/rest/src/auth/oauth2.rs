@@ -26,12 +26,13 @@ use iceberg::{Error, ErrorKind, Result};
 use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
-use super::{AuthManager, AuthSession, HttpRequest};
+use super::{AuthManager, AuthSession, HttpRequest, UnauthorizedAction};
 use crate::catalog::{
     REST_CATALOG_PROP_URI, RestCatalogConfig, credential_from_props, default_token_endpoint,
     explicit_headers_from_props,
 };
 use crate::client::HttpClient;
+use crate::response::HttpResponse;
 use crate::types::{ErrorResponse, TokenResponse};
 
 /// The manager's own OAuth2 options, which properties are merged onto.
@@ -228,9 +229,11 @@ fn attach_bearer(req: &mut HttpRequest, token: &SensitiveString) -> Result<()> {
 /// The token is a configured one (which replaces whatever the cell holds), a
 /// token cached by an earlier session (the cell is shared with the owning
 /// [`OAuth2Manager`]), or — with [`TokenSource::ClientCredentials`] — one
-/// exchanged for the credential on demand.
+/// exchanged for the credential on demand. With a credential, a token the
+/// catalog rejects is dropped from the cell, so the retried request exchanges
+/// the credential for a new one.
 ///
-/// # TODO: Support automatic token refreshing.
+/// # TODO: Refresh the token before it expires (`expires_in`).
 struct OAuth2Session {
     token: Arc<Mutex<Option<SensitiveString>>>,
     token_source: TokenSource,
@@ -339,6 +342,37 @@ impl AuthSession for OAuth2Session {
             None => Ok(()),
         }
     }
+
+    /// With a credential, drops the cached token if it is the rejected one
+    /// and asks for the request to be sent again. A cached token that differs
+    /// has already replaced the rejected one, so concurrent rejections lead
+    /// to a single exchange. The rejection stands without a credential, or
+    /// for a request that carries no bearer token (e.g. a configured
+    /// `header.authorization: Basic ...` replaced it).
+    async fn on_unauthorized(
+        &self,
+        request: &HttpRequest,
+        _response: &HttpResponse,
+    ) -> Result<UnauthorizedAction> {
+        if matches!(self.token_source, TokenSource::StaticToken) {
+            return Ok(UnauthorizedAction::Fail);
+        }
+        let Some(rejected) = request
+            .headers()
+            .get(http::header::AUTHORIZATION)
+            .and_then(|value| value.as_bytes().strip_prefix(b"Bearer "))
+        else {
+            return Ok(UnauthorizedAction::Fail);
+        };
+        let mut token = self.token.lock().await;
+        if token
+            .as_ref()
+            .is_some_and(|token| token.expose().as_bytes() == rejected)
+        {
+            *token = None;
+        }
+        Ok(UnauthorizedAction::Retry)
+    }
 }
 
 #[cfg(test)]
@@ -378,6 +412,107 @@ mod tests {
         assert_eq!(
             req.headers().get("authorization").unwrap(),
             "Bearer tok-static"
+        );
+    }
+
+    fn sent_with(authorization: &str) -> HttpRequest {
+        HttpRequest::new(
+            Client::new()
+                .get("https://rest.example.com/v1/namespaces")
+                .header(http::header::AUTHORIZATION, authorization)
+                .build()
+                .unwrap(),
+        )
+    }
+
+    fn unauthorized() -> HttpResponse {
+        HttpResponse::new(StatusCode::UNAUTHORIZED, HeaderMap::new(), vec![])
+    }
+
+    async fn credential_session(manager: &OAuth2Manager) -> Box<dyn AuthSession> {
+        manager
+            .init_session(&test_client(), &HashMap::new())
+            .await
+            .unwrap()
+    }
+
+    /// A manager with the cached token `tok-current` and a credential.
+    fn credential_manager() -> OAuth2Manager {
+        OAuth2Manager::new("http://localhost/unused")
+            .with_token("tok-current")
+            .with_credential(Some("client1".to_string()), "secret1".to_string())
+    }
+
+    async fn cached_token(manager: &OAuth2Manager) -> Option<String> {
+        manager
+            .token
+            .lock()
+            .await
+            .as_ref()
+            .map(|token| token.expose().to_string())
+    }
+
+    #[tokio::test]
+    async fn test_on_unauthorized_drops_only_the_rejected_token() {
+        let manager = credential_manager();
+        let session = credential_session(&manager).await;
+
+        // Sent with a token another request has already replaced.
+        let action = session
+            .on_unauthorized(&sent_with("Bearer tok-previous"), &unauthorized())
+            .await
+            .unwrap();
+        assert_eq!(action, UnauthorizedAction::Retry);
+        assert_eq!(
+            cached_token(&manager).await,
+            Some("tok-current".to_string())
+        );
+
+        let action = session
+            .on_unauthorized(&sent_with("Bearer tok-current"), &unauthorized())
+            .await
+            .unwrap();
+        assert_eq!(action, UnauthorizedAction::Retry);
+        assert_eq!(cached_token(&manager).await, None);
+    }
+
+    #[tokio::test]
+    async fn test_on_unauthorized_keeps_a_token_without_credential() {
+        let manager = OAuth2Manager::new("http://localhost/unused").with_token("tok-static");
+        let session = manager
+            .init_session(&test_client(), &HashMap::new())
+            .await
+            .unwrap();
+
+        let action = session
+            .on_unauthorized(&sent_with("Bearer tok-static"), &unauthorized())
+            .await
+            .unwrap();
+
+        assert_eq!(action, UnauthorizedAction::Fail);
+        assert_eq!(cached_token(&manager).await, Some("tok-static".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_on_unauthorized_fails_without_a_bearer_token() {
+        // E.g. a signer wrapping this session moved the token aside.
+        let manager = credential_manager();
+        let session = credential_session(&manager).await;
+        let mut request = sent_with("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/signature");
+        request.headers_mut().insert(
+            "original-authorization",
+            "Bearer tok-current".parse().unwrap(),
+        );
+
+        let action = session
+            .on_unauthorized(&request, &unauthorized())
+            .await
+            .unwrap();
+
+        assert_eq!(action, UnauthorizedAction::Fail);
+        assert_eq!(
+            cached_token(&manager).await,
+            Some("tok-current".to_string())
         );
     }
 }
