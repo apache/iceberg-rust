@@ -17,7 +17,7 @@
 
 //! The module contains the file writer for parquet file format.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow_schema::SchemaRef as ArrowSchemaRef;
@@ -33,6 +33,7 @@ use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use parquet::file::properties::{CdcOptions, WriterProperties};
 use parquet::file::statistics::Statistics;
 use parquet::geospatial::bounding_box::BoundingBox;
+use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet_geospatial::interval::{Interval, IntervalTrait, WraparoundInterval};
 
 use super::{FileWriter, FileWriterBuilder};
@@ -182,6 +183,31 @@ impl FileWriterBuilder for ParquetWriterBuilder {
             key_metadata,
         })
     }
+}
+
+/// The Iceberg field id of one footer column, read from the file's own Parquet type as Iceberg
+/// Java's `ParquetMetrics` reads it. `None` when the column carries no id or its id names no
+/// primitive field of `schema`, so the column gets no metrics, as an unmatched column did before.
+///
+/// The dotted column path cannot stand in for the id: Iceberg names a list element `a.element`,
+/// so a valid schema may hold a top-level column named `a.list.element`, the same dotted path
+/// as that element's Parquet column.
+fn leaf_field_id(column: &ColumnDescriptor, schema: &Schema) -> Option<i32> {
+    let info = column.self_type().get_basic_info();
+    let field_id = info.has_id().then(|| info.id())?;
+    schema
+        .field_by_id(field_id)
+        .is_some_and(|field| field.field_type.is_primitive())
+        .then_some(field_id)
+}
+
+fn repeated_leaf_field_ids(parquet_schema: &SchemaDescriptor, schema: &Schema) -> HashSet<i32> {
+    parquet_schema
+        .columns()
+        .iter()
+        .filter(|column| column.max_rep_level() > 0)
+        .filter_map(|column| leaf_field_id(column, schema))
+        .collect()
 }
 
 /// A mapping from Parquet column path names to internal field id
@@ -581,6 +607,15 @@ impl ParquetWriter {
             visitor
         };
 
+        let in_list_or_map =
+            repeated_leaf_field_ids(metadata.file_metadata().schema_descr(), &schema);
+
+        // the visitor counts the whole child array, which can include values
+        // that belongs to no row, such as values under a null slot or outside
+        // a slice. Just like Java skip NaN counts in lists or maps.
+        let mut nan_value_counts = nan_value_counts;
+        nan_value_counts.retain(|field_id, _| !in_list_or_map.contains(field_id));
+
         let (column_sizes, value_counts, null_value_counts, (lower_bounds, upper_bounds)) = {
             let mut per_col_size: HashMap<i32, u64> = HashMap::new();
             let mut per_col_val_num: HashMap<i32, u64> = HashMap::new();
@@ -597,14 +632,20 @@ impl ParquetWriter {
 
                     *per_col_size.entry(field_id).or_insert(0) +=
                         column_chunk_metadata.compressed_size() as u64;
-                    *per_col_val_num.entry(field_id).or_insert(0) +=
-                        column_chunk_metadata.num_values() as u64;
+
+                    // counts are wrong for leaves inside a list or a map, so skip them.
+                    let write_counts = !in_list_or_map.contains(&field_id);
+                    if write_counts {
+                        *per_col_val_num.entry(field_id).or_insert(0) +=
+                            column_chunk_metadata.num_values() as u64;
+                    }
 
                     min_max_agg.update(field_id, column_chunk_metadata)?;
 
                     if let Some(null_count) = column_chunk_metadata
                         .statistics()
                         .and_then(Statistics::null_count_opt)
+                        && write_counts
                     {
                         *per_col_null_val_num.entry(field_id).or_insert(0) += null_count;
                     }
@@ -874,7 +915,7 @@ mod tests {
     use std::sync::Arc;
 
     use anyhow::Result;
-    use arrow_array::builder::{Float32Builder, Int32Builder, MapBuilder};
+    use arrow_array::builder::{Float32Builder, Int32Builder, ListBuilder, MapBuilder};
     use arrow_array::types::{Float32Type, Int64Type};
     use arrow_array::{
         Array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int32Array,
@@ -1317,9 +1358,7 @@ mod tests {
             let mut map_array_builder = MapBuilder::new(
                 None,
                 arrow_array::builder::StringBuilder::new(),
-                arrow_array::builder::ListBuilder::new(arrow_array::builder::PrimitiveBuilder::<
-                    Int64Type,
-                >::new()),
+                ListBuilder::new(arrow_array::builder::PrimitiveBuilder::<Int64Type>::new()),
             );
             for i in 0..1024 {
                 map_array_builder.keys().append_value(i.to_string());
@@ -1418,16 +1457,8 @@ mod tests {
         assert_eq!(data_file.record_count(), 1024);
         assert_eq!(
             *data_file.value_counts(),
-            HashMap::from([
-                (0, 1024),
-                (5, 1024),
-                (6, 1024),
-                (2, 1024),
-                (7, 1024),
-                (9, 1024),
-                (11, 1024),
-                (13, (1..1025).sum()),
-            ])
+            // leaves inside lists and maps (7, 11 and 13) carry no counts, as in Java.
+            HashMap::from([(0, 1024), (5, 1024), (6, 1024), (2, 1024), (9, 1024)])
         );
         assert_eq!(
             *data_file.lower_bounds(),
@@ -2369,7 +2400,8 @@ mod tests {
 
         // check data file
         assert_eq!(data_file.record_count(), 1);
-        assert_eq!(*data_file.value_counts(), HashMap::from([(1, 4), (4, 4)]));
+        // every leaf is inside a list, so none carries counts, as in Java.
+        assert_eq!(*data_file.value_counts(), HashMap::new());
         assert_eq!(
             *data_file.lower_bounds(),
             HashMap::from([(1, Datum::float(1.0_f32)), (4, Datum::float(1.0_f32))])
@@ -2378,14 +2410,10 @@ mod tests {
             *data_file.upper_bounds(),
             HashMap::from([(1, Datum::float(2.0_f32)), (4, Datum::float(2.0_f32))])
         );
-        assert_eq!(
-            *data_file.null_value_counts(),
-            HashMap::from([(1, 0), (4, 0)])
-        );
-        assert_eq!(
-            *data_file.nan_value_counts(),
-            HashMap::from([(1, 1), (4, 1)])
-        );
+        assert_eq!(*data_file.null_value_counts(), HashMap::new());
+        assert_eq!(*data_file.nan_value_counts(), HashMap::new());
+        assert!(data_file.column_sizes().contains_key(&1));
+        assert!(data_file.column_sizes().contains_key(&4));
 
         // check the written file
         let expect_batch = concat_batches(&arrow_schema, vec![&to_write]).unwrap();
@@ -2550,10 +2578,8 @@ mod tests {
 
         // check data file
         assert_eq!(data_file.record_count(), 4);
-        assert_eq!(
-            *data_file.value_counts(),
-            HashMap::from([(1, 4), (2, 4), (6, 4), (7, 4)])
-        );
+        // every leaf is inside a map, so none carries counts, as in Java.
+        assert_eq!(*data_file.value_counts(), HashMap::new());
         assert_eq!(
             *data_file.lower_bounds(),
             HashMap::from([
@@ -2572,14 +2598,14 @@ mod tests {
                 (7, Datum::float(2.0_f32))
             ])
         );
-        assert_eq!(
-            *data_file.null_value_counts(),
-            HashMap::from([(1, 0), (2, 0), (6, 0), (7, 0)])
-        );
-        assert_eq!(
-            *data_file.nan_value_counts(),
-            HashMap::from([(2, 1), (7, 1)])
-        );
+        assert_eq!(*data_file.null_value_counts(), HashMap::new());
+        assert_eq!(*data_file.nan_value_counts(), HashMap::new());
+        for field_id in [1, 2, 6, 7] {
+            assert!(
+                data_file.column_sizes().contains_key(&field_id),
+                "field {field_id}"
+            );
+        }
 
         // check the written file
         let expect_batch = concat_batches(&arrow_schema, vec![&to_write]).unwrap();
@@ -3399,5 +3425,22 @@ mod tests {
         let err = parquet_compression(CompressionCodec::Zstd(99)).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
         assert!(err.to_string().contains("zstd"));
+    }
+
+    #[test]
+    fn test_repeated_leaf_field_ids_marks_fields_inside_list_or_map() {
+        let schema = nested_schema_for_test();
+        let arrow = schema_to_arrow_schema(&schema).unwrap();
+        let parquet = parquet::arrow::ArrowSchemaConverter::new()
+            .convert(&arrow)
+            .unwrap();
+
+        let repeated = repeated_leaf_field_ids(&parquet, &schema);
+        assert_eq!(repeated, HashSet::from([7, 11, 13]));
+
+        // top-level fields and struct fields outside a list or map keep their stats.
+        for field_id in [0, 2, 5, 6, 9] {
+            assert!(!repeated.contains(&field_id), "field {field_id}");
+        }
     }
 }
