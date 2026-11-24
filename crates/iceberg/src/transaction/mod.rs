@@ -290,12 +290,13 @@ mod tests {
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, PartitionSpec, Struct,
-        TableMetadata, TableProperties, Transform,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, NullOrder, PartitionSpec,
+        PrimitiveType, SortDirection, SortField, Struct, TableMetadata, TableProperties, Transform,
+        Type,
     };
     use crate::table::{StaticTable, Table};
     use crate::test_utils::{make_encrypted_table, test_runtime};
-    use crate::transaction::{ApplyTransactionAction, Transaction};
+    use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
     use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent, TableRequirement};
 
     pub fn make_v1_table() -> Table {
@@ -715,6 +716,43 @@ mod tests {
             ),
             (2, None, "2")
         );
+    }
+
+    #[tokio::test]
+    async fn test_commit_add_column_then_sort_on_it_in_one_transaction() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_schema()
+            .add_column(AddColumn::optional(
+                "new_col",
+                Type::Primitive(PrimitiveType::Int),
+            ))
+            .apply(tx)
+            .unwrap();
+        let tx = tx
+            .replace_sort_order()
+            .asc("new_col", NullOrder::First)
+            .apply(tx)
+            .unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let new_col_id = table
+            .metadata()
+            .current_schema()
+            .field_by_name("new_col")
+            .unwrap()
+            .id;
+        assert_eq!(table.metadata().default_sort_order().fields, vec![
+            SortField {
+                source_id: new_col_id,
+                transform: Transform::Identity,
+                direction: SortDirection::Ascending,
+                null_order: NullOrder::First,
+            }
+        ]);
     }
 
     #[test]
