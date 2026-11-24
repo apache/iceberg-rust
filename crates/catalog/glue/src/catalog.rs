@@ -864,6 +864,23 @@ impl Catalog for GlueCatalog {
         Ok(builder.build()?)
     }
 
+    async fn unregister_table(&self, table: &TableIdent) -> Result<Table> {
+        let table_info = self.load_table(table).await?;
+        let mut builder = Table::builder()
+            .file_io(self.file_io())
+            .metadata_location(table_info.metadata_location_result()?)
+            .metadata(table_info.metadata_ref())
+            .identifier(table.clone())
+            .runtime(self.runtime.clone())
+            .readonly(true);
+        if let Some(kms_client) = self.kms_client.clone() {
+            builder = builder.kms_client(kms_client);
+        }
+        let unregistered_table = builder.build()?;
+        self.drop_table(table).await?;
+        Ok(unregistered_table)
+    }
+
     async fn update_table(&self, commit: TableCommit) -> Result<Table> {
         let table_ident = commit.identifier().clone();
         let table_namespace = validate_namespace(table_ident.namespace())?;

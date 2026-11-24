@@ -166,6 +166,7 @@ endpoints! {
     V1_TABLE_EXISTS => HEAD "/v1/{prefix}/namespaces/{namespace}/tables/{table}",
     V1_RENAME_TABLE => POST "/v1/{prefix}/tables/rename",
     V1_REGISTER_TABLE => POST "/v1/{prefix}/namespaces/{namespace}/register",
+    V1_UNREGISTER_TABLE => POST "/v1/{prefix}/namespaces/{namespace}/tables/{table}/unregister",
     V1_REPORT_METRICS => POST "/v1/{prefix}/namespaces/{namespace}/tables/{table}/metrics",
     V1_COMMIT_TRANSACTION => POST "/v1/{prefix}/transactions/commit",
 }
@@ -178,6 +179,7 @@ endpoints! {
 ///
 /// Note: existence-check `HEAD` routes are intentionally omitted — servers that
 /// do not advertise them are expected to fall back to `GET` load paths.
+/// The optional unregister route is also omitted because older servers do not support it.
 pub(crate) static DEFAULT_ENDPOINTS: LazyLock<HashSet<Endpoint>> = LazyLock::new(|| {
     [
         &*V1_LIST_NAMESPACES,
