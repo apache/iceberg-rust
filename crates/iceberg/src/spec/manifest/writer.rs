@@ -17,7 +17,8 @@
 
 use std::cmp::min;
 
-use apache_avro::to_value;
+use apache_avro::types::Value as AvroValue;
+use apache_avro::{Schema as AvroSchema, Writer as AvroWriter, to_value};
 use bytes::Bytes;
 use itertools::Itertools;
 use serde_json::to_vec;
@@ -26,7 +27,7 @@ use super::{
     Datum, FormatVersion, ManifestContentType, PartitionSpec, PrimitiveType,
     UNASSIGNED_SEQUENCE_NUMBER,
 };
-use crate::avro::new_writer;
+use crate::avro::codec;
 use crate::encryption::EncryptedOutputFile;
 use crate::error::{Result, invalid_data};
 use crate::io::{FileMetadata, FileWrite, OutputFile};
@@ -34,7 +35,7 @@ use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2, ManifestEn
 use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2, manifest_schema_v3};
 use crate::spec::{
     DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
-    ManifestStatus, PrimitiveLiteral, SchemaRef, StructType, Type,
+    ManifestStatus, PrimitiveLiteral, SchemaRef, Type,
 };
 
 /// Placeholder for snapshot ID. The field with this value must be replaced
@@ -201,9 +202,45 @@ pub struct ManifestWriter {
 
     min_seq_num: Option<i64>,
 
-    manifest_entries: Vec<ManifestEntry>,
+    /// Started by the first entry, so a manifest is held as its Avro bytes while it is
+    /// written rather than as its entries.
+    encoding: Option<Encoding>,
 
     metadata: ManifestMetadata,
+}
+
+/// Entries buffered before they are written as one Avro block.
+const ENTRIES_PER_BLOCK: usize = 64;
+
+/// A manifest's Avro file as it is being written: the header and every finished block,
+/// the entries of the block being filled, and the partition summaries so far.
+struct Encoding {
+    avro_schema: AvroSchema,
+    partition_struct_type: Type,
+    field_stats: Vec<PartitionFieldStats>,
+    marker: [u8; 16],
+    bytes: Vec<u8>,
+    block: Vec<AvroValue>,
+}
+
+impl Encoding {
+    fn flush_block(&mut self) -> Result<()> {
+        if self.block.is_empty() {
+            return Ok(());
+        }
+        let mut writer = AvroWriter::builder()
+            .schema(&self.avro_schema)
+            .writer(&mut self.bytes)
+            .codec(codec())
+            .marker(self.marker)
+            .has_header(true)
+            .build()?;
+        for value in self.block.drain(..) {
+            writer.append_value(value)?;
+        }
+        writer.into_inner()?;
+        Ok(())
+    }
 }
 
 impl ManifestWriter {
@@ -227,27 +264,80 @@ impl ManifestWriter {
             deleted_rows: 0,
             first_row_id,
             min_seq_num: None,
-            manifest_entries: Vec::new(),
+            encoding: None,
             metadata,
         }
     }
 
-    fn construct_partition_summaries(
-        &mut self,
-        partition_type: &StructType,
-    ) -> Result<Vec<FieldSummary>> {
-        let mut field_stats: Vec<_> = partition_type
+    fn encoding(&mut self) -> Result<&mut Encoding> {
+        if self.encoding.is_none() {
+            self.encoding = Some(self.start_encoding()?);
+        }
+        Ok(self.encoding.as_mut().expect("started above"))
+    }
+
+    fn start_encoding(&self) -> Result<Encoding> {
+        let partition_type = self
+            .metadata
+            .partition_spec
+            .partition_type(&self.metadata.schema)?;
+        let avro_schema = match self.metadata.format_version {
+            FormatVersion::V1 => manifest_schema_v1(&partition_type)?,
+            FormatVersion::V2 => manifest_schema_v2(&partition_type)?,
+            FormatVersion::V3 => manifest_schema_v3(&partition_type)?,
+        };
+        let marker = uuid::Uuid::new_v4().into_bytes();
+        let table_schema = &self.metadata.schema;
+        let mut header = AvroWriter::builder()
+            .schema(&avro_schema)
+            .writer(Vec::new())
+            .codec(codec())
+            .marker(marker)
+            .build()?;
+        header.add_user_metadata(
+            "schema".to_string(),
+            to_vec(table_schema)
+                .map_err(|err| invalid_data!("Fail to serialize table schema").with_source(err))?,
+        )?;
+        header.add_user_metadata(
+            "schema-id".to_string(),
+            table_schema.schema_id().to_string(),
+        )?;
+        header.add_user_metadata(
+            "partition-spec".to_string(),
+            to_vec(&self.metadata.partition_spec.fields()).map_err(|err| {
+                invalid_data!("Fail to serialize partition spec").with_source(err)
+            })?,
+        )?;
+        header.add_user_metadata(
+            "partition-spec-id".to_string(),
+            self.metadata.partition_spec.spec_id().to_string(),
+        )?;
+        header.add_user_metadata(
+            "format-version".to_string(),
+            (self.metadata.format_version as u8).to_string(),
+        )?;
+        match self.metadata.format_version {
+            FormatVersion::V1 => {}
+            FormatVersion::V2 | FormatVersion::V3 => {
+                header
+                    .add_user_metadata("content".to_string(), self.metadata.content.to_string())?;
+            }
+        }
+        let bytes = header.into_inner()?;
+        let field_stats = partition_type
             .fields()
             .iter()
             .map(|f| PartitionFieldStats::new(f.field_type.as_primitive_type().unwrap().clone()))
             .collect();
-        for partition in self.manifest_entries.iter().map(|e| &e.data_file.partition) {
-            for (literal, stat) in partition.iter().zip_eq(field_stats.iter_mut()) {
-                let primitive_literal = literal.map(|v| v.as_primitive_literal().unwrap());
-                stat.update(primitive_literal)?;
-            }
-        }
-        Ok(field_stats.into_iter().map(|stat| stat.finish()).collect())
+        Ok(Encoding {
+            avro_schema,
+            partition_struct_type: Type::Struct(partition_type),
+            field_stats,
+            marker,
+            bytes,
+            block: Vec::with_capacity(ENTRIES_PER_BLOCK),
+        })
     }
 
     fn check_data_file(&self, data_file: &DataFile) -> Result<()> {
@@ -413,80 +503,50 @@ impl ManifestWriter {
         {
             self.min_seq_num = Some(self.min_seq_num.map_or(seq_num, |v| min(v, seq_num)));
         }
-        self.manifest_entries.push(entry);
+        let format_version = self.metadata.format_version;
+        let encoding = self.encoding()?;
+        for (literal, stat) in entry
+            .data_file
+            .partition
+            .iter()
+            .zip_eq(encoding.field_stats.iter_mut())
+        {
+            stat.update(literal.map(|v| v.as_primitive_literal().unwrap()))?;
+        }
+        let value = match format_version {
+            FormatVersion::V1 => to_value(ManifestEntryV1::try_from(
+                entry,
+                &encoding.partition_struct_type,
+            )?)?
+            .resolve(&encoding.avro_schema)?,
+            FormatVersion::V2 => to_value(ManifestEntryV2::try_from(
+                entry,
+                &encoding.partition_struct_type,
+            )?)?
+            .resolve(&encoding.avro_schema)?,
+            FormatVersion::V3 => to_value(ManifestEntryV3::try_from(
+                entry,
+                &encoding.partition_struct_type,
+            )?)?
+            .resolve(&encoding.avro_schema)?,
+        };
+        encoding.block.push(value);
+        if encoding.block.len() >= ENTRIES_PER_BLOCK {
+            encoding.flush_block()?;
+        }
         Ok(())
     }
 
     /// Write manifest file and return it.
     pub async fn write_manifest_file(mut self) -> Result<ManifestFile> {
-        // Create the avro writer
-        let partition_type = self
-            .metadata
-            .partition_spec
-            .partition_type(&self.metadata.schema)?;
-        // Wrap once and reuse for every entry so the per-entry conversion does
-        // not rebuild the partition type's field-name lookup on each call.
-        let partition_struct_type = Type::Struct(partition_type.clone());
-        let table_schema = &self.metadata.schema;
-        let avro_schema = match self.metadata.format_version {
-            FormatVersion::V1 => manifest_schema_v1(&partition_type)?,
-            FormatVersion::V2 => manifest_schema_v2(&partition_type)?,
-            FormatVersion::V3 => manifest_schema_v3(&partition_type)?,
-        };
-        let mut avro_writer = new_writer(&avro_schema, Vec::new())?;
-        avro_writer.add_user_metadata(
-            "schema".to_string(),
-            to_vec(table_schema)
-                .map_err(|err| invalid_data!("Fail to serialize table schema").with_source(err))?,
-        )?;
-        avro_writer.add_user_metadata(
-            "schema-id".to_string(),
-            table_schema.schema_id().to_string(),
-        )?;
-        avro_writer.add_user_metadata(
-            "partition-spec".to_string(),
-            to_vec(&self.metadata.partition_spec.fields()).map_err(|err| {
-                invalid_data!("Fail to serialize partition spec").with_source(err)
-            })?,
-        )?;
-        avro_writer.add_user_metadata(
-            "partition-spec-id".to_string(),
-            self.metadata.partition_spec.spec_id().to_string(),
-        )?;
-        avro_writer.add_user_metadata(
-            "format-version".to_string(),
-            (self.metadata.format_version as u8).to_string(),
-        )?;
-        match self.metadata.format_version {
-            FormatVersion::V1 => {}
-            FormatVersion::V2 | FormatVersion::V3 => {
-                avro_writer
-                    .add_user_metadata("content".to_string(), self.metadata.content.to_string())?;
-            }
-        }
-
-        let partition_summary = self.construct_partition_summaries(&partition_type)?;
-        // Write manifest entries
-        for entry in std::mem::take(&mut self.manifest_entries) {
-            let value = match self.metadata.format_version {
-                FormatVersion::V1 => {
-                    to_value(ManifestEntryV1::try_from(entry, &partition_struct_type)?)?
-                        .resolve(&avro_schema)?
-                }
-                FormatVersion::V2 => {
-                    to_value(ManifestEntryV2::try_from(entry, &partition_struct_type)?)?
-                        .resolve(&avro_schema)?
-                }
-                FormatVersion::V3 => {
-                    to_value(ManifestEntryV3::try_from(entry, &partition_struct_type)?)?
-                        .resolve(&avro_schema)?
-                }
-            };
-
-            avro_writer.append_value(value)?;
-        }
-
-        let content = avro_writer.into_inner()?;
+        let encoding = self.encoding()?;
+        encoding.flush_block()?;
+        let partition_summary: Vec<FieldSummary> = encoding
+            .field_stats
+            .drain(..)
+            .map(|stat| stat.finish())
+            .collect();
+        let content = std::mem::take(&mut encoding.bytes);
         let mut writer = self.output.writer().await?;
         writer.write(Bytes::from(content)).await?;
         let file_metadata = writer.close().await?;
@@ -1110,6 +1170,86 @@ mod tests {
 
                 assert_eq!(output, data_file);
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_manifest_spanning_several_blocks_roundtrips_in_each_format_version() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("id", "id", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        // Several blocks' worth, ending mid-block.
+        let partitions: Vec<Option<i32>> = (0..2 * ENTRIES_PER_BLOCK as i32 + 17)
+            .map(|i| (i % 50 != 7).then_some(i - 20))
+            .collect();
+        let data_files: Vec<DataFile> = partitions
+            .iter()
+            .enumerate()
+            .map(|(i, partition)| {
+                DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path(format!("memory:///table/data/{i:05}.parquet"))
+                    .file_format(DataFileFormat::Parquet)
+                    .partition(Struct::from_iter([partition.map(Literal::int)]))
+                    .partition_spec_id(0)
+                    .record_count(i as u64 + 1)
+                    .file_size_in_bytes(456)
+                    .build()
+                    .unwrap()
+            })
+            .collect();
+        let expected_summary = vec![FieldSummary {
+            contains_null: true,
+            contains_nan: Some(false),
+            lower_bound: Some(Datum::int(-20).to_bytes().unwrap()),
+            upper_bound: Some(
+                Datum::int(2 * ENTRIES_PER_BLOCK as i32 + 16 - 20)
+                    .to_bytes()
+                    .unwrap(),
+            ),
+        }];
+        let builds: [fn(ManifestWriterBuilder) -> ManifestWriter; 3] = [
+            ManifestWriterBuilder::build_v1,
+            ManifestWriterBuilder::build_v2_data,
+            ManifestWriterBuilder::build_v3_data,
+        ];
+
+        for build in builds {
+            let io = FileIO::new_with_memory();
+            let mut writer = build(ManifestWriterBuilder::new(
+                io.new_output("memory:///table/metadata/manifest.avro")
+                    .unwrap(),
+                Some(1),
+                schema.clone(),
+                partition_spec.clone(),
+            ));
+            for data_file in &data_files {
+                writer.add_file(data_file.clone(), 1).unwrap();
+            }
+            let manifest_file = writer.write_manifest_file().await.unwrap();
+            let manifest = ManifestReader::new(io, Runtime::current())
+                .read(&manifest_file)
+                .await
+                .unwrap();
+
+            let read: Vec<DataFile> = manifest
+                .entries()
+                .iter()
+                .map(|entry| entry.data_file().clone())
+                .collect();
+            assert_eq!(read, data_files);
+            assert_eq!(manifest_file.partitions, Some(expected_summary.clone()));
         }
     }
 
