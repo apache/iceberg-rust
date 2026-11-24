@@ -26,12 +26,13 @@ pub use metadata::*;
 mod reader;
 pub use reader::*;
 mod writer;
-use std::io::{Cursor, Read};
+use std::io::{Chain, Cursor, Read};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use apache_avro::Reader as AvroReader;
 use apache_avro::error::Details;
+use apache_avro::reader::ReaderDeser;
 pub use writer::*;
 
 use super::{
@@ -59,106 +60,9 @@ impl Manifest {
         bs: &[u8],
         location: Option<&str>,
     ) -> Result<(ManifestMetadata, Vec<ManifestEntry>)> {
-        let mut entries = Vec::new();
-        let metadata = Self::decode_entries(bs, location, |entry| {
-            entries.push(entry);
-            Ok(())
-        })?;
-        Ok((metadata, entries))
-    }
-
-    /// Decodes a manifest's entries from `source` one at a time, handing each to `f`,
-    /// and returns the manifest's metadata. Unlike [`Manifest::parse_avro`], at most one
-    /// decoded entry is held at a time, so `source` can be a stream.
-    pub fn read_entries(
-        source: impl Read,
-        f: impl FnMut(ManifestEntry) -> Result<()>,
-    ) -> Result<ManifestMetadata> {
-        Self::decode_entries(source, None, f)
-    }
-
-    fn decode_entries<R: Read>(
-        mut source: R,
-        location: Option<&str>,
-        mut f: impl FnMut(ManifestEntry) -> Result<()>,
-    ) -> Result<ManifestMetadata> {
-        // The header's schema is parsed before its sync marker is read, so a schema the
-        // reader refuses has consumed only `header`, and a rewrite of it can be read in
-        // front of the rest of `source`.
-        let header = read_header_metadata(&mut source)?;
-        let reader = match AvroReader::new(Cursor::new(header.clone()).chain(&mut source)) {
-            Ok(reader) => reader,
-            // iceberg-rust repeated `decimal` definitions before
-            // `schema_to_avro_schema` defined each named type once, so this
-            // fallback stays while tables can contain manifests it wrote.
-            Err(e) if matches!(e.details(), Details::AmbiguousSchemaDefinition(_)) => {
-                let (rewritten, repeated) = match define_named_types_once(&header) {
-                    Ok(Some(rewrite)) => rewrite,
-                    Ok(None) => return Err(e.into()),
-                    Err(rewrite_error) => {
-                        return Err(Error::from(e).with_context(
-                            "error defining each named type once",
-                            rewrite_error.to_string(),
-                        ));
-                    }
-                };
-                let reader = AvroReader::new(Cursor::new(rewritten).chain(&mut source)).map_err(
-                    |retry_error| {
-                        Error::from(e).with_context(
-                            "error after defining each named type once",
-                            retry_error.to_string(),
-                        )
-                    },
-                )?;
-                let location = location.unwrap_or("<unknown location>");
-                if WARNED_REPEATED_DEFINITIONS.swap(true, Ordering::Relaxed) {
-                    tracing::debug!(
-                        "Manifest {location} defines Avro named types {repeated:?} more than once."
-                    );
-                } else {
-                    tracing::warn!(
-                        "Manifest {location} defines Avro named types {repeated:?} more than once, \
-                         which the Avro specification doesn't allow. Reading it with each repeated \
-                         definition replaced by a reference to the first. Later manifests like \
-                         this are logged at debug level."
-                    );
-                }
-                reader
-            }
-            Err(e) => return Err(e.into()),
-        };
-
-        let metadata = ManifestMetadata::parse(reader.user_metadata())?;
-        let partition_type = metadata.partition_spec.partition_type(&metadata.schema)?;
-        // Wrap the partition type once and share it across all entries: the
-        // per-entry conversion needs a `&Type`, and building it here keeps the
-        // lazily-populated field-name lookup from being rebuilt for every entry.
-        let partition_struct_type = Type::Struct(partition_type);
-        let spec_id = metadata.partition_spec.spec_id();
-        match metadata.format_version {
-            FormatVersion::V1 => {
-                for entry in reader.into_deser_iter::<Resolved<_serde::ManifestEntryV1>>() {
-                    f(entry?
-                        .0
-                        .try_into(spec_id, &partition_struct_type, &metadata.schema)?)?;
-                }
-            }
-            FormatVersion::V2 => {
-                for entry in reader.into_deser_iter::<Resolved<_serde::ManifestEntryV2>>() {
-                    f(entry?
-                        .0
-                        .try_into(spec_id, &partition_struct_type, &metadata.schema)?)?;
-                }
-            }
-            FormatVersion::V3 => {
-                for entry in reader.into_deser_iter::<Resolved<_serde::ManifestEntryV3>>() {
-                    f(entry?
-                        .0
-                        .try_into(spec_id, &partition_struct_type, &metadata.schema)?)?;
-                }
-            }
-        }
-        Ok(metadata)
+        let mut reader = ManifestEntryReader::open(bs, location)?;
+        let entries = reader.by_ref().collect::<Result<Vec<_>>>()?;
+        Ok((reader.metadata, entries))
     }
 
     /// Parse manifest from bytes of avro file.
@@ -189,6 +93,122 @@ impl Manifest {
             metadata,
             entries: entries.into_iter().map(Arc::new).collect(),
         }
+    }
+}
+
+/// A manifest's entries, decoded one at a time as they are read from `R`, so a manifest
+/// can be read from a stream without being held whole.
+pub struct ManifestEntryReader<R: Read> {
+    metadata: ManifestMetadata,
+    partition_struct_type: Type,
+    entries: Entries<R>,
+}
+
+enum Entries<R: Read> {
+    V1(ReaderDeser<'static, Chain<Cursor<Vec<u8>>, R>, Resolved<_serde::ManifestEntryV1>>),
+    V2(ReaderDeser<'static, Chain<Cursor<Vec<u8>>, R>, Resolved<_serde::ManifestEntryV2>>),
+    V3(ReaderDeser<'static, Chain<Cursor<Vec<u8>>, R>, Resolved<_serde::ManifestEntryV3>>),
+}
+
+impl<R: Read> ManifestEntryReader<R> {
+    /// Reads the manifest's header from `source`; its entries follow as the reader is
+    /// iterated.
+    pub fn new(source: R) -> Result<Self> {
+        Self::open(source, None)
+    }
+
+    fn open(mut source: R, location: Option<&str>) -> Result<Self> {
+        let header = read_header_metadata(&mut source)?;
+        // apache-avro parses a header's schema before reading its sync marker, so the
+        // header alone shows whether the schema needs each named type defined once.
+        let (header, rewrite) = match AvroReader::new(Cursor::new(header.as_slice())) {
+            // iceberg-rust repeated `decimal` definitions before
+            // `schema_to_avro_schema` defined each named type once, so this
+            // fallback stays while tables can contain manifests it wrote.
+            Err(e) if matches!(e.details(), Details::AmbiguousSchemaDefinition(_)) => {
+                match define_named_types_once(&header) {
+                    Ok(Some((rewritten, repeated))) => {
+                        (rewritten, Some((Error::from(e), repeated)))
+                    }
+                    Ok(None) => return Err(e.into()),
+                    Err(rewrite_error) => {
+                        return Err(Error::from(e).with_context(
+                            "error defining each named type once",
+                            rewrite_error.to_string(),
+                        ));
+                    }
+                }
+            }
+            _ => (header, None),
+        };
+        let reader = match (AvroReader::new(Cursor::new(header).chain(source)), rewrite) {
+            (Ok(reader), None) => reader,
+            (Ok(reader), Some((_, repeated))) => {
+                let location = location.unwrap_or("<unknown location>");
+                if WARNED_REPEATED_DEFINITIONS.swap(true, Ordering::Relaxed) {
+                    tracing::debug!(
+                        "Manifest {location} defines Avro named types {repeated:?} more than once."
+                    );
+                } else {
+                    tracing::warn!(
+                        "Manifest {location} defines Avro named types {repeated:?} more than once, \
+                         which the Avro specification doesn't allow. Reading it with each repeated \
+                         definition replaced by a reference to the first. Later manifests like \
+                         this are logged at debug level."
+                    );
+                }
+                reader
+            }
+            (Err(e), None) => return Err(e.into()),
+            (Err(e), Some((original, _))) => {
+                return Err(original
+                    .with_context("error after defining each named type once", e.to_string()));
+            }
+        };
+        let metadata = ManifestMetadata::parse(reader.user_metadata())?;
+        // Wrap the partition type once and share it across all entries: the
+        // per-entry conversion needs a `&Type`, and building it here keeps the
+        // lazily-populated field-name lookup from being rebuilt for every entry.
+        let partition_struct_type =
+            Type::Struct(metadata.partition_spec.partition_type(&metadata.schema)?);
+        let entries = match metadata.format_version {
+            FormatVersion::V1 => Entries::V1(reader.into_deser_iter()),
+            FormatVersion::V2 => Entries::V2(reader.into_deser_iter()),
+            FormatVersion::V3 => Entries::V3(reader.into_deser_iter()),
+        };
+        Ok(Self {
+            metadata,
+            partition_struct_type,
+            entries,
+        })
+    }
+
+    /// The manifest's metadata.
+    pub fn metadata(&self) -> &ManifestMetadata {
+        &self.metadata
+    }
+}
+
+impl<R: Read> Iterator for ManifestEntryReader<R> {
+    type Item = Result<ManifestEntry>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let spec_id = self.metadata.partition_spec.spec_id();
+        let (partition_type, schema) = (&self.partition_struct_type, &self.metadata.schema);
+        Some(match &mut self.entries {
+            Entries::V1(entries) => entries
+                .next()?
+                .map_err(Error::from)
+                .and_then(|entry| entry.0.try_into(spec_id, partition_type, schema)),
+            Entries::V2(entries) => entries
+                .next()?
+                .map_err(Error::from)
+                .and_then(|entry| entry.0.try_into(spec_id, partition_type, schema)),
+            Entries::V3(entries) => entries
+                .next()?
+                .map_err(Error::from)
+                .and_then(|entry| entry.0.try_into(spec_id, partition_type, schema)),
+        })
     }
 }
 
@@ -2262,13 +2282,12 @@ mod tests {
             *manifest.entries()[0].data_file().partition(),
             Struct::from_iter([Some(Literal::decimal(12345)), Some(Literal::decimal(-678))])
         );
-        let mut streamed = Vec::new();
-        let metadata = Manifest::read_entries(OneByteAtATime(&bs), |entry| {
-            streamed.push(entry);
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(Manifest::new(metadata, streamed), manifest);
+        let mut streamed = ManifestEntryReader::new(OneByteAtATime(&bs)).unwrap();
+        let entries = streamed.by_ref().collect::<Result<Vec<_>>>().unwrap();
+        assert_eq!(
+            Manifest::new(streamed.metadata().clone(), entries),
+            manifest
+        );
     }
 
     /// A source that hands out one byte per read, as a slow stream can.
@@ -2288,7 +2307,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_entries_streams_what_parse_avro_reads_across_blocks() {
+    async fn test_entry_reader_streams_what_parse_avro_reads_across_blocks() {
         let schema = Arc::new(
             Schema::builder()
                 .with_fields(vec![Arc::new(NestedField::optional(
@@ -2333,13 +2352,12 @@ mod tests {
 
         let manifest = Manifest::parse_avro(&bs).unwrap();
         assert_eq!(manifest.entries().len(), files);
-        let mut streamed = Vec::new();
-        let metadata = Manifest::read_entries(OneByteAtATime(&bs), |entry| {
-            streamed.push(entry);
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(Manifest::new(metadata, streamed), manifest);
+        let mut streamed = ManifestEntryReader::new(OneByteAtATime(&bs)).unwrap();
+        let entries = streamed.by_ref().collect::<Result<Vec<_>>>().unwrap();
+        assert_eq!(
+            Manifest::new(streamed.metadata().clone(), entries),
+            manifest
+        );
     }
 
     #[test]

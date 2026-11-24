@@ -2326,7 +2326,6 @@ pub fn iceberg::spec::Manifest::into_parts(self) -> (alloc::vec::Vec<iceberg::sp
 pub fn iceberg::spec::Manifest::metadata(&self) -> &iceberg::spec::ManifestMetadata
 pub fn iceberg::spec::Manifest::new(metadata: iceberg::spec::ManifestMetadata, entries: alloc::vec::Vec<iceberg::spec::ManifestEntry>) -> Self
 pub fn iceberg::spec::Manifest::parse_avro(bs: &[u8]) -> iceberg::Result<Self>
-pub fn iceberg::spec::Manifest::read_entries(source: impl std::io::Read, f: impl core::ops::function::FnMut(iceberg::spec::ManifestEntry) -> iceberg::Result<()>) -> iceberg::Result<iceberg::spec::ManifestMetadata>
 impl core::clone::Clone for iceberg::spec::Manifest
 pub fn iceberg::spec::Manifest::clone(&self) -> iceberg::spec::Manifest
 impl core::cmp::Eq for iceberg::spec::Manifest
@@ -2362,6 +2361,13 @@ pub fn iceberg::spec::ManifestEntry::fmt(&self, f: &mut core::fmt::Formatter<'_>
 impl core::marker::StructuralPartialEq for iceberg::spec::ManifestEntry
 impl iceberg::spec::ManifestEntry
 pub fn iceberg::spec::ManifestEntry::builder() -> ManifestEntryBuilder<((), (), (), (), ())>
+pub struct iceberg::spec::ManifestEntryReader<R: std::io::Read>
+impl<R: std::io::Read> iceberg::spec::ManifestEntryReader<R>
+pub fn iceberg::spec::ManifestEntryReader<R>::metadata(&self) -> &iceberg::spec::ManifestMetadata
+pub fn iceberg::spec::ManifestEntryReader<R>::new(source: R) -> iceberg::Result<Self>
+impl<R: std::io::Read> core::iter::traits::iterator::Iterator for iceberg::spec::ManifestEntryReader<R>
+pub type iceberg::spec::ManifestEntryReader<R>::Item = core::result::Result<iceberg::spec::ManifestEntry, iceberg::Error>
+pub fn iceberg::spec::ManifestEntryReader<R>::next(&mut self) -> core::option::Option<Self::Item>
 pub struct iceberg::spec::ManifestFile
 pub iceberg::spec::ManifestFile::added_files_count: core::option::Option<u32>
 pub iceberg::spec::ManifestFile::added_rows_count: core::option::Option<u64>
