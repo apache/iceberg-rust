@@ -2326,6 +2326,7 @@ pub fn iceberg::spec::Manifest::into_parts(self) -> (alloc::vec::Vec<iceberg::sp
 pub fn iceberg::spec::Manifest::metadata(&self) -> &iceberg::spec::ManifestMetadata
 pub fn iceberg::spec::Manifest::new(metadata: iceberg::spec::ManifestMetadata, entries: alloc::vec::Vec<iceberg::spec::ManifestEntry>) -> Self
 pub fn iceberg::spec::Manifest::parse_avro(bs: &[u8]) -> iceberg::Result<Self>
+pub fn iceberg::spec::Manifest::read_entries(source: impl std::io::Read, f: impl core::ops::function::FnMut(iceberg::spec::ManifestEntry) -> iceberg::Result<()>) -> iceberg::Result<iceberg::spec::ManifestMetadata>
 impl core::clone::Clone for iceberg::spec::Manifest
 pub fn iceberg::spec::Manifest::clone(&self) -> iceberg::spec::Manifest
 impl core::cmp::Eq for iceberg::spec::Manifest

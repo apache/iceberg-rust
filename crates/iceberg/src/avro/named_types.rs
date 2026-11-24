@@ -25,7 +25,7 @@
 //! decodes the same bytes as the definition it refers to.
 
 use std::collections::HashMap;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
 use apache_avro::Schema as AvroSchema;
 use apache_avro::reader::datum::GenericDatumReader;
@@ -46,6 +46,40 @@ const SCHEMA_KEY: &str = "avro.schema";
 /// definition differs from the first one, which leaves the file ambiguous.
 pub(crate) fn define_named_types_once(bs: &[u8]) -> Result<Option<(Vec<u8>, Vec<String>)>> {
     rewrite_schema(bs, reference_repeated_definitions)
+}
+
+/// Reads an Avro object container file's magic and metadata from `source` and returns
+/// their bytes, the part of the header [`define_named_types_once`] rewrites. The sync
+/// marker after them is left in `source`.
+pub(crate) fn read_header_metadata(source: &mut impl Read) -> Result<Vec<u8>> {
+    struct Recorded<'a, R> {
+        source: &'a mut R,
+        bytes: Vec<u8>,
+    }
+    impl<R: Read> Read for Recorded<'_, R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.source.read(buf)?;
+            self.bytes.extend_from_slice(&buf[..n]);
+            Ok(n)
+        }
+    }
+    let mut recorded = Recorded {
+        source,
+        bytes: Vec::new(),
+    };
+    let mut magic = [0u8; MAGIC.len()];
+    recorded.read_exact(&mut magic)?;
+    if magic != MAGIC {
+        return Err(invalid_data!("Not an Avro object container file"));
+    }
+    let metadata_schema = AvroSchema::Map(MapSchema {
+        types: Box::new(AvroSchema::Bytes),
+        attributes: Default::default(),
+    });
+    GenericDatumReader::builder(&metadata_schema)
+        .build()?
+        .read_value(&mut recorded)?;
+    Ok(recorded.bytes)
 }
 
 /// Rewrites the schema in the header of an Avro object container file with
