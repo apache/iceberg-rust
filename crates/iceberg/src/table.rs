@@ -45,6 +45,7 @@ pub struct TableBuilder {
     disable_cache: bool,
     cache_size_bytes: Option<u64>,
     runtime: Option<Runtime>,
+    metrics_reporter: Option<Arc<dyn MetricsReporter>>,
 }
 
 impl TableBuilder {
@@ -59,7 +60,14 @@ impl TableBuilder {
             disable_cache: false,
             cache_size_bytes: None,
             runtime: None,
+            metrics_reporter: None,
         }
+    }
+
+    /// Sets the reporter inherited by scans of the built table.
+    pub fn metrics_reporter(mut self, reporter: Arc<dyn MetricsReporter>) -> Self {
+        self.metrics_reporter = Some(reporter);
+        self
     }
 
     /// required - sets the necessary FileIO to use for the table
@@ -134,6 +142,7 @@ impl TableBuilder {
             disable_cache,
             cache_size_bytes,
             runtime,
+            metrics_reporter,
         } = self;
 
         let Some(file_io) = file_io else {
@@ -193,7 +202,7 @@ impl TableBuilder {
             object_cache,
             runtime,
             encryption_manager,
-            metrics_reporter: None,
+            metrics_reporter,
         })
     }
 }

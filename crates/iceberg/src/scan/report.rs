@@ -178,7 +178,14 @@ mod tests {
         let filter = Reference::new("x").less_than(Datum::long(200));
         for (cow, custom_metadata) in [(false, false), (false, true), (true, false), (true, true)] {
             let (reporter, mut reports) = recording_reporter();
-            let table = fixture.table.clone().with_metrics_reporter(reporter);
+            let table = crate::table::Table::builder()
+                .identifier(fixture.table.identifier().clone())
+                .metadata(fixture.table.metadata_ref())
+                .file_io(fixture.table.file_io().clone())
+                .runtime(fixture.table.runtime().clone())
+                .metrics_reporter(reporter)
+                .build()
+                .unwrap();
             let mut builder = table
                 .scan()
                 .with_case_sensitive(false)
