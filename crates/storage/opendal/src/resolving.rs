@@ -27,7 +27,7 @@ use futures::StreamExt;
 use futures::stream::BoxStream;
 use iceberg::io::{
     FileMetadata, FileRead, FileWrite, InputFile, OutputFile, Storage, StorageConfig,
-    StorageCredential, StorageFactory,
+    StorageFactory,
 };
 use iceberg::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
@@ -220,8 +220,7 @@ impl OpenDalResolvingStorageFactory {
 impl StorageFactory for OpenDalResolvingStorageFactory {
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         Ok(Arc::new(OpenDalResolvingStorage {
-            props: config.props().clone(),
-            storage_credentials: config.storage_credentials().to_vec(),
+            config: config.clone(),
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: self.customized_credential_load.clone(),
@@ -237,11 +236,8 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
 /// the same canonical scheme, so they share a storage instance.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenDalResolvingStorage {
-    /// Configuration properties shared across all backends.
-    props: HashMap<String, String>,
-    /// Credentials that apply to locations under their prefixes.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    storage_credentials: Vec<StorageCredential>,
+    /// Configuration shared across all backends.
+    config: StorageConfig,
     /// Cache of canonical scheme to storage mappings.
     #[serde(skip, default)]
     storages: RwLock<HashMap<&'static str, Arc<PrefixedStorage>>>,
@@ -279,20 +275,22 @@ impl OpenDalResolvingStorage {
             return Ok(storage.clone());
         }
 
-        // A prefix such as `s3://bucket/` or `s3` names its scheme, and never
-        // matches the paths of another.
+        // A prefix names its scheme, and never matches the paths of another.
         let storage_credentials = self
-            .storage_credentials
+            .config
+            .storage_credentials()
             .iter()
             .filter(|credential| {
+                // A bare scheme such as `s3` is a valid prefix but not a URL.
                 let prefix = credential.prefix();
-                let name = prefix.split_once(':').map_or(prefix, |(name, _)| name);
-                parse_scheme(&name.to_ascii_lowercase()).map_or(true, |s| s == scheme)
+                extract_scheme(prefix)
+                    .or_else(|_| parse_scheme(prefix))
+                    .is_ok_and(|s| s == scheme)
             })
             .cloned()
             .collect();
         let config = StorageConfig::builder()
-            .props(self.props.clone())
+            .props(self.config.props().clone())
             .storage_credentials(storage_credentials)
             .build();
         let storage = PrefixedStorage::new(&config, |config| {
@@ -386,6 +384,9 @@ impl Storage for OpenDalResolvingStorage {
 mod tests {
     use std::time::Duration;
 
+    #[cfg(any(feature = "opendal-memory", feature = "opendal-s3"))]
+    use iceberg::io::StorageCredential;
+
     use super::*;
     use crate::OPENDAL_IO_TIMEOUT_MS;
 
@@ -419,12 +420,11 @@ mod tests {
         );
     }
 
-    /// Builds a resolving storage with empty props, suitable for `resolve()`
+    /// Builds a resolving storage with empty config, suitable for `resolve()`
     /// calls that don't actually hit any backend.
     fn empty_resolving_storage() -> OpenDalResolvingStorage {
         OpenDalResolvingStorage {
-            props: HashMap::new(),
-            storage_credentials: Vec::new(),
+            config: StorageConfig::new(),
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: None,
@@ -434,9 +434,7 @@ mod tests {
     #[test]
     fn test_resolve_propagates_io_timeout() {
         let mut storage = empty_resolving_storage();
-        storage
-            .props
-            .insert(OPENDAL_IO_TIMEOUT_MS.to_string(), "45000".to_string());
+        storage.config = StorageConfig::new().with_prop(OPENDAL_IO_TIMEOUT_MS, "45000");
 
         let paths: &[&str] = &[
             #[cfg(feature = "opendal-memory")]
@@ -468,7 +466,7 @@ mod tests {
     #[test]
     fn test_resolve_ignores_credentials_for_other_schemes() {
         let mut storage = empty_resolving_storage();
-        storage.storage_credentials = ["s3://bucket/", "s3"]
+        let storage_credentials = ["s3://bucket/", "s3", "future://bucket/"]
             .map(|prefix| {
                 StorageCredential::new(
                     prefix,
@@ -477,6 +475,9 @@ mod tests {
                 .unwrap()
             })
             .to_vec();
+        storage.config = StorageConfig::builder()
+            .storage_credentials(storage_credentials)
+            .build();
 
         assert!(storage.resolve("memory:/key").is_ok());
     }
@@ -485,13 +486,15 @@ mod tests {
     #[test]
     fn test_resolve_applies_a_scheme_name_prefix_to_its_aliases() {
         let mut storage = empty_resolving_storage();
-        storage.storage_credentials = vec![
-            StorageCredential::new(
-                "s3",
-                HashMap::from([(OPENDAL_IO_TIMEOUT_MS.to_string(), "2000".to_string())]),
-            )
-            .unwrap(),
-        ];
+        storage.config = StorageConfig::builder()
+            .storage_credentials(vec![
+                StorageCredential::new(
+                    "s3",
+                    HashMap::from([(OPENDAL_IO_TIMEOUT_MS.to_string(), "2000".to_string())]),
+                )
+                .unwrap(),
+            ])
+            .build();
 
         let timeouts = ["s3://bucket/key", "s3a://bucket/key"].map(|path| {
             storage

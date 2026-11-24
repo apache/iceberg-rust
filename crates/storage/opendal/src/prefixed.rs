@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::OpenDalStorage;
 
-/// Batch size of `delete_stream`, as in Java's `S3FileIO.deleteFiles`.
+/// Paths `delete_stream` buffers per batch: the most S3 deletes in one request.
 pub(crate) const DELETE_BATCH_SIZE: usize = 1000;
 
 /// Serves each path with the credential of its longest matching prefix, as
