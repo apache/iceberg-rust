@@ -32,9 +32,9 @@ use arrow_buffer::BooleanBuffer;
 use arrow_cast::cast::{CastOptions, cast_with_options};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
 use arrow_schema::{ArrowError, DataType};
+use arrow_select::nullif::nullif;
 use arrow_string::like::starts_with;
 use fnv::FnvHashSet;
-use parquet::schema::types::SchemaDescriptor;
 
 use crate::arrow::get_arrow_datum;
 use crate::arrow::record_batch_transformer::constants_map;
@@ -42,7 +42,7 @@ use crate::error::{Result, invalid_data};
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
 use crate::expr::visitors::expression_evaluator::ExpressionEvaluatorVisitor;
 use crate::expr::{BoundPredicate, BoundReference};
-use crate::spec::{Datum, Literal, PartitionSpec, Schema, Struct};
+use crate::spec::{Datum, Literal, NestedFieldRef, PartitionSpec, Schema, Struct, Type};
 
 /// A visitor to collect field ids from bound predicates.
 pub(super) struct CollectFieldIdVisitor {
@@ -446,8 +446,9 @@ impl BoundPredicateVisitor for MissingFieldResidualVisitor<'_> {
 
 /// A visitor to convert Iceberg bound predicates to Arrow predicates.
 pub(super) struct PredicateConverter<'a> {
-    /// The Parquet schema descriptor.
-    pub(super) parquet_schema: &'a SchemaDescriptor,
+    /// The Iceberg schema the filter batch is converted to. Predicate leaves are read from the
+    /// batch by their names in this schema.
+    pub(super) schema: &'a Schema,
     /// The map between field id and leaf column index in Parquet schema.
     pub(super) column_map: &'a HashMap<i32, usize>,
     /// The required column indices in Parquet schema for the predicates.
@@ -455,16 +456,10 @@ pub(super) struct PredicateConverter<'a> {
 }
 
 impl PredicateConverter<'_> {
-    /// When visiting a bound reference, we return the Parquet column path (root to leaf)
-    /// of the referenced leaf column, which the predicate closures use to extract the
-    /// column from the record batch. Return None if the field id is not found in the
-    /// column map, which is possible due to schema evolution.
-    ///
-    /// The path lets predicates target a primitive leaf nested inside a struct: for a
-    /// top-level column the path is a single element, and for `nested.value` it is
-    /// `["nested", "value"]`. `ProjectionMask::leaves` preserves the Parquet nesting, so
-    /// the projected record batch exposes `nested` as a `StructArray` holding the leaf,
-    /// which `project_column` descends by name.
+    /// When visiting a bound reference, we return the field names (top-level field to leaf)
+    /// that `project_column` follows to read the leaf from the filter batch, e.g.
+    /// `["nested", "value"]` for `nested.value`. Return None if the field id is not found in
+    /// the column map, which is possible due to schema evolution.
     fn bound_reference(&mut self, reference: &BoundReference) -> Result<Option<Arc<[String]>>> {
         // The leaf column's index in Parquet schema.
         if let Some(column_idx) = self.column_map.get(&reference.field().id) {
@@ -476,16 +471,15 @@ impl PredicateConverter<'_> {
                 ));
             }
 
-            let path: Arc<[String]> = self
-                .parquet_schema
-                .column(*column_idx)
-                .path()
-                .parts()
-                .iter()
-                .cloned()
-                .collect();
+            let path = field_path(self.schema.as_struct().fields(), reference.field().id)
+                .ok_or_else(|| {
+                    invalid_data!(
+                        "Leaf column `{}` in predicates cannot be found in the filter schema.",
+                        reference.field().name
+                    )
+                })?;
 
-            Ok(Some(path))
+            Ok(Some(path.into()))
         } else {
             Ok(None)
         }
@@ -517,9 +511,25 @@ fn constant_bool_array(value: bool, len: usize) -> BooleanArray {
     BooleanArray::new(buffer, None)
 }
 
-/// Walks the Parquet column path (root to leaf) through the projected record batch to
-/// reach a primitive leaf. A single-element path returns the matching top-level column;
-/// a longer path descends through `StructArray` children by name. `Schema::build_accessors`
+/// The names of the fields from a field in `fields` down to the field `field_id`, descending
+/// only through structs.
+fn field_path(fields: &[NestedFieldRef], field_id: i32) -> Option<Vec<String>> {
+    fields.iter().find_map(|field| {
+        if field.id == field_id {
+            return Some(vec![field.name.clone()]);
+        }
+        let Type::Struct(struct_type) = field.field_type.as_ref() else {
+            return None;
+        };
+        let mut path = field_path(struct_type.fields(), field_id)?;
+        path.insert(0, field.name.clone());
+        Some(path)
+    })
+}
+
+/// Walks `path` (top-level field to leaf) through the filter batch to reach a primitive
+/// leaf. A single-element path returns the matching top-level column; a longer path
+/// descends through `StructArray` children by name. `Schema::build_accessors`
 /// builds accessors only for primitives and primitives nested in structs — never for a list
 /// or map, nor for anything inside one — so `Reference::bind` rejects those predicates and
 /// every path segment before the leaf here is a struct.
@@ -551,15 +561,18 @@ fn project_column(
                     current.data_type()
                 ))
             })?;
-        // `flatten` ANDs the struct's validity into each child, so a leaf under a null
-        // parent struct reads as null (spec: a null parent implies a null leaf).
-        let (fields, mut columns) = struct_array.flatten();
-        let (idx, _) = fields.find(part).ok_or_else(|| {
+        let (idx, _) = struct_array.fields().find(part).ok_or_else(|| {
             ArrowError::SchemaError(format!(
                 "Predicate column nested field `{part}` not found in struct `{current_name}`."
             ))
         })?;
-        current = columns.swap_remove(idx);
+        let child = struct_array.column(idx);
+        // A null parent struct implies a null leaf (spec), so carry its nulls into the child.
+        // `nullif` returns a `Null`-typed child (an `unknown` field) unchanged.
+        current = match struct_array.nulls() {
+            Some(nulls) => nullif(child, &BooleanArray::new(!nulls.inner(), None))?,
+            None => Arc::clone(child),
+        };
         current_name = part;
     }
 
@@ -1072,14 +1085,14 @@ mod tests {
         message_type: &str,
         batch: RecordBatch,
     ) -> Result<BooleanArray, ArrowError> {
-        let bound = predicate.bind(schema, true).unwrap();
+        let bound = predicate.bind(schema.clone(), true).unwrap();
         let parquet_type = parse_message_type(message_type).expect("parse schema");
         let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
         let column_map = build_field_id_map(&parquet_schema).unwrap().unwrap();
         let column_indices: Vec<usize> = (0..parquet_schema.num_columns()).collect();
 
         let mut converter = PredicateConverter {
-            parquet_schema: &parquet_schema,
+            schema: &schema,
             column_map: &column_map,
             column_indices: &column_indices,
         };
@@ -1138,86 +1151,6 @@ mod tests {
         assert!(!result.is_null(2));
     }
 
-    /// A predicate on a primitive leaf inside a struct, whose Parquet column root is a group,
-    /// builds and evaluates. Regression test for issue #2432.
-    #[test]
-    fn test_predicate_on_nested_leaf_column() {
-        use arrow_array::{ArrayRef, Int32Array, StructArray};
-        use arrow_schema::Fields;
-
-        use crate::spec::Datum;
-
-        // Schema: id: int (1), person: struct<age: int (3)> (2)
-        let schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(1)
-                .with_fields(vec![
-                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
-                    NestedField::required(
-                        2,
-                        "person",
-                        Type::Struct(StructType::new(vec![
-                            NestedField::required(3, "age", Type::Primitive(PrimitiveType::Int))
-                                .into(),
-                        ])),
-                    )
-                    .into(),
-                ])
-                .build()
-                .unwrap(),
-        );
-
-        // `person.age > 25`, bound to the nested leaf (field id 3).
-        let bound = Reference::new("person.age")
-            .greater_than(Datum::int(25))
-            .bind(schema, true)
-            .unwrap();
-
-        // Arrow batch mirroring the schema: a struct column whose `age` child is the leaf.
-        let age = Arc::new(Int32Array::from(vec![30, 20, 40])) as ArrayRef;
-        let person = Arc::new(StructArray::from(vec![(
-            Arc::new(Field::new("age", DataType::Int32, false)),
-            age as ArrayRef,
-        )]));
-        let arrow_schema = Arc::new(ArrowSchema::new(vec![Field::new(
-            "person",
-            DataType::Struct(Fields::from(vec![Field::new(
-                "age",
-                DataType::Int32,
-                false,
-            )])),
-            false,
-        )]));
-        let batch = RecordBatch::try_new(arrow_schema, vec![person]).unwrap();
-
-        // Parquet schema: the nested leaf `person.age` sits under a group, so its column
-        // root is a group.
-        let message_type = "
-            message schema {
-              required group person = 2 {
-                required int32 age = 3;
-              }
-            }
-        ";
-        let parquet_type = parse_message_type(message_type).expect("parse schema");
-        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
-
-        // `person.age` is the single projected leaf (Parquet leaf index 0).
-        let column_map = HashMap::from([(3i32, 0usize)]);
-        let column_indices = vec![0usize];
-
-        let mut converter = PredicateConverter {
-            parquet_schema: &parquet_schema,
-            column_map: &column_map,
-            column_indices: &column_indices,
-        };
-
-        let mut predicate_fn = visit(&mut converter, &bound).unwrap();
-        let result = predicate_fn(batch).unwrap();
-
-        assert_eq!(result, BooleanArray::from(vec![true, false, true]));
-    }
-
     /// `IN` and `NOT IN` on a nested leaf whose literals have no Arrow conversion return a
     /// `FeatureUnsupported` error.
     #[test]
@@ -1243,15 +1176,6 @@ mod tests {
                 .build()
                 .unwrap(),
         );
-        let message_type = "
-            message schema {
-              required group person = 2 {
-                required int64 t (TIME(MICROS,false)) = 3;
-              }
-            }
-        ";
-        let parquet_type = parse_message_type(message_type).expect("parse schema");
-        let parquet_schema = SchemaDescriptor::new(Arc::new(parquet_type));
         let column_map = HashMap::from([(3i32, 0usize)]);
         let column_indices = vec![0usize];
 
@@ -1268,7 +1192,7 @@ mod tests {
         ] {
             let bound = predicate.bind(schema.clone(), true).unwrap();
             let mut converter = PredicateConverter {
-                parquet_schema: &parquet_schema,
+                schema: &schema,
                 column_map: &column_map,
                 column_indices: &column_indices,
             };

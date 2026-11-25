@@ -60,9 +60,13 @@ impl ArrowReader {
         columns.sort_unstable();
         let (column_indices, field_ids): (Vec<_>, Vec<_>) = columns.into_iter().unzip();
 
+        // Predicates are bound to the table schema, so convert the filter columns to it, as the
+        // reader does for its output (e.g. `int` read as `long`).
+        let filter_schema = filter_schema(snapshot_schema, &field_ids)?;
+
         // The converter that converts `BoundPredicates` to `ArrowPredicates`
         let mut converter = PredicateConverter {
-            parquet_schema,
+            schema: &filter_schema,
             column_map: field_id_map,
             column_indices: &column_indices,
         };
@@ -71,9 +75,6 @@ impl ArrowReader {
         // creates the projection mask for the Arrow predicates.
         let projection_mask = ProjectionMask::leaves(parquet_schema, column_indices.clone());
         let mut predicate_func = visit(&mut converter, predicates)?;
-        // Predicates are bound to the table schema, so convert the filter columns to it, as the
-        // reader does for its output (e.g. `int` read as `long`).
-        let filter_schema = filter_schema(snapshot_schema, &field_ids)?;
         let root_ids: Vec<i32> = filter_schema
             .as_struct()
             .fields()
@@ -1743,7 +1744,7 @@ mod tests {
     /// struct builds a row filter and prunes rows. Reads a real Parquet file so the projected
     /// `RecordBatch` shape (a `StructArray` holding the leaf) comes from arrow-rs, not a
     /// hand-built batch. The struct and the leaf are renamed in the Iceberg schema, so the
-    /// predicate has to resolve through the file's own column names.
+    /// predicate has to find the leaf by its table names after the filter batch is converted.
     #[tokio::test]
     async fn test_predicate_on_nested_struct_leaf_reads_real_parquet() {
         use arrow_array::StructArray;
@@ -1887,37 +1888,19 @@ mod tests {
         let tmp_dir = TempDir::new().unwrap();
         let file_path = format!("{}/1.parquet", tmp_dir.path().to_str().unwrap());
         let batch = RecordBatch::try_new(arrow_schema.clone(), columns).unwrap();
-        let props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .build();
-        let file = File::create(&file_path).unwrap();
-        let mut writer = ArrowWriter::try_new(file, arrow_schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
+        write_row_groups(&file_path, arrow_schema, vec![batch], false);
 
-        let predicate = predicate.bind(iceberg_schema.clone(), false).unwrap();
         let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
-        let task = FileScanTask::builder()
-            .with_file_size_in_bytes(std::fs::metadata(&file_path).unwrap().len())
-            .with_start(0)
-            .with_length(0)
-            .with_data_file_path(file_path)
-            .with_data_file_format(DataFileFormat::Parquet)
-            .with_schema(iceberg_schema)
-            .with_project_field_ids(vec![1])
-            .with_predicate(Some(predicate))
-            .with_case_sensitive(false)
-            .build()
-            .unwrap();
-
-        let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
-        let batches = reader
-            .read(tasks)
-            .unwrap()
-            .stream()
-            .try_collect::<Vec<RecordBatch>>()
-            .await
-            .unwrap();
+        let (batches, _) = read_once(
+            reader,
+            &file_path,
+            iceberg_schema,
+            vec![1],
+            predicate,
+            None,
+            vec![],
+        )
+        .await;
         batches
             .iter()
             .flat_map(|b| {
@@ -2189,6 +2172,118 @@ mod tests {
         assert_eq!(ids, vec![1, 4, 6]);
     }
 
+    /// A nested leaf written as `int` and read as `long` is compared after promotion, so a
+    /// literal outside the `int` range filters rows instead of failing the cast.
+    #[tokio::test]
+    async fn test_predicate_on_promoted_nested_leaf() {
+        use arrow_array::StructArray;
+        use arrow_schema::Fields;
+
+        // id: int (1), person: struct<age: long (3)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::required(
+                        2,
+                        "person",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::required(3, "age", Type::Primitive(PrimitiveType::Long))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+
+        // Written before the promotion, as person: struct<age: int (3)> (2).
+        let age_field = field_with_id("age", DataType::Int32, 3);
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            field_with_id(
+                "person",
+                DataType::Struct(Fields::from(vec![age_field.clone()])),
+                2,
+            ),
+        ]));
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let person = Arc::new(StructArray::from(vec![(
+            Arc::new(age_field),
+            Arc::new(Int32Array::from(vec![30, 20, 40])) as ArrayRef,
+        )])) as ArrayRef;
+
+        // The upper bound is out of `int` range.
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, person],
+            Reference::new("person.age")
+                .greater_than(Datum::long(25))
+                .and(Reference::new("person.age").less_than(Datum::long(3_000_000_000_i64))),
+        )
+        .await;
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    /// An `unknown` leaf reads as an Arrow `Null` column, null in every row. A predicate on it
+    /// still evaluates when its parent struct has null rows.
+    #[tokio::test]
+    async fn test_predicate_on_unknown_leaf_under_null_parent_struct() {
+        use arrow_array::{NullArray, StructArray};
+        use arrow_buffer::NullBuffer;
+        use arrow_schema::Fields;
+
+        // id: int (1), s: optional struct<u: unknown (3)> (2)
+        let iceberg_schema = Arc::new(
+            Schema::builder()
+                .with_schema_id(1)
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(3, "u", Type::Primitive(PrimitiveType::Unknown))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let u_field = field_with_id("u", DataType::Null, 3).with_nullable(true);
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            field_with_id("id", DataType::Int32, 1),
+            field_with_id(
+                "s",
+                DataType::Struct(Fields::from(vec![u_field.clone()])),
+                2,
+            )
+            .with_nullable(true),
+        ]));
+
+        // Row id=2 has a null `s`.
+        let id = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
+        let s = Arc::new(StructArray::new(
+            Fields::from(vec![u_field]),
+            vec![Arc::new(NullArray::new(3)) as ArrayRef],
+            Some(NullBuffer::from(vec![true, false, true])),
+        )) as ArrayRef;
+
+        let ids = ids_kept_by_predicate(
+            iceberg_schema,
+            arrow_schema,
+            vec![id, s],
+            Reference::new("s.u").is_null(),
+        )
+        .await;
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
     /// Fields inside a list or map have no accessor (see `Schema::build_accessors`), so a
     /// predicate referencing one fails at bind time and never reaches the row-filter
     /// conversion. This pins the assumption `project_column` relies on: every predicate
@@ -2240,21 +2335,24 @@ mod tests {
                 .unwrap(),
         );
 
-        // A field inside the list element and a map value: both must fail to bind.
-        assert!(
-            Reference::new("tags.element.name")
-                .is_null()
-                .bind(schema.clone(), false)
-                .is_err(),
-            "a predicate on a field inside a list must not bind"
-        );
-        assert!(
-            Reference::new("props.value")
-                .greater_than(Datum::int(0))
-                .bind(schema.clone(), false)
-                .is_err(),
-            "a predicate on a map value must not bind"
-        );
+        // A field inside the list element and a map value: both names resolve, and binding
+        // fails on the missing accessor.
+        for (predicate, name) in [
+            (
+                Reference::new("tags.element.name").is_null(),
+                "tags.element.name",
+            ),
+            (
+                Reference::new("props.value").greater_than(Datum::int(0)),
+                "props.value",
+            ),
+        ] {
+            let err = predicate.bind(schema.clone(), false).unwrap_err();
+            assert_eq!(
+                err.message(),
+                format!("Accessor for Field {name} not found")
+            );
+        }
     }
 
     // Bloom filter pushdown: on-vs-off equivalence

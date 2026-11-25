@@ -3195,7 +3195,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "applying a nested equality delete on scan needs #2906"]
     async fn test_scan_applies_nested_equality_delete_in_struct_layout() {
         let tmp_dir = TempDir::new().unwrap();
         let path = format!("{}/eq-delete.parquet", tmp_dir.path().to_str().unwrap());
@@ -3206,7 +3205,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "applying a nested equality delete on scan needs #2906"]
     async fn test_scan_applies_nested_equality_delete_from_equality_delete_writer() {
         let tmp_dir = TempDir::new().unwrap();
         let schema = nested_eq_delete_table_schema();
@@ -3218,10 +3216,10 @@ mod tests {
     }
 
     /// A delete row with a null `s` on `s.g`, which is required inside the optional `s`, deletes
-    /// the data rows whose `s` is null. Until #3306, the `s.g IS NOT NULL` it loads as binds to
-    /// `AlwaysTrue` (#3292) and the scan keeps those rows.
+    /// the data rows whose `s` is null. Until #3292 is fixed, the `s.g IS NOT NULL` it loads as
+    /// binds to `AlwaysTrue` and the scan keeps those rows.
     #[tokio::test]
-    #[ignore = "needs #2906 to apply nested equality deletes and #3306 to bind IS NULL on s.g"]
+    #[ignore = "needs #3292 to bind IS NOT NULL on s.g"]
     async fn test_scan_applies_null_parent_equality_delete_on_required_nested_field() {
         let tmp_dir = TempDir::new().unwrap();
         let path = format!("{}/eq-delete.parquet", tmp_dir.path().to_str().unwrap());
