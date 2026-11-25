@@ -1142,7 +1142,8 @@ impl FromStr for Transform {
             )
         }
 
-        let t = match s {
+        let lower = s.to_ascii_lowercase();
+        let t = match lower.as_str() {
             "identity" => Transform::Identity,
             "year" => Transform::Year,
             "month" => Transform::Month,
@@ -1378,6 +1379,19 @@ mod tests {
                 Transform::Unknown,
                 "expected {input:?} to parse as Transform::Unknown"
             );
+        }
+    }
+
+    #[test]
+    fn test_parse_known_transforms_case_insensitively() {
+        for (input, expected) in [
+            ("Identity", Transform::Identity),
+            ("YEAR", Transform::Year),
+            ("Void", Transform::Void),
+            ("Bucket[16]", Transform::Bucket(16)),
+            ("TRUNCATE[4]", Transform::Truncate(4)),
+        ] {
+            assert_eq!(input.parse::<Transform>().unwrap(), expected, "{input:?}");
         }
     }
 

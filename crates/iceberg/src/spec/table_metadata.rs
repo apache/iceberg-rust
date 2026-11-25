@@ -497,6 +497,7 @@ impl TableMetadata {
         file_io: &FileIO,
         metadata_location: &MetadataLocation,
     ) -> Result<()> {
+        self.validate_no_unknown_transforms()?;
         let json_data = serde_json::to_vec(self)?;
 
         // Check if compression codec from properties matches the one in metadata_location
@@ -525,6 +526,45 @@ impl TableMetadata {
             .new_output(metadata_location.to_string())?
             .write(data_to_write.into())
             .await
+    }
+
+    /// Transform names that iceberg-rust does not recognize are not kept, so
+    /// writing them back would replace each of them with `unknown`.
+    fn validate_no_unknown_transforms(&self) -> Result<()> {
+        for spec in self.partition_specs_iter() {
+            if let Some(field) = spec
+                .fields()
+                .iter()
+                .find(|field| field.transform == Transform::Unknown)
+            {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Cannot write table metadata: partition field '{}' in spec {} uses an unknown transform whose name would be lost",
+                        field.name,
+                        spec.spec_id()
+                    ),
+                ));
+            }
+        }
+
+        for sort_order in self.sort_orders_iter() {
+            if let Some(field) = sort_order
+                .fields
+                .iter()
+                .find(|field| field.transform == Transform::Unknown)
+            {
+                return Err(Error::new(
+                    ErrorKind::FeatureUnsupported,
+                    format!(
+                        "Cannot write table metadata: sort field with source id {} in sort order {} uses an unknown transform whose name would be lost",
+                        field.source_id, sort_order.order_id
+                    ),
+                ));
+            }
+        }
+
+        Ok(())
     }
 
     /// Normalize this partition spec.
@@ -3808,6 +3848,63 @@ mod tests {
 
         // Verify the metadata matches
         assert_eq!(read_metadata, original_metadata);
+    }
+
+    /// Loads `TableMetadataV2Valid.json` with `from` replaced by `to`, then commits a
+    /// property change on it, as any metadata update would.
+    fn updated_metadata_with_transform(from: &str, to: &str, location: &str) -> TableMetadata {
+        let path = "testdata/table_metadata/TableMetadataV2Valid.json";
+        let json = fs::read_to_string(path).unwrap();
+        assert_eq!(json.matches(from).count(), 1);
+        let metadata: TableMetadata = serde_json::from_str(&json.replace(from, to)).unwrap();
+
+        TableMetadataBuilder::new_from_metadata(metadata, None)
+            .set_location(location.to_string())
+            .set_properties(HashMap::from([("key".to_string(), "value".to_string())]))
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata
+    }
+
+    async fn assert_write_rejected(metadata: TableMetadata, expected_message: &str) {
+        let file_io = FileIO::new_with_fs();
+        let metadata_location = MetadataLocation::try_new_with_metadata(&metadata).unwrap();
+
+        let err = metadata
+            .write_to(&file_io, &metadata_location)
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported);
+        assert!(err.message().contains(expected_message), "{err}");
+        assert!(fs::metadata(metadata_location.to_string()).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_write_rejects_unknown_partition_transform() {
+        let temp_dir = TempDir::new().unwrap();
+        let metadata = updated_metadata_with_transform(
+            r#""name": "x",
+          "transform": "identity""#,
+            r#""name": "x_zorder",
+          "transform": "zorder""#,
+            temp_dir.path().to_str().unwrap(),
+        );
+
+        assert_write_rejected(metadata, "partition field 'x_zorder' in spec 0").await;
+    }
+
+    #[tokio::test]
+    async fn test_write_rejects_unknown_sort_transform() {
+        let temp_dir = TempDir::new().unwrap();
+        let metadata = updated_metadata_with_transform(
+            r#""bucket[4]""#,
+            r#""bucketv2[4]""#,
+            temp_dir.path().to_str().unwrap(),
+        );
+
+        assert_write_rejected(metadata, "sort field with source id 3 in sort order 3").await;
     }
 
     #[tokio::test]
