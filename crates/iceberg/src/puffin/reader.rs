@@ -20,6 +20,7 @@ use tokio::sync::OnceCell;
 use super::validate_puffin_compression;
 use crate::Result;
 use crate::encryption::EncryptedInputFile;
+use crate::error::invalid_data;
 use crate::io::{FileRead, InputFile};
 use crate::puffin::blob::Blob;
 use crate::puffin::metadata::{BlobMetadata, FileMetadata};
@@ -70,7 +71,24 @@ impl PuffinReader {
         validate_puffin_compression(blob_metadata.compression_codec)?;
 
         let start = blob_metadata.offset;
-        let end = start + blob_metadata.length;
+        let min_offset = u64::from(FileMetadata::MAGIC_LENGTH);
+        if start < min_offset {
+            return Err(invalid_data!(
+                "Blob offset {start} overlaps the {min_offset}-byte Puffin header magic"
+            ));
+        }
+        let end = start.checked_add(blob_metadata.length).ok_or_else(|| {
+            invalid_data!(
+                "Blob range overflows u64: offset {start}, length {}",
+                blob_metadata.length
+            )
+        })?;
+        if end > self.file_length {
+            return Err(invalid_data!(
+                "Blob range {start}..{end} exceeds file length {}",
+                self.file_length
+            ));
+        }
         let bytes = self.file_read.read(start..end).await?;
         let data = blob_metadata.compression_codec.decompress(bytes.to_vec())?;
 
@@ -177,5 +195,73 @@ mod tests {
             err.to_string()
                 .contains("is not supported for Puffin files")
         );
+    }
+
+    fn test_blob_metadata(offset: u64, length: u64) -> BlobMetadata {
+        BlobMetadata {
+            r#type: "test-type".to_string(),
+            fields: vec![1],
+            snapshot_id: 1,
+            sequence_number: 1,
+            offset,
+            length,
+            compression_codec: CompressionCodec::None,
+            properties: HashMap::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_blob_offset_length_overflow_returns_error() {
+        let reader = PuffinReader::new(java_uncompressed_metric_input_file())
+            .await
+            .unwrap();
+
+        for (offset, length) in [(u64::MAX, 1), (10, u64::MAX - 5)] {
+            let err = reader
+                .blob(&test_blob_metadata(offset, length))
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(
+                err.message().contains("overflows"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_blob_range_exceeding_file_length_returns_error() {
+        let input_file = java_uncompressed_metric_input_file();
+        let file_length = input_file.metadata().await.unwrap().size;
+        let reader = PuffinReader::new(input_file).await.unwrap();
+
+        let err = reader
+            .blob(&test_blob_metadata(4, file_length))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(
+            err.message().contains("exceeds file length"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_blob_offset_overlapping_header_magic_returns_error() {
+        let reader = PuffinReader::new(java_uncompressed_metric_input_file())
+            .await
+            .unwrap();
+
+        for (offset, length) in [(0, 4), (3, 1)] {
+            let err = reader
+                .blob(&test_blob_metadata(offset, length))
+                .await
+                .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid);
+            assert!(
+                err.message().contains("header magic"),
+                "unexpected error: {err}"
+            );
+        }
     }
 }
