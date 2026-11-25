@@ -3023,6 +3023,7 @@ pub fn iceberg::spec::TableMetadata::partition_statistics_for_snapshot(&self, sn
 pub fn iceberg::spec::TableMetadata::partition_statistics_iter(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &iceberg::spec::PartitionStatisticsFile>
 pub fn iceberg::spec::TableMetadata::properties(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>
 pub async fn iceberg::spec::TableMetadata::read_from(file_io: &iceberg::io::FileIO, metadata_location: impl core::convert::AsRef<str>) -> iceberg::Result<iceberg::spec::TableMetadata>
+pub fn iceberg::spec::TableMetadata::refs(&self) -> &std::collections::hash::map::HashMap<alloc::string::String, iceberg::spec::SnapshotReference>
 pub fn iceberg::spec::TableMetadata::schema_by_id(&self, schema_id: iceberg::spec::SchemaId) -> core::option::Option<&iceberg::spec::SchemaRef>
 pub fn iceberg::spec::TableMetadata::schemas_iter(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &iceberg::spec::SchemaRef>
 pub fn iceberg::spec::TableMetadata::snapshot_by_id(&self, snapshot_id: i64) -> core::option::Option<&iceberg::spec::SnapshotRef>
