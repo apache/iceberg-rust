@@ -335,7 +335,13 @@ impl PlanContext {
         // TODO: Ideally we could ditch this intermediate Vec as we return an iterator.
         let mut filtered_mfcs = vec![];
         for manifest_file in manifest_files {
-            let tx = if manifest_file.content == ManifestContentType::Deletes {
+            let is_delete = manifest_file.content == ManifestContentType::Deletes;
+            let has_live_files =
+                manifest_file.has_added_files() || manifest_file.has_existing_files();
+            if is_delete && !has_live_files {
+                continue;
+            }
+            let tx = if is_delete {
                 delete_file_tx.clone()
             } else {
                 tx_data.clone()
@@ -362,6 +368,9 @@ impl PlanContext {
                 None
             };
 
+            if !has_live_files {
+                continue;
+            }
             let mfc = self.create_manifest_file_context(
                 manifest_file,
                 partition_bound_predicate,

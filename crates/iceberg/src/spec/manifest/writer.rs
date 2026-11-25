@@ -30,8 +30,8 @@ use crate::avro::new_writer;
 use crate::encryption::EncryptedOutputFile;
 use crate::error::{Result, invalid_data};
 use crate::io::{FileMetadata, FileWrite, OutputFile};
-use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2};
-use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2};
+use crate::spec::manifest::_serde::{ManifestEntryV1, ManifestEntryV2, ManifestEntryV3};
+use crate::spec::manifest::{manifest_schema_v1, manifest_schema_v2, manifest_schema_v3};
 use crate::spec::{
     DataContentType, DataFile, FieldSummary, ManifestEntry, ManifestFile, ManifestMetadata,
     ManifestStatus, PrimitiveLiteral, SchemaRef, StructType, Type,
@@ -430,8 +430,8 @@ impl ManifestWriter {
         let table_schema = &self.metadata.schema;
         let avro_schema = match self.metadata.format_version {
             FormatVersion::V1 => manifest_schema_v1(&partition_type)?,
-            // Manifest schema did not change between V2 and V3
-            FormatVersion::V2 | FormatVersion::V3 => manifest_schema_v2(&partition_type)?,
+            FormatVersion::V2 => manifest_schema_v2(&partition_type)?,
+            FormatVersion::V3 => manifest_schema_v3(&partition_type)?,
         };
         let mut avro_writer = new_writer(&avro_schema, Vec::new())?;
         avro_writer.add_user_metadata(
@@ -473,9 +473,12 @@ impl ManifestWriter {
                     to_value(ManifestEntryV1::try_from(entry, &partition_struct_type)?)?
                         .resolve(&avro_schema)?
                 }
-                // Manifest entry format did not change between V2 and V3
-                FormatVersion::V2 | FormatVersion::V3 => {
+                FormatVersion::V2 => {
                     to_value(ManifestEntryV2::try_from(entry, &partition_struct_type)?)?
+                        .resolve(&avro_schema)?
+                }
+                FormatVersion::V3 => {
+                    to_value(ManifestEntryV3::try_from(entry, &partition_struct_type)?)?
                         .resolve(&avro_schema)?
                 }
             };
@@ -578,14 +581,17 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
+    use apache_avro::Reader as AvroReader;
+    use apache_avro::schema::Schema as AvroSchema;
     use tempfile::TempDir;
 
     use super::*;
     use crate::avro::{assert_deflate_codec, define_named_types_repeatedly};
     use crate::io::FileIO;
+    use crate::runtime::Runtime;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, Manifest, NestedField,
-        PrimitiveType, Schema, Struct, Transform, Type,
+        DataContentType, DataFileBuilder, DataFileFormat, Literal, Manifest, ManifestReader,
+        NestedField, PrimitiveType, Schema, Struct, Transform, Type,
     };
 
     #[tokio::test]
@@ -922,5 +928,227 @@ mod tests {
             Literal::fixed(vec![5, 6, 7, 8]),
         ])
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_write_manifest_with_repeated_uuid_partition_type() {
+        roundtrip_two_partition_fields_of_type(Type::Primitive(PrimitiveType::Uuid), [
+            Literal::uuid(uuid::Uuid::from_u128(
+                0xf79c3e09_677c_4bbd_a479_3f349cb785e7,
+            )),
+            Literal::uuid(uuid::Uuid::from_u128(
+                0x0b1c4f2a_9d3e_4a5b_8c6d_7e8f9a0b1c2d,
+            )),
+        ])
+        .await;
+    }
+
+    /// Writes a manifest with one added data file and returns the field names
+    /// of its Avro `data_file` record.
+    async fn written_data_file_field_names(
+        build: fn(ManifestWriterBuilder) -> ManifestWriter,
+    ) -> Vec<String> {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .build()
+            .unwrap();
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("manifest.avro");
+        let output_file = FileIO::new_with_fs()
+            .new_output(path.to_str().unwrap())
+            .unwrap();
+        let mut writer = build(ManifestWriterBuilder::new(
+            output_file,
+            Some(1),
+            schema,
+            partition_spec,
+        ));
+        writer
+            .add_file(
+                DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path("s3://bucket/table/data/a.parquet".to_string())
+                    .file_format(DataFileFormat::Parquet)
+                    .partition(Struct::empty())
+                    .record_count(1)
+                    .file_size_in_bytes(1)
+                    .partition_spec_id(0)
+                    .build()
+                    .unwrap(),
+                1,
+            )
+            .unwrap();
+        writer.write_manifest_file().await.unwrap();
+        let bs = fs::read(&path).unwrap();
+
+        let reader = AvroReader::new(&bs[..]).unwrap();
+        let AvroSchema::Record(entry) = reader.writer_schema() else {
+            panic!("manifest_entry is not a record");
+        };
+        let data_file_schema = &entry.fields[entry.lookup["data_file"]].schema;
+        let AvroSchema::Record(data_file) = data_file_schema else {
+            panic!("data_file is not a record");
+        };
+        data_file.fields.iter().map(|f| f.name.clone()).collect()
+    }
+
+    #[tokio::test]
+    async fn test_v1_manifest_data_file_schema() {
+        let field_names = written_data_file_field_names(ManifestWriterBuilder::build_v1).await;
+        assert_eq!(field_names, vec![
+            "file_path",
+            "file_format",
+            "partition",
+            "record_count",
+            "file_size_in_bytes",
+            "block_size_in_bytes",
+            "column_sizes",
+            "value_counts",
+            "null_value_counts",
+            "nan_value_counts",
+            "lower_bounds",
+            "upper_bounds",
+            "key_metadata",
+            "split_offsets",
+            "sort_order_id",
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_v2_manifest_data_file_schema() {
+        let field_names = written_data_file_field_names(ManifestWriterBuilder::build_v2_data).await;
+        assert_eq!(field_names, vec![
+            "content",
+            "file_path",
+            "file_format",
+            "partition",
+            "record_count",
+            "file_size_in_bytes",
+            "column_sizes",
+            "value_counts",
+            "null_value_counts",
+            "nan_value_counts",
+            "lower_bounds",
+            "upper_bounds",
+            "key_metadata",
+            "split_offsets",
+            "equality_ids",
+            "sort_order_id",
+            "referenced_data_file",
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_v3_manifest_data_file_schema() {
+        let field_names = written_data_file_field_names(ManifestWriterBuilder::build_v3_data).await;
+        assert_eq!(field_names, vec![
+            "content",
+            "file_path",
+            "file_format",
+            "partition",
+            "record_count",
+            "file_size_in_bytes",
+            "column_sizes",
+            "value_counts",
+            "null_value_counts",
+            "nan_value_counts",
+            "lower_bounds",
+            "upper_bounds",
+            "key_metadata",
+            "split_offsets",
+            "equality_ids",
+            "sort_order_id",
+            "first_row_id",
+            "referenced_data_file",
+            "content_offset",
+            "content_size_in_bytes",
+        ]);
+    }
+
+    #[tokio::test]
+    async fn test_manifest_roundtrips_uuid_and_fixed_partitions_in_each_format_version() {
+        let uuid = uuid::Uuid::from_u128(0xf79c3e09_677c_4bbd_a479_3f349cb785e7);
+        let cases = [
+            (
+                Type::Primitive(PrimitiveType::Uuid),
+                Some(Literal::uuid(uuid)),
+            ),
+            (Type::Primitive(PrimitiveType::Uuid), None),
+            (
+                Type::Primitive(PrimitiveType::Fixed(16)),
+                Some(Literal::fixed(uuid.into_bytes())),
+            ),
+        ];
+        let builds: [fn(ManifestWriterBuilder) -> ManifestWriter; 3] = [
+            ManifestWriterBuilder::build_v1,
+            ManifestWriterBuilder::build_v2_data,
+            ManifestWriterBuilder::build_v3_data,
+        ];
+
+        for build in builds {
+            for (partition_field_type, value) in cases.clone() {
+                let data_file = DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path("memory:///table/data/00000.parquet".to_string())
+                    .file_format(DataFileFormat::Parquet)
+                    .partition(Struct::from_iter([value]))
+                    .record_count(123)
+                    .file_size_in_bytes(456)
+                    .build()
+                    .unwrap();
+
+                let output =
+                    write_and_read_data_file(build, partition_field_type, data_file.clone()).await;
+
+                assert_eq!(output, data_file);
+            }
+        }
+    }
+
+    /// Writes `data_file` to a manifest partitioned by identity on one column
+    /// of `partition_field_type`, then reads it back with [`ManifestReader`].
+    async fn write_and_read_data_file(
+        build: fn(ManifestWriterBuilder) -> ManifestWriter,
+        partition_field_type: Type,
+        data_file: DataFile,
+    ) -> DataFile {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "id", partition_field_type).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = PartitionSpec::builder(schema.clone())
+            .with_spec_id(0)
+            .add_partition_field("id", "id", Transform::Identity)
+            .unwrap()
+            .build()
+            .unwrap();
+        let io = FileIO::new_with_memory();
+        let mut writer = build(ManifestWriterBuilder::new(
+            io.new_output("memory:///table/metadata/manifest.avro")
+                .unwrap(),
+            Some(1),
+            schema,
+            partition_spec,
+        ));
+        writer.add_file(data_file, 1).unwrap();
+        let manifest_file = writer.write_manifest_file().await.unwrap();
+
+        let manifest = ManifestReader::new(io, Runtime::current())
+            .read(&manifest_file)
+            .await
+            .unwrap();
+        manifest.entries()[0].data_file().clone()
     }
 }

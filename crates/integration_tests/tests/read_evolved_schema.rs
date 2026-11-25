@@ -48,7 +48,7 @@ async fn test_evolved_schema() {
     let predicate = Reference::new("language").not_equal_to(Datum::string("Rust"));
 
     let scan = table.scan().with_filter(predicate).build();
-    let batch_stream = scan.unwrap().to_arrow().await.unwrap();
+    let batch_stream = scan.unwrap().to_arrow(Default::default()).await.unwrap();
 
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
 
@@ -84,7 +84,7 @@ async fn test_evolved_schema() {
     //     Reference::new("foo").not_equal_to(Datum::int(22));
 
     let scan = table.scan().build();
-    let batch_stream = scan.unwrap().to_arrow().await.unwrap();
+    let batch_stream = scan.unwrap().to_arrow(Default::default()).await.unwrap();
 
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
     let mut actual = vec![
@@ -114,7 +114,7 @@ async fn test_evolved_schema() {
         .await
         .unwrap();
     let scan = table.scan().build();
-    let batch_stream = scan.unwrap().to_arrow().await.unwrap();
+    let batch_stream = scan.unwrap().to_arrow(Default::default()).await.unwrap();
 
     let batches: Vec<_> = batch_stream.try_collect().await.unwrap();
     let mut actual_foo = vec![

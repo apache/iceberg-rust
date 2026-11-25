@@ -99,8 +99,9 @@ fn check_convert_with_avro(expected_literal: Literal, expected_type: &Type) {
     let encoded = writer.into_inner().unwrap();
 
     let reader = apache_avro::Reader::new(&*encoded).unwrap();
-    for record in reader {
-        let result = apache_avro::from_value::<RawLiteral>(&record.unwrap()).unwrap();
+    for maybe_record in reader {
+        let record = maybe_record.unwrap();
+        let result = apache_avro::from_value::<RawLiteral>(&record).unwrap();
         let desered_literal = result.try_into(&struct_type).unwrap().unwrap();
         assert_eq!(desered_literal, struct_literal);
     }
@@ -723,20 +724,54 @@ fn check_raw_literal_bytes_serde_via_avro(
     expected_literal: Literal,
     expected_type: &Type,
 ) {
-    use apache_avro::types::Value;
-
     // Create an Avro bytes value and deserialize it through the RawLiteral path
     let avro_value = Value::Bytes(input_bytes);
-    let raw_literal: RawLiteral = apache_avro::from_value(&avro_value).unwrap();
+    check_raw_literal_serde_via_avro(avro_value, expected_literal, expected_type);
+}
+
+fn check_raw_literal_bytes_error_via_avro(input_bytes: Vec<u8>, expected_type: &Type) {
+    let avro_value = Value::Bytes(input_bytes);
+    check_raw_literal_error_via_avro(avro_value, expected_type);
+}
+
+fn check_raw_literal_string_serde_via_avro(
+    input: &str,
+    expected_literal: Literal,
+    expected_type: &Type,
+) {
+    let avro_value = Value::String(input.to_string());
+    check_raw_literal_serde_via_avro(avro_value, expected_literal, expected_type);
+}
+
+fn check_raw_literal_string_error_via_avro(input: &str, expected_type: &Type) {
+    let avro_value = Value::String(input.to_string());
+    check_raw_literal_error_via_avro(avro_value, expected_type);
+}
+
+fn check_raw_literal_serde_via_avro(input: Value, expected_literal: Literal, expected_type: &Type) {
+    let raw_literal: RawLiteral = apache_avro::from_value(&input).unwrap();
     let result = raw_literal.try_into(expected_type).unwrap();
     assert_eq!(result, Some(expected_literal));
 }
 
-fn check_raw_literal_bytes_error_via_avro(input_bytes: Vec<u8>, expected_type: &Type) {
-    use apache_avro::types::Value;
+fn check_raw_literal_error_via_avro(input: Value, expected_type: &Type) {
+    let raw_literal: RawLiteral = apache_avro::from_value(&input).unwrap();
+    let result = raw_literal.try_into(expected_type);
+    assert!(result.is_err(), "Expected error but got: {result:?}");
+}
 
-    let avro_value = Value::Bytes(input_bytes);
-    let raw_literal: RawLiteral = apache_avro::from_value(&avro_value).unwrap();
+fn check_raw_literal_serde_via_json(
+    input: JsonValue,
+    expected_literal: Literal,
+    expected_type: &Type,
+) {
+    let raw_literal: RawLiteral = serde_json::from_value(input).unwrap();
+    let result = raw_literal.try_into(expected_type).unwrap();
+    assert_eq!(result, Some(expected_literal));
+}
+
+fn check_raw_literal_error_via_json(input: JsonValue, expected_type: &Type) {
+    let raw_literal: RawLiteral = serde_json::from_value(input).unwrap();
     let result = raw_literal.try_into(expected_type);
     assert!(result.is_err(), "Expected error but got: {result:?}");
 }
@@ -808,6 +843,75 @@ fn test_raw_literal_bytes_uuid_correct_length() {
 fn test_raw_literal_bytes_uuid_wrong_length() {
     let bytes = vec![1u8, 2u8, 3u8]; // 3 bytes, but UUID needs 16
     check_raw_literal_bytes_error_via_avro(bytes, &Primitive(PrimitiveType::Uuid));
+}
+
+#[test]
+fn test_raw_literal_string_should_accept_hyphenated_uuid_as_value() {
+    let s = "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8";
+    check_raw_literal_string_serde_via_avro(
+        s,
+        Literal::uuid(Uuid::parse_str(s).unwrap()),
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
+
+#[test]
+fn test_raw_literal_string_should_reject_a_uuid_with_an_invalid_string() {
+    check_raw_literal_string_error_via_avro("not-a-uuid", &Primitive(PrimitiveType::Uuid));
+}
+
+#[test]
+fn test_raw_literal_string_should_reject_non_hyphenated_uuids() {
+    check_raw_literal_string_error_via_avro(
+        "a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8",
+        &Primitive(PrimitiveType::Uuid),
+    );
+
+    check_raw_literal_string_error_via_avro(
+        "urn:uuid:A1A2A3A4-B1B2-C1C2-D1D2-D3D4D5D6D7D8",
+        &Primitive(PrimitiveType::Uuid),
+    );
+
+    check_raw_literal_string_error_via_avro(
+        "{a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8}",
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
+
+#[test]
+fn test_raw_literal_json_string_should_accept_hyphenated_uuid_as_value() {
+    let s = "a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8";
+    check_raw_literal_serde_via_json(
+        serde_json::json!(s),
+        Literal::uuid(Uuid::parse_str(s).unwrap()),
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
+
+#[test]
+fn test_raw_literal_json_string_should_reject_a_uuid_with_an_invalid_string() {
+    check_raw_literal_error_via_json(
+        serde_json::json!("not-a-uuid"),
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
+
+#[test]
+fn test_raw_literal_json_string_should_reject_non_hyphenated_uuids() {
+    check_raw_literal_error_via_json(
+        serde_json::json!("a1a2a3a4b1b2c1c2d1d2d3d4d5d6d7d8"),
+        &Primitive(PrimitiveType::Uuid),
+    );
+
+    check_raw_literal_error_via_json(
+        serde_json::json!("urn:uuid:A1A2A3A4-B1B2-C1C2-D1D2-D3D4D5D6D7D8"),
+        &Primitive(PrimitiveType::Uuid),
+    );
+
+    check_raw_literal_error_via_json(
+        serde_json::json!("{a1a2a3a4-b1b2-c1c2-d1d2-d3d4d5d6d7d8}"),
+        &Primitive(PrimitiveType::Uuid),
+    );
 }
 
 #[test]
@@ -1133,6 +1237,25 @@ fn avro_convert_test_string() {
     check_convert_with_avro(
         Literal::Primitive(PrimitiveLiteral::String("iceberg".to_string())),
         &Primitive(PrimitiveType::String),
+    );
+}
+
+#[test]
+fn test_avro_should_convert_uuid_as_uuid() {
+    check_convert_with_avro(
+        Literal::uuid(Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap()),
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
+
+#[test]
+fn test_avro_should_serialize_uuid_as_original_uuid() {
+    let uuid = Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap();
+
+    check_serialize_avro(
+        Literal::uuid(uuid),
+        &Primitive(PrimitiveType::Uuid),
+        Value::Uuid(uuid),
     );
 }
 
@@ -1509,6 +1632,192 @@ fn test_datum_ser_deser() {
     test_fn(datum);
     let datum = Datum::fixed(vec![1, 2, 3, 4, 5]);
     test_fn(datum);
+}
+
+#[test]
+fn test_datum_uuid_converts_to_avro_fixed_value() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+    let output = to_value(Datum::uuid(uuid_value)).unwrap();
+
+    let expected = Value::Record(vec![
+        ("type".to_string(), Value::String("uuid".to_string())),
+        (
+            "literal".to_string(),
+            Value::Fixed(16, uuid_value.as_bytes().to_vec()),
+        ),
+    ]);
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_avro_uuid_value_converts_to_datum_uuid() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+    let avro_value = Value::Record(vec![
+        ("type".to_string(), Value::String("uuid".to_string())),
+        ("literal".to_string(), Value::Uuid(uuid_value)),
+    ]);
+
+    let output = apache_avro::from_value::<Datum>(&avro_value).unwrap();
+
+    assert_eq!(output, Datum::uuid(uuid_value));
+}
+
+#[test]
+fn test_avro_fixed_16_bytes_value_converts_to_datum_uuid() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+    let avro_value = Value::Record(vec![
+        ("type".to_string(), Value::String("uuid".to_string())),
+        (
+            "literal".to_string(),
+            Value::Fixed(16, uuid_value.as_bytes().to_vec()),
+        ),
+    ]);
+
+    let output = apache_avro::from_value::<Datum>(&avro_value).unwrap();
+
+    assert_eq!(output, Datum::uuid(uuid_value));
+}
+
+#[test]
+fn test_datum_16_fixed_converts_to_avro_fixed_16_bytes_value() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+    let output = to_value(Datum::fixed(bytes)).unwrap();
+
+    let expected = Value::Record(vec![
+        ("type".to_string(), Value::String("fixed[16]".to_string())),
+        ("literal".to_string(), Value::Fixed(16, bytes.to_vec())),
+    ]);
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_avro_fixed_value_converts_to_datum_16_fixed() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+    let avro_value = Value::Record(vec![
+        ("type".to_string(), Value::String("fixed[16]".to_string())),
+        ("literal".to_string(), Value::Fixed(16, bytes.to_vec())),
+    ]);
+
+    let output = apache_avro::from_value::<Datum>(&avro_value).unwrap();
+
+    assert_eq!(output, Datum::fixed(bytes));
+}
+
+#[test]
+fn test_datum_16_binary_converts_to_avro_bytes_value() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+
+    let output = to_value(Datum::binary(bytes)).unwrap();
+
+    let expected = Value::Record(vec![
+        ("type".to_string(), Value::String("binary".to_string())),
+        ("literal".to_string(), Value::Bytes(bytes.to_vec())),
+    ]);
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_avro_bytes_value_converts_to_datum_16_binary() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+    let avro_value = Value::Record(vec![
+        ("type".to_string(), Value::String("binary".to_string())),
+        ("literal".to_string(), Value::Bytes(bytes.to_vec())),
+    ]);
+
+    let output = apache_avro::from_value::<Datum>(&avro_value).unwrap();
+
+    assert_eq!(output, Datum::binary(bytes));
+}
+
+#[test]
+fn test_datum_uuid_converts_to_json_byte_array() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+
+    let output = serde_json::to_value(Datum::uuid(uuid_value)).unwrap();
+
+    let expected = serde_json::json!({
+        "type": "uuid",
+        "literal": uuid_value.as_bytes().to_vec(),
+    });
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_json_hyphenated_uuid_string_converts_to_datum_uuid() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+    let json_value = serde_json::json!({
+        "type": "uuid",
+        "literal": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    });
+
+    let output = serde_json::from_value::<Datum>(json_value).unwrap();
+
+    assert_eq!(output, Datum::uuid(uuid_value));
+}
+
+#[test]
+fn test_json_16_byte_array_converts_to_datum_uuid() {
+    let uuid_value = Uuid::from_u128(0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee);
+    let json_value = serde_json::json!({
+        "type": "uuid",
+        "literal": uuid_value.as_bytes().to_vec(),
+    });
+
+    let output = serde_json::from_value::<Datum>(json_value).unwrap();
+
+    assert_eq!(output, Datum::uuid(uuid_value));
+}
+
+#[test]
+fn test_datum_16_fixed_converts_to_json_byte_array() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+
+    let output = serde_json::to_value(Datum::fixed(bytes)).unwrap();
+
+    let expected = serde_json::json!({
+        "type": "fixed[16]",
+        "literal": bytes.to_vec(),
+    });
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_json_16_byte_array_converts_to_datum_16_fixed() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+    let json_value = serde_json::json!({
+        "type": "fixed[16]",
+        "literal": bytes.to_vec(),
+    });
+
+    let output = serde_json::from_value::<Datum>(json_value).unwrap();
+
+    assert_eq!(output, Datum::fixed(bytes));
+}
+
+#[test]
+fn test_datum_16_binary_converts_to_json_byte_array() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+
+    let output = serde_json::to_value(Datum::binary(bytes)).unwrap();
+
+    let expected = serde_json::json!({
+        "type": "binary",
+        "literal": bytes.to_vec(),
+    });
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn test_json_16_byte_array_converts_to_datum_16_binary() {
+    let bytes = 0xaaaaaaaa_bbbb_cccc_dddd_eeeeeeeeeeee_u128.to_be_bytes();
+    let json_value = serde_json::json!({
+        "type": "binary",
+        "literal": bytes.to_vec(),
+    });
+
+    let output = serde_json::from_value::<Datum>(json_value).unwrap();
+
+    assert_eq!(output, Datum::binary(bytes));
 }
 
 #[test]
