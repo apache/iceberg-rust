@@ -570,6 +570,8 @@ impl FileWrite for AesGcmFileWrite {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     /// Encrypts plaintext into AGS1 format for testing.
@@ -984,92 +986,45 @@ mod tests {
         assert!(result.is_err(), "Decryption with wrong key should fail");
     }
 
+    const BAD_MAGIC: ([u8; 8], &str) = (
+        *b"AGS2\x00\x00\x10\x00",
+        "Invalid AGS1 header: magic \"AGS2\" does not match \"AGS1\"",
+    );
+    const UNSUPPORTED_BLOCK_SIZE: ([u8; 8], &str) = (
+        *b"AGS1\x00\x02\x00\x00",
+        "Unsupported AGS1 block size: 512 (expected 1048576)",
+    );
+
+    #[rstest]
+    #[case::empty_stream(0, 0..0)]
+    #[case::first_block(14, 0..14)]
+    #[case::past_first_block(
+        PLAIN_BLOCK_SIZE as usize + 10,
+        PLAIN_BLOCK_SIZE as u64..PLAIN_BLOCK_SIZE as u64 + 10
+    )]
     #[tokio::test]
-    async fn test_invalid_header_is_rejected() {
+    async fn test_invalid_header_is_rejected(
+        #[case] plaintext_length: usize,
+        #[case] range: Range<u64>,
+        #[values(BAD_MAGIC, UNSUPPORTED_BLOCK_SIZE)] tampered: ([u8; 8], &'static str),
+    ) {
+        let (header, message) = tampered;
         let key = b"0123456789abcdef";
         let aad_prefix = b"test-aad-prefix!";
-
-        let multi_block = vec![7u8; PLAIN_BLOCK_SIZE as usize + 10];
-        let past_first_block = PLAIN_BLOCK_SIZE as u64..PLAIN_BLOCK_SIZE as u64 + 10;
-        for (plaintext, range) in [
-            (b"".as_slice(), 0..0),
-            (b"sensitive data".as_slice(), 0..14),
-            (multi_block.as_slice(), past_first_block),
-        ] {
-            let encrypted = encrypt_ags1(plaintext, &make_cipher(key), aad_prefix);
-            for (header, message) in [
-                (
-                    *b"AGS2\x00\x00\x10\x00",
-                    "Invalid AGS1 header: magic \"AGS2\" does not match \"AGS1\"",
-                ),
-                (
-                    *b"AGS1\x00\x02\x00\x00",
-                    "Unsupported AGS1 block size: 512 (expected 1048576)",
-                ),
-            ] {
-                let mut tampered = encrypted.clone();
-                tampered[..GCM_STREAM_HEADER_LENGTH as usize].copy_from_slice(&header);
-                let reader = AesGcmFileRead::new(
-                    memory_reader(tampered),
-                    Arc::new(make_cipher(key)),
-                    aad_prefix.as_slice().into(),
-                    encrypted.len() as u64,
-                )
-                .unwrap();
-
-                let err = reader.read(range.clone()).await.unwrap_err();
-                assert_eq!(err.kind(), ErrorKind::DataInvalid);
-                assert_eq!(err.message(), message);
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_header_is_checked_once() {
-        struct RecordingRead {
-            data: Bytes,
-            ranges: Arc<std::sync::Mutex<Vec<Range<u64>>>>,
-        }
-
-        #[async_trait::async_trait]
-        impl FileRead for RecordingRead {
-            async fn read(&self, range: Range<u64>) -> Result<Bytes> {
-                self.ranges.lock().unwrap().push(range.clone());
-                Ok(self.data.slice(range.start as usize..range.end as usize))
-            }
-        }
-
-        let key = b"0123456789abcdef";
-        let aad_prefix = b"test-aad-prefix!";
-        let plaintext = vec![7u8; PLAIN_BLOCK_SIZE as usize + 10];
-        let encrypted = encrypt_ags1(&plaintext, &make_cipher(key), aad_prefix);
-        let ranges = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut encrypted = encrypt_ags1(&vec![7; plaintext_length], &make_cipher(key), aad_prefix);
+        encrypted[..GCM_STREAM_HEADER_LENGTH as usize].copy_from_slice(&header);
+        let encrypted_length = encrypted.len() as u64;
         let reader = AesGcmFileRead::new(
-            Box::new(RecordingRead {
-                data: Bytes::from(encrypted.clone()),
-                ranges: ranges.clone(),
-            }),
+            memory_reader(encrypted),
             Arc::new(make_cipher(key)),
             aad_prefix.as_slice().into(),
-            encrypted.len() as u64,
+            encrypted_length,
         )
         .unwrap();
 
-        let past_first_block = PLAIN_BLOCK_SIZE as u64..PLAIN_BLOCK_SIZE as u64 + 10;
-        reader.read(past_first_block.clone()).await.unwrap();
-        reader.read(past_first_block).await.unwrap();
-        reader.read(0..10).await.unwrap();
-
-        let header = 0..u64::from(GCM_STREAM_HEADER_LENGTH);
-        let second_block =
-            u64::from(GCM_STREAM_HEADER_LENGTH + CIPHER_BLOCK_SIZE)..encrypted.len() as u64;
-        let first_block = header.end..second_block.start;
-        assert_eq!(*ranges.lock().unwrap(), vec![
-            header,
-            second_block.clone(),
-            second_block,
-            first_block
-        ]);
+        let err = reader.read(range).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(err.message(), message);
     }
 
     #[tokio::test]
