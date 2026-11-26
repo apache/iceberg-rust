@@ -151,8 +151,7 @@ impl HttpClient {
         auth_session: &dyn AuthSession,
         mut request: HttpRequest,
     ) -> Result<HttpResponse> {
-        // `request()` already set the configured headers; applying them again
-        // here would override what authentication set, such as a signature.
+        // Configured headers are set in `request()`, before authentication.
         auth_session.authenticate(&mut request).await?;
         let request = request.into_inner();
         HttpResponse::read(self.client.execute(request).await?).await

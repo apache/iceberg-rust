@@ -219,7 +219,7 @@ fn attach_bearer(req: &mut HttpRequest, token: &SensitiveString) -> Result<()> {
             .with_source(e)
         })?;
     value.set_sensitive(true);
-    // As in Java's `OAuth2Util.AuthSession`, a configured header wins.
+    // A configured header wins, as in Java.
     if !req.headers().contains_key(http::header::AUTHORIZATION) {
         req.headers_mut().insert(http::header::AUTHORIZATION, value);
     }

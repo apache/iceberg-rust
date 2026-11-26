@@ -328,8 +328,7 @@ impl RestCatalogConfig {
             .unwrap_or_else(|| self.default_client.get_or_init(Client::default).clone())
     }
 
-    /// Builds the shared default client without following redirects. An
-    /// injected client is left as is.
+    /// Builds the default client without redirects; an injected one is kept.
     pub(crate) fn disable_client_redirects(&self) {
         if self.client.is_none() {
             self.default_client.get_or_init(|| {
@@ -2034,7 +2033,7 @@ mod tests {
         )
     }
 
-    /// `pairs` plus the signing region [`test_sigv4_manager`] needs.
+    /// `pairs` plus a signing region.
     #[cfg(feature = "sigv4")]
     fn sigv4_test_props<const N: usize>(pairs: [(&str, &str); N]) -> HashMap<String, String> {
         pairs

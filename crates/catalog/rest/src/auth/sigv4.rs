@@ -375,15 +375,14 @@ fn relocate_conflicting(
 pub const REST_CATALOG_PROP_SIGNING_REGION: &str = "rest.signing-region";
 /// SigV4 signing name; defaults to [`SIGNING_NAME_DEFAULT`].
 pub const REST_CATALOG_PROP_SIGNING_NAME: &str = "rest.signing-name";
-/// Static SigV4 access key id. Unlike Java, there is no fallback to the AWS
-/// default provider chain.
+/// Static SigV4 access key id.
 pub const REST_CATALOG_PROP_ACCESS_KEY_ID: &str = "rest.access-key-id";
-/// Static SigV4 secret access key (see [`REST_CATALOG_PROP_ACCESS_KEY_ID`]).
+/// Static SigV4 secret access key.
 pub const REST_CATALOG_PROP_SECRET_ACCESS_KEY: &str = "rest.secret-access-key";
-/// Static SigV4 session token (see [`REST_CATALOG_PROP_ACCESS_KEY_ID`]).
+/// Static SigV4 session token.
 pub const REST_CATALOG_PROP_SESSION_TOKEN: &str = "rest.session-token";
 
-/// Java's `REST_SIGNING_NAME_DEFAULT`: API Gateway and Lambda.
+/// Default SigV4 signing name.
 pub const SIGNING_NAME_DEFAULT: &str = "execute-api";
 
 const CREDENTIAL_PROPERTIES: [&str; 3] = [
@@ -399,9 +398,8 @@ const SIGNING_PROPERTIES: [&str; 5] = [
     REST_CATALOG_PROP_SESSION_TOKEN,
 ];
 
-/// `signer` and `credentials` with the non-blank signing properties `overrides`
-/// on top. Overriding any credential replaces `credentials` whole: fields from
-/// two sources never form a valid credential.
+/// Applies `overrides` to `signer` and `credentials`. Any credential override
+/// replaces the credentials as a set.
 fn overlay_signing(
     signer: &SigV4Signer,
     credentials: &SharedCredentialsProvider,
@@ -435,8 +433,7 @@ fn non_blank(props: &HashMap<String, String>, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Builds a signer and credentials from Java's `AwsProperties` names, with
-/// `provider` for credentials the properties lack.
+/// Builds a signer and credentials from `props`, falling back to `provider`.
 fn from_props(
     props: &HashMap<String, String>,
     provider: Option<&SharedCredentialsProvider>,
@@ -462,8 +459,8 @@ fn from_props(
     ))
 }
 
-/// Static credentials from `props`, else `provider`. Like Java, branches on
-/// the access key id alone; a lone secret is an error.
+/// Static credentials from `props`, else `provider`. A secret without a key id
+/// is an error.
 fn credentials_from_props(
     props: &HashMap<String, String>,
     provider: Option<&SharedCredentialsProvider>,
@@ -503,20 +500,18 @@ fn credentials_from_props(
     )))
 }
 
-/// [`AuthManager`] that SigV4-signs every request on top of a delegate, as
-/// Java's `RESTSigV4AuthManager` does. The delegate's `Authorization` moves to
-/// `Original-Authorization` and is signed over.
+/// [`AuthManager`] that SigV4-signs requests on top of a delegate, like Java's
+/// `RESTSigV4AuthManager`. The delegate's `Authorization` is sent as
+/// `Original-Authorization`.
 ///
-/// Each session signs with the region, signing name and static credentials in
-/// the properties it is given, and with the provider from
-/// [`Self::with_credentials_provider`] when they hold no credentials. Creating
-/// a session fails with [`ErrorKind::DataInvalid`] without a region or
-/// credentials, or with half a static credential pair. A contextual session
-/// takes the non-blank values its context sets over its catalog session's, and
-/// context credentials replace the catalog's as a set.
+/// Sessions read the signing region, signing name and static credentials from
+/// their properties, falling back to [`Self::with_credentials_provider`] for
+/// credentials, and fail with [`ErrorKind::DataInvalid`] without either.
+/// Context values override the catalog session's; context credentials replace
+/// its credentials as a set.
 ///
-/// Configure signing-relevant headers as `header.*` properties: an injected
-/// client's default headers are added after signing.
+/// Set signing-relevant headers as `header.*` properties: an injected client's
+/// default headers are added after signing.
 #[derive(Debug)]
 pub struct SigV4AuthManager {
     delegate: Arc<dyn AuthManager>,
@@ -525,8 +520,7 @@ pub struct SigV4AuthManager {
 }
 
 impl SigV4AuthManager {
-    /// Signs on top of `delegate` with [`PayloadHashMode::IcebergRest`] and
-    /// static credentials from properties.
+    /// Signs on top of `delegate`, with [`PayloadHashMode::IcebergRest`].
     pub fn new(delegate: Arc<dyn AuthManager>) -> Self {
         Self {
             delegate,
@@ -541,13 +535,12 @@ impl SigV4AuthManager {
         self
     }
 
-    /// Encodes the payload hash as `mode` describes.
+    /// Sets how the payload hash is encoded.
     pub fn with_payload_hash_mode(mut self, mode: PayloadHashMode) -> Self {
         self.mode = mode;
         self
     }
 
-    /// The signer and credentials for `props`.
     fn signing_for(
         &self,
         props: &HashMap<String, String>,
@@ -556,8 +549,7 @@ impl SigV4AuthManager {
     }
 }
 
-/// The non-blank signing values a context sets, its credentials over its
-/// properties.
+/// Non-blank signing values from a context; credentials win over properties.
 fn context_signing_overrides(context: &SessionContext) -> HashMap<String, String> {
     SIGNING_PROPERTIES
         .iter()
@@ -650,7 +642,7 @@ struct SigV4Session {
 impl AuthSession for SigV4Session {
     async fn authenticate(&self, request: &mut crate::HttpRequest) -> Result<()> {
         self.delegate.authenticate(request).await?;
-        // Per request, as in Java; caching is the provider's job.
+        // Resolved per request; caching is the provider's job.
         let credentials = self.credentials.provide_credentials().await.map_err(|e| {
             Error::new(ErrorKind::Unexpected, "failed to resolve AWS credentials").with_source(e)
         })?;

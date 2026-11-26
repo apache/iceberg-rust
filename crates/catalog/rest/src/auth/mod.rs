@@ -116,9 +116,8 @@ pub trait AuthManager: Debug + Send + Sync {
         Ok(catalog_session)
     }
 
-    /// Whether this manager's sessions sign requests. The catalog's default
-    /// client then does not follow redirects, which would replay a signature
-    /// at another URL.
+    /// Whether sessions sign requests, so the default client must not follow
+    /// redirects.
     fn signs_requests(&self) -> bool {
         false
     }
@@ -126,7 +125,7 @@ pub trait AuthManager: Debug + Send + Sync {
 
 /// Authenticates outgoing REST catalog requests.
 ///
-/// [`Any`] lets [`AuthManager::contextual_session`] downcast the catalog session.
+/// [`Any`] lets a manager downcast its own sessions.
 #[async_trait]
 pub trait AuthSession: Any + Debug + Send + Sync {
     /// Applies authentication to the request (adds headers, signs, ...).
