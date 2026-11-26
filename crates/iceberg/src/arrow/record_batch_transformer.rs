@@ -211,6 +211,8 @@ pub(crate) enum PromotePlan {
     Struct {
         fields: Fields,
         children: Vec<ChildPlan>,
+        /// A child, or a struct below it, is `Unshred` and reads the null rows of this struct.
+        unshred_below: bool,
     },
     List {
         field: FieldRef,
@@ -299,10 +301,25 @@ impl PromotePlan {
                 Ok(ChildPlan::FromSource { source_index, plan })
             })
             .collect::<Result<_>>()?;
-        Ok(PromotePlan::Struct {
-            fields: target_fields.clone(),
+        Ok(Self::new_struct(target_fields.clone(), children))
+    }
+
+    fn new_struct(fields: Fields, children: Vec<ChildPlan>) -> Self {
+        let unshred_below = children.iter().any(|child| {
+            matches!(child, ChildPlan::FromSource {
+                plan: PromotePlan::Unshred { .. }
+                    | PromotePlan::Struct {
+                        unshred_below: true,
+                        ..
+                    },
+                ..
+            })
+        });
+        PromotePlan::Struct {
+            fields,
             children,
-        })
+            unshred_below,
+        }
     }
 
     fn build(
@@ -316,15 +333,15 @@ impl PromotePlan {
         }
         match (source, target) {
             (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
-                Ok(PromotePlan::Struct {
-                    children: Self::build_struct_children(
+                Ok(Self::new_struct(
+                    target_fields.clone(),
+                    Self::build_struct_children(
                         source_fields,
                         target_fields,
                         snapshot_schema,
                         constant_fields,
                     )?,
-                    fields: target_fields.clone(),
-                })
+                ))
             }
             // A file's Arrow schema hint can give either offset width; `apply` converts it.
             // Table schemas are always `List` (`ToArrowSchemaConverter::list`).
@@ -480,15 +497,24 @@ impl PromotePlan {
         match self {
             PromotePlan::PassThrough => Ok(Arc::clone(array)),
             PromotePlan::Cast(target_type) => Ok(cast(array.as_ref(), target_type)?),
-            PromotePlan::Struct { fields, children } => {
+            PromotePlan::Struct {
+                fields,
+                children,
+                unshred_below,
+            } => {
                 let source = array
                     .as_struct_opt()
                     .ok_or_else(|| promote_err(array, "struct"))?;
+                let child_nulls = if *unshred_below {
+                    arrow_buffer::NullBuffer::union(parent_nulls, source.nulls())
+                } else {
+                    None
+                };
                 Ok(Arc::new(Self::apply_struct(
                     source,
                     fields,
                     children,
-                    parent_nulls,
+                    child_nulls.as_ref(),
                 )?))
             }
             PromotePlan::List { field, element } => {
@@ -515,7 +541,12 @@ impl PromotePlan {
                 let source = array
                     .as_map_opt()
                     .ok_or_else(|| promote_err(array, "map"))?;
-                let entries = Self::apply_struct(source.entries(), entry_fields, entries, None)?;
+                let entries = Self::apply_struct(
+                    source.entries(),
+                    entry_fields,
+                    entries,
+                    source.entries().nulls(),
+                )?;
                 Ok(Arc::new(MapArray::try_new(
                     field.clone(),
                     source.offsets().clone(),
@@ -543,8 +574,9 @@ impl PromotePlan {
                     .and_then(|variant| unshred_variant(&variant))
                     .map_err(|e| {
                         invalid_data!(
-                            "Variant column `{name}` (field id {field_id}) has invalid shredded data: {e}"
+                            "Variant column `{name}` (field id {field_id}) has invalid shredded data"
                         )
+                        .with_source(e)
                     })?;
                 let (fields, columns, _) = cast(&ArrayRef::from(unshredded), target_type)?
                     .as_struct()
@@ -555,18 +587,18 @@ impl PromotePlan {
         }
     }
 
+    /// `child_nulls` are the null rows of `source` and of the structs above it.
     fn apply_struct(
         source: &StructArray,
         fields: &Fields,
         children: &[ChildPlan],
-        parent_nulls: Option<&arrow_buffer::NullBuffer>,
+        child_nulls: Option<&arrow_buffer::NullBuffer>,
     ) -> Result<StructArray> {
-        let nulls = arrow_buffer::NullBuffer::union(parent_nulls, source.nulls());
         let columns = children
             .iter()
             .map(|child| match child {
                 ChildPlan::FromSource { source_index, plan } => {
-                    plan.apply_under(source.column(*source_index), nulls.as_ref())
+                    plan.apply_under(source.column(*source_index), child_nulls)
                 }
                 ChildPlan::Add { target_type, value } => {
                     RecordBatchTransformer::create_column(target_type, value.as_ref(), source.len())
@@ -2004,11 +2036,14 @@ mod test {
         .unwrap()
         .apply(&source)
         .unwrap_err();
+        let source = std::error::Error::source(&err)
+            .and_then(|e| e.downcast_ref::<arrow_schema::ArrowError>());
         assert_eq!(
-            (err.kind(), err.message()),
+            (err.kind(), err.message(), source.is_some()),
             (
                 ErrorKind::DataInvalid,
-                "Variant column `v` (field id 2) has invalid shredded data: Invalid argument error: Invalid shredded variant: both value and typed_value are non-null"
+                "Variant column `v` (field id 2) has invalid shredded data",
+                true
             )
         );
     }

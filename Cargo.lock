@@ -4534,7 +4534,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dadd517b64ce5b9a7160130f6ded8eed81a20ef8cec8e3e2458165f5195701ec"
 dependencies = [
  "arrow-schema",
- "base64 0.23.0",
+ "base64 0.23.1",
  "chrono",
  "parquet-variant",
  "ryu",
