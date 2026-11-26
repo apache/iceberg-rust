@@ -129,6 +129,7 @@ impl StatelessAction for ReplaceTableAction {
     async fn commit(&self, table: &Table) -> Result<ActionCommit> {
         let original = self.table.metadata();
         let base = table.metadata();
+        // Catches the table being dropped and recreated under the same name.
         if base.uuid() != original.uuid() {
             return Err(Error::new(
                 ErrorKind::CatalogCommitConflicts,
@@ -137,6 +138,7 @@ impl StatelessAction for ReplaceTableAction {
             .with_context("expected", original.uuid())
             .with_context("found", base.uuid()));
         }
+        // Catches a concurrent change assigning ids the staged replacement may also have used.
         if (base.last_column_id(), base.last_partition_id())
             != (original.last_column_id(), original.last_partition_id())
         {
@@ -148,8 +150,8 @@ impl StatelessAction for ReplaceTableAction {
 
         let staged = self.replace(original)?;
         let sets = |matches: fn(&TableUpdate) -> bool| staged.changes.iter().any(matches);
-        // Staged changes are relative to the original table, so reset what may have moved since.
         let mut updates = Vec::new();
+        // main didn't exist when staged, but a concurrent commit such as a first append created it.
         if base.snapshot_for_ref(MAIN_BRANCH).is_some()
             && !sets(
                 |update| matches!(update, TableUpdate::RemoveSnapshotRef { ref_name } if ref_name == MAIN_BRANCH),
@@ -159,16 +161,19 @@ impl StatelessAction for ReplaceTableAction {
                 ref_name: MAIN_BRANCH.to_string(),
             });
         }
+        // The staged schema was already current, but a concurrent change may have switched it.
         if !sets(|update| matches!(update, TableUpdate::SetCurrentSchema { .. })) {
             updates.push(TableUpdate::SetCurrentSchema {
                 schema_id: staged.metadata.current_schema_id(),
             });
         }
+        // The staged spec was already the default, but a concurrent change may have switched it.
         if !sets(|update| matches!(update, TableUpdate::SetDefaultSpec { .. })) {
             updates.push(TableUpdate::SetDefaultSpec {
                 spec_id: staged.metadata.default_partition_spec_id(),
             });
         }
+        // The staged sort order was already default, but a concurrent change may have switched it.
         if !sets(|update| matches!(update, TableUpdate::SetDefaultSortOrder { .. })) {
             updates.push(TableUpdate::SetDefaultSortOrder {
                 sort_order_id: staged.metadata.default_sort_order_id(),
@@ -180,6 +185,7 @@ impl StatelessAction for ReplaceTableAction {
         for update in &updates {
             builder = update.clone().apply(builder)?;
         }
+        // Catches the catalog renumbering the staged spec or sort order the data files reference.
         if layout(&staged.metadata) != layout(&builder.build()?.metadata) {
             return Err(Error::new(
                 ErrorKind::CatalogCommitConflicts,
