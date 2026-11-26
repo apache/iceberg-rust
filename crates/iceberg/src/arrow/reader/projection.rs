@@ -653,7 +653,6 @@ fn presence_leaves(
         leaf_field_ids,
         index: 0,
         chosen: Vec::new(),
-        pick: true,
     };
     for field in fields {
         walk.visit(field, 0, false);
@@ -666,8 +665,6 @@ struct PresenceWalk<'a> {
     leaf_field_ids: &'a HashSet<i32>,
     index: usize,
     chosen: Vec<PresenceCandidate>,
-    /// Whether a struct here may record a presence leaf.
-    pick: bool,
 }
 
 impl PresenceWalk<'_> {
@@ -703,8 +700,7 @@ impl PresenceWalk<'_> {
                         best = Some(c);
                     }
                 }
-                if self.pick
-                    && !covered
+                if !covered
                     && projected
                     && let Some(leaf) = best.take()
                 {
@@ -715,16 +711,9 @@ impl PresenceWalk<'_> {
             }
             DataType::List(child)
             | DataType::LargeList(child)
-            | DataType::FixedSizeList(child, _) => self.visit(child, repetition + 1, in_projected),
-            // Iceberg can't convert a list view. Count its leaves, but don't record
-            // presence under it, including for a projected struct nested inside.
-            DataType::ListView(child) | DataType::LargeListView(child) => {
-                let pick = self.pick;
-                self.pick = false;
-                let (covered, _) = self.visit(child, repetition + 1, false);
-                self.pick = pick;
-                (covered, None)
-            }
+            | DataType::FixedSizeList(child, _)
+            | DataType::ListView(child)
+            | DataType::LargeListView(child) => self.visit(child, repetition + 1, in_projected),
             DataType::Map(entries, _) => {
                 let start = self.index;
                 // Parquet drops a map unless both its key and value are read, so the
@@ -769,7 +758,8 @@ impl PresenceWalk<'_> {
 /// The key difference is Java operates on Parquet MessageType, while we operate on Arrow Schema.
 ///
 /// # Arguments
-/// * `arrow_schema` - Arrow schema from Parquet file (without field IDs)
+/// * `arrow_schema` - Arrow schema from Parquet file (without field IDs), after
+///   `coerce_list_layouts` has rewritten its list views
 /// * `name_mapping` - Name mapping from table metadata (TableProperties.DEFAULT_NAME_MAPPING)
 ///
 /// # Returns
@@ -860,9 +850,13 @@ fn apply_name_mapping_to_field(
                 .with_data_type(DataType::Struct(entry_fields));
             DataType::Map(Arc::new(entries), *sorted)
         }
-        // `Fields::filter_leaves` treats `ListView` and `LargeListView` as leaves, so projection
-        // cannot select their elements even with IDs.
-        other => other.clone(),
+        other => {
+            debug_assert!(
+                !matches!(other, DataType::ListView(_) | DataType::LargeListView(_)),
+                "`coerce_list_layouts` must rewrite list views before name mapping"
+            );
+            other.clone()
+        }
     };
 
     let mut field = field.as_ref().clone().with_data_type(data_type);
@@ -894,34 +888,35 @@ fn try_map_fields(
     Ok(Fields::from(mapped))
 }
 
-/// Rewrites file-side Arrow `FixedSizeList` hints to `List`.
+/// Rewrites file-side Arrow `FixedSizeList` and `ListView` hints to `List`, and `LargeListView`
+/// hints to `LargeList`.
 ///
-/// parquet-rs picks its list reader from the embedded Arrow schema. Iceberg has no
-/// fixed-size list type, so a `FixedSizeList` hint must become `List` before the stream
-/// reader is built. That uses the 3-level LIST reader (no null-row padding, no
-/// `PromotePlan` conversion). Returns `None` when the schema has no `FixedSizeList`.
-/// Unchanged fields are shared; nothing is allocated before the first change.
+/// parquet-rs picks its list reader from the embedded Arrow schema. Iceberg has no fixed-size
+/// list or list view type, `RecordBatchTransformer` converts neither, and
+/// `arrow_schema_to_schema` can't convert a list view, so the hint must say `List` before the
+/// stream reader is built. That uses the 3-level LIST reader (no null-row padding). Returns
+/// `None` when there is nothing to rewrite. Unchanged fields are shared, and nothing is
+/// allocated before the first change.
 ///
-/// Same placement as the list-view rewrite in #3467: call this before name mapping and
-/// fallback IDs so nested IDs land on the rewritten `List` fields.
-pub(super) fn coerce_fixed_size_lists(arrow_schema: &ArrowSchemaRef) -> Option<ArrowSchemaRef> {
-    let fields = coerce_fixed_size_lists_in_fields(arrow_schema.fields())?;
+/// Call this before name mapping and fallback IDs so nested IDs land on the rewritten fields.
+pub(super) fn coerce_list_layouts(arrow_schema: &ArrowSchemaRef) -> Option<ArrowSchemaRef> {
+    let fields = coerce_list_layouts_in_fields(arrow_schema.fields())?;
     Some(Arc::new(ArrowSchema::new_with_metadata(
         fields,
         arrow_schema.metadata().clone(),
     )))
 }
 
-/// Returns `fields` with `FixedSizeList` rewritten to `List`, or `None` if they have none.
-fn coerce_fixed_size_lists_in_fields(fields: &Fields) -> Option<Fields> {
+/// Returns `fields` with fixed-size lists and list views rewritten, or `None` if they have none.
+fn coerce_list_layouts_in_fields(fields: &Fields) -> Option<Fields> {
     let (index, first) = fields
         .iter()
         .enumerate()
-        .find_map(|(index, field)| Some((index, coerce_fixed_size_lists_in_field(field)?)))?;
+        .find_map(|(index, field)| Some((index, coerce_list_layouts_in_field(field)?)))?;
     let rest = fields
         .iter()
         .skip(index + 1)
-        .map(coerce_fixed_size_lists_or_share);
+        .map(coerce_list_layouts_or_share);
     Some(
         fields
             .iter()
@@ -933,27 +928,28 @@ fn coerce_fixed_size_lists_in_fields(fields: &Fields) -> Option<Fields> {
     )
 }
 
-/// Returns `field` with `FixedSizeList` rewritten to `List`, or `None` if it has none.
-fn coerce_fixed_size_lists_in_field(field: &FieldRef) -> Option<FieldRef> {
+/// Returns `field` with fixed-size lists and list views rewritten, or `None` if it has none.
+fn coerce_list_layouts_in_field(field: &FieldRef) -> Option<FieldRef> {
     let data_type = match field.data_type() {
-        DataType::FixedSizeList(element, _) => {
-            DataType::List(coerce_fixed_size_lists_or_share(element))
+        DataType::FixedSizeList(element, _) | DataType::ListView(element) => {
+            DataType::List(coerce_list_layouts_or_share(element))
         }
-        DataType::List(element) => DataType::List(coerce_fixed_size_lists_in_field(element)?),
-        DataType::LargeList(element) => {
-            DataType::LargeList(coerce_fixed_size_lists_in_field(element)?)
+        DataType::LargeListView(element) => {
+            DataType::LargeList(coerce_list_layouts_or_share(element))
         }
+        DataType::List(element) => DataType::List(coerce_list_layouts_in_field(element)?),
+        DataType::LargeList(element) => DataType::LargeList(coerce_list_layouts_in_field(element)?),
         DataType::Map(entries, sorted) => {
-            DataType::Map(coerce_fixed_size_lists_in_field(entries)?, *sorted)
+            DataType::Map(coerce_list_layouts_in_field(entries)?, *sorted)
         }
-        DataType::Struct(fields) => DataType::Struct(coerce_fixed_size_lists_in_fields(fields)?),
+        DataType::Struct(fields) => DataType::Struct(coerce_list_layouts_in_fields(fields)?),
         _ => return None,
     };
     Some(Arc::new(field.as_ref().clone().with_data_type(data_type)))
 }
 
-fn coerce_fixed_size_lists_or_share(field: &FieldRef) -> FieldRef {
-    coerce_fixed_size_lists_in_field(field).unwrap_or_else(|| Arc::clone(field))
+fn coerce_list_layouts_or_share(field: &FieldRef) -> FieldRef {
+    coerce_list_layouts_in_field(field).unwrap_or_else(|| Arc::clone(field))
 }
 
 /// Add position-based fallback field IDs to Arrow schema for Parquet files lacking them.
@@ -4203,9 +4199,7 @@ message schema {
         );
 
         // An `ARROW:schema` hint can wrap leaves in types `filter_leaves` descends through,
-        // so the walk must count leaves the same way. Presence for `h` is `d` at leaf 4.
-        // For `g`, `lv2` would win on order, but Iceberg can't convert a list view, so
-        // presence is `e` at leaf 6.
+        // so the walk must count leaves the same way. Presence for `h` is `d` at leaf 6.
         let parquet_schema = SchemaDescriptor::new(Arc::new(
             parse_message_type(
                 "
@@ -4227,19 +4221,15 @@ message schema {
                         }
                       }
                     }
+                    optional group llv (LIST) = 40 {
+                      repeated group list {
+                        optional group element = 41 {
+                          optional int32 p = 42;
+                          optional int32 q = 43;
+                        }
+                      }
+                    }
                     optional binary d (STRING) = 29;
-                  }
-                  optional group g = 31 {
-                    optional group lv2 (LIST) = 32 {
-                      repeated group list {
-                        optional int32 element = 33;
-                      }
-                    }
-                    optional group e (LIST) = 34 {
-                      repeated group list {
-                        optional int32 element = 35;
-                      }
-                    }
                   }
                 }
                 ",
@@ -4260,30 +4250,20 @@ message schema {
             ];
             Arc::new(field("element", DataType::Struct(pq.into()), id))
         };
-        let int_element = |id: i32| Arc::new(field("element", DataType::Int32, id));
-        let hint = ArrowSchema::new(vec![
-            field(
-                "h",
-                DataType::Struct(Fields::from(vec![
-                    field("fl", DataType::FixedSizeList(element(22), 2), 21),
-                    field("lv", DataType::ListView(element(26)), 25),
-                    field(
-                        "d",
-                        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                        29,
-                    ),
-                ])),
-                20,
-            ),
-            field(
-                "g",
-                DataType::Struct(Fields::from(vec![
-                    field("lv2", DataType::ListView(int_element(33)), 32),
-                    field("e", DataType::List(int_element(35)), 34),
-                ])),
-                31,
-            ),
-        ]);
+        let hint = ArrowSchema::new(vec![field(
+            "h",
+            DataType::Struct(Fields::from(vec![
+                field("fl", DataType::FixedSizeList(element(22), 2), 21),
+                field("lv", DataType::ListView(element(26)), 25),
+                field("llv", DataType::LargeListView(element(41)), 40),
+                field(
+                    "d",
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                    29,
+                ),
+            ])),
+            20,
+        )]);
         let metadata = vec![parquet::file::metadata::KeyValue::new(
             parquet::arrow::ARROW_SCHEMA_META_KEY.to_string(),
             parquet::arrow::encode_arrow_schema(&hint),
@@ -4302,77 +4282,7 @@ message schema {
             .into()
         };
         let table = Schema::builder()
-            .with_fields(vec![replaced(20, "h", 30), replaced(31, "g", 36)])
-            .build()
-            .unwrap();
-        assert_eq!(
-            ArrowReader::get_arrow_projection_mask(
-                &[20, 31],
-                &table,
-                &parquet_schema,
-                &file_arrow,
-                false
-            )
-            .unwrap(),
-            ProjectionMask::leaves(&parquet_schema, vec![4, 6])
-        );
-
-        // `element` is still projected, and the file nests it under a list view.
-        // Recording `p` would keep the list view in the projected schema and fail
-        // conversion, so presence for `h` is `d` at leaf 2.
-        let parquet_schema = SchemaDescriptor::new(Arc::new(
-            parse_message_type(
-                "
-                message schema {
-                  optional group h = 20 {
-                    optional group lv (LIST) = 25 {
-                      repeated group list {
-                        optional group element = 26 {
-                          optional int32 p = 27;
-                          optional int32 q = 28;
-                        }
-                      }
-                    }
-                    optional binary d (STRING) = 29;
-                  }
-                }
-                ",
-            )
-            .unwrap(),
-        ));
-        let hint = ArrowSchema::new(vec![field(
-            "h",
-            DataType::Struct(Fields::from(vec![
-                field("lv", DataType::ListView(element(26)), 25),
-                field("d", DataType::Utf8, 29),
-            ])),
-            20,
-        )]);
-        let metadata = vec![parquet::file::metadata::KeyValue::new(
-            parquet::arrow::ARROW_SCHEMA_META_KEY.to_string(),
-            parquet::arrow::encode_arrow_schema(&hint),
-        )];
-        let file_arrow =
-            Arc::new(parquet_to_arrow_schema(&parquet_schema, Some(&metadata)).unwrap());
-        let table = Schema::builder()
-            .with_fields(vec![
-                NestedField::optional(
-                    20,
-                    "h",
-                    Type::Struct(StructType::new(vec![
-                        NestedField::optional(
-                            26,
-                            "element",
-                            Type::Struct(StructType::new(vec![
-                                NestedField::optional(30, "n", Type::Primitive(PrimitiveType::Int))
-                                    .into(),
-                            ])),
-                        )
-                        .into(),
-                    ])),
-                )
-                .into(),
-            ])
+            .with_fields(vec![replaced(20, "h", 30)])
             .build()
             .unwrap();
         assert_eq!(
@@ -4384,7 +4294,7 @@ message schema {
                 false
             )
             .unwrap(),
-            ProjectionMask::leaves(&parquet_schema, vec![2])
+            ProjectionMask::leaves(&parquet_schema, vec![6])
         );
     }
 
@@ -4543,52 +4453,68 @@ message schema {
         assert_eq!(result, vec![expected]);
     }
 
+    /// Fixed-size lists and list views become lists at any depth and keep their field IDs, and a
+    /// schema without one is left as it is.
     #[test]
-    fn test_coerce_fixed_size_lists_rewrites_nested() {
-        let item = |ty| Arc::new(Field::new("item", ty, true));
-        let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("plain", DataType::Int32, true),
-            Field::new(
-                "fsl",
-                DataType::FixedSizeList(item(DataType::Int32), 2),
-                true,
-            ),
-            Field::new(
-                "nested",
-                DataType::Struct(Fields::from(vec![Field::new(
-                    "inner",
-                    DataType::FixedSizeList(item(DataType::Int32), 3),
-                    true,
-                )])),
-                true,
-            ),
-            Field::new(
-                "list_of_fsl",
-                DataType::List(Arc::new(Field::new(
-                    "element",
-                    DataType::FixedSizeList(item(DataType::Int32), 2),
-                    true,
-                ))),
-                true,
-            ),
-        ]));
+    fn test_coerce_list_layouts() {
+        use arrow_schema::FieldRef;
 
-        let coerced = super::coerce_fixed_size_lists(&schema).expect("should rewrite");
-        assert!(matches!(
-            coerced.field_with_name("fsl").unwrap().data_type(),
-            DataType::List(_)
-        ));
-        let DataType::Struct(fields) = coerced.field_with_name("nested").unwrap().data_type()
-        else {
-            panic!("nested should stay Struct");
+        use super::coerce_list_layouts;
+
+        // The same schema, built with list views and fixed-size lists, or with lists.
+        type ListOf = fn(FieldRef) -> DataType;
+        let schema = |list: ListOf, large_list: ListOf, fixed: ListOf| {
+            let field = |name: &str, data_type, id: i32| {
+                Arc::new(
+                    Field::new(name, data_type, true).with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        id.to_string(),
+                    )])),
+                )
+            };
+            let element = |data_type, id| field("element", data_type, id);
+            let ints = |id| element(DataType::Int32, id);
+            let entries = Field::new(
+                "key_value",
+                DataType::Struct(Fields::from(vec![
+                    field("key", DataType::Utf8, 20),
+                    field("value", list(ints(22)), 21),
+                ])),
+                false,
+            );
+            Arc::new(ArrowSchema::new(vec![
+                field("id", DataType::Int32, 1),
+                field(
+                    "s",
+                    DataType::Struct(Fields::from(vec![
+                        field("a", DataType::Int32, 3),
+                        field("lv", list(ints(5)), 4),
+                        field("b", DataType::Int32, 6),
+                    ])),
+                    2,
+                ),
+                field("nested", large_list(element(list(ints(9)), 8)), 7),
+                field("fixed", fixed(element(list(ints(12)), 11)), 10),
+                field("list", DataType::List(element(fixed(ints(15)), 14)), 13),
+                field(
+                    "large",
+                    DataType::LargeList(element(list(ints(18)), 17)),
+                    16,
+                ),
+                field("map", DataType::Map(Arc::new(entries), false), 19),
+            ]))
         };
-        assert!(matches!(fields[0].data_type(), DataType::List(_)));
-        let DataType::List(element) = coerced.field_with_name("list_of_fsl").unwrap().data_type()
-        else {
-            panic!("list_of_fsl should stay List");
-        };
-        assert!(matches!(element.data_type(), DataType::List(_)));
-        assert!(super::coerce_fixed_size_lists(&coerced).is_none());
+        let lists = schema(DataType::List, DataType::LargeList, DataType::List);
+
+        assert_eq!(
+            coerce_list_layouts(&schema(
+                DataType::ListView,
+                DataType::LargeListView,
+                |element| DataType::FixedSizeList(element, 2)
+            )),
+            Some(Arc::clone(&lists))
+        );
+        assert_eq!(coerce_list_layouts(&lists), None);
     }
 
     /// parquet-rs can return a LIST as `FixedSizeList` when the file's embedded Arrow schema
