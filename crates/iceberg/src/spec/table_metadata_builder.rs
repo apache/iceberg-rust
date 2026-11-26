@@ -219,8 +219,6 @@ impl TableMetadataBuilder {
     /// - `schema` takes the name of a partition field in one of the table's specs without being
     ///   that field's source column.
     /// - `properties` contains a reserved property.
-    // TODO: Use for table replacement in https://github.com/apache/iceberg-rust/issues/3056.
-    #[allow(dead_code)]
     pub(crate) fn build_replacement(
         self,
         schema: Schema,

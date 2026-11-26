@@ -3567,6 +3567,16 @@ pub fn iceberg::transaction::ReplaceSortOrderAction::desc(self, name: &str, null
 pub fn iceberg::transaction::ReplaceSortOrderAction::desc_with_transform(self, name: &str, transform: iceberg::spec::Transform, null_order: iceberg::spec::NullOrder) -> Self
 impl core::clone::Clone for iceberg::transaction::ReplaceSortOrderAction
 pub fn iceberg::transaction::ReplaceSortOrderAction::clone(&self) -> iceberg::transaction::ReplaceSortOrderAction
+pub struct iceberg::transaction::ReplaceTableAction
+impl iceberg::transaction::ReplaceTableAction
+pub fn iceberg::transaction::ReplaceTableAction::set_format_version(self, format_version: iceberg::spec::FormatVersion) -> Self
+pub fn iceberg::transaction::ReplaceTableAction::set_location(self, location: alloc::string::String) -> Self
+pub fn iceberg::transaction::ReplaceTableAction::set_partition_spec(self, partition_spec: impl core::convert::Into<iceberg::spec::UnboundPartitionSpec>) -> Self
+pub fn iceberg::transaction::ReplaceTableAction::set_properties(self, properties: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> Self
+pub fn iceberg::transaction::ReplaceTableAction::set_sort_order(self, sort_order: iceberg::spec::SortOrder) -> Self
+pub fn iceberg::transaction::ReplaceTableAction::staged_table(&self) -> iceberg::Result<iceberg::table::Table>
+impl core::clone::Clone for iceberg::transaction::ReplaceTableAction
+pub fn iceberg::transaction::ReplaceTableAction::clone(&self) -> iceberg::transaction::ReplaceTableAction
 pub struct iceberg::transaction::Transaction
 impl iceberg::transaction::Transaction
 pub async fn iceberg::transaction::Transaction::commit(self, catalog: &dyn iceberg::Catalog) -> iceberg::Result<iceberg::table::Table>
@@ -3574,6 +3584,7 @@ pub fn iceberg::transaction::Transaction::expire_snapshots(&self) -> iceberg::tr
 pub fn iceberg::transaction::Transaction::fast_append(&self) -> iceberg::transaction::FastAppendAction
 pub fn iceberg::transaction::Transaction::new(table: &iceberg::table::Table) -> Self
 pub fn iceberg::transaction::Transaction::replace_sort_order(&self) -> iceberg::transaction::ReplaceSortOrderAction
+pub fn iceberg::transaction::Transaction::replace_table(&self, schema: iceberg::spec::Schema) -> iceberg::transaction::ReplaceTableAction
 pub fn iceberg::transaction::Transaction::update_location(&self) -> iceberg::transaction::UpdateLocationAction
 pub fn iceberg::transaction::Transaction::update_schema(&self) -> iceberg::transaction::UpdateSchemaAction
 pub fn iceberg::transaction::Transaction::update_statistics(&self) -> iceberg::transaction::UpdateStatisticsAction

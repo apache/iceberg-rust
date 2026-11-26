@@ -1,0 +1,414 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+
+use crate::TableRequirement;
+use crate::error::{Error, ErrorKind, Result};
+use crate::spec::{
+    FormatVersion, MAIN_BRANCH, Schema, SortOrder, TableMetadata, TableMetadataBuildResult,
+    UnboundPartitionSpec,
+};
+use crate::table::Table;
+use crate::transaction::action::{ActionCommit, StatelessAction};
+
+/// Replaces a table's schema, partition spec and sort order, leaving it with no current
+/// snapshot. Backs `REPLACE TABLE`.
+///
+/// Must be the first action in its transaction. Write the new contents against
+/// [`ReplaceTableAction::staged_table`] and add them with a later action, such as
+/// [`FastAppendAction`](crate::transaction::FastAppendAction).
+///
+/// Committing fails with [`ErrorKind::CatalogCommitConflicts`], without retrying, if the table
+/// was dropped and recreated since the transaction started, or if a concurrent change would give
+/// the replacement different ids than its staged table, such as renaming or dropping one of the
+/// columns it keeps.
+#[derive(Clone)]
+pub struct ReplaceTableAction {
+    table: Table,
+    schema: Schema,
+    partition_spec: UnboundPartitionSpec,
+    sort_order: SortOrder,
+    location: Option<String>,
+    format_version: Option<FormatVersion>,
+    properties: HashMap<String, String>,
+}
+
+impl ReplaceTableAction {
+    pub(crate) fn new(table: Table, schema: Schema) -> Self {
+        Self {
+            table,
+            schema,
+            partition_spec: UnboundPartitionSpec::builder().build(),
+            sort_order: SortOrder::unsorted_order(),
+            location: None,
+            format_version: None,
+            properties: HashMap::new(),
+        }
+    }
+
+    /// Sets the partition spec. Defaults to unpartitioned.
+    pub fn set_partition_spec(mut self, partition_spec: impl Into<UnboundPartitionSpec>) -> Self {
+        self.partition_spec = partition_spec.into();
+        self
+    }
+
+    /// Sets the sort order. Defaults to unsorted.
+    pub fn set_sort_order(mut self, sort_order: SortOrder) -> Self {
+        self.sort_order = sort_order;
+        self
+    }
+
+    /// Moves the table to `location`.
+    pub fn set_location(mut self, location: String) -> Self {
+        self.location = Some(location);
+        self
+    }
+
+    /// Upgrades the table to `format_version`.
+    pub fn set_format_version(mut self, format_version: FormatVersion) -> Self {
+        self.format_version = Some(format_version);
+        self
+    }
+
+    /// Sets `properties` on top of the table's existing ones.
+    pub fn set_properties(mut self, properties: HashMap<String, String>) -> Self {
+        self.properties = properties;
+        self
+    }
+
+    /// Returns the table as it will be after the replacement, to write its new contents against.
+    ///
+    /// # Errors
+    /// - The table is format version 1, which is not supported.
+    /// - The format version would downgrade the table.
+    /// - The partition spec or sort order names a column missing from the schema.
+    /// - The schema takes the name of a partition field in one of the table's specs without
+    ///   being that field's source column.
+    /// - The properties contain a reserved property.
+    pub fn staged_table(&self) -> Result<Table> {
+        let metadata = self.replace(self.table.metadata())?.metadata;
+        Ok(self.table.clone().with_metadata(Arc::new(metadata)))
+    }
+
+    fn replace(&self, metadata: &TableMetadata) -> Result<TableMetadataBuildResult> {
+        metadata
+            .clone()
+            .into_builder(None)
+            .build_replacement(
+                self.schema.clone(),
+                self.partition_spec.clone(),
+                self.sort_order.clone(),
+                self.location.clone(),
+                self.format_version,
+                self.properties.clone(),
+            )?
+            .build()
+    }
+}
+
+#[async_trait]
+impl StatelessAction for ReplaceTableAction {
+    async fn commit(&self, table: &Table) -> Result<ActionCommit> {
+        if table.metadata().uuid() != self.table.metadata().uuid() {
+            return Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                "Cannot replace table: it was recreated since the transaction started",
+            )
+            .with_context("expected", self.table.metadata().uuid())
+            .with_context("found", table.metadata().uuid()));
+        }
+
+        let staged = self.replace(self.table.metadata())?.metadata;
+        let replaced = self.replace(table.metadata())?;
+
+        let layout = |metadata: &TableMetadata| {
+            (
+                metadata.current_schema().as_struct().clone(),
+                metadata.default_partition_spec().clone(),
+                metadata.default_sort_order().clone(),
+            )
+        };
+        if layout(&staged) != layout(&replaced.metadata) {
+            return Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                "Cannot replace table: a concurrent change would give the replacement different field ids than its staged table",
+            ));
+        }
+
+        let base = table.metadata();
+        let requirements = vec![
+            TableRequirement::UuidMatch { uuid: base.uuid() },
+            TableRequirement::RefSnapshotIdMatch {
+                r#ref: MAIN_BRANCH.to_string(),
+                snapshot_id: base.current_snapshot_id(),
+            },
+            TableRequirement::LastAssignedFieldIdMatch {
+                last_assigned_field_id: base.last_column_id(),
+            },
+            TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: base.current_schema_id(),
+            },
+            TableRequirement::LastAssignedPartitionIdMatch {
+                last_assigned_partition_id: base.last_partition_id(),
+            },
+            TableRequirement::DefaultSpecIdMatch {
+                default_spec_id: base.default_partition_spec_id(),
+            },
+            TableRequirement::DefaultSortOrderIdMatch {
+                default_sort_order_id: base.default_sort_order_id(),
+            },
+        ];
+
+        Ok(ActionCommit::new(replaced.changes, requirements))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::memory::tests::new_memory_catalog;
+    use crate::spec::{
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, Literal,
+        MAIN_BRANCH, NestedField, PrimitiveType, Schema, Struct, Type,
+    };
+    use crate::table::Table;
+    use crate::test_utils::commit_with_fresh_state;
+    use crate::transaction::tests::{make_v2_table, make_v3_minimal_table_in_catalog};
+    use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
+    use crate::{Catalog, ErrorKind, TableCreation, TableRequirement};
+
+    fn replacement_schema() -> Schema {
+        Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                NestedField::optional(2, "w", Type::Primitive(PrimitiveType::String)).into(),
+            ])
+            .build()
+            .unwrap()
+    }
+
+    fn data_file(table: &Table, path: &str) -> DataFile {
+        let partition = if table.metadata().default_partition_spec().is_unpartitioned() {
+            Struct::empty()
+        } else {
+            Struct::from_iter([Some(Literal::long(1))])
+        };
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(10)
+            .partition(partition)
+            .partition_spec_id(table.metadata().default_partition_spec_id())
+            .build()
+            .unwrap()
+    }
+
+    async fn append(table: &Table, path: &str, catalog: &impl Catalog) -> Table {
+        let tx = Transaction::new(table);
+        tx.fast_append()
+            .add_data_files(vec![data_file(table, path)])
+            .apply(tx)
+            .unwrap()
+            .commit(catalog)
+            .await
+            .unwrap()
+    }
+
+    fn replace_with_new_contents(table: &Table) -> (Transaction, Table) {
+        let tx = Transaction::new(table);
+        let replace = tx.replace_table(replacement_schema());
+        let staged = replace.staged_table().unwrap();
+        let tx = replace.apply(tx).unwrap();
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![data_file(&staged, "test/new.parquet")])
+            .apply(tx)
+            .unwrap();
+        (tx, staged)
+    }
+
+    fn summary(table: &Table) -> (Option<i64>, usize, String) {
+        let metadata = table.metadata();
+        let current = metadata.current_snapshot().unwrap();
+        (
+            current.parent_snapshot_id(),
+            metadata.snapshots().count(),
+            current.summary().additional_properties["total-data-files"].clone(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_replace_table_commits_new_contents_and_keeps_history() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let table = append(&table, "test/old.parquet", &catalog).await;
+
+        let (tx, staged) = replace_with_new_contents(&table);
+        let replaced = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(
+            (
+                replaced.metadata().uuid(),
+                replaced.metadata().current_schema(),
+                summary(&replaced),
+            ),
+            (
+                table.metadata().uuid(),
+                staged.metadata().current_schema(),
+                (None, 2, "1".to_string()),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_table_commits_after_a_concurrent_append() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let (tx, _) = replace_with_new_contents(&table);
+        append(&table, "test/concurrent.parquet", &catalog).await;
+        let replaced = tx.commit(&catalog).await.unwrap();
+
+        assert_eq!(summary(&replaced), (None, 2, "1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_replace_table_fails_when_a_concurrent_change_would_change_its_field_ids() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let (tx, _) = replace_with_new_contents(&table);
+        let concurrent = Transaction::new(&table);
+        concurrent
+            .update_schema()
+            .add_column(AddColumn::optional(
+                "v",
+                Type::Primitive(PrimitiveType::Int),
+            ))
+            .apply(concurrent)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        let err = tx.commit(&catalog).await.unwrap_err();
+
+        assert_eq!(
+            (err.kind(), err.message(), err.retryable()),
+            (
+                ErrorKind::CatalogCommitConflicts,
+                "Cannot replace table: a concurrent change would give the replacement different field ids than its staged table",
+                false
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_table_fails_when_the_table_was_recreated() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let (tx, _) = replace_with_new_contents(&table);
+        let metadata = table.metadata();
+        catalog.drop_table(table.identifier()).await.unwrap();
+        catalog
+            .create_table(
+                table.identifier().namespace(),
+                TableCreation::builder()
+                    .name(table.identifier().name().to_string())
+                    .schema((**metadata.current_schema()).clone())
+                    .partition_spec((**metadata.default_partition_spec()).clone())
+                    .sort_order((**metadata.default_sort_order()).clone())
+                    .format_version(FormatVersion::V3)
+                    .build(),
+            )
+            .await
+            .unwrap();
+        let err = tx.commit(&catalog).await.unwrap_err();
+
+        assert_eq!(
+            (err.kind(), err.message(), err.retryable()),
+            (
+                ErrorKind::CatalogCommitConflicts,
+                "Cannot replace table: it was recreated since the transaction started",
+                false
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_table_requires_the_base_it_replaced() {
+        let table = make_v2_table();
+        let tx = Transaction::new(&table);
+        let mut commit = commit_with_fresh_state(tx.replace_table(replacement_schema()), &table)
+            .await
+            .unwrap();
+
+        let base = table.metadata();
+        assert_eq!(commit.take_requirements(), vec![
+            TableRequirement::UuidMatch { uuid: base.uuid() },
+            TableRequirement::RefSnapshotIdMatch {
+                r#ref: MAIN_BRANCH.to_string(),
+                snapshot_id: base.current_snapshot_id(),
+            },
+            TableRequirement::LastAssignedFieldIdMatch {
+                last_assigned_field_id: base.last_column_id(),
+            },
+            TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: base.current_schema_id(),
+            },
+            TableRequirement::LastAssignedPartitionIdMatch {
+                last_assigned_partition_id: base.last_partition_id(),
+            },
+            TableRequirement::DefaultSpecIdMatch {
+                default_spec_id: base.default_partition_spec_id(),
+            },
+            TableRequirement::DefaultSortOrderIdMatch {
+                default_sort_order_id: base.default_sort_order_id(),
+            },
+        ]);
+    }
+
+    #[test]
+    fn test_staged_table_applies_the_location_format_version_and_properties() {
+        let table = make_v2_table();
+        let staged = Transaction::new(&table)
+            .replace_table(replacement_schema())
+            .set_location("s3://bucket/moved".to_string())
+            .set_format_version(FormatVersion::V3)
+            .set_properties(HashMap::from([("key".to_string(), "value".to_string())]))
+            .staged_table()
+            .unwrap();
+
+        let metadata = staged.metadata();
+        assert_eq!(
+            (
+                metadata.location(),
+                metadata.format_version(),
+                metadata.properties().get("key").map(String::as_str),
+                metadata.current_snapshot_id(),
+            ),
+            ("s3://bucket/moved", FormatVersion::V3, Some("value"), None)
+        );
+    }
+}
