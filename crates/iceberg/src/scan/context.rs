@@ -29,7 +29,7 @@ use crate::scan::{
     FileScanTaskColumnStats, ManifestEvaluatorCache, PartitionFilterCache,
 };
 use crate::spec::{
-    ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
+    DataFile, ManifestContentType, ManifestEntryRef, ManifestFile, ManifestList, NameMapping,
     PartitionSpecRef, PrimitiveType, SchemaRef, SnapshotRef, SortOrderRef, StructType,
     TableMetadataRef,
 };
@@ -228,6 +228,7 @@ impl ManifestEntryContext {
             .with_column_stats(self.column_stats_columns.as_deref().map(|columns| {
                 FileScanTaskColumnStats::from_data_file(self.manifest_entry.data_file(), columns)
             }))
+            .with_split_offsets(well_defined_split_offsets(self.manifest_entry.data_file()))
             .build()
     }
 
@@ -247,6 +248,19 @@ impl ManifestEntryContext {
             scan_task,
         })
     }
+}
+
+/// The data file's split offsets when they are well defined, as Java's
+/// `BaseFile.splitOffsets()` decides it: non-empty, with the last offset below the
+/// file size. Some writers recorded offsets that do not belong to the file, and an
+/// engine splitting on those would cut past its end, so such a list is dropped
+/// rather than handed to the task.
+fn well_defined_split_offsets(data_file: &DataFile) -> Option<Vec<i64>> {
+    let offsets = data_file.split_offsets()?;
+    let last = *offsets.last()?;
+    u64::try_from(last)
+        .is_ok_and(|last| last < data_file.file_size_in_bytes())
+        .then(|| offsets.to_vec())
 }
 
 /// PlanContext wraps a [`SnapshotRef`] alongside all the other
