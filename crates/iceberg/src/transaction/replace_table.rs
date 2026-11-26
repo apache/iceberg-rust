@@ -23,8 +23,8 @@ use async_trait::async_trait;
 use crate::TableRequirement;
 use crate::error::{Error, ErrorKind, Result};
 use crate::spec::{
-    FormatVersion, MAIN_BRANCH, Schema, SortOrder, TableMetadata, TableMetadataBuildResult,
-    UnboundPartitionSpec,
+    FormatVersion, MAIN_BRANCH, PartitionSpecRef, Schema, SortOrder, SortOrderRef, StructType,
+    TableMetadata, TableMetadataBuildResult, UnboundPartitionSpec,
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, StatelessAction};
@@ -139,13 +139,6 @@ impl StatelessAction for ReplaceTableAction {
         let staged = self.replace(self.table.metadata())?.metadata;
         let replaced = self.replace(table.metadata())?;
 
-        let layout = |metadata: &TableMetadata| {
-            (
-                metadata.current_schema().as_struct().clone(),
-                metadata.default_partition_spec().clone(),
-                metadata.default_sort_order().clone(),
-            )
-        };
         if layout(&staged) != layout(&replaced.metadata) {
             return Err(Error::new(
                 ErrorKind::CatalogCommitConflicts,
@@ -179,6 +172,15 @@ impl StatelessAction for ReplaceTableAction {
 
         Ok(ActionCommit::new(replaced.changes, requirements))
     }
+}
+
+/// The parts of the table that the staged table's data files are written against.
+fn layout(metadata: &TableMetadata) -> (&StructType, &PartitionSpecRef, &SortOrderRef) {
+    (
+        metadata.current_schema().as_struct(),
+        metadata.default_partition_spec(),
+        metadata.default_sort_order(),
+    )
 }
 
 #[cfg(test)]
