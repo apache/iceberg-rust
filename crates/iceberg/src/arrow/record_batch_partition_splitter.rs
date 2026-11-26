@@ -26,7 +26,7 @@ use super::arrow_struct_to_literal;
 use super::partition_value_calculator::PartitionValueCalculator;
 use crate::Result;
 use crate::error::invalid_data;
-use crate::spec::{Literal, PartitionKey, PartitionSpecRef, SchemaRef, StructType};
+use crate::spec::{Literal, PartitionKey, PartitionSpecRef, SchemaRef, Struct, StructType};
 
 /// Column name for the projected partition values struct
 pub const PROJECTED_PARTITION_VALUE_COLUMN: &str = "_partition";
@@ -118,6 +118,8 @@ impl RecordBatchPartitionSplitter {
     }
 
     /// Split the record batch into multiple record batches based on the partition spec.
+    ///
+    /// The batches are returned in the order each partition value first appears in `batch`.
     pub fn split(&self, batch: &RecordBatch) -> Result<Vec<(PartitionKey, RecordBatch)>> {
         let partition_structs = if let Some(calculator) = &self.calculator {
             // Compute partition values from source columns using calculator
@@ -169,17 +171,21 @@ impl RecordBatchPartitionSplitter {
         };
 
         // Group the batch by row value.
-        let mut group_ids = HashMap::new();
-        partition_structs
-            .into_iter()
-            .enumerate()
-            .for_each(|(row_id, row)| {
-                group_ids.entry(row).or_insert(vec![]).push(row_id);
-            });
+        let mut group_index: HashMap<Struct, usize> = HashMap::new();
+        let mut groups: Vec<(Struct, Vec<usize>)> = Vec::new();
+        for (row_id, row) in partition_structs.into_iter().enumerate() {
+            match group_index.get(&row) {
+                Some(&index) => groups[index].1.push(row_id),
+                None => {
+                    group_index.insert(row.clone(), groups.len());
+                    groups.push((row, vec![row_id]));
+                }
+            }
+        }
 
         // Partition the batch with same partition partition_values
-        let mut partition_batches = Vec::with_capacity(group_ids.len());
-        for (row, row_ids) in group_ids.into_iter() {
+        let mut partition_batches = Vec::with_capacity(groups.len());
+        for (row, row_ids) in groups {
             // generate the bool filter array from column_ids
             let filter_array: BooleanArray = {
                 let mut builder = BooleanBufferBuilder::new(batch.num_rows());
@@ -331,6 +337,60 @@ mod tests {
             Struct::from_iter(vec![Some(Literal::int(2))]),
             Struct::from_iter(vec![Some(Literal::int(3))]),
         ]);
+    }
+
+    #[test]
+    fn test_record_batch_partition_split_keeps_first_occurrence_order() {
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(
+                        1,
+                        "id",
+                        Type::Primitive(crate::spec::PrimitiveType::Int),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let partition_spec = Arc::new(
+            PartitionSpecBuilder::new(schema.clone())
+                .with_spec_id(1)
+                .add_unbound_field(
+                    UnboundPartitionField::builder()
+                        .source_ids(vec![1])
+                        .name("id".to_string())
+                        .transform(Transform::Identity)
+                        .build()
+                        .unwrap(),
+                )
+                .unwrap()
+                .build()
+                .unwrap(),
+        );
+        let partition_splitter = RecordBatchPartitionSplitter::try_new_with_computed_values(
+            schema.clone(),
+            partition_spec,
+        )
+        .expect("Failed to create splitter");
+
+        let ids: Vec<i32> = (0..50).rev().chain((0..50).rev()).collect();
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let batch = RecordBatch::try_new(arrow_schema, vec![Arc::new(Int32Array::from(ids))])
+            .expect("Failed to create RecordBatch");
+
+        let partition_values = partition_splitter
+            .split(&batch)
+            .expect("Failed to split RecordBatch")
+            .into_iter()
+            .map(|(partition_key, _)| partition_key.data().clone())
+            .collect::<Vec<_>>();
+        let expected = (0..50)
+            .rev()
+            .map(|id| Struct::from_iter(vec![Some(Literal::int(id))]))
+            .collect::<Vec<_>>();
+        assert_eq!(partition_values, expected);
     }
 
     #[test]
