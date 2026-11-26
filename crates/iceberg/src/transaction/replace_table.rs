@@ -291,16 +291,6 @@ mod tests {
         (tx, staged)
     }
 
-    fn summary(table: &Table) -> (Option<i64>, usize, String) {
-        let metadata = table.metadata();
-        let current = metadata.current_snapshot().unwrap();
-        (
-            current.parent_snapshot_id(),
-            metadata.snapshots().count(),
-            current.summary().additional_properties["total-data-files"].clone(),
-        )
-    }
-
     #[tokio::test]
     async fn test_replace_table_commits_new_contents_and_keeps_history() {
         let catalog = new_memory_catalog().await;
@@ -310,17 +300,18 @@ mod tests {
         let (tx, staged) = replace_with_new_contents(&table);
         let replaced = tx.commit(&catalog).await.unwrap();
 
+        let metadata = replaced.metadata();
+        let current = metadata.current_snapshot().unwrap();
+        assert_eq!(metadata.uuid(), table.metadata().uuid());
         assert_eq!(
-            (
-                replaced.metadata().uuid(),
-                replaced.metadata().current_schema(),
-                summary(&replaced),
-            ),
-            (
-                table.metadata().uuid(),
-                staged.metadata().current_schema(),
-                (None, 2, "1".to_string()),
-            )
+            metadata.current_schema(),
+            staged.metadata().current_schema()
+        );
+        assert_eq!(current.parent_snapshot_id(), None);
+        assert_eq!(metadata.snapshots().count(), 2);
+        assert_eq!(
+            current.summary().additional_properties["total-data-files"],
+            "1"
         );
     }
 
@@ -333,7 +324,14 @@ mod tests {
         append(&table, "test/concurrent.parquet", &catalog).await;
         let replaced = tx.commit(&catalog).await.unwrap();
 
-        assert_eq!(summary(&replaced), (None, 2, "1".to_string()));
+        let metadata = replaced.metadata();
+        let current = metadata.current_snapshot().unwrap();
+        assert_eq!(current.parent_snapshot_id(), None);
+        assert_eq!(metadata.snapshots().count(), 2);
+        assert_eq!(
+            current.summary().additional_properties["total-data-files"],
+            "1"
+        );
     }
 
     #[tokio::test]
@@ -356,14 +354,12 @@ mod tests {
             .unwrap();
         let err = tx.commit(&catalog).await.unwrap_err();
 
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
         assert_eq!(
-            (err.kind(), err.message(), err.retryable()),
-            (
-                ErrorKind::CatalogCommitConflicts,
-                "Cannot replace table: a concurrent change assigned new column or partition field ids",
-                false
-            )
+            err.message(),
+            "Cannot replace table: a concurrent change assigned new column or partition field ids"
         );
+        assert!(!err.retryable());
     }
 
     /// Replaces a table that has an unused column `v` with `schema` while `v` is dropped
@@ -470,14 +466,12 @@ mod tests {
             .unwrap();
         let err = tx.commit(&catalog).await.unwrap_err();
 
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
         assert_eq!(
-            (err.kind(), err.message(), err.retryable()),
-            (
-                ErrorKind::CatalogCommitConflicts,
-                "Cannot replace table: a concurrent change would give the replacement different ids than its staged table",
-                false
-            )
+            err.message(),
+            "Cannot replace table: a concurrent change would give the replacement different ids than its staged table"
         );
+        assert!(!err.retryable());
     }
 
     #[tokio::test]
@@ -503,14 +497,12 @@ mod tests {
             .unwrap();
         let err = tx.commit(&catalog).await.unwrap_err();
 
+        assert_eq!(err.kind(), ErrorKind::CatalogCommitConflicts);
         assert_eq!(
-            (err.kind(), err.message(), err.retryable()),
-            (
-                ErrorKind::CatalogCommitConflicts,
-                "Cannot replace table: it was recreated since the transaction started",
-                false
-            )
+            err.message(),
+            "Cannot replace table: it was recreated since the transaction started"
         );
+        assert!(!err.retryable());
     }
 
     #[tokio::test]
@@ -558,14 +550,9 @@ mod tests {
             .unwrap();
 
         let metadata = staged.metadata();
-        assert_eq!(
-            (
-                metadata.location(),
-                metadata.format_version(),
-                metadata.properties().get("key").map(String::as_str),
-                metadata.current_snapshot_id(),
-            ),
-            ("s3://bucket/moved", FormatVersion::V3, Some("value"), None)
-        );
+        assert_eq!(metadata.location(), "s3://bucket/moved");
+        assert_eq!(metadata.format_version(), FormatVersion::V3);
+        assert_eq!(metadata.properties()["key"], "value");
+        assert_eq!(metadata.current_snapshot_id(), None);
     }
 }
