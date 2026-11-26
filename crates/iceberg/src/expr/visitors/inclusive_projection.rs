@@ -16,13 +16,52 @@
 // under the License.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use fnv::FnvHashSet;
 
 use crate::expr::visitors::bound_predicate_visitor::{BoundPredicateVisitor, visit};
-use crate::expr::{BoundPredicate, BoundReference, Predicate};
-use crate::spec::{Datum, PartitionField, PartitionSpecRef};
+use crate::expr::{Bind, BoundPredicate, BoundReference, Predicate};
+use crate::spec::{Datum, PartitionField, PartitionSpecRef, Schema};
 use crate::{Error, ErrorKind};
+
+/// Projects `filter`, a row filter bound to `schema`, onto the partition values
+/// of `partition_spec` and binds it to the spec's partition type.
+///
+/// Returns `None` if the spec references a source column that `schema` no
+/// longer has. A historical spec may do that, which is a legitimate v2+ state,
+/// and such a spec can't be resolved to a partition type. Any other resolution
+/// failure is an error.
+pub(crate) fn project_partition_filter(
+    schema: &Schema,
+    partition_spec: &PartitionSpecRef,
+    filter: &BoundPredicate,
+    case_sensitive: bool,
+) -> crate::Result<Option<BoundPredicate>> {
+    // TODO(https://github.com/apache/iceberg-rust/issues/2844): derive partition types from
+    // transforms where possible to restore pruning on a historical spec's still-live fields,
+    // which also makes the fallback per-term (dropped fields only) instead of per-spec.
+    let has_dropped_source_column = partition_spec
+        .fields()
+        .iter()
+        .any(|field| schema.field_by_id(field.source_id).is_none());
+    if has_dropped_source_column {
+        return Ok(None);
+    }
+
+    let partition_type = partition_spec.partition_type(schema)?;
+    let partition_schema = Arc::new(
+        Schema::builder()
+            .with_schema_id(partition_spec.spec_id())
+            .with_fields(partition_type.fields().to_owned())
+            .build()?,
+    );
+    InclusiveProjection::new(partition_spec.clone())
+        .project(filter)?
+        .rewrite_not()
+        .bind(partition_schema, case_sensitive)
+        .map(Some)
+}
 
 pub(crate) struct InclusiveProjection {
     partition_spec: PartitionSpecRef,

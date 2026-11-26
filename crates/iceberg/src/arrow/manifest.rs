@@ -650,13 +650,13 @@ mod tests {
     use super::*;
     use crate::ErrorKind;
     use crate::arrow::arrow_schema_to_schema;
+    use crate::arrow::test_utils::{listed_manifest, write_manifest_list};
     use crate::io::FileIO;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, Datum, FieldSummary, ListType,
-        Literal, Manifest, ManifestEntry, ManifestList, ManifestListWriter, ManifestStatus,
-        ManifestWriter, ManifestWriterBuilder, MapType, NestedField, PartitionSpec,
-        PrimitiveLiteral, PrimitiveType, Schema, Struct, StructType, Transform, Type,
-        UNASSIGNED_SEQUENCE_NUMBER,
+        Literal, Manifest, ManifestEntry, ManifestList, ManifestStatus, ManifestWriter,
+        ManifestWriterBuilder, MapType, NestedField, PartitionSpec, PrimitiveLiteral,
+        PrimitiveType, Schema, Struct, StructType, Transform, Type,
     };
 
     fn table_schema() -> Schema {
@@ -1740,45 +1740,6 @@ mod tests {
                 lower_bounds
             );
         }
-    }
-
-    /// A manifest list entry that a manifest list writer for snapshot 1
-    /// assigns sequence numbers to.
-    fn listed_manifest(path: &str, content: ManifestContentType) -> ManifestFile {
-        ManifestFile {
-            manifest_path: path.to_string(),
-            manifest_length: 100,
-            partition_spec_id: 0,
-            content,
-            sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
-            min_sequence_number: UNASSIGNED_SEQUENCE_NUMBER,
-            added_snapshot_id: 1,
-            added_files_count: Some(1),
-            existing_files_count: Some(2),
-            deleted_files_count: Some(3),
-            added_rows_count: Some(10),
-            existing_rows_count: Some(20),
-            deleted_rows_count: Some(30),
-            partitions: None,
-            key_metadata: None,
-            first_row_id: None,
-        }
-    }
-
-    /// Writes a manifest list for snapshot 1 with sequence number 5 and, in
-    /// v3, first row ID 100.
-    async fn write_manifest_list(version: FormatVersion, manifests: Vec<ManifestFile>) -> Vec<u8> {
-        let io = FileIO::new_with_memory();
-        let path = "memory:///manifest-list.avro";
-        let output = io.new_output(path).unwrap().writer().await.unwrap();
-        let mut writer = match version {
-            FormatVersion::V1 => ManifestListWriter::v1(output, 1, None),
-            FormatVersion::V2 => ManifestListWriter::v2(output, 1, None, 5),
-            FormatVersion::V3 => ManifestListWriter::v3(output, 1, None, 5, Some(100)),
-        };
-        writer.add_manifests(manifests.into_iter()).unwrap();
-        writer.close().await.unwrap();
-        io.new_input(path).unwrap().read().await.unwrap().to_vec()
     }
 
     #[tokio::test]

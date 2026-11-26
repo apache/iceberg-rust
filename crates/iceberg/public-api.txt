@@ -102,6 +102,15 @@ pub fn iceberg::arrow::ManifestEntryBatchReader<B>::schema(&self) -> arrow_schem
 impl<B: core::convert::AsRef<[u8]>> core::iter::traits::iterator::Iterator for iceberg::arrow::ManifestEntryBatchReader<B>
 pub type iceberg::arrow::ManifestEntryBatchReader<B>::Item = core::result::Result<arrow_array::record_batch::RecordBatch, iceberg::Error>
 pub fn iceberg::arrow::ManifestEntryBatchReader<B>::next(&mut self) -> core::option::Option<Self::Item>
+pub struct iceberg::arrow::ManifestFilter
+impl iceberg::arrow::ManifestFilter
+pub fn iceberg::arrow::ManifestFilter::manifest_list_mask(&self, batch: &arrow_array::record_batch::RecordBatch) -> iceberg::Result<arrow_array::array::boolean_array::BooleanArray>
+impl core::convert::From<iceberg::arrow::ManifestFilter> for iceberg::Result<iceberg::arrow::ManifestFilter>
+pub fn iceberg::Result<iceberg::arrow::ManifestFilter>::from(manifest_filter: iceberg::arrow::ManifestFilter) -> Self
+impl core::fmt::Debug for iceberg::arrow::ManifestFilter
+pub fn iceberg::arrow::ManifestFilter::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl iceberg::arrow::ManifestFilter
+pub fn iceberg::arrow::ManifestFilter::builder() -> ManifestFilterBuilder<((), (), (), ())>
 pub struct iceberg::arrow::ManifestListBatchReader<B: core::convert::AsRef<[u8]>>
 impl<B: core::convert::AsRef<[u8]>> iceberg::arrow::ManifestListBatchReader<B>
 pub fn iceberg::arrow::ManifestListBatchReader<B>::schema(&self) -> arrow_schema::schema::SchemaRef

@@ -103,7 +103,7 @@ impl<'a> ManifestFilterVisitor<'a> {
 
 const ROWS_MIGHT_MATCH: Result<bool> = Ok(true);
 const ROWS_CANNOT_MATCH: Result<bool> = Ok(false);
-const IN_PREDICATE_LIMIT: usize = 200;
+pub(crate) const IN_PREDICATE_LIMIT: usize = 200;
 
 impl BoundPredicateVisitor for ManifestFilterVisitor<'_> {
     type T = bool;
