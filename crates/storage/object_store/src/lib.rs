@@ -275,6 +275,20 @@ impl ObjectStoreStorage {
             ObjectStoreStorage::S3(s3) => {
                 let parsed = parse_s3_url(path)?;
 
+                // Reject paths that cannot be represented losslessly by object_store::path::Path
+                // (e.g. trailing slashes alias non-slash keys, and '//' creates empty segments).
+                if parsed.relative.starts_with('/')
+                    || parsed.relative.ends_with('/')
+                    || parsed.relative.contains("//")
+                {
+                    return Err(Error::new(
+                        ErrorKind::DataInvalid,
+                        format!(
+                            "Path cannot be represented losslessly by object_store: '{path}'. Empty path segments ('//') and trailing slashes are not supported.",
+                        ),
+                    ));
+                }
+
                 let store = s3
                     .store_cache
                     .entry(parsed.bucket.clone())
@@ -470,6 +484,7 @@ struct ObjectStoreWriter {
     bytes_written: u64,
     part_size_bytes: usize,
     closed: bool,
+    failed: bool,
 }
 
 impl ObjectStoreWriter {
@@ -484,6 +499,7 @@ impl ObjectStoreWriter {
             bytes_written: 0,
             part_size_bytes,
             closed: false,
+            failed: false,
         }
     }
 
@@ -499,6 +515,7 @@ impl ObjectStoreWriter {
             bytes_written: 0,
             part_size_bytes,
             closed: false,
+            failed: false,
         }
     }
 
@@ -623,16 +640,13 @@ impl ObjectStoreWriter {
 impl Drop for ObjectStoreWriter {
     fn drop(&mut self) {
         if let Some(mut upload) = self.upload.take() {
+            let mut tasks = std::mem::take(&mut self.tasks);
             if Self::check_tokio_runtime().is_ok() {
                 tokio::runtime::Handle::current().spawn(async move {
-                    if let Err(e) = upload.abort().await {
-                        tracing::warn!(
-                            error = %e,
-                            "Failed to abort multipart upload on drop"
-                        );
-                    }
+                    Self::drain_and_abort(&mut tasks, &mut upload, "drop cleanup").await;
                 });
             } else {
+                tasks.abort_all();
                 tracing::warn!(
                     "ObjectStoreWriter dropped outside a Tokio runtime; multipart upload abort skipped"
                 );
@@ -650,6 +664,12 @@ impl FileWrite for ObjectStoreWriter {
                 "Writer has already been closed",
             ));
         }
+        if self.failed {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "Writer has encountered an unrecoverable failure",
+            ));
+        }
         self.bytes_written += bs.len() as u64;
 
         if self.upload.is_none() {
@@ -659,11 +679,13 @@ impl FileWrite for ObjectStoreWriter {
             }
 
             // Exceeded threshold: initialize multipart upload session
-            let upload = self
-                .store
-                .put_multipart(&self.path)
-                .await
-                .map_err(from_object_store_error)?;
+            let upload = match self.store.put_multipart(&self.path).await {
+                Ok(u) => u,
+                Err(e) => {
+                    self.failed = true;
+                    return Err(from_object_store_error(e));
+                }
+            };
             self.upload = Some(upload);
         }
 
@@ -678,6 +700,7 @@ impl FileWrite for ObjectStoreWriter {
         )
         .await
         {
+            self.failed = true;
             let _ = self.upload.take();
             return Err(e);
         }
@@ -689,6 +712,12 @@ impl FileWrite for ObjectStoreWriter {
             return Err(Error::new(
                 ErrorKind::PreconditionFailed,
                 "Writer has already been closed",
+            ));
+        }
+        if self.failed {
+            return Err(Error::new(
+                ErrorKind::PreconditionFailed,
+                "Writer has encountered an unrecoverable failure",
             ));
         }
         self.closed = true;
@@ -710,10 +739,12 @@ impl FileWrite for ObjectStoreWriter {
         // have been sent (S3 requires at least 1 part to complete a multipart upload).
         if !self.buffer.is_empty() || self.parts_submitted == 0 {
             if let Err(e) = Self::drain_capacity(&mut self.tasks, upload).await {
+                self.failed = true;
                 let _ = self.upload.take();
                 return Err(e);
             }
             if let Err(e) = Self::check_tokio_runtime() {
+                self.failed = true;
                 let _ = self.upload.take();
                 return Err(e);
             }
@@ -727,6 +758,7 @@ impl FileWrite for ObjectStoreWriter {
         while let Some(res) = self.tasks.join_next().await {
             match res {
                 Ok(Err(e)) => {
+                    self.failed = true;
                     let err =
                         Self::abort_and_wrap(&mut self.tasks, upload, e, "part upload failure")
                             .await;
@@ -734,6 +766,7 @@ impl FileWrite for ObjectStoreWriter {
                     return Err(err);
                 }
                 Err(join_err) => {
+                    self.failed = true;
                     Self::drain_and_abort(&mut self.tasks, upload, "task panic").await;
                     let _ = self.upload.take();
                     return Err(
@@ -747,6 +780,7 @@ impl FileWrite for ObjectStoreWriter {
 
         // Complete multipart upload; abort if S3 rejects completion.
         if let Err(e) = upload.complete().await {
+            self.failed = true;
             let err = Self::abort_and_wrap(&mut self.tasks, upload, e, "complete failure").await;
             let _ = self.upload.take();
             return Err(err);
@@ -954,13 +988,29 @@ mod tests {
     }
 
     #[cfg(feature = "object_store-s3")]
-    #[test]
-    fn test_relative_path_empty_segments_rejected() {
+    #[tokio::test]
+    async fn test_storage_layer_rejects_unrepresentable_paths() {
         let storage = make_s3_storage();
+
+        // Trailing slash aliasing: in S3 'dir/' != 'dir', but Path::parse strips trailing slashes
+        let err = storage.exists("s3://my-bucket/dir/").await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert!(err.message().contains("losslessly"));
+
+        let err = storage.delete("s3://my-bucket/dir/").await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+
+        // Consecutive slashes ('//')
         let err = storage
-            .get_store_and_path("s3://my-bucket/data//file.parquet")
+            .read("s3://my-bucket/data//file.parquet")
+            .await
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+
+        // Leading double slash after bucket
+        let res = storage.metadata("s3://my-bucket//file.parquet").await;
+        assert!(res.is_err());
+        assert_eq!(res.err().unwrap().kind(), ErrorKind::DataInvalid);
     }
 
     #[cfg(feature = "object_store-s3")]
@@ -1236,6 +1286,15 @@ mod tests {
 
         assert_eq!(err.kind(), ErrorKind::Unexpected);
         assert!(!completed.load(Ordering::SeqCst));
+
+        // Subsequent close() must fail fast with PreconditionFailed
+        let second_close_res = writer.close().await;
+        assert!(second_close_res.is_err());
+        assert_eq!(
+            second_close_res.err().unwrap().kind(),
+            ErrorKind::PreconditionFailed
+        );
+
         drop(writer);
         tokio::task::yield_now().await;
         assert_eq!(
@@ -1243,6 +1302,33 @@ mod tests {
             1,
             "abort() MUST be called exactly once when complete() fails"
         );
+    }
+
+    #[tokio::test]
+    async fn test_writer_write_failure_rejects_subsequent_close() {
+        let (mut writer, _parts, _completed, abort_count) = make_mock_writer(true, false);
+
+        // Writing past MAX_CONCURRENT_PART_UPLOADS triggers in-flight task awaiting inside write()
+        let write_err = writer
+            .write(Bytes::from(vec![0u8; 10 * 5 * 1024 * 1024]))
+            .await
+            .unwrap_err();
+        assert_eq!(write_err.kind(), ErrorKind::Unexpected);
+        assert_eq!(abort_count.load(Ordering::SeqCst), 1);
+
+        // Subsequent close() must reject with PreconditionFailed rather than fall back to single-PUT
+        let close_res = writer.close().await;
+        assert!(close_res.is_err());
+        let close_err = close_res.err().unwrap();
+        assert_eq!(close_err.kind(), ErrorKind::PreconditionFailed);
+        assert!(close_err.message().contains("unrecoverable failure"));
+
+        // Subsequent write() must also reject with PreconditionFailed
+        let post_write_err = writer
+            .write(Bytes::from_static(b"extra"))
+            .await
+            .unwrap_err();
+        assert_eq!(post_write_err.kind(), ErrorKind::PreconditionFailed);
     }
 
     #[tokio::test]
