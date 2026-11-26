@@ -95,7 +95,11 @@ fn check_convert_with_avro(expected_literal: Literal, expected_type: &Type) {
 
     let mut writer = apache_avro::Writer::new(&avro_schema, Vec::new()).unwrap();
     let raw_literal = RawLiteral::try_from(struct_literal.clone(), &struct_type).unwrap();
-    writer.append_ser(raw_literal).unwrap();
+    let value = to_value(raw_literal)
+        .unwrap()
+        .resolve(&avro_schema)
+        .unwrap();
+    writer.append_value_ref(&value).unwrap();
     let encoded = writer.into_inner().unwrap();
 
     let reader = apache_avro::Reader::new(&*encoded).unwrap();
@@ -1464,10 +1468,6 @@ fn avro_convert_test_record() {
     );
 }
 
-// # TODO:https://github.com/apache/iceberg-rust/issues/86
-// rust avro don't support deserialize any bytes representation now:
-// - binary
-// - decimal
 #[test]
 fn avro_convert_test_binary_ser() {
     let literal = Literal::Primitive(PrimitiveLiteral::Binary(vec![1, 2, 3, 4, 5]));
@@ -1487,10 +1487,48 @@ fn avro_convert_test_decimal_ser() {
     check_serialize_avro(literal, &ty, expect_value);
 }
 
-// # TODO:https://github.com/apache/iceberg-rust/issues/86
-// rust avro can't support to convert any byte-like type to fixed in avro now.
-// - uuid ser/de
-// - fixed ser/de
+#[test]
+fn avro_convert_test_binary() {
+    check_convert_with_avro(
+        Literal::binary(vec![1, 2, 3, 4, 5]),
+        &Primitive(PrimitiveType::Binary),
+    );
+}
+
+#[test]
+fn avro_convert_test_decimal() {
+    check_convert_with_avro(
+        Literal::decimal(12345),
+        &Primitive(PrimitiveType::Decimal {
+            precision: 9,
+            scale: 8,
+        }),
+    );
+
+    check_convert_with_avro(
+        Literal::decimal(-12345),
+        &Primitive(PrimitiveType::Decimal {
+            precision: 9,
+            scale: 8,
+        }),
+    );
+}
+
+#[test]
+fn avro_convert_test_fixed() {
+    check_convert_with_avro(
+        Literal::fixed(vec![1, 2, 3, 4]),
+        &Primitive(PrimitiveType::Fixed(4)),
+    );
+}
+
+#[test]
+fn avro_convert_test_uuid() {
+    check_convert_with_avro(
+        Literal::uuid(Uuid::parse_str("f79c3e09-677c-4bbd-a479-3f349cb785e7").unwrap()),
+        &Primitive(PrimitiveType::Uuid),
+    );
+}
 
 #[test]
 fn test_parse_timestamp() {
