@@ -129,9 +129,34 @@ impl Transaction {
         let updated_table = Self::update_table_metadata(table, &updates)?;
 
         existing_updates.extend(updates);
-        existing_requirements.extend(requirements);
+        Self::merge_requirements(existing_requirements, requirements);
 
         Ok(updated_table)
+    }
+
+    // Catalogs check against the base, so keep only the first requirement per value.
+    fn merge_requirements(
+        existing_requirements: &mut Vec<TableRequirement>,
+        requirements: Vec<TableRequirement>,
+    ) {
+        for requirement in requirements {
+            if !existing_requirements
+                .iter()
+                .any(|existing| Self::asserts_same_value(existing, &requirement))
+            {
+                existing_requirements.push(requirement);
+            }
+        }
+    }
+
+    fn asserts_same_value(left: &TableRequirement, right: &TableRequirement) -> bool {
+        match (left, right) {
+            (
+                TableRequirement::RefSnapshotIdMatch { r#ref: left, .. },
+                TableRequirement::RefSnapshotIdMatch { r#ref: right, .. },
+            ) => left == right,
+            _ => std::mem::discriminant(left) == std::mem::discriminant(right),
+        }
     }
 
     /// Sets table to a new version.
@@ -305,15 +330,16 @@ mod tests {
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, PartitionSpec, Struct,
-        TableMetadata, TableProperties, Transform,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, NullOrder,
+        PartitionSpec, PrimitiveType, SortDirection, SortField, Struct, TableMetadata,
+        TableProperties, Transform, Type,
     };
     use crate::table::{StaticTable, Table};
     use crate::test_utils::{make_encrypted_table, test_runtime};
-    use crate::transaction::{ApplyTransactionAction, Transaction};
+    use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
     use crate::{
         Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
-        TableIdent, TableUpdate,
+        TableIdent, TableRequirement, TableUpdate,
     };
 
     pub fn make_v1_table() -> Table {
@@ -688,6 +714,121 @@ mod tests {
         assert_eq!(summary.get("total-records").unwrap(), "30");
         assert_eq!(summary.get("total-data-files").unwrap(), "2");
         assert_eq!(summary.get("total-files-size").unwrap(), "300");
+    }
+
+    #[tokio::test]
+    async fn test_commit_two_fast_appends_in_one_transaction() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let data_file = |path: &str| {
+            DataFileBuilder::default()
+                .content(DataContentType::Data)
+                .file_path(path.to_string())
+                .file_format(DataFileFormat::Parquet)
+                .file_size_in_bytes(100)
+                .record_count(10)
+                .partition(Struct::from_iter([Some(Literal::long(1))]))
+                .partition_spec_id(0)
+                .build()
+                .unwrap()
+        };
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![data_file("test/1.parquet")])
+            .apply(tx)
+            .unwrap();
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![data_file("test/2.parquet")])
+            .apply(tx)
+            .unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let current = table.metadata().current_snapshot().unwrap();
+        let parent = table
+            .metadata()
+            .snapshot_by_id(current.parent_snapshot_id().unwrap())
+            .unwrap();
+        assert_eq!(
+            (
+                table.metadata().snapshots().count(),
+                parent.parent_snapshot_id(),
+                current.summary().additional_properties["total-data-files"].as_str(),
+            ),
+            (2, None, "2")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_add_column_then_sort_on_it_in_one_transaction() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .update_schema()
+            .add_column(AddColumn::optional(
+                "new_col",
+                Type::Primitive(PrimitiveType::Int),
+            ))
+            .apply(tx)
+            .unwrap();
+        let tx = tx
+            .replace_sort_order()
+            .asc("new_col", NullOrder::First)
+            .apply(tx)
+            .unwrap();
+        let table = tx.commit(&catalog).await.unwrap();
+
+        let new_col_id = table
+            .metadata()
+            .current_schema()
+            .field_by_name("new_col")
+            .unwrap()
+            .id;
+        assert_eq!(table.metadata().default_sort_order().fields, vec![
+            SortField {
+                source_id: new_col_id,
+                transform: Transform::Identity,
+                direction: SortDirection::Ascending,
+                null_order: NullOrder::First,
+            }
+        ]);
+    }
+
+    #[test]
+    fn test_merge_requirements_keeps_the_first_requirement_on_each_value() {
+        let main = |snapshot_id| TableRequirement::RefSnapshotIdMatch {
+            r#ref: "main".to_string(),
+            snapshot_id,
+        };
+        let branch = TableRequirement::RefSnapshotIdMatch {
+            r#ref: "branch".to_string(),
+            snapshot_id: Some(2),
+        };
+        let mut requirements = vec![main(None), TableRequirement::CurrentSchemaIdMatch {
+            current_schema_id: 0,
+        }];
+
+        Transaction::merge_requirements(&mut requirements, vec![
+            main(Some(1)),
+            branch.clone(),
+            TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: 1,
+            },
+            TableRequirement::DefaultSpecIdMatch { default_spec_id: 0 },
+        ]);
+
+        assert_eq!(requirements, vec![
+            main(None),
+            TableRequirement::CurrentSchemaIdMatch {
+                current_schema_id: 0
+            },
+            branch,
+            TableRequirement::DefaultSpecIdMatch { default_spec_id: 0 },
+        ]);
     }
 
     #[tokio::test]
