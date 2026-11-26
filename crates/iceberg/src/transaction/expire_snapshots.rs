@@ -167,8 +167,15 @@ impl ExpireSnapshotsAction {
                     max_snapshot_age_ms,
                     ..
                 } => {
-                    let min_to_keep =
-                        min_snapshots_to_keep.map_or(default_min_to_keep, |m| m as usize);
+                    let min_to_keep = match min_snapshots_to_keep {
+                        Some(m) if *m <= 0 => {
+                            return Err(invalid_data!(
+                                "Branch min_snapshots_to_keep must be at least 1, got {m}"
+                            ));
+                        }
+                        Some(m) => *m as usize,
+                        None => default_min_to_keep,
+                    };
                     let cutoff =
                         max_snapshot_age_ms.map_or(default_cutoff, |age| now.saturating_sub(age));
                     branches.push((snapshot_ref.snapshot_id, min_to_keep, cutoff));
@@ -264,10 +271,15 @@ impl ExpireSnapshotsAction {
     }
 
     /// Iterates a snapshot and its ancestors, newest first, following `parent_snapshot_id`.
+    /// Stops on cycles so corrupt metadata cannot hang snapshot expiration.
     fn ancestors(metadata: &TableMetadata, head_id: i64) -> impl Iterator<Item = i64> + '_ {
         let mut next_id = Some(head_id);
+        let mut visited = HashSet::new();
         std::iter::from_fn(move || {
             let id = next_id?;
+            if !visited.insert(id) {
+                return None;
+            }
             next_id = metadata
                 .snapshot_by_id(id)
                 .and_then(|snapshot| snapshot.parent_snapshot_id());
@@ -1212,5 +1224,73 @@ mod tests {
 
         assert_eq!(removed_statistics(&updates), vec![1, 2]);
         assert_eq!(removed_partition_statistics(&updates), vec![1, 2]);
+    }
+
+    #[tokio::test]
+    async fn test_non_positive_per_ref_min_snapshots_to_keep_errors() {
+        for min_snapshots_to_keep in [-1, 0] {
+            let table = table_with(
+                vec![
+                    snapshot(1, None, 35, TS + 1),
+                    snapshot(2, Some(1), 36, TS + 2),
+                ],
+                vec![(MAIN_BRANCH, branch(2, Some(min_snapshots_to_keep)))],
+            );
+
+            let err = commit_with_fresh_state(
+                action().retain_last(1).expire_older_than_ms(i64::MAX),
+                &table,
+            )
+            .await
+            .err()
+            .expect("non-positive min_snapshots_to_keep should error");
+            assert_eq!(err.kind(), crate::ErrorKind::DataInvalid);
+            assert!(
+                err.message().contains("min_snapshots_to_keep"),
+                "unexpected error: {err}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parent_cycle_terminates() {
+        let table = table_with(
+            vec![
+                snapshot(1, None, 35, TS + 1),
+                snapshot(2, Some(1), 36, TS + 2),
+            ],
+            vec![(MAIN_BRANCH, branch(2, None))],
+        );
+        let mut metadata = table.metadata().clone();
+        let s1 = metadata.snapshots.get_mut(&1).unwrap();
+        let mut patched = s1.as_ref().clone();
+        patched.parent_snapshot_id = Some(2);
+        *s1 = Arc::new(patched);
+        let cyclic_table = table.with_metadata(Arc::new(metadata));
+
+        let removed = expired(
+            &cyclic_table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+        assert_eq!(removed, vec![1]);
+
+        let self_table = table_with(vec![snapshot(1, None, 35, TS + 1)], vec![(
+            MAIN_BRANCH,
+            branch(1, None),
+        )]);
+        let mut self_metadata = self_table.metadata().clone();
+        let s1 = self_metadata.snapshots.get_mut(&1).unwrap();
+        let mut patched = s1.as_ref().clone();
+        patched.parent_snapshot_id = Some(1);
+        *s1 = Arc::new(patched);
+        let self_cyclic_table = self_table.with_metadata(Arc::new(self_metadata));
+
+        let removed = expired(
+            &self_cyclic_table,
+            action().retain_last(1).expire_older_than_ms(i64::MAX),
+        )
+        .await;
+        assert!(removed.is_empty());
     }
 }
