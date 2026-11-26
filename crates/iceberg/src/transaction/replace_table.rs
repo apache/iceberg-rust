@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::TableRequirement;
 use crate::error::{Error, ErrorKind, Result};
 use crate::spec::{
     FormatVersion, MAIN_BRANCH, PartitionSpecRef, Schema, SortOrder, SortOrderRef, StructType,
@@ -28,6 +27,7 @@ use crate::spec::{
 };
 use crate::table::Table;
 use crate::transaction::action::{ActionCommit, StatelessAction};
+use crate::{TableRequirement, TableUpdate};
 
 /// Replaces a table's schema, partition spec and sort order, leaving it with no current
 /// snapshot. Backs `REPLACE TABLE`.
@@ -36,10 +36,10 @@ use crate::transaction::action::{ActionCommit, StatelessAction};
 /// [`ReplaceTableAction::staged_table`] and add them with a later action, such as
 /// [`FastAppendAction`](crate::transaction::FastAppendAction).
 ///
-/// Committing fails with [`ErrorKind::CatalogCommitConflicts`], without retrying, if the table
-/// was dropped and recreated since the transaction started, or if a concurrent change would give
-/// the replacement different ids than its staged table, such as renaming or dropping one of the
-/// columns it keeps.
+/// Committing fails with [`ErrorKind::CatalogCommitConflicts`], without retrying, if since the
+/// transaction started the table was dropped and recreated, a concurrent change assigned new
+/// column or partition field ids, or a concurrent change would give the replacement's partition
+/// spec or sort order a different id than its staged table.
 #[derive(Clone)]
 pub struct ReplaceTableAction {
     table: Table,
@@ -127,26 +127,66 @@ impl ReplaceTableAction {
 #[async_trait]
 impl StatelessAction for ReplaceTableAction {
     async fn commit(&self, table: &Table) -> Result<ActionCommit> {
-        if table.metadata().uuid() != self.table.metadata().uuid() {
+        let original = self.table.metadata();
+        let base = table.metadata();
+        if base.uuid() != original.uuid() {
             return Err(Error::new(
                 ErrorKind::CatalogCommitConflicts,
                 "Cannot replace table: it was recreated since the transaction started",
             )
-            .with_context("expected", self.table.metadata().uuid())
-            .with_context("found", table.metadata().uuid()));
+            .with_context("expected", original.uuid())
+            .with_context("found", base.uuid()));
         }
-
-        let staged = self.replace(self.table.metadata())?.metadata;
-        let replaced = self.replace(table.metadata())?;
-
-        if layout(&staged) != layout(&replaced.metadata) {
+        if (base.last_column_id(), base.last_partition_id())
+            != (original.last_column_id(), original.last_partition_id())
+        {
             return Err(Error::new(
                 ErrorKind::CatalogCommitConflicts,
-                "Cannot replace table: a concurrent change would give the replacement different field ids than its staged table",
+                "Cannot replace table: a concurrent change assigned new column or partition field ids",
             ));
         }
 
-        let base = table.metadata();
+        let staged = self.replace(original)?;
+        let sets = |matches: fn(&TableUpdate) -> bool| staged.changes.iter().any(matches);
+        // Staged changes are relative to the original table, so reset what may have moved since.
+        let mut updates = Vec::new();
+        if base.snapshot_for_ref(MAIN_BRANCH).is_some()
+            && !sets(
+                |update| matches!(update, TableUpdate::RemoveSnapshotRef { ref_name } if ref_name == MAIN_BRANCH),
+            )
+        {
+            updates.push(TableUpdate::RemoveSnapshotRef {
+                ref_name: MAIN_BRANCH.to_string(),
+            });
+        }
+        if !sets(|update| matches!(update, TableUpdate::SetCurrentSchema { .. })) {
+            updates.push(TableUpdate::SetCurrentSchema {
+                schema_id: staged.metadata.current_schema_id(),
+            });
+        }
+        if !sets(|update| matches!(update, TableUpdate::SetDefaultSpec { .. })) {
+            updates.push(TableUpdate::SetDefaultSpec {
+                spec_id: staged.metadata.default_partition_spec_id(),
+            });
+        }
+        if !sets(|update| matches!(update, TableUpdate::SetDefaultSortOrder { .. })) {
+            updates.push(TableUpdate::SetDefaultSortOrder {
+                sort_order_id: staged.metadata.default_sort_order_id(),
+            });
+        }
+        updates.extend(staged.changes);
+
+        let mut builder = base.clone().into_builder(None);
+        for update in &updates {
+            builder = update.clone().apply(builder)?;
+        }
+        if layout(&staged.metadata) != layout(&builder.build()?.metadata) {
+            return Err(Error::new(
+                ErrorKind::CatalogCommitConflicts,
+                "Cannot replace table: a concurrent change would give the replacement different ids than its staged table",
+            ));
+        }
+
         let requirements = vec![
             TableRequirement::UuidMatch { uuid: base.uuid() },
             TableRequirement::RefSnapshotIdMatch {
@@ -170,7 +210,7 @@ impl StatelessAction for ReplaceTableAction {
             },
         ];
 
-        Ok(ActionCommit::new(replaced.changes, requirements))
+        Ok(ActionCommit::new(updates, requirements))
     }
 }
 
@@ -190,13 +230,14 @@ mod tests {
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
         DataContentType, DataFile, DataFileBuilder, DataFileFormat, FormatVersion, Literal,
-        MAIN_BRANCH, NestedField, PrimitiveType, Schema, Struct, Type,
+        MAIN_BRANCH, NestedField, PrimitiveType, Schema, Struct, Transform, Type,
+        UnboundPartitionField, UnboundPartitionSpec,
     };
     use crate::table::Table;
     use crate::test_utils::commit_with_fresh_state;
     use crate::transaction::tests::{make_v2_table, make_v3_minimal_table_in_catalog};
     use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
-    use crate::{Catalog, ErrorKind, TableCreation, TableRequirement};
+    use crate::{Catalog, ErrorKind, TableCommit, TableCreation, TableRequirement, TableUpdate};
 
     fn replacement_schema() -> Schema {
         Schema::builder()
@@ -296,7 +337,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replace_table_fails_when_a_concurrent_change_would_change_its_field_ids() {
+    async fn test_replace_table_fails_when_a_concurrent_change_assigns_new_field_ids() {
         let catalog = new_memory_catalog().await;
         let table = make_v3_minimal_table_in_catalog(&catalog).await;
 
@@ -319,7 +360,121 @@ mod tests {
             (err.kind(), err.message(), err.retryable()),
             (
                 ErrorKind::CatalogCommitConflicts,
-                "Cannot replace table: a concurrent change would give the replacement different field ids than its staged table",
+                "Cannot replace table: a concurrent change assigned new column or partition field ids",
+                false
+            )
+        );
+    }
+
+    /// Replaces a table that has an unused column `v` with `schema` while `v` is dropped
+    /// concurrently, returning the staged and the replaced table.
+    async fn replace_while_dropping_an_unused_column(
+        schema: impl FnOnce(&Table) -> Schema,
+    ) -> (Table, Table) {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+        let tx = Transaction::new(&table);
+        let table = tx
+            .update_schema()
+            .add_column(AddColumn::optional(
+                "v",
+                Type::Primitive(PrimitiveType::Int),
+            ))
+            .apply(tx)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+
+        let tx = Transaction::new(&table);
+        let replace = tx.replace_table(schema(&table));
+        let staged = replace.staged_table().unwrap();
+        let tx = replace.apply(tx).unwrap();
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![data_file(&staged, "test/new.parquet")])
+            .apply(tx)
+            .unwrap();
+
+        let concurrent = Transaction::new(&table);
+        concurrent
+            .update_schema()
+            .delete_column("v")
+            .apply(concurrent)
+            .unwrap()
+            .commit(&catalog)
+            .await
+            .unwrap();
+        (staged, tx.commit(&catalog).await.unwrap())
+    }
+
+    #[tokio::test]
+    async fn test_replace_table_keeps_the_staged_ids_of_a_concurrently_dropped_column() {
+        let (staged, replaced) = replace_while_dropping_an_unused_column(|_| {
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "x", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::optional(2, "v", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap()
+        })
+        .await;
+
+        assert_eq!(
+            replaced.metadata().current_schema().as_struct(),
+            staged.metadata().current_schema().as_struct()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_table_restores_its_unchanged_schema_over_a_concurrent_schema_change() {
+        let (staged, replaced) = replace_while_dropping_an_unused_column(|table| {
+            (**table.metadata().current_schema()).clone()
+        })
+        .await;
+
+        assert_eq!(
+            replaced.metadata().current_schema().as_struct(),
+            staged.metadata().current_schema().as_struct()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_replace_table_fails_when_the_catalog_would_renumber_its_spec() {
+        let catalog = new_memory_catalog().await;
+        let table = make_v3_minimal_table_in_catalog(&catalog).await;
+
+        let (tx, _) = replace_with_new_contents(&table);
+        catalog
+            .update_table(
+                TableCommit::builder()
+                    .ident(table.identifier().clone())
+                    .updates(vec![TableUpdate::AddSpec {
+                        spec: UnboundPartitionSpec::builder()
+                            .add_partition_field(
+                                UnboundPartitionField::builder()
+                                    .source_ids(vec![1])
+                                    .name("x_part")
+                                    .transform(Transform::Identity)
+                                    .build()
+                                    .unwrap(),
+                            )
+                            .unwrap()
+                            .build(),
+                    }])
+                    .requirements(vec![])
+                    .build(),
+            )
+            .await
+            .unwrap();
+        let err = tx.commit(&catalog).await.unwrap_err();
+
+        assert_eq!(
+            (err.kind(), err.message(), err.retryable()),
+            (
+                ErrorKind::CatalogCommitConflicts,
+                "Cannot replace table: a concurrent change would give the replacement different ids than its staged table",
                 false
             )
         );
