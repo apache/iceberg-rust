@@ -351,8 +351,9 @@ impl core::fmt::Debug for iceberg_catalog_rest::RestSessionCatalogBuilder
 pub fn iceberg_catalog_rest::RestSessionCatalogBuilder::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct iceberg_catalog_rest::SigV4AuthManager
 impl iceberg_catalog_rest::SigV4AuthManager
-pub fn iceberg_catalog_rest::SigV4AuthManager::from_properties(delegate: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthManager>, props: &std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> iceberg::error::Result<Self>
-pub fn iceberg_catalog_rest::SigV4AuthManager::new(delegate: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthManager>, signer: iceberg_catalog_rest::SigV4Signer, credentials: aws_credential_types::provider::credentials::SharedCredentialsProvider) -> Self
+pub fn iceberg_catalog_rest::SigV4AuthManager::new(delegate: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthManager>) -> Self
+pub fn iceberg_catalog_rest::SigV4AuthManager::with_credentials_provider(self, provider: aws_credential_types::provider::credentials::SharedCredentialsProvider) -> Self
+pub fn iceberg_catalog_rest::SigV4AuthManager::with_payload_hash_mode(self, mode: iceberg_catalog_rest::PayloadHashMode) -> Self
 impl core::fmt::Debug for iceberg_catalog_rest::SigV4AuthManager
 pub fn iceberg_catalog_rest::SigV4AuthManager::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl iceberg_catalog_rest::AuthManager for iceberg_catalog_rest::SigV4AuthManager
@@ -360,15 +361,6 @@ pub fn iceberg_catalog_rest::SigV4AuthManager::catalog_session<'life0, 'life1, '
 pub fn iceberg_catalog_rest::SigV4AuthManager::contextual_session<'life0, 'life1, 'async_trait>(&'life0 self, context: &'life1 iceberg::catalog::session::SessionContext, catalog_session: alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::sync::Arc<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn iceberg_catalog_rest::SigV4AuthManager::init_session<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, client: &'life1 iceberg_catalog_rest::HttpClient, props: &'life2 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::boxed::Box<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub fn iceberg_catalog_rest::SigV4AuthManager::signs_requests(&self) -> bool
-pub struct iceberg_catalog_rest::SigV4Signer
-impl iceberg_catalog_rest::SigV4Signer
-pub fn iceberg_catalog_rest::SigV4Signer::sign(&self, request: &mut iceberg_catalog_rest::HttpRequest, credentials: &aws_credential_types::credentials_impl::Credentials) -> iceberg::error::Result<()>
-impl core::clone::Clone for iceberg_catalog_rest::SigV4Signer
-pub fn iceberg_catalog_rest::SigV4Signer::clone(&self) -> iceberg_catalog_rest::SigV4Signer
-impl core::fmt::Debug for iceberg_catalog_rest::SigV4Signer
-pub fn iceberg_catalog_rest::SigV4Signer::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl iceberg_catalog_rest::SigV4Signer
-pub fn iceberg_catalog_rest::SigV4Signer::builder() -> SigV4SignerBuilder<((), (), ())>
 pub struct iceberg_catalog_rest::UpdateNamespacePropertiesRequest
 pub iceberg_catalog_rest::UpdateNamespacePropertiesRequest::removals: core::option::Option<alloc::vec::Vec<alloc::string::String>>
 pub iceberg_catalog_rest::UpdateNamespacePropertiesRequest::updates: std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>

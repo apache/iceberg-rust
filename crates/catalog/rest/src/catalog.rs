@@ -2021,15 +2021,9 @@ mod tests {
     fn test_sigv4_manager() -> crate::auth::SigV4AuthManager {
         use aws_credential_types::provider::SharedCredentialsProvider;
 
-        use crate::auth::{PayloadHashMode, SigV4AuthManager, SigV4Signer};
+        use crate::auth::SigV4AuthManager;
 
-        SigV4AuthManager::new(
-            Arc::new(NoopAuthManager),
-            SigV4Signer::builder()
-                .region("us-east-1")
-                .service("execute-api")
-                .mode(PayloadHashMode::IcebergRest)
-                .build(),
+        SigV4AuthManager::new(Arc::new(NoopAuthManager)).with_credentials_provider(
             SharedCredentialsProvider::new(aws_credential_types::Credentials::new(
                 "ak",
                 "sk",
@@ -2038,6 +2032,16 @@ mod tests {
                 "test",
             )),
         )
+    }
+
+    /// `pairs` plus the signing region [`test_sigv4_manager`] needs.
+    #[cfg(feature = "sigv4")]
+    fn sigv4_test_props<const N: usize>(pairs: [(&str, &str); N]) -> HashMap<String, String> {
+        pairs
+            .into_iter()
+            .chain([(crate::auth::REST_CATALOG_PROP_SIGNING_REGION, "us-east-1")])
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     fn test_catalog_with<M>(config: RestCatalogConfig, auth_manager: M) -> RestSessionCatalog
@@ -3697,7 +3701,10 @@ mod tests {
             .create_async()
             .await;
 
-        let config = RestCatalogConfig::builder().uri(server.url()).build();
+        let config = RestCatalogConfig::builder()
+            .uri(server.url())
+            .props(sigv4_test_props([]))
+            .build();
         let err = test_catalog_with(config, test_sigv4_manager())
             .list_namespaces(&SessionContext::empty(), None)
             .await
@@ -3754,9 +3761,9 @@ mod tests {
 
         let config = RestCatalogConfig::builder()
             .uri(server.url())
-            .props(HashMap::from([(
-                REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES.to_string(),
-                "invalid".to_string(),
+            .props(sigv4_test_props([(
+                REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES,
+                "invalid",
             )]))
             .build();
         let catalog = test_catalog_with(config, test_sigv4_manager());
@@ -3798,9 +3805,9 @@ mod tests {
 
         let config = RestCatalogConfig::builder()
             .uri(server.url())
-            .props(HashMap::from([(
-                "header.authorization".to_string(),
-                "Bearer configured".to_string(),
+            .props(sigv4_test_props([(
+                "header.authorization",
+                "Bearer configured",
             )]))
             .build();
         let catalog = test_catalog_with(config, test_sigv4_manager());
