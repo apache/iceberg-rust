@@ -2973,6 +2973,7 @@ dependencies = [
  "async-trait",
  "aws-credential-types",
  "aws-sigv4",
+ "backon",
  "base64 0.22.1",
  "bytes",
  "chrono",
