@@ -65,6 +65,8 @@ pub const S3_ALLOW_ANONYMOUS: &str = "s3.allow-anonymous";
 pub const S3_DISABLE_EC2_METADATA: &str = "s3.disable-ec2-metadata";
 /// Option to skip loading configuration from config file and the env.
 pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
+/// S3 bulk delete batch size property key (matches Iceberg Java specification).
+pub const S3_DELETE_BATCH_SIZE: &str = "s3.delete.batch-size";
 /// Size in bytes of each part of a multipart upload. Defaults to 32 MiB, matching Java
 /// `S3FileIOProperties.MULTIPART_SIZE_DEFAULT`. Must be at least 5 MiB, the S3 minimum,
 /// and at most `i32::MAX`, since Java reads the property as an `int`.
@@ -73,7 +75,7 @@ pub const S3_DISABLE_CONFIG_LOAD: &str = "s3.disable-config-load";
 /// transfer within the per-operation IO timeout. Lower it on a slow connection; if a
 /// 5 MiB part still cannot finish in time, raise `opendal.io-timeout-ms` instead.
 ///
-/// Only `iceberg-storage-opendal` reads this property, so [`S3Config`] has no matching field.
+/// Only storage backends supporting S3 read this property, so [`S3Config`] has no matching field.
 pub const S3_MULTIPART_PART_SIZE_BYTES: &str = "s3.multipart.part-size-bytes";
 /// Number of times to retry an S3 operation, `0` to disable retrying. Retries back off exponentially,
 /// with jitter, between [`S3_RETRY_MIN_WAIT_MS`] and [`S3_RETRY_MAX_WAIT_MS`].
