@@ -51,7 +51,7 @@
 //!         .scan()
 //!         .select(["name", "id"])
 //!         .build()?
-//!         .to_arrow()
+//!         .to_arrow(Default::default())
 //!         .await?;
 //!
 //!     // Consume this stream like arrow record batch stream.
@@ -76,7 +76,7 @@ pub mod sensitive;
 
 mod catalog;
 
-pub use catalog::utils::drop_table_data;
+pub use catalog::utils::{delete_removed_metadata_files, drop_table_data};
 pub use catalog::*;
 
 pub mod table;

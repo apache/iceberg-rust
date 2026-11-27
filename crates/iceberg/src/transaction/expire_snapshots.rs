@@ -376,7 +376,7 @@ mod tests {
     use crate::transaction::Transaction;
     use crate::transaction::action::ApplyTransactionAction;
     use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
-    use crate::transaction::tests::{make_v2_minimal_table, make_v2_table};
+    use crate::transaction::tests::{make_v1_table, make_v2_minimal_table, make_v2_table};
     use crate::{TableRequirement, TableUpdate};
 
     // `make_v2_table` carries an older snapshot (ts 1515100955770) and a current
@@ -961,6 +961,25 @@ mod tests {
 
         let removed = expired(&table, action().expire_older_than_ms(now - 5 * day_ms)).await;
         assert!(removed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_v1_refs_protect_their_snapshots() {
+        // Written by Spark: `main` has three snapshots, and the tag `t1` (max-ref-age-ms of 7 days)
+        // and the branch `b1` point at the oldest one, from 2026-10-26.
+        let json = std::fs::read_to_string(format!(
+            "{}/testdata/table_metadata/TableMetadataV1WithRefs.json",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        let metadata = serde_json::from_str(&json).unwrap();
+        let table = make_v1_table().with_metadata(Arc::new(metadata));
+
+        // With the table defaults, `main` keeps only its head and `t1` has aged out,
+        // but `b1` keeps the oldest snapshot.
+        assert_eq!(expired(&table, action()).await, vec![2148504332539494603]);
+        let updates = updates_of(&table, action()).await;
+        assert_eq!(removed_refs(&updates), vec!["t1"]);
     }
 
     #[tokio::test]

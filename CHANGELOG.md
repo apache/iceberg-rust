@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Breaking Changes
 
+* `TableScan::to_arrow` now requires `ArrowReaderOptions`; pass `Default::default()` for default reader settings. Move reader-setting calls from `TableScanBuilder` and `ArrowReaderBuilder` to `ArrowReaderOptions::builder()`, then pass the options to `to_arrow(options)` or `ArrowReaderBuilder::with_options(options)`. Configure Parquet I/O through the nested `ParquetReadOptions`. Scan `with_concurrency_limit()` now bounds manifest planning only; set `with_data_file_concurrency_limit` on the reader-options builder to bound data-file and delete-file reads. Unset reader concurrency uses execution-host parallelism. See [#3514](https://github.com/apache/iceberg-rust/pull/3514).
+
 * `FileWrite::close`, `EncryptedOutputFile::write`, `ManifestListWriter::close`, and `PuffinWriter::close` now return `Result<io::FileMetadata>` instead of `Result<()>`. The returned size is the on-disk size, including encryption overhead. Custom `FileWrite` implementations must return the number of bytes stored.
 * `EncryptedOutputFile::key_metadata()` is replaced by `key_metadata_with_saved_file_metadata(&FileMetadata)`. Pass the metadata returned by `write()` or the writer's `close()` to include the stored length before encoding key metadata.
 * `EncryptedInputFile::metadata()` is now synchronous and derives the plaintext size from key metadata without a storage stat. Remove `.await` from calls to this method.

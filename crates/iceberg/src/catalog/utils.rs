@@ -19,11 +19,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::{TryStreamExt, stream};
+use futures::{StreamExt, TryStreamExt, stream};
 
 use crate::Result;
 use crate::io::FileIO;
-use crate::spec::{ManifestFile, ManifestReader};
+use crate::spec::{ManifestFile, TableMetadata};
 use crate::table::Table;
 
 const DELETE_CONCURRENCY: usize = 10;
@@ -62,7 +62,7 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
 
     // Delete data files only if gc.enabled is true, to avoid corrupting shared tables
     if metadata.table_properties().gc_enabled()? {
-        delete_data_files(io, &manifests_to_delete).await?;
+        delete_data_files(table_info, &manifests_to_delete).await?;
     }
 
     // Delete manifest files
@@ -104,14 +104,54 @@ pub async fn drop_table_data(table_info: &Table) -> Result<()> {
     Ok(())
 }
 
+/// Deletes the previous metadata files tracked by `base` that `new` no longer tracks, if
+/// `write.metadata.delete-after-commit.enabled` is `true` on `new`.
+///
+/// This mirrors the Java implementation's `CatalogUtil.deleteRemovedMetadataFiles`. Call it
+/// only after `new` has been committed over `base`. Deletion is best-effort: failures are
+/// logged rather than returned, since the commit has already succeeded.
+pub async fn delete_removed_metadata_files(io: &FileIO, base: &TableMetadata, new: &TableMetadata) {
+    match new
+        .table_properties()
+        .metadata_delete_after_commit_enabled()
+    {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(e) => {
+            tracing::warn!("Skipping deletion of removed metadata files: {e}");
+            return;
+        }
+    }
+
+    let retained: HashSet<&str> = new
+        .metadata_log()
+        .iter()
+        .map(|log| log.metadata_file.as_str())
+        .collect();
+    let removed = base
+        .metadata_log()
+        .iter()
+        .map(|log| log.metadata_file.as_str())
+        .filter(|path| !retained.contains(path));
+
+    stream::iter(removed)
+        .for_each_concurrent(DELETE_CONCURRENCY, |path| async move {
+            if let Err(e) = io.delete(path).await {
+                tracing::warn!("Failed to delete removed metadata file {path}: {e}");
+            }
+        })
+        .await;
+}
+
 /// Reads manifests concurrently and deletes the data files referenced within.
 async fn delete_data_files(
-    io: &FileIO,
+    table: &Table,
     manifest_files: &HashMap<String, ManifestFile>,
 ) -> Result<()> {
+    let io = table.file_io();
     stream::iter(manifest_files.values().map(Ok))
         .try_for_each_concurrent(DELETE_CONCURRENCY, |manifest_file| async move {
-            let manifest = ManifestReader::new(io.clone()).read(manifest_file).await?;
+            let manifest = table.manifest_reader().read(manifest_file).await?;
             let data_file_paths = manifest
                 .entries()
                 .iter()

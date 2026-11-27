@@ -41,11 +41,12 @@ use crate::metadata_columns::{
     RESERVED_COL_NAME_LAST_UPDATED_SEQUENCE_NUMBER, RESERVED_FIELD_ID_DELETE_FILE_PATH,
     RESERVED_FIELD_ID_DELETE_FILE_POS,
 };
+use crate::scan::FileScanTaskColumnStats;
 use crate::spec::{
     DataContentType, DataFileBuilder, DataFileFormat, FormatVersion, Literal, ManifestEntry,
-    ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField, PartitionSpec,
-    PrimitiveType, Schema, Struct, StructType, TableMetadata, TableMetadataBuilder, Transform,
-    Type, UnboundPartitionSpec,
+    ManifestFile, ManifestListWriter, ManifestStatus, ManifestWriterBuilder, NestedField,
+    PartitionSpec, PrimitiveType, Schema, SchemaRef, Struct, StructType, TableMetadata,
+    TableMetadataBuilder, Transform, Type, UnboundPartitionSpec,
 };
 use crate::table::Table;
 use crate::test_utils::test_runtime;
@@ -607,24 +608,15 @@ impl TableTestFixture {
         manifest_list_write.close().await.unwrap();
     }
 
-    /// Writes a data manifest under an older schema where the identity partition
-    /// source `x` (id 1) is still `int` (so the partition value is stored as `int`),
-    /// plus an equality-delete manifest. Exercises the scan's reader-side widening.
-    /// When `delete_before_promotion` is false the delete is written under the current
-    /// `long` schema (`long` partition), and the old `int` partition must widen to
-    /// match it. When true the delete is also written under the old `int` schema (`int`
-    /// partition), which matched on main and must keep matching once both sides widen.
-    /// The data/delete parquet files themselves are not written, which is enough for
-    /// `plan_files` (it reads only manifests).
-    pub(crate) async fn setup_promoted_partition_with_eq_delete(
-        &mut self,
-        delete_before_promotion: bool,
-    ) {
+    async fn write_unpromoted_data_manifest(
+        &self,
+        current_schema: &Schema,
+        partition: Struct,
+    ) -> (SchemaRef, ManifestFile) {
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
         let parent_snapshot = current_snapshot
             .parent_snapshot(self.table.metadata())
             .unwrap();
-        let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
         let current_partition_spec = self.table.metadata().default_partition_spec();
 
         // The schema the data manifest was written under: the current schema with the
@@ -641,13 +633,17 @@ impl TableTestFixture {
 
         // Data manifest under the old (int) schema; an Existing entry from the parent
         // snapshot so its data sequence number is below the equality delete's.
-        let mut data_writer = ManifestWriterBuilder::new(
+        let data_writer = ManifestWriterBuilder::new(
             self.next_manifest_file(),
             Some(current_snapshot.snapshot_id()),
             written_schema.clone(),
             current_partition_spec.as_ref().clone(),
-        )
-        .build_v2_data();
+        );
+        let mut data_writer = match self.table.metadata().format_version() {
+            FormatVersion::V1 => data_writer.build_v1(),
+            FormatVersion::V2 => data_writer.build_v2_data(),
+            FormatVersion::V3 => data_writer.build_v3_data(),
+        };
         data_writer
             .add_existing_entry(
                 ManifestEntry::builder()
@@ -657,13 +653,13 @@ impl TableTestFixture {
                     .file_sequence_number(parent_snapshot.sequence_number())
                     .data_file(
                         DataFileBuilder::default()
-                            .partition_spec_id(0)
+                            .partition_spec_id(current_partition_spec.spec_id())
                             .content(DataContentType::Data)
                             .file_path(format!("{}/x7.parquet", &self.table_location))
                             .file_format(DataFileFormat::Parquet)
                             .file_size_in_bytes(100)
                             .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::int(7))]))
+                            .partition(partition)
                             .build()
                             .unwrap(),
                     )
@@ -671,6 +667,25 @@ impl TableTestFixture {
             )
             .unwrap();
         let data_manifest = data_writer.write_manifest_file().await.unwrap();
+
+        (written_schema, data_manifest)
+    }
+
+    /// Writes manifests for int-partitioned data and an equality delete.
+    /// `delete_before_promotion` selects an int delete partition; otherwise it is long.
+    pub(crate) async fn setup_promoted_partition_with_eq_delete(
+        &mut self,
+        delete_before_promotion: bool,
+    ) {
+        let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+        let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
+        let current_partition_spec = self.table.metadata().default_partition_spec();
+        let (written_schema, data_manifest) = self
+            .write_unpromoted_data_manifest(
+                &current_schema,
+                Struct::from_iter([Some(Literal::int(7))]),
+            )
+            .await;
 
         // Equality-delete manifest, Added in the current snapshot so its sequence
         // number is above the data file's. Written under the old `int` schema or the
@@ -759,54 +774,16 @@ impl TableTestFixture {
             .unwrap();
 
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
-        let parent_snapshot = current_snapshot
-            .parent_snapshot(self.table.metadata())
-            .unwrap();
         let current_schema = current_snapshot.schema(self.table.metadata()).unwrap();
         let current_partition_spec = self.table.metadata().default_partition_spec();
 
-        let mut fields = current_schema.as_struct().fields().to_vec();
-        fields[0] = NestedField::required(1, "x", PrimitiveType::Int).into();
-        let written_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(0)
-                .with_fields(fields)
-                .build()
-                .unwrap(),
-        );
-
         let data_file_path = format!("{}/x7.parquet", &self.table_location);
-
-        let mut data_writer = ManifestWriterBuilder::new(
-            self.next_manifest_file(),
-            Some(current_snapshot.snapshot_id()),
-            written_schema,
-            current_partition_spec.as_ref().clone(),
-        )
-        .build_v3_data();
-        data_writer
-            .add_existing_entry(
-                ManifestEntry::builder()
-                    .status(ManifestStatus::Existing)
-                    .snapshot_id(parent_snapshot.snapshot_id())
-                    .sequence_number(parent_snapshot.sequence_number())
-                    .file_sequence_number(parent_snapshot.sequence_number())
-                    .data_file(
-                        DataFileBuilder::default()
-                            .partition_spec_id(0)
-                            .content(DataContentType::Data)
-                            .file_path(data_file_path.clone())
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(100)
-                            .record_count(1)
-                            .partition(Struct::from_iter([Some(Literal::int(7))]))
-                            .build()
-                            .unwrap(),
-                    )
-                    .build(),
+        let (_, data_manifest) = self
+            .write_unpromoted_data_manifest(
+                &current_schema,
+                Struct::from_iter([Some(Literal::int(7))]),
             )
-            .unwrap();
-        let data_manifest = data_writer.write_manifest_file().await.unwrap();
+            .await;
 
         let mut dv_writer = ManifestWriterBuilder::new(
             self.next_manifest_file(),
@@ -895,59 +872,14 @@ impl TableTestFixture {
         self.table = self.table.clone().with_metadata(Arc::new(metadata));
 
         let current_snapshot = self.table.metadata().current_snapshot().unwrap();
-        let parent_snapshot = current_snapshot
-            .parent_snapshot(self.table.metadata())
-            .unwrap();
         let current_schema = self.table.metadata().current_schema().clone();
         let current_partition_spec = self.table.metadata().default_partition_spec();
-
-        // The schema the data manifest was written under: the partition source `x` still
-        // `int`.
-        let mut fields = current_schema.as_struct().fields().to_vec();
-        fields[0] = NestedField::required(1, "x", PrimitiveType::Int).into();
-        let written_schema = Arc::new(
-            Schema::builder()
-                .with_schema_id(0)
-                .with_fields(fields)
-                .build()
-                .unwrap(),
-        );
-
-        // Data manifest under the old (int) schema; an Existing entry from the parent
-        // snapshot so its sequence number is below the equality delete's.
-        let mut data_writer = ManifestWriterBuilder::new(
-            self.next_manifest_file(),
-            Some(current_snapshot.snapshot_id()),
-            written_schema,
-            current_partition_spec.as_ref().clone(),
-        )
-        .build_v2_data();
-        data_writer
-            .add_existing_entry(
-                ManifestEntry::builder()
-                    .status(ManifestStatus::Existing)
-                    .snapshot_id(parent_snapshot.snapshot_id())
-                    .sequence_number(parent_snapshot.sequence_number())
-                    .file_sequence_number(parent_snapshot.sequence_number())
-                    .data_file(
-                        DataFileBuilder::default()
-                            .partition_spec_id(current_partition_spec.spec_id())
-                            .content(DataContentType::Data)
-                            .file_path(format!("{}/x7.parquet", &self.table_location))
-                            .file_format(DataFileFormat::Parquet)
-                            .file_size_in_bytes(100)
-                            .record_count(1)
-                            .partition(Struct::from_iter([
-                                Some(Literal::int(7)),
-                                Some(Literal::date(20_000)),
-                            ]))
-                            .build()
-                            .unwrap(),
-                    )
-                    .build(),
+        let (_, data_manifest) = self
+            .write_unpromoted_data_manifest(
+                &current_schema,
+                Struct::from_iter([Some(Literal::int(7)), Some(Literal::date(20_000))]),
             )
-            .unwrap();
-        let data_manifest = data_writer.write_manifest_file().await.unwrap();
+            .await;
 
         // Equality-delete manifest, Added in the current snapshot (sequence number above
         // the data file's) under the current `long` schema.
@@ -1004,14 +936,25 @@ impl TableTestFixture {
 
         // Drop the date source `d`: the manifests keep the two-field spec while the
         // current schema loses `d`, so the spec resolves `d` to `unknown`.
+        self.drop_partition_source(9);
+    }
+
+    /// Drops a source column after making the default partition spec unpartitioned.
+    pub(crate) fn drop_partition_source(&mut self, source_id: i32) {
+        let current_schema = self.table.metadata().current_schema();
         let evolved_schema = Schema::builder()
             .with_fields(
                 current_schema
                     .as_struct()
                     .fields()
                     .iter()
-                    .filter(|field| field.id != 9)
+                    .filter(|field| field.id != source_id)
                     .cloned(),
+            )
+            .with_identifier_field_ids(
+                current_schema
+                    .identifier_field_ids()
+                    .filter(|id| *id != source_id),
             )
             .build()
             .unwrap();
@@ -1519,6 +1462,86 @@ impl TableTestFixture {
         );
         manifest_list_write
             .add_manifests(std::iter::once(data_file_manifest))
+            .unwrap();
+        manifest_list_write.close().await.unwrap();
+    }
+
+    /// Writes one manifest per element of `manifests`, in order. Each holds one live "Added"
+    /// data-file entry per element of its statistics (`1.parquet`, `2.parquet`, ..., numbered
+    /// across manifests and partitioned on `x` = 100, 200, ...), carrying that element's column
+    /// sizes, value, null and NaN counts and bounds. A manifest is written with its schema, or
+    /// the current snapshot's schema if `None`.
+    pub(crate) async fn setup_manifest_files_with_column_stats(
+        &mut self,
+        manifests: &[(Option<SchemaRef>, Vec<FileScanTaskColumnStats>)],
+    ) {
+        let current_snapshot = self.table.metadata().current_snapshot().unwrap();
+        let current_partition_spec = self.table.metadata().default_partition_spec();
+        let parquet_file_size = self.write_parquet_data_files();
+
+        let mut manifest_files = vec![];
+        let mut file_number = 0;
+        for (manifest_schema, column_stats) in manifests {
+            let schema = match manifest_schema {
+                Some(schema) => schema.clone(),
+                None => current_snapshot.schema(self.table.metadata()).unwrap(),
+            };
+            let mut writer = ManifestWriterBuilder::new(
+                self.next_manifest_file(),
+                Some(current_snapshot.snapshot_id()),
+                schema,
+                current_partition_spec.as_ref().clone(),
+            )
+            .build_v2_data();
+
+            for stats in column_stats {
+                file_number += 1;
+                let data_file = DataFileBuilder::default()
+                    .partition_spec_id(0)
+                    .content(DataContentType::Data)
+                    .file_path(format!("{}/{file_number}.parquet", &self.table_location))
+                    .file_format(DataFileFormat::Parquet)
+                    .file_size_in_bytes(parquet_file_size)
+                    .record_count(1)
+                    .partition(Struct::from_iter([Some(Literal::long(100 * file_number))]))
+                    .column_sizes(stats.column_sizes().clone())
+                    .value_counts(stats.value_counts().clone())
+                    .null_value_counts(stats.null_value_counts().clone())
+                    .nan_value_counts(stats.nan_value_counts().clone())
+                    .lower_bounds(stats.lower_bounds().clone())
+                    .upper_bounds(stats.upper_bounds().clone())
+                    .build()
+                    .unwrap();
+
+                writer
+                    .add_entry(
+                        ManifestEntry::builder()
+                            .status(ManifestStatus::Added)
+                            .data_file(data_file)
+                            .build(),
+                    )
+                    .unwrap();
+            }
+
+            manifest_files.push(writer.write_manifest_file().await.unwrap());
+        }
+
+        let manifest_list_writer = self
+            .table
+            .file_io()
+            .new_output(current_snapshot.manifest_list())
+            .unwrap()
+            .writer()
+            .await
+            .unwrap();
+        let mut manifest_list_write = ManifestListWriter::v2(
+            manifest_list_writer,
+            current_snapshot.snapshot_id(),
+            current_snapshot.parent_snapshot_id(),
+            current_snapshot.sequence_number(),
+        );
+        manifest_list_write
+            .add_manifests(manifest_files.into_iter())
             .unwrap();
         manifest_list_write.close().await.unwrap();
     }

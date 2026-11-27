@@ -33,6 +33,7 @@ use iceberg::{Error, ErrorKind, Result};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use crate::prefixed::{DELETE_BATCH_SIZE, PrefixedStorage};
 #[cfg(feature = "opendal-s3")]
 use crate::s3::CustomAwsCredentialLoader;
 use crate::{OpenDalClientConfig, OpenDalStorage};
@@ -95,8 +96,9 @@ fn build_storage_for_scheme(
             let config = crate::s3::s3_config_parse(props.clone())?;
             Ok(OpenDalStorage::S3 {
                 config: Arc::new(config),
+                multipart_part_size: crate::s3::s3_multipart_part_size_parse(props)?,
                 customized_credential_load: customized_credential_load.clone(),
-                client_config,
+                client_config: crate::s3::s3_client_config(props, client_config)?,
             })
         }
         #[cfg(feature = "opendal-gcs")]
@@ -159,6 +161,8 @@ fn build_storage_for_scheme(
 /// delegates operations to the appropriate [`OpenDalStorage`] variant based on
 /// the path scheme.
 ///
+/// Supports [storage credentials](iceberg::io::StorageConfig::storage_credentials).
+///
 /// # Serialization
 ///
 /// Serialization fails when a custom S3 credential loader is configured because the loader holds
@@ -216,7 +220,7 @@ impl OpenDalResolvingStorageFactory {
 impl StorageFactory for OpenDalResolvingStorageFactory {
     fn build(&self, config: &StorageConfig) -> Result<Arc<dyn Storage>> {
         Ok(Arc::new(OpenDalResolvingStorage {
-            props: config.props().clone(),
+            config: config.clone(),
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: self.customized_credential_load.clone(),
@@ -232,11 +236,11 @@ impl StorageFactory for OpenDalResolvingStorageFactory {
 /// the same canonical scheme, so they share a storage instance.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OpenDalResolvingStorage {
-    /// Configuration properties shared across all backends.
-    props: HashMap<String, String>,
+    /// Configuration shared across all backends.
+    config: StorageConfig,
     /// Cache of canonical scheme to storage mappings.
     #[serde(skip, default)]
-    storages: RwLock<HashMap<&'static str, Arc<OpenDalStorage>>>,
+    storages: RwLock<HashMap<&'static str, Arc<PrefixedStorage>>>,
     /// Custom AWS credential loader for S3 storage.
     #[cfg(feature = "opendal-s3")]
     #[serde(skip)]
@@ -245,8 +249,8 @@ pub struct OpenDalResolvingStorage {
 
 impl OpenDalResolvingStorage {
     /// Resolve the storage for the given path by extracting the canonical scheme and
-    /// returning the cached or newly-created [`OpenDalStorage`].
-    fn resolve(&self, path: &str) -> Result<Arc<OpenDalStorage>> {
+    /// returning the cached or newly-created storage for it.
+    fn resolve(&self, path: &str) -> Result<Arc<PrefixedStorage>> {
         let scheme = extract_scheme(path)?;
 
         // Fast path: check read lock first.
@@ -271,12 +275,32 @@ impl OpenDalResolvingStorage {
             return Ok(storage.clone());
         }
 
-        let storage = build_storage_for_scheme(
-            scheme,
-            &self.props,
-            #[cfg(feature = "opendal-s3")]
-            &self.customized_credential_load,
-        )?;
+        // A prefix names its scheme, and never matches the paths of another.
+        let storage_credentials = self
+            .config
+            .storage_credentials()
+            .iter()
+            .filter(|credential| {
+                // A bare scheme such as `s3` is a valid prefix but not a URL.
+                let prefix = credential.prefix();
+                extract_scheme(prefix)
+                    .or_else(|_| parse_scheme(prefix))
+                    .is_ok_and(|s| s == scheme)
+            })
+            .cloned()
+            .collect();
+        let config = StorageConfig::builder()
+            .props(self.config.props().clone())
+            .storage_credentials(storage_credentials)
+            .build();
+        let storage = PrefixedStorage::new(&config, |config| {
+            build_storage_for_scheme(
+                scheme,
+                config.props(),
+                #[cfg(feature = "opendal-s3")]
+                &self.customized_credential_load,
+            )
+        })?;
         let storage = Arc::new(storage);
         cache.insert(scheme, storage.clone());
         Ok(storage)
@@ -324,10 +348,21 @@ impl Storage for OpenDalResolvingStorage {
         let mut grouped: HashMap<&'static str, Vec<String>> = HashMap::new();
         while let Some(path) = paths.next().await {
             let scheme = extract_scheme(&path)?;
-            grouped.entry(scheme).or_default().push(path);
+            let batch = grouped.entry(scheme).or_default();
+            batch.push(path);
+            if batch.len() >= DELETE_BATCH_SIZE {
+                let batch = std::mem::take(batch);
+                let storage = self.resolve(&batch[0])?;
+                storage
+                    .delete_stream(futures::stream::iter(batch).boxed())
+                    .await?;
+            }
         }
 
         for (_, paths) in grouped {
+            if paths.is_empty() {
+                continue;
+            }
             let storage = self.resolve(&paths[0])?;
             storage
                 .delete_stream(futures::stream::iter(paths).boxed())
@@ -337,23 +372,20 @@ impl Storage for OpenDalResolvingStorage {
     }
 
     fn new_input(&self, path: &str) -> Result<InputFile> {
-        Ok(InputFile::new(
-            Arc::new(self.resolve(path)?.as_ref().clone()),
-            path.to_string(),
-        ))
+        self.resolve(path)?.new_input(path)
     }
 
     fn new_output(&self, path: &str) -> Result<OutputFile> {
-        Ok(OutputFile::new(
-            Arc::new(self.resolve(path)?.as_ref().clone()),
-            path.to_string(),
-        ))
+        self.resolve(path)?.new_output(path)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
+
+    #[cfg(any(feature = "opendal-memory", feature = "opendal-s3"))]
+    use iceberg::io::StorageCredential;
 
     use super::*;
     use crate::OPENDAL_IO_TIMEOUT_MS;
@@ -388,11 +420,11 @@ mod tests {
         );
     }
 
-    /// Builds a resolving storage with empty props, suitable for `resolve()`
+    /// Builds a resolving storage with empty config, suitable for `resolve()`
     /// calls that don't actually hit any backend.
     fn empty_resolving_storage() -> OpenDalResolvingStorage {
         OpenDalResolvingStorage {
-            props: HashMap::new(),
+            config: StorageConfig::new(),
             storages: RwLock::new(HashMap::new()),
             #[cfg(feature = "opendal-s3")]
             customized_credential_load: None,
@@ -402,9 +434,7 @@ mod tests {
     #[test]
     fn test_resolve_propagates_io_timeout() {
         let mut storage = empty_resolving_storage();
-        storage
-            .props
-            .insert(OPENDAL_IO_TIMEOUT_MS.to_string(), "45000".to_string());
+        storage.config = StorageConfig::new().with_prop(OPENDAL_IO_TIMEOUT_MS, "45000");
 
         let paths: &[&str] = &[
             #[cfg(feature = "opendal-memory")]
@@ -425,10 +455,101 @@ mod tests {
         for path in paths {
             let resolved = storage.resolve(path).unwrap();
             assert_eq!(
-                resolved.client_config().io_timeout(),
+                resolved.storage_for(path).client_config().io_timeout(),
                 Duration::from_secs(45),
                 "{path}"
             );
+        }
+    }
+
+    #[cfg(feature = "opendal-memory")]
+    #[test]
+    fn test_resolve_ignores_credentials_for_other_schemes() {
+        let mut storage = empty_resolving_storage();
+        let storage_credentials = ["s3://bucket/", "s3", "future://bucket/"]
+            .map(|prefix| {
+                StorageCredential::new(
+                    prefix,
+                    HashMap::from([(OPENDAL_IO_TIMEOUT_MS.to_string(), "invalid".to_string())]),
+                )
+                .unwrap()
+            })
+            .to_vec();
+        storage.config = StorageConfig::builder()
+            .storage_credentials(storage_credentials)
+            .build();
+
+        assert!(storage.resolve("memory:/key").is_ok());
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_resolve_applies_a_scheme_name_prefix_to_its_aliases() {
+        let mut storage = empty_resolving_storage();
+        storage.config = StorageConfig::builder()
+            .storage_credentials(vec![
+                StorageCredential::new(
+                    "s3",
+                    HashMap::from([(OPENDAL_IO_TIMEOUT_MS.to_string(), "2000".to_string())]),
+                )
+                .unwrap(),
+            ])
+            .build();
+
+        let timeouts = ["s3://bucket/key", "s3a://bucket/key"].map(|path| {
+            storage
+                .resolve(path)
+                .unwrap()
+                .storage_for(path)
+                .client_config()
+                .io_timeout()
+        });
+
+        assert_eq!(timeouts, [Duration::from_secs(2); 2]);
+    }
+
+    /// A resolving storage holding one delete batch of memory files, and their paths.
+    #[cfg(feature = "opendal-memory")]
+    async fn storage_with_a_full_batch() -> (OpenDalResolvingStorage, Vec<String>) {
+        let storage = empty_resolving_storage();
+        let paths: Vec<_> = (0..DELETE_BATCH_SIZE)
+            .map(|i| format!("memory:/table/{i}"))
+            .collect();
+        for path in &paths {
+            storage.write(path, Bytes::from("data")).await.unwrap();
+        }
+        (storage, paths)
+    }
+
+    #[cfg(feature = "opendal-memory")]
+    #[tokio::test(start_paused = true)]
+    async fn test_delete_stream_deletes_a_full_batch_before_the_stream_ends() {
+        let (storage, paths) = storage_with_a_full_batch().await;
+        let stream = futures::stream::iter(paths.clone())
+            .chain(futures::stream::pending())
+            .boxed();
+
+        tokio::time::timeout(Duration::from_secs(1), storage.delete_stream(stream))
+            .await
+            .unwrap_err();
+
+        for path in &paths {
+            assert!(!storage.exists(path).await.unwrap(), "{path}");
+        }
+    }
+
+    #[cfg(feature = "opendal-memory")]
+    #[tokio::test]
+    async fn test_delete_stream_deletes_a_stream_of_exactly_one_batch() {
+        let (storage, paths) = storage_with_a_full_batch().await;
+
+        storage
+            .delete_stream(futures::stream::iter(paths.clone()).boxed())
+            .await
+            .unwrap();
+
+        for path in &paths {
+            assert!(!storage.exists(path).await.unwrap(), "{path}");
         }
     }
 
@@ -438,7 +559,7 @@ mod tests {
         let storage = empty_resolving_storage();
 
         // All three S3-family schemes must collapse to a single cached
-        // `Arc<OpenDalStorage>` so that catalogs handing the resolver a mix
+        // storage so that catalogs handing the resolver a mix
         // of `s3://`, `s3a://`, `s3n://` paths don't rebuild operators.
         let a = storage.resolve("s3://bucket/key").unwrap();
         let b = storage.resolve("s3a://bucket/key").unwrap();
@@ -453,10 +574,11 @@ mod tests {
     fn test_resolve_hdfs_native_returns_hdfs_variant() {
         let storage = empty_resolving_storage();
 
-        let resolved = storage.resolve("hdfs://nameservice1/a/b").unwrap();
+        let path = "hdfs://nameservice1/a/b";
+        let resolved = storage.resolve(path).unwrap();
 
         assert!(
-            matches!(&*resolved, OpenDalStorage::HdfsNative(_)),
+            matches!(resolved.storage_for(path), OpenDalStorage::HdfsNative(_)),
             "expected HdfsNative variant, got {resolved:?}"
         );
     }
