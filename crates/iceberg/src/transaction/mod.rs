@@ -87,6 +87,9 @@ use crate::{Catalog, Error, ErrorKind, TableCommit, TableRequirement, TableUpdat
 pub struct Transaction {
     table: Table,
     actions: Vec<TransactionActionEntry>,
+    /// Newly added `(snapshot_id, manifest_list)` pairs submitted in prior commit
+    /// attempts so retries can recognize a commit whose response was lost.
+    submitted_snapshots: Vec<(i64, String)>,
 }
 
 impl Transaction {
@@ -95,6 +98,7 @@ impl Transaction {
         Self {
             table: table.clone(),
             actions: vec![],
+            submitted_snapshots: vec![],
         }
     }
 
@@ -246,6 +250,18 @@ impl Transaction {
     async fn do_commit(&mut self, catalog: &dyn Catalog) -> Result<Table> {
         let refreshed = catalog.load_table(self.table.identifier()).await?;
 
+        // Any surviving witness proves an earlier attempt landed: a `TableCommit`
+        // is atomic on the catalog, even when it adds several snapshots and one of
+        // them was expired concurrently.
+        if self.submitted_snapshots.iter().any(|(id, manifest_list)| {
+            refreshed
+                .metadata()
+                .snapshot_by_id(*id)
+                .is_some_and(|snapshot| snapshot.manifest_list() == manifest_list)
+        }) {
+            return Ok(refreshed);
+        }
+
         if self.table.metadata() != refreshed.metadata()
             || self.table.metadata_location() != refreshed.metadata_location()
         {
@@ -268,6 +284,27 @@ impl Transaction {
             )?;
         }
 
+        self.submitted_snapshots
+            .extend(existing_updates.iter().filter_map(|update| {
+                match update {
+                    TableUpdate::AddSnapshot { snapshot }
+                        if !snapshot.manifest_list().is_empty()
+                            && self
+                                .table
+                                .metadata()
+                                .snapshot_by_id(snapshot.snapshot_id())
+                                .is_none()
+                            && current_table
+                                .metadata()
+                                .snapshot_by_id(snapshot.snapshot_id())
+                                .is_some_and(|s| s.manifest_list() == snapshot.manifest_list()) =>
+                    {
+                        Some((snapshot.snapshot_id(), snapshot.manifest_list().to_string()))
+                    }
+                    _ => None,
+                }
+            }));
+
         let table_commit = TableCommit::builder()
             .ident(self.table.identifier().to_owned())
             .updates(existing_updates)
@@ -283,21 +320,27 @@ mod tests {
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use uuid::Uuid;
 
     use crate::catalog::MockCatalog;
     use crate::io::FileIO;
     use crate::memory::tests::new_memory_catalog;
     use crate::spec::{
-        DataContentType, DataFileBuilder, DataFileFormat, Literal, NullOrder, PartitionSpec,
-        PrimitiveType, SortDirection, SortField, Struct, TableMetadata, TableProperties, Transform,
-        Type,
+        DataContentType, DataFile, DataFileBuilder, DataFileFormat, Literal, NullOrder,
+        PartitionSpec, PrimitiveType, SortDirection, SortField, Struct, TableMetadata,
+        TableProperties, Transform, Type,
     };
     use crate::table::{StaticTable, Table};
     use crate::test_utils::{make_encrypted_table, test_runtime};
     use crate::transaction::{AddColumn, ApplyTransactionAction, Transaction};
-    use crate::{Catalog, Error, ErrorKind, TableCreation, TableIdent, TableRequirement};
+    use crate::{
+        Catalog, Error, ErrorKind, Namespace, NamespaceIdent, Result, TableCommit, TableCreation,
+        TableIdent, TableRequirement, TableUpdate,
+    };
 
     pub fn make_v1_table() -> Table {
         let file = File::open(format!(
@@ -414,7 +457,7 @@ mod tests {
 
     pub(crate) async fn make_v3_minimal_table_in_catalog(catalog: &impl Catalog) -> Table {
         let table_ident =
-            TableIdent::from_strs([format!("ns1-{}", uuid::Uuid::new_v4()), "test1".to_string()])
+            TableIdent::from_strs([format!("ns1-{}", Uuid::new_v4()), "test1".to_string()])
                 .unwrap();
 
         catalog
@@ -874,6 +917,561 @@ mod tests {
         let result = Transaction::new(&table).commit(&catalog).await.unwrap();
 
         assert_eq!(result.metadata(), table.metadata());
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum FaultMode {
+        /// Durably commit attempt 1, then return retryable `CatalogCommitConflicts`.
+        PostCommitConflictOnce,
+        /// Durably commit attempt 1, then expire one of its snapshots and return
+        /// retryable `CatalogCommitConflicts`.
+        PostCommitConflictThenExpireOneSnapshot,
+        /// Durably commit attempt 1, then return retryable `CatalogCommitConflicts`
+        /// and fail the next `load_table` with a retryable error.
+        PostCommitConflictThenLoadFailure,
+        /// Fail attempt 1 before committing, after a concurrent writer committed a
+        /// snapshot with the same id but a different manifest list.
+        PreCommitConflictWithSameSnapshotId,
+        /// Fail attempt 1 before committing with retryable `CatalogCommitConflicts`.
+        PreCommitConflictOnce,
+        /// Stash attempt 1 without committing, then land attempt 1 when attempt 2 commits.
+        DelayedFirstCommit,
+    }
+
+    #[derive(Debug)]
+    struct FaultyCatalog {
+        inner: Box<dyn Catalog>,
+        mode: FaultMode,
+        update_calls: AtomicUsize,
+        load_calls: AtomicUsize,
+        concurrent_file_after_fault: Mutex<Option<DataFile>>,
+        delayed_commit: Mutex<Option<TableCommit>>,
+        first_attempt_snapshots: Mutex<Vec<(i64, String)>>,
+    }
+
+    impl FaultyCatalog {
+        async fn new(mode: FaultMode) -> Self {
+            Self {
+                inner: Box::new(new_memory_catalog().await),
+                mode,
+                update_calls: AtomicUsize::new(0),
+                load_calls: AtomicUsize::new(0),
+                concurrent_file_after_fault: Mutex::new(None),
+                delayed_commit: Mutex::new(None),
+                first_attempt_snapshots: Mutex::new(vec![]),
+            }
+        }
+
+        fn inject_concurrent_append(&self, file: DataFile) {
+            *self.concurrent_file_after_fault.lock().unwrap() = Some(file);
+        }
+
+        fn update_calls(&self) -> usize {
+            self.update_calls.load(Ordering::SeqCst)
+        }
+
+        fn load_calls(&self) -> usize {
+            self.load_calls.load(Ordering::SeqCst)
+        }
+
+        fn first_attempt_snapshots(&self) -> Vec<(i64, String)> {
+            self.first_attempt_snapshots.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl Catalog for FaultyCatalog {
+        async fn list_namespaces(
+            &self,
+            parent: Option<&NamespaceIdent>,
+        ) -> Result<Vec<NamespaceIdent>> {
+            self.inner.list_namespaces(parent).await
+        }
+
+        async fn create_namespace(
+            &self,
+            namespace: &NamespaceIdent,
+            properties: HashMap<String, String>,
+        ) -> Result<Namespace> {
+            self.inner.create_namespace(namespace, properties).await
+        }
+
+        async fn get_namespace(&self, namespace: &NamespaceIdent) -> Result<Namespace> {
+            self.inner.get_namespace(namespace).await
+        }
+
+        async fn namespace_exists(&self, namespace: &NamespaceIdent) -> Result<bool> {
+            self.inner.namespace_exists(namespace).await
+        }
+
+        async fn update_namespace(
+            &self,
+            namespace: &NamespaceIdent,
+            properties: HashMap<String, String>,
+        ) -> Result<()> {
+            self.inner.update_namespace(namespace, properties).await
+        }
+
+        async fn drop_namespace(&self, namespace: &NamespaceIdent) -> Result<()> {
+            self.inner.drop_namespace(namespace).await
+        }
+
+        async fn list_tables(&self, namespace: &NamespaceIdent) -> Result<Vec<TableIdent>> {
+            self.inner.list_tables(namespace).await
+        }
+
+        async fn create_table(
+            &self,
+            namespace: &NamespaceIdent,
+            creation: TableCreation,
+        ) -> Result<Table> {
+            self.inner.create_table(namespace, creation).await
+        }
+
+        async fn load_table(&self, table: &TableIdent) -> Result<Table> {
+            let call = self.load_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if matches!(self.mode, FaultMode::PostCommitConflictThenLoadFailure) && call == 2 {
+                return Err(
+                    Error::new(ErrorKind::Unexpected, "simulated transient load failure")
+                        .with_retryable(true),
+                );
+            }
+            self.inner.load_table(table).await
+        }
+
+        async fn drop_table(&self, table: &TableIdent) -> Result<()> {
+            self.inner.drop_table(table).await
+        }
+
+        async fn purge_table(&self, table: &TableIdent) -> Result<()> {
+            self.inner.purge_table(table).await
+        }
+
+        async fn table_exists(&self, table: &TableIdent) -> Result<bool> {
+            self.inner.table_exists(table).await
+        }
+
+        async fn rename_table(&self, src: &TableIdent, dest: &TableIdent) -> Result<()> {
+            self.inner.rename_table(src, dest).await
+        }
+
+        async fn register_table(
+            &self,
+            table_ident: &TableIdent,
+            metadata_location: String,
+        ) -> Result<Table> {
+            self.inner
+                .register_table(table_ident, metadata_location)
+                .await
+        }
+
+        async fn update_table(&self, mut commit: TableCommit) -> Result<Table> {
+            let call = self.update_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            match self.mode {
+                FaultMode::PostCommitConflictOnce
+                | FaultMode::PostCommitConflictThenLoadFailure
+                    if call == 1 =>
+                {
+                    let committed = self.inner.update_table(commit).await?;
+                    let extra_file = self.concurrent_file_after_fault.lock().unwrap().take();
+                    if let Some(file) = extra_file {
+                        let tx = Transaction::new(&committed);
+                        let tx = tx.fast_append().add_data_files(vec![file]).apply(tx)?;
+                        let _ = tx.commit(&*self.inner).await?;
+                    }
+                    Err(Error::new(
+                        ErrorKind::CatalogCommitConflicts,
+                        "simulated conflict after commit succeeded",
+                    )
+                    .with_retryable(true))
+                }
+                FaultMode::PostCommitConflictThenExpireOneSnapshot if call == 1 => {
+                    // `Transaction` checks each action's requirements against the
+                    // intermediate table. A catalog re-checks them all against its
+                    // own base, which the second append's requirement (the first
+                    // append's snapshot, created by this same commit) cannot
+                    // satisfy, so this test double applies the updates alone.
+                    let _ = commit.take_requirements();
+                    let committed = self.inner.update_table(commit).await?;
+                    let current_snapshot_id = committed
+                        .metadata()
+                        .current_snapshot()
+                        .unwrap()
+                        .snapshot_id();
+                    let expired_snapshot_id = committed
+                        .metadata()
+                        .snapshots()
+                        .map(|snapshot| snapshot.snapshot_id())
+                        .find(|id| *id != current_snapshot_id)
+                        .expect("attempt 1 should commit two snapshots");
+                    *self.first_attempt_snapshots.lock().unwrap() = committed
+                        .metadata()
+                        .snapshots()
+                        .map(|snapshot| {
+                            (snapshot.snapshot_id(), snapshot.manifest_list().to_string())
+                        })
+                        .collect();
+                    let expire = TableCommit::builder()
+                        .ident(committed.identifier().clone())
+                        .updates(vec![TableUpdate::RemoveSnapshots {
+                            snapshot_ids: vec![expired_snapshot_id],
+                        }])
+                        .requirements(vec![])
+                        .build();
+                    self.inner.update_table(expire).await?;
+                    Err(Error::new(
+                        ErrorKind::CatalogCommitConflicts,
+                        "simulated conflict after a concurrent snapshot expiration",
+                    )
+                    .with_retryable(true))
+                }
+                FaultMode::PreCommitConflictWithSameSnapshotId if call == 1 => {
+                    let ident = commit.identifier().clone();
+                    let requirements = commit.take_requirements();
+                    let table = self.inner.load_table(&ident).await?;
+                    let mut updates = Vec::new();
+                    for update in commit.take_updates() {
+                        match update {
+                            TableUpdate::AddSnapshot { mut snapshot } => {
+                                // Another writer committed the same snapshot id with
+                                // its own manifest list, which must not be mistaken
+                                // for this attempt's output.
+                                let foreign = format!("{}.foreign", snapshot.manifest_list());
+                                let content = table
+                                    .file_io()
+                                    .new_input(snapshot.manifest_list())?
+                                    .read()
+                                    .await?;
+                                table.file_io().new_output(&foreign)?.write(content).await?;
+                                snapshot.manifest_list = foreign;
+                                updates.push(TableUpdate::AddSnapshot { snapshot });
+                            }
+                            update => updates.push(update),
+                        }
+                    }
+                    let foreign = TableCommit::builder()
+                        .ident(ident)
+                        .updates(updates)
+                        .requirements(requirements)
+                        .build();
+                    self.inner.update_table(foreign).await?;
+                    Err(Error::new(
+                        ErrorKind::CatalogCommitConflicts,
+                        "simulated conflict with the same snapshot id under a different manifest list",
+                    )
+                    .with_retryable(true))
+                }
+                FaultMode::PreCommitConflictOnce if call == 1 => {
+                    let extra_file = self.concurrent_file_after_fault.lock().unwrap().take();
+                    if let Some(file) = extra_file {
+                        let table = self.inner.load_table(commit.identifier()).await?;
+                        let tx = Transaction::new(&table);
+                        let tx = tx.fast_append().add_data_files(vec![file]).apply(tx)?;
+                        let _ = tx.commit(&*self.inner).await?;
+                    }
+                    Err(Error::new(
+                        ErrorKind::CatalogCommitConflicts,
+                        "simulated genuine pre-commit conflict",
+                    )
+                    .with_retryable(true))
+                }
+                FaultMode::DelayedFirstCommit if call == 1 => {
+                    *self.delayed_commit.lock().unwrap() = Some(commit);
+                    Err(Error::new(
+                        ErrorKind::CatalogCommitConflicts,
+                        "simulated delayed in-flight commit",
+                    )
+                    .with_retryable(true))
+                }
+                FaultMode::DelayedFirstCommit if call == 2 => {
+                    let first_commit = self
+                        .delayed_commit
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .expect("attempt 1 commit should be stashed");
+                    let _ = self.inner.update_table(first_commit).await?;
+                    Err(Error::new(
+                        ErrorKind::CatalogCommitConflicts,
+                        "simulated conflict because delayed attempt 1 just landed",
+                    )
+                    .with_retryable(true))
+                }
+                _ => self.inner.update_table(commit).await,
+            }
+        }
+    }
+
+    fn make_test_data_file(path: &str) -> DataFile {
+        DataFileBuilder::default()
+            .content(DataContentType::Data)
+            .file_path(path.to_string())
+            .file_format(DataFileFormat::Parquet)
+            .file_size_in_bytes(100)
+            .record_count(10)
+            .partition(Struct::from_iter([Some(Literal::long(1))]))
+            .partition_spec_id(0)
+            .build()
+            .unwrap()
+    }
+
+    /// Rewrites a manifest list path from attempt 0 to `attempt`, so a test can
+    /// check that the retry wrote nothing there.
+    fn manifest_list_at_attempt(path: &str, attempt: u64) -> String {
+        assert!(
+            path.contains("-0-"),
+            "expected an attempt 0 manifest list, got {path}"
+        );
+        path.replacen("-0-", &format!("-{attempt}-"), 1)
+    }
+
+    /// The manifest list written for the committed snapshot must be the one from
+    /// attempt 0, and the retry must not leave attempt 1's manifest list behind.
+    async fn assert_attempt_0_committed_without_orphan(committed: &Table, commit_uuid: Uuid) {
+        let snapshot = committed.metadata().current_snapshot().unwrap();
+        assert!(
+            snapshot
+                .manifest_list()
+                .contains(&format!("-0-{commit_uuid}")),
+            "unexpected manifest list {}",
+            snapshot.manifest_list()
+        );
+        assert!(
+            committed
+                .file_io()
+                .exists(snapshot.manifest_list())
+                .await
+                .unwrap()
+        );
+        let retried = manifest_list_at_attempt(snapshot.manifest_list(), 1);
+        assert!(
+            !committed.file_io().exists(&retried).await.unwrap(),
+            "retry wrote an orphan manifest list at {retried}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_retry_detects_already_committed_snapshot_with_check_duplicate() {
+        let catalog = FaultyCatalog::new(FaultMode::PostCommitConflictOnce).await;
+        let table = with_retry_properties(make_v3_minimal_table_in_catalog(&catalog).await, "3");
+        let commit_uuid = Uuid::now_v7();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .set_commit_uuid(commit_uuid)
+            .add_data_files(vec![make_test_data_file("test/file1.parquet")])
+            .apply(tx)
+            .unwrap();
+
+        let committed = tx.commit(&catalog).await.unwrap();
+        assert_eq!(catalog.update_calls(), 1);
+        assert_eq!(committed.metadata().snapshots().count(), 1);
+        assert_attempt_0_committed_without_orphan(&committed, commit_uuid).await;
+    }
+
+    #[tokio::test]
+    async fn test_commit_retry_detects_already_committed_snapshot_without_check_duplicate() {
+        let catalog = FaultyCatalog::new(FaultMode::PostCommitConflictOnce).await;
+        let table = with_retry_properties(make_v3_minimal_table_in_catalog(&catalog).await, "3");
+        let commit_uuid = Uuid::now_v7();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .with_check_duplicate(false)
+            .set_commit_uuid(commit_uuid)
+            .add_data_files(vec![make_test_data_file("test/file1.parquet")])
+            .apply(tx)
+            .unwrap();
+
+        let committed = tx.commit(&catalog).await.unwrap();
+        assert_eq!(catalog.update_calls(), 1);
+        assert_eq!(committed.metadata().snapshots().count(), 1);
+        assert_attempt_0_committed_without_orphan(&committed, commit_uuid).await;
+    }
+
+    #[tokio::test]
+    async fn test_commit_retry_detects_already_committed_snapshot_with_concurrent_writer() {
+        let catalog = FaultyCatalog::new(FaultMode::PostCommitConflictOnce).await;
+        let table = with_retry_properties(make_v3_minimal_table_in_catalog(&catalog).await, "3");
+        catalog.inject_concurrent_append(make_test_data_file("test/concurrent.parquet"));
+        let commit_uuid = Uuid::now_v7();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .set_commit_uuid(commit_uuid)
+            .add_data_files(vec![make_test_data_file("test/file1.parquet")])
+            .apply(tx)
+            .unwrap();
+
+        let committed = tx.commit(&catalog).await.unwrap();
+        assert_eq!(catalog.update_calls(), 1);
+        assert_eq!(committed.metadata().snapshots().count(), 2);
+        let current = committed.metadata().current_snapshot().unwrap();
+        let parent_id = current.parent_snapshot_id().unwrap();
+        // Our snapshot survived underneath the concurrent write.
+        let parent = committed.metadata().snapshot_by_id(parent_id).unwrap();
+        assert!(
+            parent.manifest_list().contains(&commit_uuid.to_string()),
+            "unexpected parent manifest list {}",
+            parent.manifest_list()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_retry_rebases_on_genuine_pre_commit_conflict() {
+        let catalog = FaultyCatalog::new(FaultMode::PreCommitConflictOnce).await;
+        let table = with_retry_properties(make_v3_minimal_table_in_catalog(&catalog).await, "3");
+        catalog.inject_concurrent_append(make_test_data_file("test/other.parquet"));
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![make_test_data_file("test/file1.parquet")])
+            .apply(tx)
+            .unwrap();
+
+        let committed = tx.commit(&catalog).await.unwrap();
+        assert_eq!(catalog.update_calls(), 2);
+        assert_eq!(committed.metadata().snapshots().count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_commit_retry_detects_delayed_first_attempt_after_second_attempt() {
+        let catalog = FaultyCatalog::new(FaultMode::DelayedFirstCommit).await;
+        let table = with_retry_properties(make_v3_minimal_table_in_catalog(&catalog).await, "3");
+        let commit_uuid = Uuid::now_v7();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .set_commit_uuid(commit_uuid)
+            .add_data_files(vec![make_test_data_file("test/file1.parquet")])
+            .apply(tx)
+            .unwrap();
+
+        let committed = tx.commit(&catalog).await.unwrap();
+        assert_eq!(catalog.update_calls(), 2);
+        assert_eq!(committed.metadata().snapshots().count(), 1);
+
+        // Attempt 1 is the one that landed; attempt 2 was discarded with the
+        // conflict it returned, and attempt 3 wrote nothing.
+        let snapshot = committed.metadata().current_snapshot().unwrap();
+        assert!(
+            snapshot
+                .manifest_list()
+                .contains(&format!("-0-{commit_uuid}")),
+            "unexpected manifest list {}",
+            snapshot.manifest_list()
+        );
+        let third_attempt = manifest_list_at_attempt(snapshot.manifest_list(), 2);
+        assert!(
+            !committed.file_io().exists(&third_attempt).await.unwrap(),
+            "attempt 3 wrote a manifest list at {third_attempt}"
+        );
+    }
+
+    /// A transaction that adds several snapshots commits them atomically. If one
+    /// of them is expired concurrently, a surviving witness still proves the
+    /// attempt landed and the retry must not re-run the actions.
+    #[tokio::test]
+    async fn test_commit_retry_detects_partially_expired_multi_snapshot_commit() {
+        let catalog = FaultyCatalog::new(FaultMode::PostCommitConflictThenExpireOneSnapshot).await;
+        let table = with_retry_properties(make_v3_minimal_table_in_catalog(&catalog).await, "3");
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![make_test_data_file("test/file1.parquet")])
+            .apply(tx)
+            .unwrap();
+        let tx = tx
+            .fast_append()
+            .add_data_files(vec![make_test_data_file("test/file2.parquet")])
+            .apply(tx)
+            .unwrap();
+
+        let committed = tx.commit(&catalog).await.unwrap();
+        assert_eq!(catalog.update_calls(), 1);
+        assert_eq!(committed.metadata().snapshots().count(), 1);
+
+        let submitted = catalog.first_attempt_snapshots();
+        assert_eq!(submitted.len(), 2);
+        let surviving = committed.metadata().current_snapshot().unwrap();
+        assert!(
+            submitted
+                .iter()
+                .any(|(_, manifest_list)| manifest_list == surviving.manifest_list()),
+            "the surviving snapshot {} was not submitted in attempt 1",
+            surviving.manifest_list()
+        );
+        for (_, manifest_list) in &submitted {
+            assert!(committed.file_io().exists(manifest_list).await.unwrap());
+            let retried = manifest_list_at_attempt(manifest_list, 1);
+            assert!(
+                !committed.file_io().exists(&retried).await.unwrap(),
+                "retry wrote an orphan manifest list at {retried}"
+            );
+        }
+    }
+
+    /// A failed refresh must not discard the witnesses recorded by the attempt
+    /// that landed.
+    #[tokio::test]
+    async fn test_commit_retry_survives_transient_load_failure() {
+        let catalog = FaultyCatalog::new(FaultMode::PostCommitConflictThenLoadFailure).await;
+        let table = with_retry_properties(make_v3_minimal_table_in_catalog(&catalog).await, "3");
+        let commit_uuid = Uuid::now_v7();
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .set_commit_uuid(commit_uuid)
+            .add_data_files(vec![make_test_data_file("test/file1.parquet")])
+            .apply(tx)
+            .unwrap();
+
+        let committed = tx.commit(&catalog).await.unwrap();
+        assert_eq!(catalog.load_calls(), 3);
+        assert_eq!(catalog.update_calls(), 1);
+        assert_eq!(committed.metadata().snapshots().count(), 1);
+        assert_attempt_0_committed_without_orphan(&committed, commit_uuid).await;
+    }
+
+    /// A witness is only proof when the manifest list matches. A concurrent
+    /// writer that picks the same snapshot id with its own manifest list must not
+    /// make the retry report that snapshot as its own commit.
+    #[tokio::test]
+    async fn test_commit_retry_does_not_trust_snapshot_with_different_manifest_list() {
+        let catalog = FaultyCatalog::new(FaultMode::PreCommitConflictWithSameSnapshotId).await;
+        let table = with_retry_properties(make_v3_minimal_table_in_catalog(&catalog).await, "3");
+
+        let tx = Transaction::new(&table);
+        let tx = tx
+            .fast_append()
+            .with_check_duplicate(false)
+            .add_data_files(vec![make_test_data_file("test/file1.parquet")])
+            .apply(tx)
+            .unwrap();
+
+        let err = match tx.commit(&catalog).await {
+            Ok(table) => panic!(
+                "retry accepted a snapshot with a different manifest list: {}",
+                table.metadata().current_snapshot().unwrap().manifest_list()
+            ),
+            Err(err) => err,
+        };
+        assert_eq!(
+            err.kind(),
+            ErrorKind::DataInvalid,
+            "unexpected error {err:?}"
+        );
+
+        let refreshed = catalog.load_table(table.identifier()).await.unwrap();
+        let current = refreshed.metadata().current_snapshot().unwrap();
+        assert!(current.manifest_list().ends_with(".foreign"));
     }
 }
 
