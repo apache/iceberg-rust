@@ -82,6 +82,19 @@ impl<'a> Int96CoercionVisitor<'a> {
             return None;
         }
 
+        // A variant leaf has no field id, so look at its ancestors. The shredding spec stores
+        // variant timestamps as INT64, not as INT96.
+        if self.field_stack.iter().any(|ancestor| {
+            ancestor
+                .metadata()
+                .get(PARQUET_FIELD_ID_META_KEY)
+                .and_then(|id| id.parse::<i32>().ok())
+                .and_then(|id| self.iceberg_schema.field_by_id(id))
+                .is_some_and(|f| matches!(*f.field_type, Type::Variant(_)))
+        }) {
+            return None;
+        }
+
         let target = field
             .metadata()
             .get(PARQUET_FIELD_ID_META_KEY)
@@ -251,11 +264,13 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use arrow_schema::{DataType, Field, Schema as ArrowSchema, TimeUnit};
+    use arrow_schema::{DataType, Field, Fields, Schema as ArrowSchema, TimeUnit};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 
     use super::coerce_int96_timestamps;
-    use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
+    use crate::spec::{
+        ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type, VariantType,
+    };
 
     fn iceberg_schema_with_timestamp() -> Schema {
         Schema::builder()
@@ -385,6 +400,32 @@ mod tests {
             coerced.field(0).data_type(),
             &DataType::Timestamp(TimeUnit::Microsecond, None)
         );
+    }
+
+    #[test]
+    fn test_no_coercion_inside_variant() {
+        let iceberg = Schema::builder()
+            .with_schema_id(1)
+            .with_fields(vec![
+                NestedField::optional(1, "v", Type::Variant(VariantType)).into(),
+            ])
+            .build()
+            .unwrap();
+        let timestamp_ns = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new(
+                "v",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("metadata", DataType::Binary, false),
+                    Field::new("value", DataType::Binary, true),
+                    Field::new("typed_value", timestamp_ns, true),
+                ])),
+                true,
+            )
+            .with_metadata(field_id_meta(1)),
+        ]));
+
+        assert!(coerce_int96_timestamps(&arrow_schema, &iceberg).is_none());
     }
 
     // Field ID exists but points to a non-timestamp Iceberg type. The field_by_id

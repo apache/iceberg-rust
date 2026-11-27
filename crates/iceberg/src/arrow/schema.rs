@@ -118,9 +118,15 @@ fn is_variant_binary(data_type: &DataType) -> bool {
     }
 }
 
-/// Checks that `field` stores a variant unshredded: `metadata` and `value` bytes, matched by
-/// name, with a required `metadata`.
-pub(crate) fn validate_unshredded_variant(field: &Field, variant_field_id: i32) -> Result<()> {
+/// Makes sure that `field` stores a variant as a group with a required `metadata` and a
+/// `value`. A shredded group also has a `typed_value`, and can omit `value`. The function
+/// finds the fields by name.
+///
+/// # Errors
+///
+/// Returns `DataInvalid` if the group has a different layout. The function does not examine
+/// the contents of `typed_value`. The reader examines them when it unshreds the rows.
+pub(crate) fn validate_variant_storage(field: &Field, variant_field_id: i32) -> Result<()> {
     let invalid = |problem: String| {
         invalid_data!(
             "Variant column `{}` (field id {variant_field_id}) {problem}",
@@ -133,15 +139,7 @@ pub(crate) fn validate_unshredded_variant(field: &Field, variant_field_id: i32) 
             field.data_type()
         )));
     };
-    if subfields.find("typed_value").is_some() {
-        return Err(Error::new(
-            ErrorKind::FeatureUnsupported,
-            format!(
-                "Reading shredded variant column `{}` (field id {variant_field_id}) is not supported yet, see https://github.com/apache/iceberg-rust/issues/3606",
-                field.name()
-            ),
-        ));
-    }
+    let shredded = subfields.find("typed_value").is_some();
     for name in ["metadata", "value"] {
         match subfields.find(name) {
             Some((_, subfield)) if !is_variant_binary(subfield.data_type()) => {
@@ -158,13 +156,22 @@ pub(crate) fn validate_unshredded_variant(field: &Field, variant_field_id: i32) 
                 ));
             }
             Some(_) => {}
+            // The shredding spec lets a writer omit `value` if `typed_value` holds all values.
+            None if shredded && name == "value" => {}
             None => return Err(invalid(format!("is missing the `{name}` field"))),
         }
     }
-    if subfields.len() != 2 {
-        return Err(invalid(
-            "has fields other than `metadata` and `value`".to_string(),
-        ));
+    let known = ["metadata", "value", "typed_value"]
+        .into_iter()
+        .filter(|name| subfields.find(name).is_some())
+        .count();
+    if subfields.len() != known {
+        let names = if shredded {
+            "`metadata`, `value` and `typed_value`"
+        } else {
+            "`metadata` and `value`"
+        };
+        return Err(invalid(format!("has fields other than {names}")));
     }
     Ok(())
 }

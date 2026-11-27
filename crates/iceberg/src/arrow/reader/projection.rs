@@ -31,7 +31,7 @@ use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 use super::{ArrowReader, CollectFieldIdVisitor};
-use crate::arrow::schema::validate_unshredded_variant;
+use crate::arrow::schema::validate_variant_storage;
 use crate::arrow::{VariantExtensionType, arrow_schema_to_schema, arrow_type_to_type};
 use crate::error::{Result, invalid_data};
 use crate::expr::BoundPredicate;
@@ -151,8 +151,8 @@ impl ArrowReader {
         type_promotion_is_valid: fn(Option<&PrimitiveType>, Option<&PrimitiveType>) -> bool,
     ) -> Result<ProjectionMask> {
         let leaf_field_ids = &projected.leaf_ids;
-        // Maps field_id → leaf column indices. `Vec` because a variant contributes two
-        // leaves (metadata + value) under a single field id.
+        // Maps field_id → leaf column indices. `Vec` because all leaves of a variant group map
+        // to the field id of the variant.
         let mut column_map: HashMap<i32, Vec<usize>> = HashMap::new();
         let fields = arrow_schema.fields();
         // HashSet for O(1) membership checks instead of O(n) slice scans.
@@ -313,7 +313,7 @@ impl ArrowReader {
             None => {
                 let entered = Self::variant_field_id(field, projected_variant_ids);
                 if let Some(variant_field_id) = entered {
-                    validate_unshredded_variant(field, variant_field_id)?;
+                    validate_variant_storage(field, variant_field_id)?;
                 }
                 entered
             }
@@ -1011,6 +1011,7 @@ mod tests {
     use parquet::file::properties::WriterProperties;
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
+    use parquet_variant_compute::{VariantArray, cast_to_variant, json_to_variant, shred_variant};
     use tempfile::TempDir;
 
     use crate::arrow::{ArrowReader, ArrowReaderBuilder, ArrowReaderOptions as ReaderOptions};
@@ -1235,26 +1236,38 @@ message schema {
         );
     }
 
-    /// A shredded variant (with a `typed_value` sub-field) must be rejected, not silently
-    /// projected as metadata/value only.
+    /// The columns after the variant keep their leaf indices.
     #[test]
-    fn test_arrow_projection_mask_variant_shredded_is_rejected() {
+    fn test_arrow_projection_mask_variant_shredded_projects_every_leaf() {
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
                     NestedField::required(1, "c1", Type::Primitive(PrimitiveType::String)).into(),
                     NestedField::required(2, "v", Type::Variant(VariantType)).into(),
+                    NestedField::required(3, "c3", Type::Primitive(PrimitiveType::Long)).into(),
                 ])
                 .build()
                 .unwrap(),
+        );
+        let shredded_field = Field::new(
+            "a",
+            DataType::Struct(Fields::from(vec![
+                Field::new("value", DataType::Binary, true),
+                Field::new("typed_value", DataType::Int64, true),
+            ])),
+            false,
         );
         let shredded = Field::new(
             "v",
             DataType::Struct(Fields::from(vec![
                 Field::new("metadata", DataType::Binary, false),
                 Field::new("value", DataType::Binary, true),
-                Field::new("typed_value", DataType::Int64, true),
+                Field::new(
+                    "typed_value",
+                    DataType::Struct(Fields::from(vec![shredded_field])),
+                    true,
+                ),
             ])),
             false,
         )
@@ -1262,6 +1275,7 @@ message schema {
         let arrow_schema = Arc::new(ArrowSchema::new(vec![
             Field::new("c1", DataType::Utf8, false).with_metadata(field_id_meta(1)),
             shredded,
+            Field::new("c3", DataType::Int64, false).with_metadata(field_id_meta(3)),
         ]));
         let message_type = "
 message schema {
@@ -1269,39 +1283,41 @@ message schema {
   required group v = 2 {
     required binary metadata;
     optional binary value;
-    optional int64 typed_value;
+    optional group typed_value {
+      required group a {
+        optional binary value;
+        optional int64 typed_value;
+      }
+    }
   }
+  required int64 c3 = 3;
 }
 ";
         let parquet_schema =
             SchemaDescriptor::new(Arc::new(parse_message_type(message_type).unwrap()));
-
-        let err = ArrowReader::get_arrow_projection_mask(
-            &[1, 2],
-            &schema,
-            &parquet_schema,
-            &arrow_schema,
-            false,
-        )
-        .unwrap_err();
-        assert_eq!(
-            (err.kind(), err.message()),
-            (
-                ErrorKind::FeatureUnsupported,
-                "Reading shredded variant column `v` (field id 2) is not supported yet, see https://github.com/apache/iceberg-rust/issues/3606"
+        let mask_for = |field_ids: &[i32]| {
+            ArrowReader::get_arrow_projection_mask(
+                field_ids,
+                &schema,
+                &parquet_schema,
+                &arrow_schema,
+                false,
             )
-        );
+            .unwrap()
+        };
 
-        // An unprojected shredded sibling does not affect other columns.
-        let mask = ArrowReader::get_arrow_projection_mask(
-            &[1],
-            &schema,
-            &parquet_schema,
-            &arrow_schema,
-            false,
-        )
-        .unwrap();
-        assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
+        assert_eq!(
+            mask_for(&[2]),
+            ProjectionMask::leaves(&parquet_schema, vec![1, 2, 3, 4])
+        );
+        assert_eq!(
+            mask_for(&[1, 2, 3]),
+            ProjectionMask::leaves(&parquet_schema, vec![0, 1, 2, 3, 4, 5])
+        );
+        assert_eq!(
+            mask_for(&[3]),
+            ProjectionMask::leaves(&parquet_schema, vec![5])
+        );
     }
 
     #[test]
@@ -1387,15 +1403,52 @@ message schema {
             error_of(DataType::Binary),
             invalid("must be stored as a group, found Binary")
         );
+        let typed_value = || Field::new("typed_value", DataType::Int64, true);
+        // A shredded variant can omit `value`.
+        let (mask, parquet_schema) = mask_for(DataType::Struct(Fields::from(vec![
+            metadata(),
+            typed_value(),
+        ])))
+        .unwrap();
+        assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0, 1, 2]));
+        assert_eq!(
+            error_of(DataType::Struct(Fields::from(vec![
+                metadata(),
+                binary("value"),
+                typed_value(),
+                binary("foo"),
+            ]))),
+            invalid("has fields other than `metadata`, `value` and `typed_value`")
+        );
+        assert_eq!(
+            error_of(DataType::Struct(Fields::from(vec![
+                metadata(),
+                typed_value(),
+                typed_value(),
+            ]))),
+            invalid("has fields other than `metadata`, `value` and `typed_value`")
+        );
+        assert_eq!(
+            error_of(DataType::Struct(Fields::from(vec![
+                metadata(),
+                Field::new("value", DataType::Int64, true),
+                typed_value(),
+            ]))),
+            invalid("has a non-binary `value` field: Int64")
+        );
         assert_eq!(
             error_of(DataType::Struct(Fields::from(vec![
                 binary("metadata"),
-                Field::new("typed_value", DataType::Int64, true),
+                typed_value(),
             ]))),
-            (
-                ErrorKind::FeatureUnsupported,
-                "Reading shredded variant column `v` (field id 2) is not supported yet, see https://github.com/apache/iceberg-rust/issues/3606".to_string()
-            )
+            invalid("has an optional `metadata` field, which must be required")
+        );
+        assert_eq!(
+            error_of(DataType::Struct(Fields::from(vec![
+                binary("value"),
+                typed_value(),
+            ]))),
+            invalid("is missing the `metadata` field")
         );
 
         // Children are matched by name, and any Arrow binary type holds the bytes.
@@ -5072,5 +5125,425 @@ message schema {
             .unwrap();
         assert_eq!(fallback.len(), 1);
         assert_top_list(&fallback[0]);
+    }
+
+    /// Makes one variant from each JSON row. `None` makes a null row.
+    fn variants_from_json(rows: &[Option<&str>]) -> VariantArray {
+        let json = Arc::new(StringArray::from(rows.to_vec())) as ArrayRef;
+        json_to_variant(&json).unwrap()
+    }
+
+    /// Asserts that `column` has the unshredded table type and the rows of `expected`.
+    fn assert_variant_rows(field: &Field, column: &ArrayRef, expected: &VariantArray) {
+        let table_type = crate::arrow::type_to_arrow_type(&Type::Variant(VariantType)).unwrap();
+        assert_eq!(field.extension_type_name(), Some("arrow.parquet.variant"));
+        assert_eq!(column.data_type(), &table_type);
+        let actual = VariantArray::try_new(column.as_ref()).unwrap();
+        assert_eq!(
+            actual.iter().collect::<Vec<_>>(),
+            expected.iter().collect::<Vec<_>>()
+        );
+    }
+
+    /// `variants` in the unshredded table type.
+    fn unshredded(variants: &VariantArray) -> ArrayRef {
+        let table_type = crate::arrow::type_to_arrow_type(&Type::Variant(VariantType)).unwrap();
+        arrow_cast::cast(&ArrayRef::from(variants.clone()), &table_type).unwrap()
+    }
+
+    /// Shreds `variants` to the type `typed_value`, writes them to Parquet, and reads them again.
+    async fn assert_top_level_shredded_round_trip(variants: &VariantArray, typed_value: DataType) {
+        let shredded = shred_variant(variants, &typed_value).unwrap();
+        assert_top_level_storage_reads_as(shredded.into(), variants).await;
+    }
+
+    /// Writes `storage` as the variant `v`, reads it, and asserts the rows of `expected`.
+    async fn assert_top_level_storage_reads_as(storage: ArrayRef, expected: &VariantArray) {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("v", storage.data_type().clone(), true).with_metadata(field_id_meta(2)),
+        ]));
+        let path = write_variant_parquet(arrow_schema, vec![storage], dir);
+
+        let batches = read_variant(top_level_variant_schema(), &path, vec![2]).await;
+        assert_eq!(batches.len(), 1);
+        let schema = batches[0].schema();
+        assert_variant_rows(
+            schema.field_with_name("v").unwrap(),
+            batches[0].column_by_name("v").unwrap(),
+            expected,
+        );
+    }
+
+    /// Rows of the shredded type are in `typed_value`. Other rows are in `value`. A null row
+    /// and a variant null stay different.
+    #[tokio::test]
+    async fn test_read_shredded_variant_primitive() {
+        assert_top_level_shredded_round_trip(
+            &variants_from_json(&[Some("1"), Some(r#""text""#), None, Some("null"), Some("-7")]),
+            DataType::Int8,
+        )
+        .await;
+    }
+
+    /// A missing field must stay missing. It must not become an explicit null.
+    #[tokio::test]
+    async fn test_read_shredded_variant_object() {
+        let typed_value = DataType::Struct(Fields::from(vec![
+            Field::new("a", DataType::Int8, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        assert_top_level_shredded_round_trip(
+            &variants_from_json(&[
+                Some(r#"{"a": 1, "b": "x"}"#),
+                Some(r#"{"a": 2}"#),
+                Some(r#"{"a": null, "b": "y"}"#),
+                Some(r#"{"b": "z", "c": true}"#),
+                Some(r#"{"c": {"d": [1, 2]}}"#),
+                Some("{}"),
+                Some("5"),
+                None,
+            ]),
+            typed_value,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_read_shredded_variant_array() {
+        assert_top_level_shredded_round_trip(
+            &variants_from_json(&[
+                Some("[1, 2, 3]"),
+                Some(r#"[1, "x", null]"#),
+                Some("[]"),
+                Some(r#""not an array""#),
+                None,
+            ]),
+            DataType::new_list(DataType::Int8, true),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_read_shredded_variant_nested_object_and_array() {
+        let element = DataType::Struct(Fields::from(vec![Field::new("n", DataType::Int8, true)]));
+        let typed_value = DataType::Struct(Fields::from(vec![Field::new(
+            "items",
+            DataType::new_list(element, true),
+            true,
+        )]));
+        assert_top_level_shredded_round_trip(
+            &variants_from_json(&[
+                Some(r#"{"items": [{"n": 1}, {"n": 2, "m": 3}, {}]}"#),
+                Some(r#"{"items": [7, {"n": "x"}]}"#),
+                Some(r#"{"items": "scalar", "other": 1}"#),
+                Some(r#"{"other": 2}"#),
+            ]),
+            typed_value,
+        )
+        .await;
+    }
+
+    /// A writer can omit `value` when every row fits `typed_value`.
+    #[tokio::test]
+    async fn test_read_shredded_variant_without_value() {
+        use arrow_array::StructArray;
+        let variants = variants_from_json(&[Some("1"), None, Some("-7")]);
+        let (fields, columns, nulls) =
+            ArrayRef::from(shred_variant(&variants, &DataType::Int8).unwrap())
+                .as_struct()
+                .clone()
+                .into_parts();
+        let (fields, columns): (Vec<_>, Vec<_>) = fields
+            .iter()
+            .cloned()
+            .zip(columns)
+            .filter(|(field, _)| field.name() != "value")
+            .unzip();
+        assert_eq!(
+            fields.iter().map(|f| f.name().as_str()).collect::<Vec<_>>(),
+            ["metadata", "typed_value"]
+        );
+        let storage = StructArray::new(fields.into(), columns, nulls);
+        assert_top_level_storage_reads_as(Arc::new(storage), &variants).await;
+    }
+
+    /// The INT96 coercion must not change a shredded nanosecond timestamp.
+    #[tokio::test]
+    async fn test_read_shredded_variant_timestamp_nanos() {
+        use arrow_array::TimestampNanosecondArray;
+        for timezone in [Some("UTC"), None] {
+            let timestamps = TimestampNanosecondArray::from(vec![
+                Some(1_700_000_000_123_456_789),
+                None,
+                Some(-1),
+            ])
+            .with_timezone_opt(timezone);
+            assert_top_level_shredded_round_trip(
+                &cast_to_variant(&timestamps).unwrap(),
+                timestamps.data_type().clone(),
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_shredded_variant_nested_in_struct_and_list() {
+        use arrow_array::{ListArray, StructArray};
+        use arrow_buffer::{NullBuffer, OffsetBuffer};
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().to_str().unwrap();
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(
+                        1,
+                        "nested",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(2, "payload", Type::Variant(VariantType)).into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        3,
+                        "l",
+                        Type::List(crate::spec::ListType::new(
+                            NestedField::list_element(4, Type::Variant(VariantType), true).into(),
+                        )),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let variants = variants_from_json(&[Some(r#"{"a": 1}"#), Some(r#"{"b": 2}"#), Some("3")]);
+        let typed_value =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int8, true)]));
+        let shredded = shred_variant(&variants, &typed_value).unwrap();
+        let payload_field = Field::new("payload", shredded.data_type().clone(), true)
+            .with_metadata(field_id_meta(2));
+        let element_field = Arc::new(
+            Field::new("element", shredded.data_type().clone(), true)
+                .with_metadata(field_id_meta(4)),
+        );
+        let nested_fields = Fields::from(vec![payload_field]);
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("nested", DataType::Struct(nested_fields.clone()), true)
+                .with_metadata(field_id_meta(1)),
+            Field::new("l", DataType::List(element_field.clone()), true)
+                .with_metadata(field_id_meta(3)),
+        ]));
+        let nested = Arc::new(StructArray::new(
+            nested_fields,
+            vec![ArrayRef::from(shredded.clone())],
+            Some(NullBuffer::from(vec![true, false, true])),
+        )) as ArrayRef;
+        let list = Arc::new(ListArray::new(
+            element_field,
+            OffsetBuffer::new(vec![0, 1, 2, 3].into()),
+            shredded.into(),
+            None,
+        )) as ArrayRef;
+        let path = write_variant_parquet(arrow_schema, vec![nested, list], dir);
+
+        let batches = read_variant(schema.clone(), &path, vec![1, 3]).await;
+        let table = crate::arrow::schema_to_arrow_schema(&schema).unwrap();
+        let (DataType::Struct(table_nested_fields), DataType::List(table_element)) =
+            (table.field(0).data_type(), table.field(1).data_type())
+        else {
+            unreachable!()
+        };
+        let expected: Vec<ArrayRef> = vec![
+            Arc::new(StructArray::new(
+                table_nested_fields.clone(),
+                vec![unshredded(&variants)],
+                Some(NullBuffer::from(vec![true, false, true])),
+            )),
+            Arc::new(ListArray::new(
+                table_element.clone(),
+                OffsetBuffer::new(vec![0, 1, 2, 3].into()),
+                unshredded(&variants),
+                None,
+            )),
+        ];
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].columns(), expected);
+    }
+
+    /// A map passes no parent nulls to its entries.
+    #[tokio::test]
+    async fn test_read_shredded_variant_as_map_value() {
+        use arrow_array::{MapArray, StructArray};
+        use arrow_buffer::{NullBuffer, OffsetBuffer};
+        let map_nulls = NullBuffer::from(vec![true, false, true]);
+        let offsets = OffsetBuffer::new(vec![0, 1, 1, 3].into());
+        let keys = Arc::new(StringArray::from(vec!["a", "b", "c"])) as ArrayRef;
+        for value_required in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let dir = tmp.path().to_str().unwrap();
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(
+                            1,
+                            "m",
+                            Type::Map(crate::spec::MapType::new(
+                                NestedField::map_key_element(
+                                    2,
+                                    Type::Primitive(PrimitiveType::String),
+                                )
+                                .into(),
+                                NestedField::map_value_element(
+                                    3,
+                                    Type::Variant(VariantType),
+                                    value_required,
+                                )
+                                .into(),
+                            )),
+                        )
+                        .into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let variants = variants_from_json(&[
+                Some(r#"{"a": 1}"#),
+                value_required.then_some(r#"{"b": 2}"#),
+                Some("3"),
+            ]);
+            let typed_value =
+                DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int8, true)]));
+            let shredded = ArrayRef::from(shred_variant(&variants, &typed_value).unwrap());
+            let entry_fields = Fields::from(vec![
+                Field::new("key", DataType::Utf8, false).with_metadata(field_id_meta(2)),
+                Field::new("value", shredded.data_type().clone(), !value_required)
+                    .with_metadata(field_id_meta(3)),
+            ]);
+            let entries_field = Arc::new(Field::new(
+                "key_value",
+                DataType::Struct(entry_fields.clone()),
+                false,
+            ));
+            let arrow_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("m", DataType::Map(entries_field.clone(), false), true)
+                    .with_metadata(field_id_meta(1)),
+            ]));
+            let map_with = |entries_field, entry_fields, values| {
+                Arc::new(MapArray::new(
+                    entries_field,
+                    offsets.clone(),
+                    StructArray::new(entry_fields, vec![keys.clone(), values], None),
+                    Some(map_nulls.clone()),
+                    false,
+                )) as ArrayRef
+            };
+            let path = write_variant_parquet(
+                arrow_schema,
+                vec![map_with(entries_field, entry_fields, shredded)],
+                dir,
+            );
+
+            let batches = read_variant(schema.clone(), &path, vec![1]).await;
+            let table = crate::arrow::schema_to_arrow_schema(&schema).unwrap();
+            let DataType::Map(table_entries_field, _) = table.field(0).data_type() else {
+                unreachable!()
+            };
+            let DataType::Struct(table_entry_fields) = table_entries_field.data_type() else {
+                unreachable!()
+            };
+            let expected = map_with(
+                table_entries_field.clone(),
+                table_entry_fields.clone(),
+                unshredded(&variants),
+            );
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].columns(), [expected]);
+        }
+    }
+
+    /// iceberg-java writes a required variant in an optional struct. In a null `nested` row,
+    /// the variant is not null and can hold empty bytes. With `through_inner`, a required
+    /// struct is between `nested` and the variant.
+    #[tokio::test]
+    async fn test_read_shredded_required_variant_in_null_struct_row() {
+        use arrow_array::StructArray;
+        use arrow_buffer::NullBuffer;
+        let variants = variants_from_json(&[Some(r#"{"a": 1}"#), Some(r#"{"b": 2}"#), Some("3")]);
+        let typed_value =
+            DataType::Struct(Fields::from(vec![Field::new("a", DataType::Int8, true)]));
+        let shredded = ArrayRef::from(shred_variant(&variants, &typed_value).unwrap());
+        let nested_nulls = NullBuffer::from(vec![false, true, false]);
+        for through_inner in [false, true] {
+            let tmp = TempDir::new().unwrap();
+            let dir = tmp.path().to_str().unwrap();
+            let payload = NestedField::required(2, "payload", Type::Variant(VariantType));
+            let payload_field = Field::new("payload", shredded.data_type().clone(), false)
+                .with_metadata(field_id_meta(2));
+            let (nested_type, child_field, child) = if through_inner {
+                let inner_fields = Fields::from(vec![payload_field]);
+                let inner = StructArray::new(inner_fields.clone(), vec![shredded.clone()], None);
+                (
+                    Type::Struct(StructType::new(vec![
+                        NestedField::required(
+                            3,
+                            "inner",
+                            Type::Struct(StructType::new(vec![payload.into()])),
+                        )
+                        .into(),
+                    ])),
+                    Field::new("inner", DataType::Struct(inner_fields), false)
+                        .with_metadata(field_id_meta(3)),
+                    Arc::new(inner) as ArrayRef,
+                )
+            } else {
+                (
+                    Type::Struct(StructType::new(vec![payload.into()])),
+                    payload_field,
+                    shredded.clone(),
+                )
+            };
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(1, "nested", nested_type.clone()).into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let nested_fields = Fields::from(vec![child_field]);
+            let arrow_schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("nested", DataType::Struct(nested_fields.clone()), true)
+                    .with_metadata(field_id_meta(1)),
+            ]));
+            let nested = Arc::new(StructArray::new(
+                nested_fields,
+                vec![child],
+                Some(nested_nulls.clone()),
+            )) as ArrayRef;
+            let path = write_variant_parquet(arrow_schema, vec![nested], dir);
+
+            let batches = read_variant(schema, &path, vec![1]).await;
+            let DataType::Struct(table_nested_fields) =
+                crate::arrow::type_to_arrow_type(&nested_type).unwrap()
+            else {
+                unreachable!()
+            };
+            let mut child = unshredded(&variants);
+            if through_inner
+                && let DataType::Struct(table_inner_fields) = table_nested_fields[0].data_type()
+            {
+                child = Arc::new(StructArray::new(
+                    table_inner_fields.clone(),
+                    vec![child],
+                    None,
+                ));
+            }
+            let expected =
+                StructArray::new(table_nested_fields, vec![child], Some(nested_nulls.clone()));
+            assert_eq!(batches.len(), 1);
+            assert_eq!(batches[0].columns(), [Arc::new(expected) as ArrayRef]);
+        }
     }
 }
