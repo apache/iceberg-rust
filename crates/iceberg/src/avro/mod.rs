@@ -25,16 +25,17 @@ pub(crate) use named_types::define_named_types_once;
 pub(crate) use named_types::define_named_types_repeatedly;
 pub(crate) use schema::*;
 
+/// The codec of the Avro files iceberg-rust writes.
+pub(crate) fn codec() -> apache_avro::Codec {
+    apache_avro::Codec::Deflate(Default::default())
+}
+
 /// Creates an Avro writer with deflate compression.
 pub(crate) fn new_writer<W: std::io::Write>(
     schema: &apache_avro::Schema,
     writer: W,
 ) -> apache_avro::AvroResult<apache_avro::Writer<'_, W>> {
-    apache_avro::Writer::with_codec(
-        schema,
-        writer,
-        apache_avro::Codec::Deflate(Default::default()),
-    )
+    apache_avro::Writer::with_codec(schema, writer, codec())
 }
 
 #[cfg(test)]
