@@ -19,10 +19,11 @@
 
 use std::str::FromStr;
 
-use aes_gcm::aead::generic_array::typenum::U12;
-use aes_gcm::aead::rand_core::RngCore;
-use aes_gcm::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
-use aes_gcm::{Aes128Gcm, Aes256Gcm, AesGcm, Nonce};
+use aes_gcm::aead::consts::U12;
+use aes_gcm::aead::{Aead, AeadCore, Generate, KeyInit, Nonce, Payload};
+use aes_gcm::{Aes128Gcm, Aes256Gcm, AesGcm};
+use rand::rngs::OsRng;
+use rand::{RngCore, TryRngCore};
 
 /// AES-192-GCM with 96-bit nonce. Not provided by `aes-gcm` but constructible
 /// from the underlying primitives, same as `Aes128Gcm` and `Aes256Gcm`.
@@ -112,7 +113,7 @@ impl SecureKey {
     /// Generates a new random key for the specified key size.
     pub fn generate(key_size: AesKeySize) -> Self {
         let mut key = vec![0u8; key_size.key_length()];
-        OsRng.fill_bytes(&mut key);
+        OsRng.unwrap_err().fill_bytes(&mut key);
         Self {
             key: SensitiveBytes::new(key),
             key_size,
@@ -217,7 +218,7 @@ fn encrypt_aes_gcm<C>(key_bytes: &[u8], plaintext: &[u8], aad: Option<&[u8]>) ->
 where C: Aead + AeadCore + KeyInit {
     let cipher = C::new_from_slice(key_bytes)
         .map_err(|e| invalid_data!("Invalid AES key").with_source(anyhow::anyhow!(e)))?;
-    let nonce = C::generate_nonce(&mut OsRng);
+    let nonce = Nonce::<C>::generate();
 
     let ciphertext = if let Some(aad) = aad {
         cipher.encrypt(&nonce, Payload {
@@ -244,16 +245,17 @@ where C: Aead + AeadCore + KeyInit {
     let cipher = C::new_from_slice(key_bytes)
         .map_err(|e| invalid_data!("Invalid AES key").with_source(anyhow::anyhow!(e)))?;
 
-    let nonce = Nonce::from_slice(&ciphertext[..AesGcmCipher::NONCE_LEN]);
-    let encrypted_data = &ciphertext[AesGcmCipher::NONCE_LEN..];
+    let (nonce, encrypted_data) = ciphertext.split_at(AesGcmCipher::NONCE_LEN);
+    let nonce = Nonce::<C>::try_from(nonce)
+        .map_err(|e| invalid_data!("Invalid AES-GCM nonce").with_source(anyhow::anyhow!(e)))?;
 
     let plaintext = if let Some(aad) = aad {
-        cipher.decrypt(nonce, Payload {
+        cipher.decrypt(&nonce, Payload {
             msg: encrypted_data,
             aad,
         })
     } else {
-        cipher.decrypt(nonce, encrypted_data)
+        cipher.decrypt(&nonce, encrypted_data)
     }
     .map_err(|e| {
         Error::new(ErrorKind::Unexpected, "AES-GCM decryption failed")
