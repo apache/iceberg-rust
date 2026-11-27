@@ -214,6 +214,11 @@ impl ArrowReader {
             }),
             arrow_schema.metadata().clone(),
         );
+
+        if !leaf_field_ids.is_empty() && projected_arrow_schema.fields().is_empty() {
+            return Ok(ProjectionMask::none(parquet_schema.num_columns()));
+        }
+
         let iceberg_schema = arrow_schema_to_schema(&projected_arrow_schema)?;
 
         tagged_fields.filter_leaves(|idx, field| {
@@ -263,8 +268,7 @@ impl ArrowReader {
         indices.extend(presence);
 
         if indices.is_empty() {
-            // Edge case: All requested columns are new (don't exist in file).
-            // Project all columns so RecordBatchTransformer has a batch to transform.
+            // Preserve the fallback for leafless requests and incompatible types.
             Ok(ProjectionMask::all())
         } else {
             Ok(ProjectionMask::leaves(parquet_schema, indices))
@@ -2219,6 +2223,114 @@ message schema {
             .await
             .unwrap_err();
         assert_eq!(err.kind(), ErrorKind::DataInvalid);
+    }
+
+    #[tokio::test]
+    async fn test_name_mapped_struct_with_unmatched_child() {
+        use serde_json::json;
+
+        use crate::arrow::schema_to_arrow_schema;
+
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    NestedField::optional(
+                        2,
+                        "s",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(3, "x", Type::Primitive(PrimitiveType::Int))
+                                .into(),
+                        ])),
+                    )
+                    .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let file_fields = Fields::from(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "s",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "old_x",
+                    DataType::Int32,
+                    true,
+                )])),
+                true,
+            ),
+        ]);
+        let file_batch = serde_arrow::to_record_batch(
+            &file_fields,
+            &json!([
+                {"id": 1, "s": {"old_x": 11}},
+                {"id": 2, "s": {"old_x": null}},
+                {"id": 3, "s": null}
+            ]),
+        )
+        .unwrap();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("old.parquet");
+        let mut writer =
+            ArrowWriter::try_new(File::create(&path).unwrap(), file_batch.schema(), None).unwrap();
+        writer.write(&file_batch).unwrap();
+        writer.close().unwrap();
+
+        let file_size = std::fs::metadata(&path).unwrap().len();
+        let expected_schema = schema_to_arrow_schema(&schema).unwrap();
+        let reader = ArrowReaderBuilder::new(FileIO::new_with_fs(), Runtime::current()).build();
+        for (aliases, expected_rows) in [
+            (
+                vec!["x".to_string()],
+                json!([{"id": 1, "s": null}, {"id": 2, "s": null}, {"id": 3, "s": null}]),
+            ),
+            (
+                vec!["x".to_string(), "old_x".to_string()],
+                json!([
+                    {"id": 1, "s": {"x": 11}},
+                    {"id": 2, "s": {"x": null}},
+                    {"id": 3, "s": null}
+                ]),
+            ),
+        ] {
+            let expected =
+                serde_arrow::to_record_batch(expected_schema.fields(), &expected_rows).unwrap();
+            let mapping = Arc::new(NameMapping::new(vec![
+                MappedField::new(Some(1), vec!["id".to_string()], vec![]),
+                MappedField::new(Some(2), vec!["s".to_string()], vec![MappedField::new(
+                    Some(3),
+                    aliases.clone(),
+                    vec![],
+                )]),
+            ]));
+            for (field_ids, columns) in [(vec![2], vec![1]), (vec![1, 2], vec![0, 1])] {
+                let task = FileScanTask::builder()
+                    .with_file_size_in_bytes(file_size)
+                    .with_start(0)
+                    .with_length(0)
+                    .with_data_file_path(path.to_str().unwrap().to_string())
+                    .with_data_file_format(DataFileFormat::Parquet)
+                    .with_schema(schema.clone())
+                    .with_project_field_ids(field_ids.clone())
+                    .with_case_sensitive(true)
+                    .with_name_mapping(Some(mapping.clone()))
+                    .build()
+                    .unwrap();
+                let output = reader
+                    .clone()
+                    .read(Box::pin(futures::stream::iter([Ok(task)])))
+                    .unwrap()
+                    .stream()
+                    .try_collect::<Vec<RecordBatch>>()
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    output,
+                    vec![expected.project(&columns).unwrap()],
+                    "aliases {aliases:?}, projected IDs {field_ids:?}",
+                );
+            }
+        }
     }
 
     /// Every nested Arrow type gets IDs, with list and map entries matched by their spec names.
