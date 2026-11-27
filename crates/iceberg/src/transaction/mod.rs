@@ -55,6 +55,7 @@ mod action;
 pub use action::*;
 mod append;
 mod expire_snapshots;
+mod replace_table;
 mod snapshot;
 mod sort_order;
 mod update_location;
@@ -70,11 +71,12 @@ use backon::{BackoffBuilder, ExponentialBackoff, ExponentialBuilder, RetryableWi
 pub use update_schema::AddColumn;
 
 use crate::error::Result;
-use crate::spec::TableProperties;
+use crate::spec::{Schema, TableProperties};
 use crate::table::Table;
 use crate::transaction::action::TransactionActionEntry;
 pub use crate::transaction::append::FastAppendAction;
 pub use crate::transaction::expire_snapshots::ExpireSnapshotsAction;
+pub use crate::transaction::replace_table::ReplaceTableAction;
 pub use crate::transaction::sort_order::ReplaceSortOrderAction;
 pub use crate::transaction::update_location::UpdateLocationAction;
 pub use crate::transaction::update_properties::UpdatePropertiesAction;
@@ -193,6 +195,11 @@ impl Transaction {
     /// Expire snapshots from the table metadata.
     pub fn expire_snapshots(&self) -> ExpireSnapshotsAction {
         ExpireSnapshotsAction::new()
+    }
+
+    /// Replaces the table's schema, partition spec and sort order, keeping its history.
+    pub fn replace_table(&self, schema: Schema) -> ReplaceTableAction {
+        ReplaceTableAction::new(self.table.clone(), schema)
     }
 
     /// Commit transaction.
