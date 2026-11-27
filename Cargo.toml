@@ -44,7 +44,7 @@ rust-version = "1.95"
 unused_qualifications = "deny"
 
 [workspace.dependencies]
-aes-gcm = "0.10"
+aes-gcm = "0.11"
 anyhow = "1.0.72"
 apache-avro = { version = "0.22", features = ["snappy", "zstandard"] }
 array-init = "2"

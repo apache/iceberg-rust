@@ -20,8 +20,8 @@
 
 use std::fmt;
 
-use aes_gcm::aead::OsRng;
-use aes_gcm::aead::rand_core::RngCore;
+use rand::rngs::OsRng;
+use rand::{RngCore, TryRngCore};
 
 use super::{AesKeySize, SecureKey};
 use crate::error::invalid_data;
@@ -123,7 +123,7 @@ const AAD_PREFIX_LENGTH: usize = 16;
 
 fn generate_aad_prefix() -> Box<[u8]> {
     let mut prefix = vec![0u8; AAD_PREFIX_LENGTH];
-    OsRng.fill_bytes(&mut prefix);
+    OsRng.unwrap_err().fill_bytes(&mut prefix);
     prefix.into_boxed_slice()
 }
 
