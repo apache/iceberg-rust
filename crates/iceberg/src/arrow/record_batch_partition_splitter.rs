@@ -118,6 +118,7 @@ impl RecordBatchPartitionSplitter {
     }
 
     /// Split the record batch into multiple record batches based on the partition spec.
+    /// In pre-computed mode, the `_partition` routing column is removed from returned batches.
     pub fn split(&self, batch: &RecordBatch) -> Result<Vec<(PartitionKey, RecordBatch)>> {
         let partition_structs = if let Some(calculator) = &self.calculator {
             // Compute partition values from source columns using calculator
@@ -168,6 +169,23 @@ impl RecordBatchPartitionSplitter {
                 .collect::<Result<Vec<_>>>()?
         };
 
+        // The pre-computed partition column is routing metadata, not table data. Remove it
+        // before returning batches to the file writer, which validates against the table schema.
+        let batch = if self.calculator.is_none() {
+            let columns = batch
+                .schema()
+                .fields()
+                .iter()
+                .enumerate()
+                .filter_map(|(index, field)| {
+                    (field.name() != PROJECTED_PARTITION_VALUE_COLUMN).then_some(index)
+                })
+                .collect::<Vec<_>>();
+            batch.project(&columns)?
+        } else {
+            batch.clone()
+        };
+
         // Group the batch by row value.
         let mut group_ids = HashMap::new();
         partition_structs
@@ -198,7 +216,7 @@ impl RecordBatchPartitionSplitter {
             );
 
             // filter the RecordBatch
-            partition_batches.push((partition_key, filter_record_batch(batch, &filter_array)?));
+            partition_batches.push((partition_key, filter_record_batch(&batch, &filter_array)?));
         }
 
         Ok(partition_batches)
@@ -434,6 +452,12 @@ mod tests {
         });
 
         assert_eq!(partitioned_batches.len(), 3);
+        assert!(partitioned_batches.iter().all(|(_, batch)| {
+            batch.num_columns() == 2
+                && batch
+                    .column_by_name(PROJECTED_PARTITION_VALUE_COLUMN)
+                    .is_none()
+        }));
 
         // Helper to extract id and name values from a batch
         let extract_values = |batch: &RecordBatch| -> (Vec<i32>, Vec<String>) {
