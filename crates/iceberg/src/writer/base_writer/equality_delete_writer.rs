@@ -30,33 +30,25 @@ use crate::arrow::schema_to_arrow_schema;
 use crate::error::invalid_data;
 use crate::spec::{DataFile, PartitionKey, Schema, SchemaRef};
 use crate::writer::file_writer::FileWriterBuilder;
-use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
+use crate::writer::file_writer::location_generator::FileNameGenerator;
 use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileWriterBuilder};
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
 
 /// Builder for `EqualityDeleteWriter`.
 #[derive(Debug)]
-pub struct EqualityDeleteFileWriterBuilder<
-    B: FileWriterBuilder,
-    L: LocationGenerator,
-    F: FileNameGenerator,
-> {
-    inner: RollingFileWriterBuilder<B, L, F>,
+pub struct EqualityDeleteFileWriterBuilder<B: FileWriterBuilder, F: FileNameGenerator> {
+    inner: RollingFileWriterBuilder<B, F>,
     config: EqualityDeleteWriterConfig,
 }
 
-impl<B, L, F> EqualityDeleteFileWriterBuilder<B, L, F>
+impl<B, F> EqualityDeleteFileWriterBuilder<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
     /// Create a new `EqualityDeleteFileWriterBuilder` using a `RollingFileWriterBuilder`.
-    pub fn new(
-        inner: RollingFileWriterBuilder<B, L, F>,
-        config: EqualityDeleteWriterConfig,
-    ) -> Self {
+    pub fn new(inner: RollingFileWriterBuilder<B, F>, config: EqualityDeleteWriterConfig) -> Self {
         Self { inner, config }
     }
 }
@@ -149,13 +141,12 @@ impl EqualityDeleteWriterConfig {
 }
 
 #[async_trait::async_trait]
-impl<B, L, F> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B, L, F>
+impl<B, F> IcebergWriterBuilder for EqualityDeleteFileWriterBuilder<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
-    type R = EqualityDeleteFileWriter<B, L, F>;
+    type R = EqualityDeleteFileWriter<B, F>;
 
     async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(EqualityDeleteFileWriter {
@@ -169,22 +160,17 @@ where
 
 /// Writer used to write equality delete files.
 #[derive(Debug)]
-pub struct EqualityDeleteFileWriter<
-    B: FileWriterBuilder,
-    L: LocationGenerator,
-    F: FileNameGenerator,
-> {
-    inner: Option<RollingFileWriter<B, L, F>>,
+pub struct EqualityDeleteFileWriter<B: FileWriterBuilder, F: FileNameGenerator> {
+    inner: Option<RollingFileWriter<B, F>>,
     projector: RecordBatchProjector,
     equality_ids: Vec<i32>,
     partition_key: Option<PartitionKey>,
 }
 
 #[async_trait::async_trait]
-impl<B, L, F> IcebergWriter for EqualityDeleteFileWriter<B, L, F>
+impl<B, F> IcebergWriter for EqualityDeleteFileWriter<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
     async fn write(&mut self, batch: RecordBatch) -> Result<()> {
@@ -464,7 +450,7 @@ mod test {
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             pb,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
         let mut equality_delete_writer =
@@ -685,7 +671,7 @@ mod test {
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             pb,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
         let mut equality_delete_writer =
@@ -814,7 +800,7 @@ mod test {
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             pb,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
         let mut equality_delete_writer =

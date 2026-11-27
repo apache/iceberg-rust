@@ -2738,7 +2738,9 @@ mod tests {
         let rolling = RollingFileWriterBuilder::new_with_default_file_size(
             ParquetWriterBuilder::new(WriterProperties::builder().build(), Arc::new(delete_schema)),
             FileIO::new_with_fs(),
-            DefaultLocationGenerator::with_data_location(dir.path().to_str().unwrap().to_string()),
+            Arc::new(DefaultLocationGenerator::with_data_location(
+                dir.path().to_str().unwrap().to_string(),
+            )),
             DefaultFileNameGenerator::new("eq-del".to_string(), None, DataFileFormat::Parquet),
         );
         let mut writer = EqualityDeleteFileWriterBuilder::new(rolling, config)

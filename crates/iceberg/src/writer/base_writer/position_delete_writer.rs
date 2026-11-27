@@ -45,7 +45,7 @@ use crate::metadata_columns::{
 };
 use crate::spec::{DataContentType, DataFile, PartitionKey, Schema, SchemaRef};
 use crate::writer::file_writer::FileWriterBuilder;
-use crate::writer::file_writer::location_generator::{FileNameGenerator, LocationGenerator};
+use crate::writer::file_writer::location_generator::FileNameGenerator;
 use crate::writer::file_writer::rolling_writer::{RollingFileWriter, RollingFileWriterBuilder};
 use crate::writer::{IcebergWriter, IcebergWriterBuilder};
 use crate::{Error, ErrorKind, Result};
@@ -171,18 +171,13 @@ fn validate_position_delete_batch(batch: &RecordBatch) -> Result<()> {
 
 /// Builder for [`PositionDeleteFileWriter`].
 #[derive(Debug)]
-pub struct PositionDeleteFileWriterBuilder<
-    B: FileWriterBuilder,
-    L: LocationGenerator,
-    F: FileNameGenerator,
-> {
-    inner: RollingFileWriterBuilder<B, L, F>,
+pub struct PositionDeleteFileWriterBuilder<B: FileWriterBuilder, F: FileNameGenerator> {
+    inner: RollingFileWriterBuilder<B, F>,
 }
 
-impl<B, L, F> PositionDeleteFileWriterBuilder<B, L, F>
+impl<B, F> PositionDeleteFileWriterBuilder<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
     /// Create a new `PositionDeleteFileWriterBuilder` using a `RollingFileWriterBuilder`.
@@ -191,19 +186,18 @@ where
     /// with the [`position_delete_schema`]; the per-batch validation in
     /// [`PositionDeleteFileWriter::write`] guards against a mismatched batch, but
     /// the caller is responsible for wiring the same schema into the file writer.
-    pub fn new(inner: RollingFileWriterBuilder<B, L, F>) -> Self {
+    pub fn new(inner: RollingFileWriterBuilder<B, F>) -> Self {
         Self { inner }
     }
 }
 
 #[async_trait::async_trait]
-impl<B, L, F> IcebergWriterBuilder for PositionDeleteFileWriterBuilder<B, L, F>
+impl<B, F> IcebergWriterBuilder for PositionDeleteFileWriterBuilder<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
-    type R = PositionDeleteFileWriter<B, L, F>;
+    type R = PositionDeleteFileWriter<B, F>;
 
     async fn build(&self, partition_key: Option<PartitionKey>) -> Result<Self::R> {
         Ok(PositionDeleteFileWriter {
@@ -215,20 +209,15 @@ where
 
 /// Writer used to write position delete files within one spec/partition.
 #[derive(Debug)]
-pub struct PositionDeleteFileWriter<
-    B: FileWriterBuilder,
-    L: LocationGenerator,
-    F: FileNameGenerator,
-> {
-    inner: Option<RollingFileWriter<B, L, F>>,
+pub struct PositionDeleteFileWriter<B: FileWriterBuilder, F: FileNameGenerator> {
+    inner: Option<RollingFileWriter<B, F>>,
     partition_key: Option<PartitionKey>,
 }
 
 #[async_trait::async_trait]
-impl<B, L, F> IcebergWriter for PositionDeleteFileWriter<B, L, F>
+impl<B, F> IcebergWriter for PositionDeleteFileWriter<B, F>
 where
     B: FileWriterBuilder,
-    L: LocationGenerator,
     F: FileNameGenerator,
 {
     /// Writes a batch of `(file_path, pos)` records; the shape is validated on every
@@ -353,11 +342,7 @@ mod test {
         temp_dir: &TempDir,
     ) -> (
         FileIO,
-        PositionDeleteFileWriterBuilder<
-            ParquetWriterBuilder,
-            DefaultLocationGenerator,
-            DefaultFileNameGenerator,
-        >,
+        PositionDeleteFileWriterBuilder<ParquetWriterBuilder, DefaultFileNameGenerator>,
     ) {
         let file_io = FileIO::new_with_fs();
         let location_gen = DefaultLocationGenerator::with_data_location(
@@ -373,7 +358,7 @@ mod test {
         let rolling_writer_builder = RollingFileWriterBuilder::new_with_default_file_size(
             parquet_writer_builder,
             file_io.clone(),
-            location_gen,
+            Arc::new(location_gen),
             file_name_gen,
         );
         (
