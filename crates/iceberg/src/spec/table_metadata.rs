@@ -338,6 +338,12 @@ impl TableMetadata {
         })
     }
 
+    /// Returns all snapshot references (branches and tags) of the table.
+    #[inline]
+    pub fn refs(&self) -> &HashMap<String, SnapshotReference> {
+        &self.refs
+    }
+
     /// Return all sort orders.
     #[inline]
     pub fn sort_orders_iter(&self) -> impl ExactSizeIterator<Item = &SortOrderRef> {
@@ -1591,10 +1597,11 @@ mod tests {
     use crate::io::FileIO;
     use crate::spec::table_metadata::TableMetadata;
     use crate::spec::{
-        BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, NestedField, NullOrder, Operation,
-        PartitionSpec, PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema, Snapshot,
-        SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder, StatisticsFile,
-        Summary, TableProperties, Transform, Type, UnboundPartitionField, UnboundPartitionSpec,
+        BlobMetadata, EncryptedKey, INITIAL_ROW_ID, Literal, MAIN_BRANCH, NestedField, NullOrder,
+        Operation, PartitionSpec, PartitionStatisticsFile, PrimitiveLiteral, PrimitiveType, Schema,
+        Snapshot, SnapshotReference, SnapshotRetention, SortDirection, SortField, SortOrder,
+        StatisticsFile, Summary, TableProperties, Transform, Type, UnboundPartitionField,
+        UnboundPartitionSpec,
     };
     use crate::{ErrorKind, TableCreation};
 
@@ -4574,5 +4581,47 @@ mod tests {
             .map(|field| field.name.as_str())
             .collect();
         assert_eq!(names, vec!["y", "z"]);
+    }
+
+    #[test]
+    fn test_table_metadata_refs() {
+        let empty = get_test_table_metadata("TableMetadataV2ValidMinimal.json");
+        assert!(empty.refs().is_empty());
+
+        let base = get_test_table_metadata("TableMetadataV2Valid.json");
+        let main_ref = SnapshotReference::new(
+            3055729675574597004,
+            SnapshotRetention::branch(None, None, None),
+        );
+        assert_eq!(
+            base.refs(),
+            &HashMap::from([(MAIN_BRANCH.to_string(), main_ref.clone())])
+        );
+
+        let dev_ref = SnapshotReference::new(
+            3051729675574597004,
+            SnapshotRetention::branch(Some(5), Some(86_400_000), Some(604_800_000)),
+        );
+        let tag_ref = SnapshotReference::new(3051729675574597004, SnapshotRetention::Tag {
+            max_ref_age_ms: Some(172_800_000),
+        });
+
+        let metadata = base
+            .into_builder(None)
+            .set_ref("dev", dev_ref.clone())
+            .unwrap()
+            .set_ref("v1.0", tag_ref.clone())
+            .unwrap()
+            .build()
+            .unwrap()
+            .metadata;
+
+        let expected = HashMap::from([
+            (MAIN_BRANCH.to_string(), main_ref),
+            ("dev".to_string(), dev_ref),
+            ("v1.0".to_string(), tag_ref),
+        ]);
+        assert_eq!(metadata.refs(), &expected);
+        assert_eq!(metadata.refs().get("missing"), None);
     }
 }
