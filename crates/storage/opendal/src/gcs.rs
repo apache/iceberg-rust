@@ -84,3 +84,41 @@ pub(crate) fn gcs_config_build(cfg: &GcsConfig, path: &str) -> Result<Operator> 
     cfg.bucket = bucket.to_string();
     Operator::from_config(cfg).map_err(from_opendal_error)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use opendal::services::GcsConfig;
+
+    use crate::{OpenDalClientConfig, OpenDalStorage};
+
+    #[test]
+    fn test_relativize_path_gcs() {
+        let storage = OpenDalStorage::Gcs {
+            config: Arc::new(GcsConfig::default()),
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        assert_eq!(
+            storage
+                .relativize_path("gs://my-bucket/path/to/file.parquet")
+                .unwrap(),
+            "path/to/file.parquet"
+        );
+    }
+
+    #[test]
+    fn test_relativize_path_gcs_invalid_scheme() {
+        let storage = OpenDalStorage::Gcs {
+            config: Arc::new(GcsConfig::default()),
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        assert!(
+            storage
+                .relativize_path("s3://my-bucket/path/to/file.parquet")
+                .is_err()
+        );
+    }
+}
