@@ -20,9 +20,9 @@ mod deserializer;
 mod named_types;
 mod schema;
 pub(crate) use deserializer::Resolved;
-pub(crate) use named_types::define_named_types_once;
 #[cfg(test)]
 pub(crate) use named_types::define_named_types_repeatedly;
+pub(crate) use named_types::{define_named_types_once, read_header_metadata};
 pub(crate) use schema::*;
 
 /// Creates an Avro writer with deflate compression.

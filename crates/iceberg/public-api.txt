@@ -2382,6 +2382,13 @@ pub fn iceberg::spec::ManifestEntry::fmt(&self, f: &mut core::fmt::Formatter<'_>
 impl core::marker::StructuralPartialEq for iceberg::spec::ManifestEntry
 impl iceberg::spec::ManifestEntry
 pub fn iceberg::spec::ManifestEntry::builder() -> ManifestEntryBuilder<((), (), (), (), ())>
+pub struct iceberg::spec::ManifestEntryReader<R: std::io::Read>
+impl<R: std::io::Read> iceberg::spec::ManifestEntryReader<R>
+pub fn iceberg::spec::ManifestEntryReader<R>::metadata(&self) -> &iceberg::spec::ManifestMetadata
+pub fn iceberg::spec::ManifestEntryReader<R>::new(source: R) -> iceberg::Result<Self>
+impl<R: std::io::Read> core::iter::traits::iterator::Iterator for iceberg::spec::ManifestEntryReader<R>
+pub type iceberg::spec::ManifestEntryReader<R>::Item = core::result::Result<iceberg::spec::ManifestEntry, iceberg::Error>
+pub fn iceberg::spec::ManifestEntryReader<R>::next(&mut self) -> core::option::Option<Self::Item>
 pub struct iceberg::spec::ManifestFile
 pub iceberg::spec::ManifestFile::added_files_count: core::option::Option<u32>
 pub iceberg::spec::ManifestFile::added_rows_count: core::option::Option<u64>
