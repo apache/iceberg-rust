@@ -17,12 +17,19 @@
 
 //! AWS SigV4 request signing for the REST catalog.
 
+use std::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use aws_credential_types::provider::{ProvideCredentials, SharedCredentialsProvider};
 use chrono::{DateTime, Utc};
-use iceberg::{Error, ErrorKind, Result};
+use iceberg::{Error, ErrorKind, Result, SessionContext};
 use sha2::{Digest, Sha256};
 use typed_builder::TypedBuilder;
 
-use super::Credentials;
+use super::{AuthManager, AuthSession, Credentials};
+use crate::client::HttpClient;
 
 /// How the payload hash is encoded in the `x-amz-content-sha256` header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,7 +68,7 @@ fn payload_hashes(body: Option<&[u8]>, mode: PayloadHashMode) -> (String, String
 ///
 /// Built with [`SigV4Signer::builder`].
 #[derive(Clone, Debug, TypedBuilder)]
-pub struct SigV4Signer {
+pub(crate) struct SigV4Signer {
     /// The signing region, e.g. `us-east-1`.
     #[builder(setter(into))]
     region: String,
@@ -364,8 +371,289 @@ fn relocate_conflicting(
     }
 }
 
+/// SigV4 signing region.
+pub const REST_CATALOG_PROP_SIGNING_REGION: &str = "rest.signing-region";
+/// SigV4 signing name; defaults to [`SIGNING_NAME_DEFAULT`].
+pub const REST_CATALOG_PROP_SIGNING_NAME: &str = "rest.signing-name";
+/// Static SigV4 access key id.
+pub const REST_CATALOG_PROP_ACCESS_KEY_ID: &str = "rest.access-key-id";
+/// Static SigV4 secret access key.
+pub const REST_CATALOG_PROP_SECRET_ACCESS_KEY: &str = "rest.secret-access-key";
+/// Static SigV4 session token.
+pub const REST_CATALOG_PROP_SESSION_TOKEN: &str = "rest.session-token";
+
+/// Default SigV4 signing name.
+pub const SIGNING_NAME_DEFAULT: &str = "execute-api";
+
+const CREDENTIAL_PROPERTIES: [&str; 3] = [
+    REST_CATALOG_PROP_ACCESS_KEY_ID,
+    REST_CATALOG_PROP_SECRET_ACCESS_KEY,
+    REST_CATALOG_PROP_SESSION_TOKEN,
+];
+const SIGNING_PROPERTIES: [&str; 5] = [
+    REST_CATALOG_PROP_SIGNING_REGION,
+    REST_CATALOG_PROP_SIGNING_NAME,
+    REST_CATALOG_PROP_ACCESS_KEY_ID,
+    REST_CATALOG_PROP_SECRET_ACCESS_KEY,
+    REST_CATALOG_PROP_SESSION_TOKEN,
+];
+
+/// Applies `overrides` to `signer` and `credentials`. Any credential override
+/// replaces the credentials as a set.
+fn overlay_signing(
+    signer: &SigV4Signer,
+    credentials: &SharedCredentialsProvider,
+    overrides: &HashMap<String, String>,
+    provider: Option<&SharedCredentialsProvider>,
+) -> Result<(SigV4Signer, SharedCredentialsProvider)> {
+    let signer = SigV4Signer {
+        region: non_blank(overrides, REST_CATALOG_PROP_SIGNING_REGION)
+            .unwrap_or_else(|| signer.region.clone()),
+        service: non_blank(overrides, REST_CATALOG_PROP_SIGNING_NAME)
+            .unwrap_or_else(|| signer.service.clone()),
+        mode: signer.mode,
+    };
+    let replaces_credentials = CREDENTIAL_PROPERTIES
+        .iter()
+        .any(|key| overrides.contains_key(*key));
+    let credentials = if replaces_credentials {
+        credentials_from_props(overrides, provider)?
+    } else {
+        credentials.clone()
+    };
+    Ok((signer, credentials))
+}
+
+/// Trims a property, treating blank as absent.
+fn non_blank(props: &HashMap<String, String>, key: &str) -> Option<String> {
+    props
+        .get(key)
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+/// Builds a signer and credentials from `props`, falling back to `provider`.
+fn from_props(
+    props: &HashMap<String, String>,
+    provider: Option<&SharedCredentialsProvider>,
+    mode: PayloadHashMode,
+) -> Result<(SigV4Signer, SharedCredentialsProvider)> {
+    let region = non_blank(props, REST_CATALOG_PROP_SIGNING_REGION).ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("'{REST_CATALOG_PROP_SIGNING_REGION}' is required for SigV4 signing"),
+        )
+    })?;
+    let name = non_blank(props, REST_CATALOG_PROP_SIGNING_NAME)
+        .unwrap_or_else(|| SIGNING_NAME_DEFAULT.into());
+
+    let credentials = credentials_from_props(props, provider)?;
+    Ok((
+        SigV4Signer::builder()
+            .region(region)
+            .service(name)
+            .mode(mode)
+            .build(),
+        credentials,
+    ))
+}
+
+/// Static credentials from `props`, else `provider`. A secret without a key id
+/// is an error.
+fn credentials_from_props(
+    props: &HashMap<String, String>,
+    provider: Option<&SharedCredentialsProvider>,
+) -> Result<SharedCredentialsProvider> {
+    let Some(access_key_id) = non_blank(props, REST_CATALOG_PROP_ACCESS_KEY_ID) else {
+        if non_blank(props, REST_CATALOG_PROP_SECRET_ACCESS_KEY).is_some() {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "'{REST_CATALOG_PROP_SECRET_ACCESS_KEY}' is set without '{REST_CATALOG_PROP_ACCESS_KEY_ID}'"
+                ),
+            ));
+        }
+        return provider.cloned().ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "no SigV4 credentials: set '{REST_CATALOG_PROP_ACCESS_KEY_ID}' and \
+                     '{REST_CATALOG_PROP_SECRET_ACCESS_KEY}', or give the `SigV4AuthManager` \
+                     a credentials provider"
+                ),
+            )
+        });
+    };
+    let secret_access_key = non_blank(props, REST_CATALOG_PROP_SECRET_ACCESS_KEY).ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("'{REST_CATALOG_PROP_ACCESS_KEY_ID}' is set without '{REST_CATALOG_PROP_SECRET_ACCESS_KEY}'"),
+        )
+    })?;
+    Ok(SharedCredentialsProvider::new(Credentials::new(
+        access_key_id,
+        secret_access_key,
+        non_blank(props, REST_CATALOG_PROP_SESSION_TOKEN),
+        None,
+        "iceberg-rest-properties",
+    )))
+}
+
+/// [`AuthManager`] that SigV4-signs requests on top of a delegate, like Java's
+/// `RESTSigV4AuthManager`. The delegate's `Authorization` is sent as
+/// `Original-Authorization`.
+///
+/// Sessions read the signing region, signing name and static credentials from
+/// their properties, falling back to [`Self::with_credentials_provider`] for
+/// credentials, and fail with [`ErrorKind::DataInvalid`] without either.
+/// Context values override the catalog session's; context credentials replace
+/// its credentials as a set.
+///
+/// Set signing-relevant headers as `header.*` properties: an injected client's
+/// default headers are added after signing.
+#[derive(Debug)]
+pub struct SigV4AuthManager {
+    delegate: Arc<dyn AuthManager>,
+    credentials: Option<SharedCredentialsProvider>,
+    mode: PayloadHashMode,
+}
+
+impl SigV4AuthManager {
+    /// Signs on top of `delegate`, with [`PayloadHashMode::IcebergRest`].
+    pub fn new(delegate: Arc<dyn AuthManager>) -> Self {
+        Self {
+            delegate,
+            credentials: None,
+            mode: PayloadHashMode::IcebergRest,
+        }
+    }
+
+    /// Signs with `provider` when the properties hold no static credentials.
+    pub fn with_credentials_provider(mut self, provider: SharedCredentialsProvider) -> Self {
+        self.credentials = Some(provider);
+        self
+    }
+
+    /// Sets how the payload hash is encoded.
+    pub fn with_payload_hash_mode(mut self, mode: PayloadHashMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    fn signing_for(
+        &self,
+        props: &HashMap<String, String>,
+    ) -> Result<(SigV4Signer, SharedCredentialsProvider)> {
+        from_props(props, self.credentials.as_ref(), self.mode)
+    }
+}
+
+/// Non-blank signing values from a context; credentials win over properties.
+fn context_signing_overrides(context: &SessionContext) -> HashMap<String, String> {
+    SIGNING_PROPERTIES
+        .iter()
+        .filter_map(|key| {
+            let credential = context.credentials().get(*key).map(|v| v.expose());
+            let property = context.properties().get(*key).map(String::as_str);
+            let value = [credential, property]
+                .into_iter()
+                .flatten()
+                .find(|v| !v.trim().is_empty())?;
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect()
+}
+
+#[async_trait]
+impl AuthManager for SigV4AuthManager {
+    async fn init_session(
+        &self,
+        client: &HttpClient,
+        props: &HashMap<String, String>,
+    ) -> Result<Box<dyn AuthSession>> {
+        let (signer, credentials) = self.signing_for(props)?;
+        Ok(Box::new(SigV4Session {
+            delegate: Arc::from(self.delegate.init_session(client, props).await?),
+            signer,
+            credentials,
+        }))
+    }
+
+    async fn catalog_session(
+        &self,
+        client: &HttpClient,
+        props: &HashMap<String, String>,
+    ) -> Result<Arc<dyn AuthSession>> {
+        let (signer, credentials) = self.signing_for(props)?;
+        Ok(Arc::new(SigV4Session {
+            delegate: self.delegate.catalog_session(client, props).await?,
+            signer,
+            credentials,
+        }))
+    }
+
+    async fn contextual_session(
+        &self,
+        context: &SessionContext,
+        catalog_session: Arc<dyn AuthSession>,
+    ) -> Result<Arc<dyn AuthSession>> {
+        let parent = (&*catalog_session as &dyn Any)
+            .downcast_ref::<SigV4Session>()
+            .ok_or_else(|| {
+                Error::new(ErrorKind::DataInvalid, "unexpected SigV4 catalog session")
+            })?;
+
+        let delegate = self
+            .delegate
+            .contextual_session(context, parent.delegate.clone())
+            .await?;
+        let overrides = context_signing_overrides(context);
+        if overrides.is_empty() && Arc::ptr_eq(&delegate, &parent.delegate) {
+            return Ok(catalog_session);
+        }
+        let (signer, credentials) = overlay_signing(
+            &parent.signer,
+            &parent.credentials,
+            &overrides,
+            self.credentials.as_ref(),
+        )?;
+        Ok(Arc::new(SigV4Session {
+            delegate,
+            signer,
+            credentials,
+        }))
+    }
+
+    fn signs_requests(&self) -> bool {
+        true
+    }
+}
+
+/// [`AuthSession`] applying the delegate's auth, then SigV4-signing.
+#[derive(Debug)]
+struct SigV4Session {
+    delegate: Arc<dyn AuthSession>,
+    signer: SigV4Signer,
+    credentials: SharedCredentialsProvider,
+}
+
+#[async_trait]
+impl AuthSession for SigV4Session {
+    async fn authenticate(&self, request: &mut crate::HttpRequest) -> Result<()> {
+        self.delegate.authenticate(request).await?;
+        // Resolved per request; caching is the provider's job.
+        let credentials = self.credentials.provide_credentials().await.map_err(|e| {
+            Error::new(ErrorKind::Unexpected, "failed to resolve AWS credentials").with_source(e)
+        })?;
+        self.signer.sign(request, &credentials)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use chrono::TimeZone;
 
     use super::*;
@@ -514,7 +802,7 @@ mod tests {
 
     /// Records every event field.
     #[derive(Clone, Default)]
-    struct CapturedLog(std::sync::Arc<std::sync::Mutex<String>>);
+    struct CapturedLog(Arc<Mutex<String>>);
 
     impl tracing::field::Visit for CapturedLog {
         fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
@@ -1221,5 +1509,791 @@ mod tests {
             before.trunc_subsecs(0) <= stamped && stamped <= after,
             "{date}"
         );
+    }
+
+    fn test_credentials_provider() -> SharedCredentialsProvider {
+        SharedCredentialsProvider::new(test_credentials())
+    }
+
+    fn test_session() -> SigV4Session {
+        SigV4Session {
+            delegate: Arc::new(crate::auth::NoopSession),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: test_credentials_provider(),
+        }
+    }
+
+    fn request_with(headers: &[(&'static str, &str)]) -> HttpRequest {
+        let mut builder = reqwest::Client::new().get("https://rest.example.com/v1/config");
+        for (name, value) in headers {
+            builder = builder.header(*name, *value);
+        }
+        HttpRequest::new(builder.build().unwrap())
+    }
+
+    #[tokio::test]
+    async fn relocation_keeps_an_existing_original_authorization() {
+        let mut request = request_with(&[
+            ("original-authorization", "credential-A"),
+            ("authorization", "credential-B"),
+        ]);
+
+        test_session().authenticate(&mut request).await.unwrap();
+
+        let relocated: Vec<_> = request
+            .headers()
+            .get_all("original-authorization")
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(relocated, ["credential-A", "credential-B"]);
+        assert!(
+            request
+                .headers()
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("AWS4-HMAC-SHA256 ")
+        );
+    }
+
+    #[tokio::test]
+    async fn credentials_are_resolved_once_per_request() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = {
+            let calls = calls.clone();
+            aws_credential_types::credential_fn::provide_credentials_fn(move || {
+                let calls = calls.clone();
+                async move {
+                    let n = calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(Credentials::new(
+                        format!("AKID{n}"),
+                        "secret",
+                        None::<String>,
+                        None,
+                        "test",
+                    ))
+                }
+            })
+        };
+        let session = SigV4Session {
+            delegate: Arc::new(crate::auth::NoopSession),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: SharedCredentialsProvider::new(counted),
+        };
+
+        let mut first = request_with(&[]);
+        session.authenticate(&mut first).await.unwrap();
+        let mut second = request_with(&[]);
+        session.authenticate(&mut second).await.unwrap();
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let auth = |r: &HttpRequest| {
+            r.headers()
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string()
+        };
+        assert!(auth(&first).contains("AKID0/"), "{}", auth(&first));
+        assert!(auth(&second).contains("AKID1/"), "{}", auth(&second));
+    }
+
+    #[tokio::test]
+    async fn the_delegate_authenticates_before_signing() {
+        #[derive(Debug)]
+        struct Bearer;
+        #[async_trait]
+        impl AuthSession for Bearer {
+            async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
+                request
+                    .headers_mut()
+                    .insert("authorization", "Bearer delegate".parse().unwrap());
+                Ok(())
+            }
+        }
+
+        let session = SigV4Session {
+            delegate: Arc::new(Bearer),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: test_credentials_provider(),
+        };
+        let mut request = request_with(&[]);
+        session.authenticate(&mut request).await.unwrap();
+
+        assert_eq!(
+            request.headers().get("original-authorization").unwrap(),
+            "Bearer delegate"
+        );
+        let auth = request.headers().get("authorization").unwrap();
+        assert!(auth.to_str().unwrap().contains("original-authorization"));
+    }
+
+    fn props(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn static_credentials_come_from_properties() {
+        let (signer, credentials) = from_props(
+            &props(&[
+                (REST_CATALOG_PROP_SIGNING_REGION, "cn-hangzhou"),
+                (REST_CATALOG_PROP_ACCESS_KEY_ID, "AKID"),
+                (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "secret"),
+                (REST_CATALOG_PROP_SESSION_TOKEN, "token"),
+            ]),
+            None,
+            PayloadHashMode::IcebergRest,
+        )
+        .unwrap();
+
+        assert_eq!(signer.region, "cn-hangzhou");
+        assert_eq!(signer.service, SIGNING_NAME_DEFAULT);
+        assert_eq!(signer.mode, PayloadHashMode::IcebergRest);
+        let resolved = credentials.provide_credentials().await.unwrap();
+        assert_eq!(resolved.access_key_id(), "AKID");
+        assert_eq!(resolved.session_token(), Some("token"));
+    }
+
+    #[tokio::test]
+    async fn a_blank_property_counts_as_absent() {
+        let err = from_props(
+            &props(&[(REST_CATALOG_PROP_SIGNING_REGION, "   ")]),
+            None,
+            PayloadHashMode::IcebergRest,
+        )
+        .unwrap_err();
+        assert!(
+            err.message().contains(REST_CATALOG_PROP_SIGNING_REGION),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn half_a_credential_pair_is_rejected_even_with_a_provider() {
+        let provider = test_credentials_provider();
+        for ((present, missing), provider) in [
+            (
+                REST_CATALOG_PROP_ACCESS_KEY_ID,
+                REST_CATALOG_PROP_SECRET_ACCESS_KEY,
+            ),
+            (
+                REST_CATALOG_PROP_SECRET_ACCESS_KEY,
+                REST_CATALOG_PROP_ACCESS_KEY_ID,
+            ),
+        ]
+        .into_iter()
+        .flat_map(|pair| [(pair, None), (pair, Some(&provider))])
+        {
+            let err = from_props(
+                &props(&[
+                    (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1"),
+                    (present, "value"),
+                ]),
+                provider,
+                PayloadHashMode::IcebergRest,
+            )
+            .unwrap_err();
+            assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+            let message = err.message();
+            assert!(message.contains(present), "{err}");
+            assert!(message.contains(missing), "{err}");
+            assert!(!message.contains("credentials provider"), "{err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn without_credentials_the_error_points_at_the_provider() {
+        let err = from_props(
+            &props(&[(REST_CATALOG_PROP_SIGNING_REGION, "us-east-1")]),
+            None,
+            PayloadHashMode::IcebergRest,
+        )
+        .unwrap_err();
+        assert!(err.message().contains("credentials provider"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_signing_name_property_overrides_the_default() {
+        let (signer, _) = from_props(
+            &props(&[
+                (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1"),
+                (REST_CATALOG_PROP_SIGNING_NAME, "glue"),
+                (REST_CATALOG_PROP_ACCESS_KEY_ID, "AKID"),
+                (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "secret"),
+            ]),
+            None,
+            PayloadHashMode::IcebergRest,
+        )
+        .unwrap();
+        assert_eq!(signer.service, "glue");
+        assert_ne!(signer.service, SIGNING_NAME_DEFAULT);
+    }
+
+    #[tokio::test]
+    async fn a_padded_property_is_trimmed_not_just_accepted() {
+        let (signer, credentials) = from_props(
+            &props(&[
+                (REST_CATALOG_PROP_SIGNING_REGION, "  us-east-1  "),
+                (REST_CATALOG_PROP_ACCESS_KEY_ID, "  AKID  "),
+                (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "secret"),
+            ]),
+            None,
+            PayloadHashMode::IcebergRest,
+        )
+        .unwrap();
+        assert_eq!(signer.region, "us-east-1");
+        assert_eq!(
+            credentials
+                .provide_credentials()
+                .await
+                .unwrap()
+                .access_key_id(),
+            "AKID"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_delegate_stops_the_request_unsigned() {
+        #[derive(Debug)]
+        struct Failing;
+        #[async_trait]
+        impl AuthSession for Failing {
+            async fn authenticate(&self, _: &mut HttpRequest) -> Result<()> {
+                Err(Error::new(ErrorKind::Unexpected, "token refresh failed"))
+            }
+        }
+
+        let session = SigV4Session {
+            delegate: Arc::new(Failing),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: test_credentials_provider(),
+        };
+        let mut request = request_with(&[]);
+        let err = session.authenticate(&mut request).await.unwrap_err();
+
+        assert!(err.message().contains("token refresh failed"), "{err}");
+        assert!(request.headers().get("authorization").is_none());
+    }
+
+    /// Records which delegate method ran and with which properties.
+    #[derive(Debug, Default)]
+    struct RecordingManager {
+        calls: Mutex<Vec<(&'static str, HashMap<String, String>)>>,
+    }
+
+    #[async_trait]
+    impl AuthManager for RecordingManager {
+        async fn init_session(
+            &self,
+            _: &HttpClient,
+            props: &HashMap<String, String>,
+        ) -> Result<Box<dyn AuthSession>> {
+            self.calls.lock().unwrap().push(("init", props.clone()));
+            Ok(Box::new(crate::auth::NoopSession))
+        }
+
+        async fn catalog_session(
+            &self,
+            _: &HttpClient,
+            props: &HashMap<String, String>,
+        ) -> Result<Arc<dyn AuthSession>> {
+            self.calls.lock().unwrap().push(("catalog", props.clone()));
+            Ok(Arc::new(crate::auth::NoopSession))
+        }
+    }
+
+    fn test_client() -> HttpClient {
+        HttpClient::new(
+            &crate::RestCatalogConfig::builder()
+                .uri("http://localhost".to_string())
+                .build(),
+        )
+        .unwrap()
+    }
+
+    #[derive(Debug)]
+    struct ContextDelegate {
+        parent: Arc<dyn AuthSession>,
+    }
+
+    #[derive(Debug)]
+    struct ContextBearer(String);
+
+    #[async_trait]
+    impl AuthSession for ContextBearer {
+        async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
+            request.headers_mut().insert(
+                "authorization",
+                format!("Bearer {}", self.0).parse().unwrap(),
+            );
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl AuthManager for ContextDelegate {
+        async fn init_session(
+            &self,
+            _: &HttpClient,
+            _: &HashMap<String, String>,
+        ) -> Result<Box<dyn AuthSession>> {
+            Ok(Box::new(crate::auth::NoopSession))
+        }
+
+        async fn catalog_session(
+            &self,
+            _: &HttpClient,
+            _: &HashMap<String, String>,
+        ) -> Result<Arc<dyn AuthSession>> {
+            Ok(self.parent.clone())
+        }
+
+        async fn contextual_session(
+            &self,
+            context: &SessionContext,
+            parent: Arc<dyn AuthSession>,
+        ) -> Result<Arc<dyn AuthSession>> {
+            assert!(Arc::ptr_eq(&parent, &self.parent));
+            match context.identity() {
+                Some("fail") => Err(Error::new(
+                    ErrorKind::DataInvalid,
+                    "delegate context failed",
+                )),
+                Some(identity) => Ok(Arc::new(ContextBearer(identity.to_string()))),
+                None => Ok(parent),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn contextual_sigv4_sessions_use_the_delegate_and_context_credentials() {
+        let base = props(&[
+            (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1"),
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "CATALOG"),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "catalog-secret"),
+        ]);
+        let manager = SigV4AuthManager::new(Arc::new(ContextDelegate {
+            parent: Arc::new(crate::auth::NoopSession),
+        }));
+        let parent = manager
+            .catalog_session(&test_client(), &base)
+            .await
+            .unwrap();
+        let context = SessionContext::builder()
+            .identity("alice".to_string())
+            .properties(props(&[
+                (REST_CATALOG_PROP_SIGNING_REGION, "eu-west-1"),
+                (REST_CATALOG_PROP_ACCESS_KEY_ID, "PROPERTY-KEY"),
+            ]))
+            .credentials(
+                props(&[
+                    (REST_CATALOG_PROP_ACCESS_KEY_ID, "CONTEXT-KEY"),
+                    (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "context-secret"),
+                    (REST_CATALOG_PROP_SESSION_TOKEN, "context-token"),
+                ])
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+            )
+            .build();
+        let session = manager
+            .contextual_session(&context, parent.clone())
+            .await
+            .unwrap();
+        let mut request = request_with(&[]);
+        session.authenticate(&mut request).await.unwrap();
+        let authorization = request
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            authorization.contains("Credential=CONTEXT-KEY/"),
+            "{authorization}"
+        );
+        assert!(
+            authorization.contains("/eu-west-1/execute-api/"),
+            "{authorization}"
+        );
+        assert_eq!(
+            request.headers().get("original-authorization").unwrap(),
+            "Bearer alice"
+        );
+        assert_eq!(
+            request.headers().get("x-amz-security-token").unwrap(),
+            "context-token"
+        );
+
+        let date = request
+            .headers()
+            .get("x-amz-date")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let now = chrono::NaiveDateTime::parse_from_str(date, "%Y%m%dT%H%M%SZ")
+            .unwrap()
+            .and_utc();
+        let mut expected = request_with(&[("authorization", "Bearer alice")]);
+        SigV4Signer::builder()
+            .region("eu-west-1")
+            .service("execute-api")
+            .mode(PayloadHashMode::IcebergRest)
+            .build()
+            .sign_at(
+                &mut expected,
+                &Credentials::new(
+                    "CONTEXT-KEY",
+                    "context-secret",
+                    Some("context-token".into()),
+                    None,
+                    "test",
+                ),
+                now,
+            )
+            .unwrap();
+        assert_eq!(
+            request.headers().get("authorization"),
+            expected.headers().get("authorization")
+        );
+
+        let unchanged = manager
+            .contextual_session(&SessionContext::empty(), parent.clone())
+            .await
+            .unwrap();
+        assert!(Arc::ptr_eq(&parent, &unchanged));
+        assert!(scope_of(parent.as_ref()).await.starts_with("CATALOG/"));
+
+        let failed = SessionContext::builder().identity("fail".into()).build();
+        let err = manager
+            .contextual_session(&failed, parent)
+            .await
+            .unwrap_err();
+        assert_eq!(err.message(), "delegate context failed");
+        assert!(!format!("{manager:?}").contains("catalog-secret"));
+    }
+
+    #[tokio::test]
+    async fn context_credentials_replace_the_catalog_credentials_as_a_set() {
+        let base = props(&[
+            (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1"),
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "CATALOG"),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "catalog-secret"),
+            (REST_CATALOG_PROP_SESSION_TOKEN, "catalog-token"),
+        ]);
+        let manager = SigV4AuthManager::new(Arc::new(RecordingManager::default()));
+        let parent = manager
+            .catalog_session(&test_client(), &base)
+            .await
+            .unwrap();
+        let context = SessionContext::builder()
+            .properties(props(&[(REST_CATALOG_PROP_SIGNING_REGION, " ")]))
+            .credentials(
+                props(&[
+                    (REST_CATALOG_PROP_ACCESS_KEY_ID, "CONTEXT"),
+                    (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "context-secret"),
+                ])
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+            )
+            .build();
+
+        let session = manager.contextual_session(&context, parent).await.unwrap();
+
+        let mut request = request_with(&[]);
+        session.authenticate(&mut request).await.unwrap();
+        let mut expected = request_with(&[]);
+        let date = request
+            .headers()
+            .get("x-amz-date")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        let now = chrono::NaiveDateTime::parse_from_str(date, "%Y%m%dT%H%M%SZ")
+            .unwrap()
+            .and_utc();
+        test_signer(PayloadHashMode::IcebergRest)
+            .sign_at(
+                &mut expected,
+                &Credentials::new("CONTEXT", "context-secret", None, None, "test"),
+                now,
+            )
+            .unwrap();
+        assert_eq!(header_list(&request), header_list(&expected));
+    }
+
+    #[tokio::test]
+    async fn context_session_token_alone_does_not_reuse_catalog_keys() {
+        let base = props(&[
+            (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1"),
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "CATALOG"),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "catalog-secret"),
+        ]);
+        let manager = SigV4AuthManager::new(Arc::new(RecordingManager::default()));
+        let parent = manager
+            .catalog_session(&test_client(), &base)
+            .await
+            .unwrap();
+        let context = SessionContext::builder()
+            .credentials(
+                props(&[(REST_CATALOG_PROP_SESSION_TOKEN, "context-token")])
+                    .into_iter()
+                    .map(|(k, v)| (k, v.into()))
+                    .collect(),
+            )
+            .build();
+
+        let err = manager
+            .contextual_session(&context, parent)
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+        assert!(err.message().contains("credentials provider"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_manager_forwards_to_the_matching_delegate_method() {
+        let delegate = Arc::new(RecordingManager::default());
+        let manager = SigV4AuthManager::new(delegate.clone())
+            .with_credentials_provider(test_credentials_provider());
+        let init_props = props(&[("a", "1"), (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1")]);
+        let catalog_props = props(&[("b", "2"), (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1")]);
+
+        manager
+            .init_session(&test_client(), &init_props)
+            .await
+            .unwrap();
+        manager
+            .catalog_session(&test_client(), &catalog_props)
+            .await
+            .unwrap();
+
+        let calls = delegate.calls.lock().unwrap().clone();
+        assert_eq!(calls, vec![
+            ("init", init_props),
+            ("catalog", catalog_props)
+        ]);
+    }
+
+    /// The credential scope a session signs with.
+    async fn scope_of(session: &dyn AuthSession) -> String {
+        let mut request = request_with(&[]);
+        session.authenticate(&mut request).await.unwrap();
+        let auth = request
+            .headers()
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let scope = auth.split("Credential=").nth(1).unwrap();
+        scope.split(',').next().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn each_session_signs_as_its_own_properties_describe() {
+        let manager = SigV4AuthManager::new(Arc::new(RecordingManager::default()));
+        let init_props = props(&[
+            (REST_CATALOG_PROP_SIGNING_REGION, "us-east-1"),
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "AKID"),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "secret"),
+        ]);
+        let catalog_props = props(&[
+            (REST_CATALOG_PROP_SIGNING_REGION, "eu-west-1"),
+            (REST_CATALOG_PROP_SIGNING_NAME, "glue"),
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "ROTATED"),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "rotated-secret"),
+        ]);
+
+        let init = manager
+            .init_session(&test_client(), &init_props)
+            .await
+            .unwrap();
+        let catalog = manager
+            .catalog_session(&test_client(), &catalog_props)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            [
+                signing_of(init.as_ref()).await,
+                signing_of(catalog.as_ref()).await,
+            ],
+            [
+                (
+                    "AKID".to_string(),
+                    "us-east-1".to_string(),
+                    SIGNING_NAME_DEFAULT.to_string(),
+                    PayloadHashMode::IcebergRest,
+                ),
+                (
+                    "ROTATED".to_string(),
+                    "eu-west-1".to_string(),
+                    "glue".to_string(),
+                    PayloadHashMode::IcebergRest,
+                ),
+            ]
+        );
+    }
+
+    /// The access key, region, service and payload hash mode a session signs with.
+    async fn signing_of(session: &dyn AuthSession) -> (String, String, String, PayloadHashMode) {
+        let session = (session as &dyn Any)
+            .downcast_ref::<SigV4Session>()
+            .unwrap();
+        let credentials = session.credentials.provide_credentials().await.unwrap();
+        (
+            credentials.access_key_id().to_string(),
+            session.signer.region.clone(),
+            session.signer.service.clone(),
+            session.signer.mode,
+        )
+    }
+
+    #[tokio::test]
+    async fn static_credentials_take_precedence_over_an_injected_provider() {
+        let manager = SigV4AuthManager::new(Arc::new(RecordingManager::default()))
+            .with_credentials_provider(test_credentials_provider())
+            .with_payload_hash_mode(PayloadHashMode::StandardAws);
+        let region = (REST_CATALOG_PROP_SIGNING_REGION, "eu-west-1");
+        let credentials = props(&[
+            (REST_CATALOG_PROP_ACCESS_KEY_ID, "OTHER"),
+            (REST_CATALOG_PROP_SECRET_ACCESS_KEY, "other"),
+        ]);
+        let mut with_credentials = credentials.clone();
+        with_credentials.extend(props(&[region]));
+
+        let from_provider = manager
+            .catalog_session(&test_client(), &props(&[region]))
+            .await
+            .unwrap();
+        let from_properties = manager
+            .catalog_session(&test_client(), &with_credentials)
+            .await
+            .unwrap();
+        let context = SessionContext::builder()
+            .credentials(
+                credentials
+                    .into_iter()
+                    .map(|(k, v)| (k, v.into()))
+                    .collect(),
+            )
+            .build();
+        let contextual = manager
+            .contextual_session(&context, from_provider.clone())
+            .await
+            .unwrap();
+
+        let expected = |access_key_id: &str| {
+            (
+                access_key_id.to_string(),
+                "eu-west-1".to_string(),
+                SIGNING_NAME_DEFAULT.to_string(),
+                PayloadHashMode::StandardAws,
+            )
+        };
+        assert_eq!(
+            [
+                signing_of(from_provider.as_ref()).await,
+                signing_of(from_properties.as_ref()).await,
+                signing_of(contextual.as_ref()).await,
+            ],
+            [expected("ak"), expected("OTHER"), expected("OTHER")]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_context_derives_from_the_catalog_session_it_is_given() {
+        let manager = SigV4AuthManager::new(Arc::new(RecordingManager::default()))
+            .with_credentials_provider(test_credentials_provider());
+        let context = SessionContext::builder()
+            .properties(props(&[(REST_CATALOG_PROP_SIGNING_NAME, "glue")]))
+            .build();
+
+        let mut regions = Vec::new();
+        for region in ["eu-west-1", "ap-south-1"] {
+            let catalog = manager
+                .catalog_session(
+                    &test_client(),
+                    &props(&[(REST_CATALOG_PROP_SIGNING_REGION, region)]),
+                )
+                .await
+                .unwrap();
+            let session = manager.contextual_session(&context, catalog).await.unwrap();
+            regions.push(signing_of(session.as_ref()).await.1);
+        }
+
+        assert_eq!(regions, ["eu-west-1", "ap-south-1"]);
+    }
+
+    #[tokio::test]
+    async fn a_catalog_session_of_another_manager_is_rejected() {
+        let manager = SigV4AuthManager::new(Arc::new(RecordingManager::default()));
+
+        let err = manager
+            .contextual_session(&SessionContext::empty(), Arc::new(crate::auth::NoopSession))
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.kind(), ErrorKind::DataInvalid, "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_request_the_signer_rejects_fails_the_session() {
+        let session = SigV4Session {
+            delegate: Arc::new(crate::auth::NoopSession),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: test_credentials_provider(),
+        };
+        let mut request = HttpRequest::new(
+            reqwest::Client::new()
+                .post("https://rest.example.com/v1/namespaces")
+                .body(reqwest::Body::wrap_stream(futures::stream::once(async {
+                    Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"chunk"))
+                })))
+                .build()
+                .unwrap(),
+        );
+
+        let err = session.authenticate(&mut request).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::FeatureUnsupported, "{err}");
+        assert!(request.headers().get("authorization").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_failing_credentials_provider_fails_the_session() {
+        #[derive(Debug)]
+        struct Failing;
+        impl ProvideCredentials for Failing {
+            fn provide_credentials<'a>(
+                &'a self,
+            ) -> aws_credential_types::provider::future::ProvideCredentials<'a>
+            where Self: 'a {
+                aws_credential_types::provider::future::ProvideCredentials::ready(Err(
+                    aws_credential_types::provider::error::CredentialsError::not_loaded("no creds"),
+                ))
+            }
+        }
+
+        let session = SigV4Session {
+            delegate: Arc::new(crate::auth::NoopSession),
+            signer: test_signer(PayloadHashMode::IcebergRest),
+            credentials: SharedCredentialsProvider::new(Failing),
+        };
+        let mut request = request_with(&[]);
+
+        let err = session.authenticate(&mut request).await.unwrap_err();
+        assert!(err.message().contains("resolve AWS credentials"), "{err}");
+        assert!(request.headers().get("authorization").is_none());
     }
 }

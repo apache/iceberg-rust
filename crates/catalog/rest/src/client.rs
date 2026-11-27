@@ -151,12 +151,9 @@ impl HttpClient {
         auth_session: &dyn AuthSession,
         mut request: HttpRequest,
     ) -> Result<HttpResponse> {
-        // Authenticate first, then apply extra headers, so a configured
-        // `header.authorization` keeps overriding a token (unchanged behavior).
+        // Configured headers are set in `request()`, before authentication.
         auth_session.authenticate(&mut request).await?;
-
-        let mut request = request.into_inner();
-        request.headers_mut().extend(self.extra_headers.clone());
+        let request = request.into_inner();
         HttpResponse::read(self.client.execute(request).await?).await
     }
 
