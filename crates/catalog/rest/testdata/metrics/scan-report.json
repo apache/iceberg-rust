@@ -1,0 +1,91 @@
+{
+  "report-type": "scan-report",
+  "table-name": "analytics.sales.orders",
+  "snapshot-id": -12345,
+  "schema-id": 7,
+  "filter": true,
+  "projected-field-ids": [
+    1,
+    2,
+    -1
+  ],
+  "projected-field-names": [
+    "id",
+    "customer.名",
+    "_file"
+  ],
+  "metrics": {
+    "total-data-manifests": {
+      "unit": "count",
+      "value": 1
+    },
+    "total-delete-manifests": {
+      "unit": "count",
+      "value": 2
+    },
+    "skipped-data-manifests": {
+      "unit": "count",
+      "value": 3
+    },
+    "skipped-delete-manifests": {
+      "unit": "count",
+      "value": 4
+    },
+    "scanned-data-manifests": {
+      "unit": "count",
+      "value": 5
+    },
+    "scanned-delete-manifests": {
+      "unit": "count",
+      "value": 6
+    },
+    "result-data-files": {
+      "unit": "count",
+      "value": 7
+    },
+    "skipped-data-files": {
+      "unit": "count",
+      "value": 8
+    },
+    "total-file-size-in-bytes": {
+      "unit": "bytes",
+      "value": 9
+    },
+    "result-delete-files": {
+      "unit": "count",
+      "value": 10
+    },
+    "skipped-delete-files": {
+      "unit": "count",
+      "value": 11
+    },
+    "total-delete-file-size-in-bytes": {
+      "unit": "bytes",
+      "value": 12
+    },
+    "indexed-delete-files": {
+      "unit": "count",
+      "value": 13
+    },
+    "equality-delete-files": {
+      "unit": "count",
+      "value": 14
+    },
+    "positional-delete-files": {
+      "unit": "count",
+      "value": 15
+    },
+    "dvs": {
+      "unit": "count",
+      "value": 16
+    },
+    "total-planning-duration": {
+      "time-unit": "nanoseconds",
+      "count": 1,
+      "total-duration": 2644235116
+    }
+  },
+  "metadata": {
+    "query-id": "query-123"
+  }
+}
