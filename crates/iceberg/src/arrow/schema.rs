@@ -17,7 +17,7 @@
 
 //! Conversion between Arrow schema and Iceberg schema.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use arrow_array::types::{Decimal128Type, validate_decimal_precision_and_scale};
@@ -987,6 +987,81 @@ pub fn schema_to_arrow_schema(schema: &Schema) -> Result<ArrowSchema> {
         ArrowSchemaOrFieldOrType::Schema(schema) => Ok(schema),
         _ => unreachable!(),
     }
+}
+
+/// The Arrow type of fields listed in `ArrowReaderOptions::dictionary_field_ids`.
+pub(crate) fn dictionary_string_type() -> DataType {
+    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+}
+
+/// Checks that every id names a top-level `string` field of `schema`.
+pub(crate) fn validate_dictionary_field_ids(
+    schema: &Schema,
+    field_ids: &BTreeSet<i32>,
+) -> Result<()> {
+    for &id in field_ids {
+        let Some(field) = schema.field_by_id(id) else {
+            return Err(Error::new(
+                ErrorKind::DataInvalid,
+                format!("Cannot read field id {id} as a dictionary: the schema has no such field"),
+            ));
+        };
+        let reason = if schema.as_struct().field_by_id(id).is_none() {
+            "only top-level fields are supported"
+        } else if *field.field_type != Type::Primitive(PrimitiveType::String) {
+            "only string fields are supported"
+        } else {
+            continue;
+        };
+        return Err(Error::new(
+            ErrorKind::FeatureUnsupported,
+            format!(
+                "Cannot read field '{}' (id {id}, type {}) as a dictionary: {reason}",
+                field.name, field.field_type
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Retypes the top-level string fields of `schema` whose ids are in `field_ids` as
+/// [`dictionary_string_type`].
+///
+/// Fields that are already dictionaries, for example from a file's embedded Arrow
+/// schema, are normalized too, so every file yields the same type.
+pub(crate) fn with_dictionary_fields(
+    schema: &ArrowSchema,
+    field_ids: &BTreeSet<i32>,
+) -> Result<ArrowSchema> {
+    let is_string = |data_type: &DataType| {
+        matches!(
+            data_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        )
+    };
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let string_typed = match field.data_type() {
+                DataType::Dictionary(_, value_type) => is_string(value_type.as_ref()),
+                data_type => is_string(data_type),
+            };
+            Ok(match try_get_field_id_from_metadata(field)? {
+                Some(id) if string_typed && field_ids.contains(&id) => Arc::new(
+                    field
+                        .as_ref()
+                        .clone()
+                        .with_data_type(dictionary_string_type()),
+                ),
+                _ => Arc::clone(field),
+            })
+        })
+        .collect::<Result<Vec<FieldRef>>>()?;
+    Ok(ArrowSchema::new_with_metadata(
+        fields,
+        schema.metadata().clone(),
+    ))
 }
 
 /// Convert iceberg type to an arrow type.
