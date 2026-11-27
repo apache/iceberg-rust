@@ -726,8 +726,11 @@ impl FileScanTaskReader {
             // Coerce INT96 timestamp columns before building the stream reader to avoid
             // i64 overflow in arrow-rs. Apply this after assigning any missing field IDs
             // so the final schema contains both changes.
-            coerce_int96_timestamps(&schema, task.schema()).unwrap_or(schema)
-        } else if let Some(coerced) = coerce_int96_timestamps(file_schema, task.schema()) {
+            coerce_int96_timestamps(&schema, task.schema(), arrow_metadata.parquet_schema())?
+                .unwrap_or(schema)
+        } else if let Some(coerced) =
+            coerce_int96_timestamps(file_schema, task.schema(), arrow_metadata.parquet_schema())?
+        {
             coerced
         } else if without_fixed_size_lists.is_some() || install_row_number {
             Arc::clone(file_schema)
@@ -936,7 +939,10 @@ mod tests {
         RESERVED_FIELD_ID_POS, RESERVED_FIELD_ID_ROW_ID,
     };
     use crate::scan::{FileScanTask, FileScanTaskDeleteFile, FileScanTaskStream};
-    use crate::spec::{DataFileFormat, NestedField, PrimitiveType, Schema, SchemaRef, Type};
+    use crate::spec::{
+        DataFileFormat, MappedField, NameMapping, NestedField, PrimitiveType, Schema, SchemaRef,
+        Type,
+    };
 
     fn record_count_task(path: &str, file_size: u64, record_count: Option<u64>) -> FileScanTask {
         let schema = Schema::builder()
@@ -1066,22 +1072,19 @@ mod tests {
         schema: SchemaRef,
         project_field_ids: Vec<i32>,
     ) -> Vec<RecordBatch> {
+        read_int96_batches_with_name_mapping(file_path, schema, project_field_ids, None).await
+    }
+
+    async fn read_int96_batches_with_name_mapping(
+        file_path: &str,
+        schema: SchemaRef,
+        project_field_ids: Vec<i32>,
+        name_mapping: Option<Arc<NameMapping>>,
+    ) -> Vec<RecordBatch> {
         let file_io = FileIO::new_with_fs();
         let reader = ArrowReaderBuilder::new(file_io, Runtime::current()).build();
 
-        let file_size = std::fs::metadata(file_path).unwrap().len();
-        let task = FileScanTask::builder()
-            .with_file_size_in_bytes(file_size)
-            .with_start(0)
-            .with_length(file_size)
-            .with_data_file_path(file_path.to_string())
-            .with_data_file_format(DataFileFormat::Parquet)
-            .with_schema(schema)
-            .with_project_field_ids(project_field_ids)
-            .with_case_sensitive(false)
-            .build()
-            .unwrap();
-
+        let task = int96_scan_task(file_path, schema, project_field_ids, name_mapping);
         let tasks = Box::pin(futures::stream::iter(vec![Ok(task)])) as FileScanTaskStream;
         reader
             .read(tasks)
@@ -1089,6 +1092,27 @@ mod tests {
             .stream()
             .try_collect()
             .await
+            .unwrap()
+    }
+
+    fn int96_scan_task(
+        file_path: &str,
+        schema: SchemaRef,
+        project_field_ids: Vec<i32>,
+        name_mapping: Option<Arc<NameMapping>>,
+    ) -> FileScanTask {
+        let file_size = std::fs::metadata(file_path).unwrap().len();
+        FileScanTask::builder()
+            .with_file_size_in_bytes(file_size)
+            .with_start(0)
+            .with_length(file_size)
+            .with_data_file_path(file_path.to_string())
+            .with_data_file_format(DataFileFormat::Parquet)
+            .with_schema(schema)
+            .with_project_field_ids(project_field_ids)
+            .with_name_mapping(name_mapping)
+            .with_case_sensitive(false)
+            .build()
             .unwrap()
     }
 
@@ -1189,33 +1213,6 @@ mod tests {
         writer.close().unwrap();
 
         (file_path, expected_micros)
-    }
-
-    async fn assert_int96_read_matches(
-        file_path: &str,
-        schema: SchemaRef,
-        project_field_ids: Vec<i32>,
-        expected_micros: &[i64],
-    ) {
-        use arrow_array::TimestampMicrosecondArray;
-
-        let batches = read_int96_batches(file_path, schema, project_field_ids).await;
-
-        assert_eq!(batches.len(), 1);
-        let ts_array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .expect("Expected TimestampMicrosecondArray");
-
-        for (i, expected) in expected_micros.iter().enumerate() {
-            assert_eq!(
-                ts_array.value(i),
-                *expected,
-                "Row {i}: got {}, expected {expected}",
-                ts_array.value(i)
-            );
-        }
     }
 
     /// Writes a single-column Parquet file encrypted with `encryption_key`, then reads it
@@ -2968,47 +2965,602 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_int96_timestamps_with_field_ids() {
+    async fn test_read_int64_nanosecond_timestamps_as_microseconds() {
+        use arrow_array::{TimestampMicrosecondArray, TimestampNanosecondArray};
+        use arrow_schema::TimeUnit;
+
+        use crate::arrow::schema::UTC_TIME_ZONE;
+        use crate::arrow::schema_to_arrow_schema;
+
+        let nanos = vec![
+            Some(1_000_000_000),
+            None,
+            Some(-1_000_000_000),
+            Some(1_704_067_200_123_456_000),
+        ];
+        let micros = vec![
+            Some(1_000_000),
+            None,
+            Some(-1_000_000),
+            Some(1_704_067_200_123_456),
+        ];
+        for (timestamp_type, timezone) in [
+            (PrimitiveType::Timestamp, None),
+            (PrimitiveType::Timestamptz, Some(UTC_TIME_ZONE)),
+        ] {
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::optional(1, "ts", Type::Primitive(timestamp_type)).into(),
+                        NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let expected_batch =
+                RecordBatch::try_new(Arc::new(schema_to_arrow_schema(&schema).unwrap()), vec![
+                    Arc::new(
+                        TimestampMicrosecondArray::from(micros.clone()).with_timezone_opt(timezone),
+                    ),
+                    Arc::new(Int32Array::from(vec![0, 1, 2, 3])),
+                ])
+                .unwrap();
+            for with_field_ids in [true, false] {
+                let fields = expected_batch
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| {
+                        let mut field = field.as_ref().clone();
+                        if field.name() == "ts" {
+                            field = field.with_data_type(DataType::Timestamp(
+                                TimeUnit::Nanosecond,
+                                timezone.map(Into::into),
+                            ));
+                        }
+                        if !with_field_ids {
+                            field = field.with_metadata(HashMap::new());
+                        }
+                        field
+                    })
+                    .collect::<Vec<_>>();
+                let arrow_schema = Arc::new(ArrowSchema::new(fields));
+                let batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+                    Arc::new(
+                        TimestampNanosecondArray::from(nanos.clone()).with_timezone_opt(timezone),
+                    ),
+                    expected_batch.column(1).clone(),
+                ])
+                .unwrap();
+                let tmp_dir = TempDir::new().unwrap();
+                let file_path = tmp_dir.path().join("nanos.parquet");
+                let mut writer =
+                    ArrowWriter::try_new(File::create(&file_path).unwrap(), arrow_schema, None)
+                        .unwrap();
+                writer.write(&batch).unwrap();
+                writer.close().unwrap();
+                let name_mapping = (!with_field_ids).then(|| {
+                    Arc::new(NameMapping::new(vec![
+                        MappedField::new(Some(1), vec!["ts".to_string()], vec![]),
+                        MappedField::new(Some(2), vec!["id".to_string()], vec![]),
+                    ]))
+                });
+                for (field_ids, column_indices) in [
+                    (vec![1], vec![0]),
+                    (vec![1, 2], vec![0, 1]),
+                    (vec![2, 1], vec![1, 0]),
+                ] {
+                    let actual = read_int96_batches_with_name_mapping(
+                        file_path.to_str().unwrap(),
+                        schema.clone(),
+                        field_ids,
+                        name_mapping.clone(),
+                    )
+                    .await;
+                    let expected = vec![expected_batch.project(&column_indices).unwrap()];
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_with_unselected_list_views() {
+        use arrow_array::TimestampMicrosecondArray;
+        use arrow_schema::TimeUnit;
+        use parquet::arrow::{ARROW_SCHEMA_META_KEY, encode_arrow_schema};
+        use parquet::data_type::{Int32Type, Int96Type};
+        use parquet::file::metadata::KeyValue;
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::parser::parse_message_type;
+
+        use crate::arrow::schema::UTC_TIME_ZONE;
+        use crate::arrow::schema_to_arrow_schema;
+
         let schema = Arc::new(
             Schema::builder()
-                .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamptz))
                         .into(),
                     NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
                 ])
                 .build()
                 .unwrap(),
         );
+        for with_field_ids in [true, false] {
+            let field = |name, data_type, nullable, id: i32| {
+                let field = Field::new(name, data_type, nullable);
+                if with_field_ids {
+                    field.with_metadata(HashMap::from([(
+                        PARQUET_FIELD_ID_META_KEY.to_string(),
+                        id.to_string(),
+                    )]))
+                } else {
+                    field
+                }
+            };
+            let element = Arc::new(field("element", DataType::Int32, true, 4));
+            let message = if with_field_ids {
+                "message schema {
+                    optional group items (LIST) = 3 {
+                        repeated group list { optional int32 element = 4; }
+                    }
+                    optional int96 ts = 1;
+                    required int32 id = 2;
+                }"
+            } else {
+                "message schema {
+                    optional group items (LIST) {
+                        repeated group list { optional int32 element; }
+                    }
+                    optional int96 ts;
+                    required int32 id;
+                }"
+            };
+            let name_mapping =
+                (!with_field_ids).then(|| {
+                    Arc::new(NameMapping::new(vec![
+                        MappedField::new(Some(3), vec!["items".to_string()], vec![
+                            MappedField::new(Some(4), vec!["element".to_string()], vec![]),
+                        ]),
+                        MappedField::new(Some(1), vec!["ts".to_string()], vec![]),
+                        MappedField::new(Some(2), vec!["id".to_string()], vec![]),
+                    ]))
+                });
+            for list_type in [
+                DataType::ListView(element.clone()),
+                DataType::LargeListView(element),
+            ] {
+                let parquet_schema = parse_message_type(message).unwrap();
+                let hint = ArrowSchema::new(vec![
+                    field("items", list_type, true, 3),
+                    field(
+                        "ts",
+                        DataType::Timestamp(TimeUnit::Nanosecond, None),
+                        true,
+                        1,
+                    ),
+                    field("id", DataType::Int32, false, 2),
+                ]);
+                let properties = WriterProperties::builder()
+                    .set_key_value_metadata(Some(vec![KeyValue::new(
+                        ARROW_SCHEMA_META_KEY.to_string(),
+                        encode_arrow_schema(&hint),
+                    )]))
+                    .build();
+                let tmp_dir = TempDir::new().unwrap();
+                let file_path = tmp_dir.path().join("list_view.parquet");
+                let mut writer = SerializedFileWriter::new(
+                    File::create(&file_path).unwrap(),
+                    Arc::new(parquet_schema),
+                    Arc::new(properties),
+                )
+                .unwrap();
+                let mut row_group = writer.next_row_group().unwrap();
+                let mut column = row_group.next_column().unwrap().unwrap();
+                column
+                    .typed::<Int32Type>()
+                    .write_batch(&[7], Some(&[3]), Some(&[0]))
+                    .unwrap();
+                column.close().unwrap();
+                let (int96, micros) = make_int96_test_value();
+                let mut column = row_group.next_column().unwrap().unwrap();
+                column
+                    .typed::<Int96Type>()
+                    .write_batch(&[int96], Some(&[1]), None)
+                    .unwrap();
+                column.close().unwrap();
+                let mut column = row_group.next_column().unwrap().unwrap();
+                column
+                    .typed::<Int32Type>()
+                    .write_batch(&[42], None, None)
+                    .unwrap();
+                column.close().unwrap();
+                row_group.close().unwrap();
+                writer.close().unwrap();
 
-        let tmp_dir = TempDir::new().unwrap();
-        let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let (file_path, expected_micros) =
-            write_int96_parquet_file(&table_location, "with_ids.parquet", true);
+                let expected_batch =
+                    RecordBatch::try_new(Arc::new(schema_to_arrow_schema(&schema).unwrap()), vec![
+                        Arc::new(
+                            TimestampMicrosecondArray::from(vec![micros])
+                                .with_timezone(UTC_TIME_ZONE),
+                        ),
+                        Arc::new(Int32Array::from(vec![42])),
+                    ])
+                    .unwrap();
+                for (field_ids, column_indices) in [(vec![2], vec![1]), (vec![1, 2], vec![0, 1])] {
+                    let actual = read_int96_batches_with_name_mapping(
+                        file_path.to_str().unwrap(),
+                        schema.clone(),
+                        field_ids,
+                        name_mapping.clone(),
+                    )
+                    .await;
+                    let expected = vec![expected_batch.project(&column_indices).unwrap()];
+                    assert_eq!(actual, expected);
+                }
+            }
+        }
+    }
 
-        assert_int96_read_matches(&file_path, schema, vec![1, 2], &expected_micros).await;
+    #[tokio::test]
+    async fn test_read_int96_timestamps_with_field_ids() {
+        for timestamp_type in [PrimitiveType::Timestamp, PrimitiveType::Timestamptz] {
+            assert_int96_microsecond_projections(timestamp_type, true, None).await;
+        }
     }
 
     #[tokio::test]
     async fn test_read_int96_timestamps_without_field_ids() {
+        for timestamp_type in [PrimitiveType::Timestamp, PrimitiveType::Timestamptz] {
+            assert_int96_microsecond_projections(timestamp_type, false, None).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamps_with_name_mapping() {
+        let name_mapping = Arc::new(NameMapping::new(vec![
+            MappedField::new(Some(1), vec!["ts".to_string()], vec![]),
+            MappedField::new(Some(2), vec!["id".to_string()], vec![]),
+        ]));
+        for timestamp_type in [PrimitiveType::Timestamp, PrimitiveType::Timestamptz] {
+            assert_int96_microsecond_projections(timestamp_type, false, Some(name_mapping.clone()))
+                .await;
+        }
+    }
+
+    async fn assert_int96_microsecond_projections(
+        timestamp_type: PrimitiveType,
+        with_field_ids: bool,
+        name_mapping: Option<Arc<NameMapping>>,
+    ) {
+        use arrow_array::TimestampMicrosecondArray;
+
+        use crate::arrow::schema::UTC_TIME_ZONE;
+        use crate::arrow::schema_to_arrow_schema;
+
+        let timezone = (timestamp_type == PrimitiveType::Timestamptz).then_some(UTC_TIME_ZONE);
         let schema = Arc::new(
             Schema::builder()
                 .with_schema_id(1)
                 .with_fields(vec![
-                    NestedField::optional(1, "ts", Type::Primitive(PrimitiveType::Timestamp))
-                        .into(),
+                    NestedField::optional(1, "ts", Type::Primitive(timestamp_type)).into(),
                     NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
                 ])
                 .build()
                 .unwrap(),
         );
-
         let tmp_dir = TempDir::new().unwrap();
-        let table_location = tmp_dir.path().to_str().unwrap().to_string();
-        let (file_path, expected_micros) =
-            write_int96_parquet_file(&table_location, "no_ids.parquet", false);
+        let (file_path, expected_micros) = write_int96_parquet_file(
+            tmp_dir.path().to_str().unwrap(),
+            "timestamps.parquet",
+            with_field_ids,
+        );
+        let ids: Vec<i32> = (0..expected_micros.len() as i32).collect();
+        let expected_batch =
+            RecordBatch::try_new(Arc::new(schema_to_arrow_schema(&schema).unwrap()), vec![
+                Arc::new(
+                    TimestampMicrosecondArray::from(expected_micros).with_timezone_opt(timezone),
+                ),
+                Arc::new(Int32Array::from(ids)),
+            ])
+            .unwrap();
+        for (field_ids, column_indices) in [
+            (vec![1], vec![0]),
+            (vec![1, 2], vec![0, 1]),
+            (vec![2, 1], vec![1, 0]),
+        ] {
+            let actual = read_int96_batches_with_name_mapping(
+                &file_path,
+                schema.clone(),
+                field_ids,
+                name_mapping.clone(),
+            )
+            .await;
+            let expected = vec![expected_batch.project(&column_indices).unwrap()];
+            assert_eq!(actual, expected);
+        }
+    }
 
-        assert_int96_read_matches(&file_path, schema, vec![1, 2], &expected_micros).await;
+    #[tokio::test]
+    async fn test_read_int96_nanosecond_timestamps() {
+        for timestamp_type in [PrimitiveType::TimestampNs, PrimitiveType::TimestamptzNs] {
+            for with_field_ids in [true, false] {
+                assert_int96_nanosecond_projections(timestamp_type.clone(), with_field_ids).await;
+            }
+        }
+    }
+
+    async fn assert_int96_nanosecond_projections(
+        timestamp_type: PrimitiveType,
+        with_field_ids: bool,
+    ) {
+        use arrow_array::TimestampNanosecondArray;
+        use parquet::data_type::{Int32Type, Int96, Int96Type};
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::parser::parse_message_type;
+
+        use crate::arrow::schema::UTC_TIME_ZONE;
+        use crate::arrow::schema_to_arrow_schema;
+
+        let timezone = (timestamp_type == PrimitiveType::TimestamptzNs).then_some(UTC_TIME_ZONE);
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(1, "ts", Type::Primitive(timestamp_type)).into(),
+                    NestedField::required(2, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let message = if with_field_ids {
+            "message schema { optional int96 ts = 1; required int32 id = 2; }"
+        } else {
+            "message schema { optional int96 ts; required int32 id; }"
+        };
+        let parquet_schema = parse_message_type(message).unwrap();
+        let name_mapping = (!with_field_ids).then(|| {
+            Arc::new(NameMapping::new(vec![
+                MappedField::new(Some(1), vec!["ts".to_string()], vec![]),
+                MappedField::new(Some(2), vec!["id".to_string()], vec![]),
+            ]))
+        });
+        let nanos = vec![Some(1), None, Some(2_000_006_001_i64)];
+        let int96_values: Vec<Int96> = nanos
+            .iter()
+            .flatten()
+            .map(|nanos| {
+                let mut value = Int96::new();
+                value.set_data(
+                    *nanos as u32,
+                    (nanos >> 32) as u32,
+                    UNIX_EPOCH_JULIAN as u32,
+                );
+                value
+            })
+            .collect();
+        let ids = vec![0, 1, 2];
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = tmp_dir.path().join("nanosecond_timestamps.parquet");
+        let mut writer = SerializedFileWriter::new(
+            File::create(&file_path).unwrap(),
+            Arc::new(parquet_schema),
+            Default::default(),
+        )
+        .unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<Int96Type>()
+            .write_batch(&int96_values, Some(&[1, 0, 1]), None)
+            .unwrap();
+        column.close().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<Int32Type>()
+            .write_batch(&ids, None, None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        let expected_batch =
+            RecordBatch::try_new(Arc::new(schema_to_arrow_schema(&schema).unwrap()), vec![
+                Arc::new(TimestampNanosecondArray::from(nanos).with_timezone_opt(timezone)),
+                Arc::new(Int32Array::from(ids)),
+            ])
+            .unwrap();
+        for (field_ids, column_indices) in [
+            (vec![1], vec![0]),
+            (vec![1, 2], vec![0, 1]),
+            (vec![2, 1], vec![1, 0]),
+        ] {
+            let actual = read_int96_batches_with_name_mapping(
+                file_path.to_str().unwrap(),
+                schema.clone(),
+                field_ids,
+                name_mapping.clone(),
+            )
+            .await;
+            let expected = vec![expected_batch.project(&column_indices).unwrap()];
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_with_mixed_timestamp_types_in_struct() {
+        for with_field_ids in [true, false] {
+            assert_int96_mixed_timestamp_types_in_struct(with_field_ids).await;
+        }
+    }
+
+    async fn assert_int96_mixed_timestamp_types_in_struct(with_field_ids: bool) {
+        use arrow_array::{StructArray, TimestampMicrosecondArray, TimestampNanosecondArray};
+        use parquet::data_type::{Int64Type, Int96Type};
+        use parquet::file::writer::SerializedFileWriter;
+        use parquet::schema::parser::parse_message_type;
+
+        use crate::arrow::schema::UTC_TIME_ZONE;
+        use crate::arrow::schema_to_arrow_schema;
+        use crate::spec::StructType;
+
+        let message = if with_field_ids {
+            "message schema {
+                required int64 id = 1;
+                required group data = 2 {
+                    optional int64 micros (TIMESTAMP(MICROS,false)) = 3;
+                    optional int96 legacy = 4;
+                }
+                optional int64 nanos (TIMESTAMP(NANOS,true)) = 5;
+                optional int96 trailing = 6;
+            }"
+        } else {
+            "message schema {
+                required int64 id;
+                required group data {
+                    optional int64 micros (TIMESTAMP(MICROS,false));
+                    optional int96 legacy;
+                }
+                optional int64 nanos (TIMESTAMP(NANOS,true));
+                optional int96 trailing;
+            }"
+        };
+        let parquet_schema = parse_message_type(message).unwrap();
+        let name_mapping = (!with_field_ids).then(|| {
+            Arc::new(NameMapping::new(vec![
+                MappedField::new(Some(1), vec!["id".to_string()], vec![]),
+                MappedField::new(Some(2), vec!["data".to_string()], vec![
+                    MappedField::new(Some(3), vec!["micros".to_string()], vec![]),
+                    MappedField::new(Some(4), vec!["legacy".to_string()], vec![]),
+                ]),
+                MappedField::new(Some(5), vec!["nanos".to_string()], vec![]),
+                MappedField::new(Some(6), vec!["trailing".to_string()], vec![]),
+            ]))
+        });
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long)).into(),
+                    NestedField::required(
+                        2,
+                        "data",
+                        Type::Struct(StructType::new(vec![
+                            NestedField::optional(
+                                3,
+                                "micros",
+                                Type::Primitive(PrimitiveType::Timestamp),
+                            )
+                            .into(),
+                            NestedField::optional(
+                                4,
+                                "legacy",
+                                Type::Primitive(PrimitiveType::Timestamptz),
+                            )
+                            .into(),
+                        ])),
+                    )
+                    .into(),
+                    NestedField::optional(
+                        5,
+                        "nanos",
+                        Type::Primitive(PrimitiveType::TimestamptzNs),
+                    )
+                    .into(),
+                    NestedField::optional(6, "trailing", Type::Primitive(PrimitiveType::Timestamp))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let (int96_value, expected_micros) = make_int96_test_value();
+        let nanos = vec![1_000_003_001_i64, -1_000_003_001, 0];
+        let tmp_dir = TempDir::new().unwrap();
+        let file_path = tmp_dir.path().join("mixed_timestamps.parquet");
+        let mut writer = SerializedFileWriter::new(
+            File::create(&file_path).unwrap(),
+            Arc::new(parquet_schema),
+            Default::default(),
+        )
+        .unwrap();
+        let mut row_group = writer.next_row_group().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<Int64Type>()
+            .write_batch(&[0, 1, 2], None, None)
+            .unwrap();
+        column.close().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<Int64Type>()
+            .write_batch(&[17, -17], Some(&[1, 0, 1]), None)
+            .unwrap();
+        column.close().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<Int96Type>()
+            .write_batch(&[int96_value, int96_value], Some(&[1, 0, 1]), None)
+            .unwrap();
+        column.close().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<Int64Type>()
+            .write_batch(&nanos, Some(&[1; 3]), None)
+            .unwrap();
+        column.close().unwrap();
+        let mut column = row_group.next_column().unwrap().unwrap();
+        column
+            .typed::<Int96Type>()
+            .write_batch(&[int96_value; 3], Some(&[1; 3]), None)
+            .unwrap();
+        column.close().unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&schema).unwrap());
+        let DataType::Struct(fields) = arrow_schema.field(1).data_type() else {
+            panic!("Expected struct field");
+        };
+        let expected_batch = RecordBatch::try_new(arrow_schema.clone(), vec![
+            Arc::new(Int64Array::from(vec![0, 1, 2])),
+            Arc::new(StructArray::new(
+                fields.clone(),
+                vec![
+                    Arc::new(TimestampMicrosecondArray::from(vec![
+                        Some(17),
+                        None,
+                        Some(-17),
+                    ])),
+                    Arc::new(
+                        TimestampMicrosecondArray::from(vec![
+                            Some(expected_micros),
+                            None,
+                            Some(expected_micros),
+                        ])
+                        .with_timezone(UTC_TIME_ZONE),
+                    ),
+                ],
+                None,
+            )),
+            Arc::new(TimestampNanosecondArray::from(nanos).with_timezone(UTC_TIME_ZONE)),
+            Arc::new(TimestampMicrosecondArray::from(vec![expected_micros; 3])),
+        ])
+        .unwrap();
+
+        for (field_ids, column_indices) in [
+            (vec![1, 2, 5, 6], vec![0, 1, 2, 3]),
+            (vec![2], vec![1]),
+            (vec![6, 2, 5], vec![3, 1, 2]),
+        ] {
+            let actual = read_int96_batches_with_name_mapping(
+                file_path.to_str().unwrap(),
+                schema.clone(),
+                field_ids,
+                name_mapping.clone(),
+            )
+            .await;
+            let expected = vec![expected_batch.project(&column_indices).unwrap()];
+            assert_eq!(actual, expected);
+        }
     }
 
     #[tokio::test]
@@ -3197,11 +3749,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_read_int96_timestamps_in_list() {
+        assert_read_int96_timestamps_in_list(PrimitiveType::Timestamp).await;
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamptz_in_list() {
+        assert_read_int96_timestamps_in_list(PrimitiveType::Timestamptz).await;
+    }
+
+    async fn assert_read_int96_timestamps_in_list(timestamp_type: PrimitiveType) {
         use arrow_array::{ListArray, TimestampMicrosecondArray};
+        use arrow_buffer::OffsetBuffer;
         use parquet::basic::{Repetition, Type as PhysicalType};
         use parquet::data_type::Int96Type;
         use parquet::file::writer::SerializedFileWriter;
         use parquet::schema::types::Type as SchemaType;
+
+        use crate::arrow::schema::UTC_TIME_ZONE;
+        use crate::arrow::schema_to_arrow_schema;
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
@@ -3269,7 +3834,7 @@ mod tests {
                             element_field: NestedField::optional(
                                 2,
                                 "element",
-                                Type::Primitive(PrimitiveType::Timestamp),
+                                Type::Primitive(timestamp_type.clone()),
                             )
                             .into(),
                         }),
@@ -3280,35 +3845,45 @@ mod tests {
                 .unwrap(),
         );
 
-        let batches = read_int96_batches(&file_path, iceberg_schema, vec![1]).await;
-
-        assert_eq!(batches.len(), 1);
-        let list_array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .expect("Expected ListArray");
-        let ts_array = list_array
-            .values()
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .expect("Expected TimestampMicrosecondArray inside list");
-
-        assert_eq!(
-            ts_array.value(0),
-            expected_micros,
-            "INT96 in list: got {}, expected {expected_micros}",
-            ts_array.value(0)
+        let batches = read_int96_batches(&file_path, iceberg_schema.clone(), vec![1]).await;
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&iceberg_schema).unwrap());
+        let DataType::List(element) = arrow_schema.field(0).data_type() else {
+            panic!("Expected list field");
+        };
+        let timezone = (timestamp_type == PrimitiveType::Timestamptz).then_some(UTC_TIME_ZONE);
+        let values = Arc::new(
+            TimestampMicrosecondArray::from(vec![expected_micros]).with_timezone_opt(timezone),
         );
+        let list = ListArray::new(
+            element.clone(),
+            OffsetBuffer::from_lengths([1]),
+            values,
+            None,
+        );
+        let expected = vec![RecordBatch::try_new(arrow_schema, vec![Arc::new(list)]).unwrap()];
+        assert_eq!(batches, expected);
     }
 
     #[tokio::test]
     async fn test_read_int96_timestamps_in_map() {
-        use arrow_array::{MapArray, TimestampMicrosecondArray};
+        assert_read_int96_timestamps_in_map(PrimitiveType::Timestamp).await;
+    }
+
+    #[tokio::test]
+    async fn test_read_int96_timestamptz_in_map() {
+        assert_read_int96_timestamps_in_map(PrimitiveType::Timestamptz).await;
+    }
+
+    async fn assert_read_int96_timestamps_in_map(timestamp_type: PrimitiveType) {
+        use arrow_array::{MapArray, StructArray, TimestampMicrosecondArray};
+        use arrow_buffer::OffsetBuffer;
         use parquet::basic::{Repetition, Type as PhysicalType};
         use parquet::data_type::{ByteArrayType, Int96Type};
         use parquet::file::writer::SerializedFileWriter;
         use parquet::schema::types::Type as SchemaType;
+
+        use crate::arrow::schema::UTC_TIME_ZONE;
+        use crate::arrow::schema_to_arrow_schema;
 
         let tmp_dir = TempDir::new().unwrap();
         let table_location = tmp_dir.path().to_str().unwrap().to_string();
@@ -3402,7 +3977,7 @@ mod tests {
                             value_field: NestedField::optional(
                                 3,
                                 "value",
-                                Type::Primitive(PrimitiveType::Timestamp),
+                                Type::Primitive(timestamp_type.clone()),
                             )
                             .into(),
                         }),
@@ -3413,26 +3988,35 @@ mod tests {
                 .unwrap(),
         );
 
-        let batches = read_int96_batches(&file_path, iceberg_schema, vec![1]).await;
-
-        assert_eq!(batches.len(), 1);
-        let map_array = batches[0]
-            .column(0)
-            .as_any()
-            .downcast_ref::<MapArray>()
-            .expect("Expected MapArray");
-        let ts_array = map_array
-            .values()
-            .as_any()
-            .downcast_ref::<TimestampMicrosecondArray>()
-            .expect("Expected TimestampMicrosecondArray as map values");
-
-        assert_eq!(
-            ts_array.value(0),
-            expected_micros,
-            "INT96 in map: got {}, expected {expected_micros}",
-            ts_array.value(0)
+        let batches = read_int96_batches(&file_path, iceberg_schema.clone(), vec![1]).await;
+        let arrow_schema = Arc::new(schema_to_arrow_schema(&iceberg_schema).unwrap());
+        let DataType::Map(entry_field, sorted) = arrow_schema.field(0).data_type() else {
+            panic!("Expected map field");
+        };
+        let DataType::Struct(fields) = entry_field.data_type() else {
+            panic!("Expected map entries struct");
+        };
+        let timezone = (timestamp_type == PrimitiveType::Timestamptz).then_some(UTC_TIME_ZONE);
+        let entries = StructArray::new(
+            fields.clone(),
+            vec![
+                Arc::new(StringArray::from(vec!["event_time"])),
+                Arc::new(
+                    TimestampMicrosecondArray::from(vec![expected_micros])
+                        .with_timezone_opt(timezone),
+                ),
+            ],
+            None,
         );
+        let map = MapArray::new(
+            entry_field.clone(),
+            OffsetBuffer::from_lengths([1]),
+            entries,
+            None,
+            *sorted,
+        );
+        let expected = vec![RecordBatch::try_new(arrow_schema, vec![Arc::new(map)]).unwrap()];
+        assert_eq!(batches, expected);
     }
 
     /// Writes `id` (Int32) plus a wide string column (field id 2) whose bytes dominate
