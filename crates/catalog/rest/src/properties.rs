@@ -20,13 +20,10 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::str::FromStr;
-use std::sync::OnceLock;
+use std::time::Duration;
 
-use iceberg::properties::{BoolProp, DurationMsProp, U32Prop};
-use iceberg::sensitive::SensitiveString;
-use iceberg::{Error, ErrorKind, NamespaceIdent, Result, TableIdent};
+use iceberg::{Error, ErrorKind, Result};
 use iceberg_property_macro::Properties;
-use itertools::Itertools;
 use reqwest::header::{self, HeaderMap, HeaderName, HeaderValue};
 
 use crate::auth::{AUTH_TYPE_NONE, AUTH_TYPE_OAUTH2};
@@ -79,7 +76,6 @@ const TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX_MS: u64 = 1000 * 365 * 24 * 3600 * 1000
 
 const ICEBERG_REST_SPEC_VERSION: &str = "0.14.1";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-const PATH_V1: &str = "v1";
 
 /// Typed REST catalog properties.
 // PartialEq supports whole-configuration assertions in parsing tests.
@@ -95,91 +91,33 @@ pub(crate) struct RestCatalogProperties {
     #[property(key = REST_CATALOG_PROP_PREFIX, default = None, getter)]
     prefix: Option<String>,
     /// Explicit authentication scheme.
-    #[property(key = REST_CATALOG_PROP_AUTH_TYPE, default = None, getter)]
-    auth_type: Option<AuthType>,
-    /// Configured bearer token.
-    #[property(key = REST_CATALOG_PROP_TOKEN, default = None, getter)]
-    token: Option<SensitiveString>,
-    /// Configured OAuth2 client ID and secret.
-    #[property(key = REST_CATALOG_PROP_CREDENTIAL, default = None, getter)]
-    credential: Option<OAuth2Credential>,
-    /// Explicit OAuth2 token endpoint.
-    #[property(key = REST_CATALOG_PROP_OAUTH2_SERVER_URI, default = None, getter)]
-    oauth2_server_uri: Option<String>,
-    /// Explicit OAuth2 scope.
-    #[property(key = REST_CATALOG_PROP_SCOPE, default = None, getter)]
-    scope: Option<String>,
-    /// OAuth2 audience.
-    #[property(key = REST_CATALOG_PROP_AUDIENCE, default = None, getter)]
-    audience: Option<String>,
-    /// OAuth2 resource.
-    #[property(key = REST_CATALOG_PROP_RESOURCE, default = None, getter)]
-    resource: Option<String>,
+    #[property(key = REST_CATALOG_PROP_AUTH_TYPE, default = AuthType::None, getter)]
+    auth_type: AuthType,
     /// Explicit headers added to requests.
     #[property(nested, getter)]
     headers: RestHeaders,
-    /// Lazily initialized catalog endpoints.
-    #[property(nested, getter)]
-    endpoint_cache: RestEndpointCache,
     /// Whether header redaction is disabled.
     #[property(
         key = REST_CATALOG_PROP_DISABLE_HEADER_REDACTION,
-        default = BoolProp::from(false),
+        default = false,
+        parse_with = parse_disable_header_redaction,
         getter
     )]
-    disable_header_redaction: BoolProp,
+    disable_header_redaction: bool,
     /// Requested page size for namespace and table listings.
-    #[property(key = REST_CATALOG_PROP_PAGE_SIZE, default = None, getter)]
-    page_size: Option<U32Prop<1, { i32::MAX as u32 }>>,
+    #[property(key = REST_CATALOG_PROP_PAGE_SIZE, default = None, parse_with = parse_page_size, getter)]
+    page_size: Option<u32>,
     /// Maximum number of cached tables.
     #[property(key = REST_CATALOG_PROP_TABLE_CACHE_MAX_ENTRIES, default = TABLE_CACHE_MAX_ENTRIES_DEFAULT, getter)]
     table_cache_max_entries: u64,
     /// How long a loaded table stays cached.
     #[property(
         key = REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS,
-        default = DurationMsProp::try_from(TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT).unwrap(),
+        default = Duration::from_millis(TABLE_CACHE_EXPIRE_AFTER_WRITE_MS_DEFAULT),
+        parse_with = parse_table_cache_expiry,
         getter
     )]
-    table_cache_expire_after_write: DurationMsProp<1, TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX_MS>,
-}
-
-/// OAuth2 client credentials.
-// PartialEq supports comparing credentials in property parsing tests.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct OAuth2Credential {
-    client_id: Option<String>,
-    client_secret: SensitiveString,
-}
-
-impl OAuth2Credential {
-    /// Creates a credential from a client ID and secret.
-    pub(crate) fn new(client_id: Option<String>, client_secret: SensitiveString) -> Self {
-        Self {
-            client_id,
-            client_secret,
-        }
-    }
-
-    /// Returns the optional client ID.
-    pub(crate) fn client_id(&self) -> Option<&str> {
-        self.client_id.as_deref()
-    }
-
-    /// Returns the client secret.
-    pub(crate) fn client_secret(&self) -> &SensitiveString {
-        &self.client_secret
-    }
-}
-
-impl FromStr for OAuth2Credential {
-    type Err = std::convert::Infallible;
-
-    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
-        Ok(match value.split_once(':') {
-            Some((id, secret)) => Self::new(Some(id.to_string()), secret.to_string().into()),
-            None => Self::new(None, value.to_string().into()),
-        })
-    }
+    table_cache_expire_after_write: Duration,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,8 +146,6 @@ impl Debug for RestCatalogProperties {
             .field("warehouse", &self.warehouse)
             .field("prefix", &self.prefix)
             .field("auth_type", &self.auth_type)
-            .field("token", &self.token)
-            .field("credential", &self.credential)
             .field("headers", &"[REDACTED]")
             .field("page_size", &self.page_size)
             .field("table_cache_max_entries", &self.table_cache_max_entries)
@@ -236,70 +172,16 @@ impl RestCatalogProperties {
         Self::from_properties(&props)
     }
 
-    fn url_prefixed(&self, parts: &[&str]) -> String {
-        let base = self.endpoint_cache.base.get_or_init(|| {
-            [self.uri().as_str(), PATH_V1]
-                .into_iter()
-                .chain(self.prefix().as_deref())
-                .join("/")
-        });
-        std::iter::once(base.as_str())
-            .chain(parts.iter().copied())
-            .join("/")
+    pub(crate) fn extra_headers(&self) -> HeaderMap {
+        self.headers.extra_headers()
     }
+}
 
-    pub(crate) fn config_endpoint(&self) -> &str {
-        self.endpoint_cache
-            .config
-            .get_or_init(|| [self.uri().as_str(), PATH_V1, "config"].join("/"))
-    }
+// PartialEq supports whole-configuration assertions in parsing tests.
+#[derive(Clone, PartialEq)]
+pub(crate) struct RestHeaders(pub(crate) HeaderMap);
 
-    pub(crate) fn get_token_endpoint(&self) -> &str {
-        self.oauth2_server_uri()
-            .as_deref()
-            .unwrap_or_else(|| self.default_token_endpoint())
-    }
-
-    /// Returns the OAuth2 token endpoint derived from the catalog URI.
-    pub(crate) fn default_token_endpoint(&self) -> &str {
-        self.endpoint_cache
-            .token
-            .get_or_init(|| [self.uri().as_str(), PATH_V1, "oauth", "tokens"].join("/"))
-    }
-
-    pub(crate) fn namespaces_endpoint(&self) -> &str {
-        self.endpoint_cache
-            .namespaces
-            .get_or_init(|| self.url_prefixed(&["namespaces"]))
-    }
-
-    pub(crate) fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
-        self.url_prefixed(&["namespaces", &ns.to_url_string()])
-    }
-
-    pub(crate) fn tables_endpoint(&self, ns: &NamespaceIdent) -> String {
-        self.url_prefixed(&["namespaces", &ns.to_url_string(), "tables"])
-    }
-
-    pub(crate) fn rename_table_endpoint(&self) -> &str {
-        self.endpoint_cache
-            .rename_table
-            .get_or_init(|| self.url_prefixed(&["tables", "rename"]))
-    }
-
-    pub(crate) fn register_table_endpoint(&self, ns: &NamespaceIdent) -> String {
-        self.url_prefixed(&["namespaces", &ns.to_url_string(), "register"])
-    }
-
-    pub(crate) fn table_endpoint(&self, table: &TableIdent) -> String {
-        self.url_prefixed(&[
-            "namespaces",
-            &table.namespace.to_url_string(),
-            "tables",
-            &table.name,
-        ])
-    }
-
+impl RestHeaders {
     pub(crate) fn extra_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::from_iter([
             (
@@ -315,70 +197,11 @@ impl RestCatalogProperties {
                 HeaderValue::from_str(&format!("iceberg-rust/{CARGO_PKG_VERSION}")).unwrap(),
             ),
         ]);
-        headers.extend(self.headers.0.clone());
+        headers.extend(self.0.clone());
         headers
     }
 
-    pub(crate) fn extra_oauth_params(&self) -> HashMap<String, String> {
-        let mut params = self.explicit_oauth_params();
-        params
-            .entry(REST_CATALOG_PROP_SCOPE.to_string())
-            .or_insert_with(|| "catalog".to_string());
-        params
-    }
-
-    pub(crate) fn explicit_oauth_params(&self) -> HashMap<String, String> {
-        [
-            (REST_CATALOG_PROP_SCOPE, self.scope()),
-            (REST_CATALOG_PROP_AUDIENCE, self.audience()),
-            (REST_CATALOG_PROP_RESOURCE, self.resource()),
-        ]
-        .into_iter()
-        .filter_map(|(key, value)| value.as_ref().map(|value| (key.to_string(), value.clone())))
-        .collect()
-    }
-
-    pub(crate) fn resolved_auth_type(&self) -> &AuthType {
-        self.auth_type().as_ref().unwrap_or_else(|| {
-            if self.token.is_some() || self.credential.is_some() || self.oauth2_server_uri.is_some()
-            {
-                &AuthType::OAuth2
-            } else {
-                &AuthType::None
-            }
-        })
-    }
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct RestEndpointCache {
-    base: OnceLock<String>,
-    config: OnceLock<String>,
-    token: OnceLock<String>,
-    namespaces: OnceLock<String>,
-    rename_table: OnceLock<String>,
-}
-
-impl RestEndpointCache {
-    fn from_properties(_props: &HashMap<String, String>) -> Result<Self> {
-        Ok(Self::default())
-    }
-}
-
-// Endpoints derive only from immutable properties; cache initialization must
-// not change configuration equality.
-impl PartialEq for RestEndpointCache {
-    fn eq(&self, _other: &Self) -> bool {
-        true
-    }
-}
-
-// PartialEq supports whole-configuration assertions in parsing tests.
-#[derive(Clone, PartialEq)]
-pub(crate) struct RestHeaders(pub(crate) HeaderMap);
-
-impl RestHeaders {
-    fn from_properties(props: &HashMap<String, String>) -> Result<Self> {
+    pub(crate) fn from_properties(props: &HashMap<String, String>) -> Result<Self> {
         let mut headers = HeaderMap::new();
         for (key, value) in props.iter().filter_map(|(key, value)| {
             key.strip_prefix(REST_CATALOG_PROP_HEADER_PREFIX)
@@ -405,6 +228,43 @@ impl RestHeaders {
     }
 }
 
+fn parse_disable_header_redaction(value: &str) -> Result<bool> {
+    Ok(value.eq_ignore_ascii_case("true"))
+}
+
+fn parse_page_size(value: &str) -> Result<u32> {
+    value
+        .parse::<u32>()
+        .ok()
+        .filter(|value| (1..=i32::MAX as u32).contains(value))
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid {REST_CATALOG_PROP_PAGE_SIZE}: {value}; expected an integer between 1 and {}",
+                    i32::MAX
+                ),
+            )
+        })
+}
+
+fn parse_table_cache_expiry(value: &str) -> Result<Duration> {
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|value| (1..=TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX_MS).contains(value))
+        .map(Duration::from_millis)
+        .ok_or_else(|| {
+            Error::new(
+                ErrorKind::DataInvalid,
+                format!(
+                    "Invalid {REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS}: {value}; \
+                     expected milliseconds between 1 and {TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX_MS}"
+                ),
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use mockito::Server;
@@ -419,12 +279,6 @@ mod tests {
             (REST_CATALOG_PROP_WAREHOUSE, "s3://warehouse"),
             ("prefix", "catalog"),
             (REST_CATALOG_PROP_AUTH_TYPE, "OAuth2"),
-            ("token", "secret"),
-            ("credential", "client:secret"),
-            ("oauth2-server-uri", "http://localhost:8181/token"),
-            ("scope", "custom-scope"),
-            ("audience", "custom-audience"),
-            ("resource", "custom-resource"),
             ("header.x-custom", "value"),
             (REST_CATALOG_PROP_DISABLE_HEADER_REDACTION, "TRUE"),
             (REST_CATALOG_PROP_PAGE_SIZE, "25"),
@@ -439,25 +293,15 @@ mod tests {
             uri: "http://localhost:8181".to_string(),
             warehouse: Some("s3://warehouse".to_string()),
             prefix: Some("catalog".to_string()),
-            auth_type: Some(AuthType::OAuth2),
-            token: Some("secret".to_string().into()),
-            credential: Some(OAuth2Credential {
-                client_id: Some("client".to_string()),
-                client_secret: "secret".to_string().into(),
-            }),
-            oauth2_server_uri: Some("http://localhost:8181/token".to_string()),
-            scope: Some("custom-scope".to_string()),
-            audience: Some("custom-audience".to_string()),
-            resource: Some("custom-resource".to_string()),
+            auth_type: AuthType::OAuth2,
             headers: RestHeaders(HeaderMap::from_iter([(
                 HeaderName::from_static("x-custom"),
                 HeaderValue::from_static("value"),
             )])),
-            endpoint_cache: RestEndpointCache::default(),
-            disable_header_redaction: BoolProp::from(true),
-            page_size: Some(U32Prop::try_from(25).unwrap()),
+            disable_header_redaction: true,
+            page_size: Some(25),
             table_cache_max_entries: 10,
-            table_cache_expire_after_write: DurationMsProp::try_from(500).unwrap(),
+            table_cache_expire_after_write: Duration::from_millis(500),
         };
 
         assert_eq!(
@@ -472,19 +316,12 @@ mod tests {
             uri: String::new(),
             warehouse: None,
             prefix: None,
-            auth_type: None,
-            token: None,
-            credential: None,
-            oauth2_server_uri: None,
-            scope: None,
-            audience: None,
-            resource: None,
+            auth_type: AuthType::None,
             headers: RestHeaders(HeaderMap::new()),
-            endpoint_cache: RestEndpointCache::default(),
-            disable_header_redaction: BoolProp::from(false),
+            disable_header_redaction: false,
             page_size: None,
             table_cache_max_entries: 100,
-            table_cache_expire_after_write: DurationMsProp::try_from(300_000).unwrap(),
+            table_cache_expire_after_write: Duration::from_millis(300_000),
         };
 
         assert_eq!(
@@ -494,68 +331,51 @@ mod tests {
     }
 
     #[test]
-    fn test_endpoint_cache_initialization_and_equality() {
-        let default_token = "http://localhost:8181/v1/oauth/tokens";
-        for (token, expected_token) in [
-            (None, default_token),
-            (Some(""), ""),
-            (
-                Some("http://localhost:8181/token"),
-                "http://localhost:8181/token",
-            ),
+    fn test_header_redaction_boolean() {
+        for (value, expected) in [
+            ("true", true),
+            ("TRUE", true),
+            ("True", true),
+            ("false", false),
+            ("FALSE", false),
+            ("", false),
+            ("invalid", false),
+            ("1", false),
+            (" true ", false),
         ] {
-            let mut props = HashMap::from([
-                (
-                    REST_CATALOG_PROP_URI.to_string(),
-                    "http://localhost:8181".to_string(),
-                ),
-                (REST_CATALOG_PROP_PREFIX.to_string(), "catalog".to_string()),
-            ]);
-            if let Some(token) = token {
-                props.insert(
-                    REST_CATALOG_PROP_OAUTH2_SERVER_URI.to_string(),
-                    token.to_string(),
-                );
-            }
-            let properties = RestCatalogProperties::from_properties(&props).unwrap();
-            let unchanged = properties.clone();
-            let cache = properties.endpoint_cache();
-            let cells = [
-                &cache.base,
-                &cache.config,
-                &cache.token,
-                &cache.namespaces,
-                &cache.rename_table,
-            ];
-            assert_eq!(cells.map(OnceLock::get), [None; 5]);
+            let properties = RestCatalogProperties::from_properties(&HashMap::from([(
+                REST_CATALOG_PROP_DISABLE_HEADER_REDACTION.to_string(),
+                value.to_string(),
+            )]))
+            .unwrap();
+            assert_eq!(properties.disable_header_redaction(), expected);
+        }
+    }
 
-            assert_eq!(properties.get_token_endpoint(), expected_token);
-            let expected_cached = [
-                None,
-                None,
-                token.is_none().then_some(default_token),
-                None,
-                None,
-            ];
+    #[test]
+    fn test_numeric_property_boundaries() {
+        for (page_size, expiry) in [
+            (1, 1),
+            (i32::MAX as u32, TABLE_CACHE_EXPIRE_AFTER_WRITE_MAX_MS),
+        ] {
+            let properties = RestCatalogProperties::from_properties(&HashMap::from([
+                (
+                    REST_CATALOG_PROP_PAGE_SIZE.to_string(),
+                    page_size.to_string(),
+                ),
+                (
+                    REST_CATALOG_PROP_TABLE_CACHE_EXPIRE_AFTER_WRITE_MS.to_string(),
+                    expiry.to_string(),
+                ),
+            ]))
+            .unwrap();
             assert_eq!(
-                cells.map(|cell| cell.get().map(String::as_str)),
-                expected_cached
+                (
+                    properties.page_size(),
+                    *properties.table_cache_expire_after_write()
+                ),
+                (Some(page_size), Duration::from_millis(expiry)),
             );
-            assert_eq!(
-                [
-                    properties.config_endpoint(),
-                    properties.namespaces_endpoint(),
-                    properties.rename_table_endpoint(),
-                    properties.default_token_endpoint(),
-                ],
-                [
-                    "http://localhost:8181/v1/config",
-                    "http://localhost:8181/v1/catalog/namespaces",
-                    "http://localhost:8181/v1/catalog/tables/rename",
-                    default_token,
-                ],
-            );
-            assert_eq!(properties, unchanged);
         }
     }
 
@@ -583,44 +403,6 @@ mod tests {
             assert_eq!(error.kind(), ErrorKind::DataInvalid);
             assert!(format!("{error}").contains(key.strip_prefix("header.").unwrap_or(key)));
             assert!(!format!("{error:?}").contains("secret\nvalue"));
-        }
-    }
-
-    #[test]
-    fn test_credential_parsing_and_redaction_fallback() {
-        for (value, client_id, secret) in [
-            ("secret", None, "secret"),
-            (
-                "client:secret:with:colons",
-                Some("client"),
-                "secret:with:colons",
-            ),
-            (":secret", Some(""), "secret"),
-            ("client:", Some("client"), ""),
-            ("", None, ""),
-        ] {
-            let properties = RestCatalogProperties::from_properties(&HashMap::from([
-                ("credential".to_string(), value.to_string()),
-                (
-                    REST_CATALOG_PROP_DISABLE_HEADER_REDACTION.to_string(),
-                    "invalid".to_string(),
-                ),
-            ]))
-            .unwrap();
-            let expected = (
-                Some(OAuth2Credential {
-                    client_id: client_id.map(str::to_string),
-                    client_secret: secret.to_string().into(),
-                }),
-                false,
-            );
-            assert_eq!(
-                (
-                    properties.credential().clone(),
-                    properties.disable_header_redaction().get()
-                ),
-                expected,
-            );
         }
     }
 
@@ -696,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_table_cache_rejects_out_of_range_expiry() {
-        for value in ["0", "31536000000001"] {
+        for value in ["", "0", "31536000000001", "1.5", "18446744073709551616"] {
             let config = RestCatalogTestFixture::builder()
                 .uri("http://localhost".to_string())
                 .props(HashMap::from([(

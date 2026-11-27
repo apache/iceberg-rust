@@ -34,6 +34,7 @@ use iceberg::{
     Catalog, CatalogBuilder, Error, ErrorKind, Namespace, NamespaceIdent, Result, Runtime,
     SessionCatalog, SessionContext, TableCommit, TableCreation, TableIdent,
 };
+use itertools::Itertools;
 use reqwest::{Client, Method, StatusCode, Url, header};
 use tokio::sync::OnceCell;
 
@@ -143,6 +144,13 @@ impl RestCatalogBuilder {
     }
 }
 
+#[derive(Default)]
+struct RestEndpointCache {
+    base: OnceLock<String>,
+    namespaces: OnceLock<String>,
+    rename_table: OnceLock<String>,
+}
+
 struct RestCatalogClient {
     /// The manager that created `catalog_session`; retained so each request can
     /// derive authentication for its [`SessionContext`].
@@ -161,6 +169,7 @@ struct RestCatalogClient {
     endpoints: HashSet<Endpoint>,
     /// Tables reused when the server answers a load with `304 Not Modified`.
     table_cache: Option<TableCache>,
+    endpoint_cache: RestEndpointCache,
 }
 
 impl Debug for RestCatalogClient {
@@ -176,6 +185,51 @@ impl Debug for RestCatalogClient {
 }
 
 impl RestCatalogClient {
+    fn url_prefixed(&self, parts: &[&str]) -> String {
+        let base = self.endpoint_cache.base.get_or_init(|| {
+            [self.config.uri().as_str(), "v1"]
+                .into_iter()
+                .chain(self.config.prefix().as_deref())
+                .join("/")
+        });
+        std::iter::once(base.as_str())
+            .chain(parts.iter().copied())
+            .join("/")
+    }
+
+    fn namespaces_endpoint(&self) -> &str {
+        self.endpoint_cache
+            .namespaces
+            .get_or_init(|| self.url_prefixed(&["namespaces"]))
+    }
+
+    fn namespace_endpoint(&self, ns: &NamespaceIdent) -> String {
+        self.url_prefixed(&["namespaces", &ns.to_url_string()])
+    }
+
+    fn tables_endpoint(&self, ns: &NamespaceIdent) -> String {
+        self.url_prefixed(&["namespaces", &ns.to_url_string(), "tables"])
+    }
+
+    fn rename_table_endpoint(&self) -> &str {
+        self.endpoint_cache
+            .rename_table
+            .get_or_init(|| self.url_prefixed(&["tables", "rename"]))
+    }
+
+    fn register_table_endpoint(&self, ns: &NamespaceIdent) -> String {
+        self.url_prefixed(&["namespaces", &ns.to_url_string(), "register"])
+    }
+
+    fn table_endpoint(&self, table: &TableIdent) -> String {
+        self.url_prefixed(&[
+            "namespaces",
+            &table.namespace.to_url_string(),
+            "tables",
+            &table.name,
+        ])
+    }
+
     /// Initializes the runtime config, advertised endpoints, auth manager, and
     /// catalog authentication session shared by one REST catalog instance.
     async fn init(
@@ -210,7 +264,7 @@ impl RestCatalogClient {
         let table_cache = (config.table_cache_max_entries() > 0).then(|| {
             TableCache::builder()
                 .max_capacity(config.table_cache_max_entries())
-                .time_to_live(config.table_cache_expire_after_write().get())
+                .time_to_live(*config.table_cache_expire_after_write())
                 .build()
         });
 
@@ -218,6 +272,7 @@ impl RestCatalogClient {
             auth_manager,
             catalog_session,
             table_cache,
+            endpoint_cache: RestEndpointCache::default(),
             config,
             props,
             http_client,
@@ -260,7 +315,8 @@ impl RestCatalogClient {
         auth_session: &dyn AuthSession,
         user_config: &RestCatalogProperties,
     ) -> Result<CatalogConfig> {
-        let mut request_builder = http_client.request(Method::GET, user_config.config_endpoint());
+        let mut request_builder =
+            http_client.request(Method::GET, format!("{}/v1/config", user_config.uri()));
 
         if let Some(warehouse_location) = user_config.warehouse() {
             request_builder = request_builder.query(&[("warehouse", warehouse_location)]);
@@ -492,7 +548,7 @@ impl RestSessionCatalog {
 
         let mut request_builder = client
             .http_client
-            .request(Method::DELETE, client.config.table_endpoint(table));
+            .request(Method::DELETE, client.table_endpoint(table));
 
         if purge {
             request_builder = request_builder.query(&[("purgeRequested", "true")]);
@@ -522,10 +578,13 @@ impl RestSessionCatalog {
             return Ok(auth_manager.clone());
         }
         let config = RestCatalogProperties::for_handshake(&self.props)?;
-        let auth_type = config.resolved_auth_type();
+        let mut auth_type = config.auth_type();
         // Java parity (`AuthManagers`): make the inference visible so users
         // configure the type explicitly.
-        if *auth_type == AuthType::OAuth2 && config.auth_type().is_none() {
+        if !self.props.contains_key(REST_CATALOG_PROP_AUTH_TYPE)
+            && OAuth2Manager::is_configured(&self.props)
+        {
+            auth_type = &AuthType::OAuth2;
             tracing::warn!(
                 "Inferring {REST_CATALOG_PROP_AUTH_TYPE}={AUTH_TYPE_OAUTH2} from the configured \
                  OAuth properties; set it explicitly to avoid this warning"
@@ -533,7 +592,7 @@ impl RestSessionCatalog {
         }
         match auth_type {
             AuthType::None => Ok(Arc::new(NoopAuthManager)),
-            AuthType::OAuth2 => Ok(Arc::new(OAuth2Manager::from_properties(&config))),
+            AuthType::OAuth2 => Ok(Arc::new(OAuth2Manager::from_properties(&self.props)?)),
             AuthType::Custom(other) => Err(Error::new(
                 ErrorKind::DataInvalid,
                 format!(
@@ -644,7 +703,7 @@ impl SessionCatalog for RestSessionCatalog {
         parent: Option<&NamespaceIdent>,
     ) -> Result<Vec<NamespaceIdent>> {
         let client = self.client().await?;
-        let endpoint = client.config.namespaces_endpoint();
+        let endpoint = client.namespaces_endpoint();
         let mut namespaces = Vec::new();
         // An empty initial token explicitly opts in to pagination.
         let mut next_token = client.config.page_size().map(|_| String::new());
@@ -653,7 +712,7 @@ impl SessionCatalog for RestSessionCatalog {
             let mut request = client.http_client.request(Method::GET, endpoint);
 
             if let Some(page_size) = client.config.page_size() {
-                request = request.query(&[("pageSize", page_size.get())]);
+                request = request.query(&[("pageSize", page_size)]);
             }
 
             // Filter on `parent={namespace}` if a parent namespace exists.
@@ -710,7 +769,7 @@ impl SessionCatalog for RestSessionCatalog {
         let request = HttpRequest::build(
             client
                 .http_client
-                .request(Method::POST, client.config.namespaces_endpoint())
+                .request(Method::POST, client.namespaces_endpoint())
                 .json(&CreateNamespaceRequest {
                     namespace: namespace.clone(),
                     properties,
@@ -745,7 +804,7 @@ impl SessionCatalog for RestSessionCatalog {
         let request = HttpRequest::build(
             client
                 .http_client
-                .request(Method::GET, client.config.namespace_endpoint(namespace)),
+                .request(Method::GET, client.namespace_endpoint(namespace)),
         )?;
 
         let http_response = client.query_catalog(context, request).await?;
@@ -784,7 +843,7 @@ impl SessionCatalog for RestSessionCatalog {
         }
 
         let client = self.client().await?;
-        self.check_exists_via_head(context, client, client.config.namespace_endpoint(ns))
+        self.check_exists_via_head(context, client, client.namespace_endpoint(ns))
             .await
     }
 
@@ -810,7 +869,7 @@ impl SessionCatalog for RestSessionCatalog {
         let request = HttpRequest::build(
             client
                 .http_client
-                .request(Method::DELETE, client.config.namespace_endpoint(namespace)),
+                .request(Method::DELETE, client.namespace_endpoint(namespace)),
         )?;
 
         let http_response = client.query_catalog(context, request).await?;
@@ -834,7 +893,7 @@ impl SessionCatalog for RestSessionCatalog {
         namespace: &NamespaceIdent,
     ) -> Result<Vec<TableIdent>> {
         let client = self.client().await?;
-        let endpoint = client.config.tables_endpoint(namespace);
+        let endpoint = client.tables_endpoint(namespace);
         let mut identifiers = Vec::new();
         // An empty initial token explicitly opts in to pagination.
         let mut next_token = client.config.page_size().map(|_| String::new());
@@ -843,7 +902,7 @@ impl SessionCatalog for RestSessionCatalog {
             let mut request = client.http_client.request(Method::GET, endpoint.clone());
 
             if let Some(page_size) = client.config.page_size() {
-                request = request.query(&[("pageSize", page_size.get())]);
+                request = request.query(&[("pageSize", page_size)]);
             }
 
             if let Some(token) = next_token {
@@ -903,7 +962,7 @@ impl SessionCatalog for RestSessionCatalog {
         let request = HttpRequest::build(
             client
                 .http_client
-                .request(Method::POST, client.config.tables_endpoint(namespace))
+                .request(Method::POST, client.tables_endpoint(namespace))
                 .json(&CreateTableRequest {
                     name: creation.name,
                     location: creation.location,
@@ -993,7 +1052,7 @@ impl SessionCatalog for RestSessionCatalog {
 
         let mut request_builder = client
             .http_client
-            .request(Method::GET, client.config.table_endpoint(table_ident));
+            .request(Method::GET, client.table_endpoint(table_ident));
         if let Some((etag, _)) = &cached {
             request_builder = request_builder.header(header::IF_NONE_MATCH, etag);
         }
@@ -1110,7 +1169,7 @@ impl SessionCatalog for RestSessionCatalog {
         }
 
         let client = self.client().await?;
-        self.check_exists_via_head(context, client, client.config.table_endpoint(table))
+        self.check_exists_via_head(context, client, client.table_endpoint(table))
             .await
     }
 
@@ -1126,7 +1185,7 @@ impl SessionCatalog for RestSessionCatalog {
         let request = HttpRequest::build(
             client
                 .http_client
-                .request(Method::POST, client.config.rename_table_endpoint())
+                .request(Method::POST, client.rename_table_endpoint())
                 .json(&RenameTableRequest {
                     source: src.clone(),
                     destination: dest.clone(),
@@ -1166,9 +1225,7 @@ impl SessionCatalog for RestSessionCatalog {
                 .http_client
                 .request(
                     Method::POST,
-                    client
-                        .config
-                        .register_table_endpoint(table_ident.namespace()),
+                    client.register_table_endpoint(table_ident.namespace()),
                 )
                 .json(&RegisterTableRequest {
                     name: table_ident.name.clone(),
@@ -1243,10 +1300,7 @@ impl SessionCatalog for RestSessionCatalog {
         let request = HttpRequest::build(
             client
                 .http_client
-                .request(
-                    Method::POST,
-                    client.config.table_endpoint(commit.identifier()),
-                )
+                .request(Method::POST, client.table_endpoint(commit.identifier()))
                 .json(&CommitTableRequest {
                     identifier: Some(commit.identifier().clone()),
                     requirements: commit.take_requirements(),
@@ -1558,6 +1612,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_endpoint_cache_uses_resolved_properties() {
+        let mut server = Server::new_async().await;
+        let config_mock = server.mock("GET", "/v1/config")
+            .with_status(200)
+            .with_body(r#"{"defaults": {}, "overrides": {"uri": "http://localhost:8181", "prefix": "catalog"}}"#)
+            .create_async().await;
+        let catalog = session_catalog(
+            RestCatalogTestFixture::builder()
+                .uri(server.url())
+                .props(HashMap::from([(
+                    "prefix".to_string(),
+                    "original".to_string(),
+                )]))
+                .build(),
+        );
+        let client = catalog.client().await.unwrap();
+        let properties = client.config.clone();
+        let cells = [
+            &client.endpoint_cache.base,
+            &client.endpoint_cache.namespaces,
+            &client.endpoint_cache.rename_table,
+        ];
+        assert_eq!(cells.map(OnceLock::get), [None; 3]);
+        assert_eq!(
+            client.namespaces_endpoint(),
+            "http://localhost:8181/v1/catalog/namespaces"
+        );
+        assert_eq!(cells.map(|cell| cell.get().map(String::as_str)), [
+            Some("http://localhost:8181/v1/catalog"),
+            Some("http://localhost:8181/v1/catalog/namespaces"),
+            None,
+        ]);
+        assert_eq!(
+            client.rename_table_endpoint(),
+            "http://localhost:8181/v1/catalog/tables/rename"
+        );
+        assert_eq!(client.config, properties);
+        config_mock.assert_async().await;
+    }
+
+    #[tokio::test]
     async fn test_cache_property_precedence() {
         for (default, client, override_value, expected) in [
             ("10", None, None, 10),
@@ -1599,7 +1694,7 @@ mod tests {
             assert_eq!(
                 (
                     config.table_cache_max_entries(),
-                    config.table_cache_expire_after_write().get()
+                    *config.table_cache_expire_after_write()
                 ),
                 (expected, Duration::from_millis(expected)),
             );

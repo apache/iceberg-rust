@@ -71,7 +71,6 @@ extern crate self as iceberg;
 mod error;
 pub use error::{Error, ErrorKind, Result};
 
-pub mod properties;
 pub mod sensitive;
 
 mod catalog;
