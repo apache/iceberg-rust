@@ -25,7 +25,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow_schema::{
-    DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+    DataType, Field, FieldRef, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use parquet::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
@@ -214,6 +214,24 @@ impl ArrowReader {
             }),
             arrow_schema.metadata().clone(),
         );
+        // A millisecond column whose Iceberg type differs from the table's would otherwise be
+        // dropped and read as nulls.
+        for field in projected_arrow_schema.flattened_fields() {
+            if let DataType::Timestamp(TimeUnit::Millisecond, _) = field.data_type()
+                && let Some(field_id) = parquet_field_id(field)
+                && let Some(table_field) = iceberg_schema_of_task.field_by_id(field_id)
+            {
+                let file_type = arrow_type_to_type(field.data_type())?;
+                if file_type != *table_field.field_type {
+                    return Err(invalid_data!(
+                        "Cannot read column {} (field id {field_id}) as {}: the file stores {} which reads as {file_type}",
+                        table_field.name,
+                        table_field.field_type,
+                        field.data_type()
+                    ));
+                }
+            }
+        }
         let iceberg_schema = arrow_schema_to_schema(&projected_arrow_schema)?;
 
         tagged_fields.filter_leaves(|idx, field| {
@@ -1011,6 +1029,7 @@ mod tests {
     use parquet::file::properties::WriterProperties;
     use parquet::schema::parser::parse_message_type;
     use parquet::schema::types::SchemaDescriptor;
+    use rstest::rstest;
     use tempfile::TempDir;
 
     use crate::arrow::{ArrowReader, ArrowReaderBuilder, ArrowReaderOptions as ReaderOptions};
@@ -1141,6 +1160,91 @@ message schema {
         )
         .expect("Some ProjectionMask");
         assert_eq!(mask, ProjectionMask::leaves(&parquet_schema, vec![0]));
+    }
+
+    #[rstest]
+    #[case::naive_under_timestamp("TIMESTAMP(MILLIS,false)", PrimitiveType::Timestamp, None)]
+    #[case::utc_under_timestamptz("TIMESTAMP(MILLIS,true)", PrimitiveType::Timestamptz, None)]
+    #[case::legacy_under_timestamptz("TIMESTAMP_MILLIS", PrimitiveType::Timestamptz, None)]
+    #[case::naive_under_timestamptz(
+        "TIMESTAMP(MILLIS,false)",
+        PrimitiveType::Timestamptz,
+        Some("Timestamp(ms) which reads as timestamp")
+    )]
+    #[case::utc_under_timestamp(
+        "TIMESTAMP(MILLIS,true)",
+        PrimitiveType::Timestamp,
+        Some("Timestamp(ms, \"UTC\") which reads as timestamptz")
+    )]
+    #[case::legacy_under_timestamp(
+        "TIMESTAMP_MILLIS",
+        PrimitiveType::Timestamp,
+        Some("Timestamp(ms, \"UTC\") which reads as timestamptz")
+    )]
+    #[case::naive_under_timestamp_ns(
+        "TIMESTAMP(MILLIS,false)",
+        PrimitiveType::TimestampNs,
+        Some("Timestamp(ms) which reads as timestamp")
+    )]
+    #[case::naive_under_timestamptz_ns(
+        "TIMESTAMP(MILLIS,false)",
+        PrimitiveType::TimestamptzNs,
+        Some("Timestamp(ms) which reads as timestamp")
+    )]
+    #[case::utc_under_timestamp_ns(
+        "TIMESTAMP(MILLIS,true)",
+        PrimitiveType::TimestampNs,
+        Some("Timestamp(ms, \"UTC\") which reads as timestamptz")
+    )]
+    #[case::utc_under_timestamptz_ns(
+        "TIMESTAMP(MILLIS,true)",
+        PrimitiveType::TimestamptzNs,
+        Some("Timestamp(ms, \"UTC\") which reads as timestamptz")
+    )]
+    fn test_arrow_projection_mask_millisecond_column_must_match_table_type(
+        #[case] declared: &str,
+        #[case] table_type: PrimitiveType,
+        #[case] rejected: Option<&str>,
+    ) {
+        let parquet_schema = SchemaDescriptor::new(Arc::new(
+            parse_message_type(&format!(
+                "message schema {{ required int32 id = 1; optional int64 ts ({declared}) = 2; }}"
+            ))
+            .unwrap(),
+        ));
+        let arrow_schema = Arc::new(parquet_to_arrow_schema(&parquet_schema, None).unwrap());
+        let schema = Schema::builder()
+            .with_fields(vec![
+                NestedField::required(1, "id", Type::Primitive(PrimitiveType::Int)).into(),
+                NestedField::optional(2, "ts", Type::Primitive(table_type.clone())).into(),
+            ])
+            .build()
+            .unwrap();
+
+        let result = ArrowReader::get_arrow_projection_mask(
+            &[1, 2],
+            &schema,
+            &parquet_schema,
+            &arrow_schema,
+            false,
+        );
+
+        match rejected {
+            None => assert_eq!(
+                result.unwrap(),
+                ProjectionMask::leaves(&parquet_schema, vec![0, 1])
+            ),
+            Some(file_type) => {
+                let err = result.unwrap_err();
+                assert_eq!(err.kind(), ErrorKind::DataInvalid);
+                assert_eq!(
+                    err.to_string(),
+                    format!(
+                        "DataInvalid => Cannot read column ts (field id 2) as {table_type}: the file stores {file_type}"
+                    )
+                );
+            }
+        }
     }
 
     fn field_id_meta(id: i32) -> HashMap<String, String> {

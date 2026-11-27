@@ -29,7 +29,7 @@ use arrow_array::{Array, ArrayRef, BooleanArray, Datum as ArrowDatum, RecordBatc
 use arrow_buffer::BooleanBuffer;
 use arrow_cast::cast::{CastOptions, cast_with_options};
 use arrow_ord::cmp::{eq, gt, gt_eq, lt, lt_eq, neq};
-use arrow_schema::{ArrowError, DataType};
+use arrow_schema::{ArrowError, DataType, TimeUnit};
 use arrow_string::like::starts_with;
 use fnv::FnvHashSet;
 use parquet::schema::types::SchemaDescriptor;
@@ -525,6 +525,27 @@ fn project_column(
     }
 }
 
+/// Like [`project_column`], but widens millisecond timestamps to microseconds so
+/// comparisons with microsecond literals keep their precision.
+fn project_comparison_column(
+    batch: &RecordBatch,
+    column_idx: usize,
+) -> std::result::Result<ArrayRef, ArrowError> {
+    let column = project_column(batch, column_idx)?;
+
+    match column.data_type() {
+        DataType::Timestamp(TimeUnit::Millisecond, tz) => cast_with_options(
+            &column,
+            &DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
+            &CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        ),
+        _ => Ok(column),
+    }
+}
+
 fn compute_is_nan(array: &ArrayRef) -> std::result::Result<BooleanArray, ArrowError> {
     // Compute NaN over the contiguous values slice, then fold the null bitmap
     // in with a single bitwise AND so that null slots become false.
@@ -674,7 +695,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_comparison_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 lt(&left, literal.as_ref())
             }))
@@ -694,7 +715,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_comparison_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 lt_eq(&left, literal.as_ref())
             }))
@@ -714,7 +735,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_comparison_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 gt(&left, literal.as_ref())
             }))
@@ -734,7 +755,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_comparison_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 gt_eq(&left, literal.as_ref())
             }))
@@ -754,7 +775,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_comparison_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 eq(&left, literal.as_ref())
             }))
@@ -774,7 +795,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
             let literal = get_arrow_datum(literal)?;
 
             Ok(Box::new(move |batch| {
-                let left = project_column(&batch, idx)?;
+                let left = project_comparison_column(&batch, idx)?;
                 let literal = try_cast_literal(&literal, left.data_type())?;
                 neq(&left, literal.as_ref())
             }))
@@ -839,7 +860,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native is_in kernel
-                let left = project_column(&batch, idx)?;
+                let left = project_comparison_column(&batch, idx)?;
 
                 let mut acc = constant_bool_array(false, batch.num_rows());
                 for literal in &literals {
@@ -869,7 +890,7 @@ impl BoundPredicateVisitor for PredicateConverter<'_> {
 
             Ok(Box::new(move |batch| {
                 // update this if arrow ever adds a native not_in kernel
-                let left = project_column(&batch, idx)?;
+                let left = project_comparison_column(&batch, idx)?;
                 let mut acc = constant_bool_array(true, batch.num_rows());
                 for literal in &literals {
                     let literal = try_cast_literal(literal, left.data_type())?;
@@ -925,8 +946,8 @@ mod tests {
     use crate::expr::visitors::bound_predicate_visitor::visit;
     use crate::expr::{Bind, BoundPredicate, Predicate, Reference};
     use crate::spec::{
-        Datum, Literal, NestedField, PartitionSpec, PrimitiveType, Schema, SchemaRef, Struct,
-        StructType, Transform, Type,
+        Datum, Literal, NestedField, PartitionSpec, PrimitiveLiteral, PrimitiveType, Schema,
+        SchemaRef, Struct, StructType, Transform, Type,
     };
 
     fn table_schema_simple() -> SchemaRef {
@@ -1089,6 +1110,90 @@ mod tests {
             [true, false, true, true]
         );
         assert!(!result.is_null(2));
+    }
+
+    #[test]
+    fn test_predicate_converter_compares_millisecond_timestamps_as_micros() {
+        use arrow_array::TimestampMillisecondArray;
+
+        for (primitive_type, tz) in [
+            (PrimitiveType::Timestamp, None),
+            (PrimitiveType::Timestamptz, Some("UTC")),
+        ] {
+            let schema = Arc::new(
+                Schema::builder()
+                    .with_fields(vec![
+                        NestedField::required(4, "ts", Type::Primitive(primitive_type.clone()))
+                            .into(),
+                    ])
+                    .build()
+                    .unwrap(),
+            );
+            let column =
+                TimestampMillisecondArray::from(vec![-1_500, 1_000, 2_000]).with_timezone_opt(tz);
+            let batch = RecordBatch::try_new(
+                Arc::new(ArrowSchema::new(vec![Field::new(
+                    "ts",
+                    column.data_type().clone(),
+                    false,
+                )])),
+                vec![Arc::new(column)],
+            )
+            .unwrap();
+            let micros = |v| Datum::new(primitive_type.clone(), PrimitiveLiteral::Long(v));
+
+            const TS: &str = "message schema { required int64 ts = 4; }";
+            for (predicate, expected) in [
+                (Reference::new("ts").less_than(micros(1_000_500)), [
+                    true, true, false,
+                ]),
+                (Reference::new("ts").equal_to(micros(1_000_500)), [
+                    false, false, false,
+                ]),
+                (Reference::new("ts").equal_to(micros(2_000_000)), [
+                    false, false, true,
+                ]),
+            ] {
+                let result =
+                    apply_predicate_to_batch(predicate, schema.clone(), TS, batch.clone()).unwrap();
+                assert_eq!(result, BooleanArray::from(expected.to_vec()), "{tz:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_predicate_converter_null_checks_skip_millisecond_widening() {
+        use arrow_array::TimestampMillisecondArray;
+
+        const TS: &str = "message schema { optional int64 ts = 4; }";
+        let schema = Arc::new(
+            Schema::builder()
+                .with_fields(vec![
+                    NestedField::optional(4, "ts", Type::Primitive(PrimitiveType::Timestamp))
+                        .into(),
+                ])
+                .build()
+                .unwrap(),
+        );
+        let column = TimestampMillisecondArray::from(vec![Some(i64::MAX), None]);
+        let batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "ts",
+                column.data_type().clone(),
+                true,
+            )])),
+            vec![Arc::new(column)],
+        )
+        .unwrap();
+
+        for (predicate, expected) in [
+            (Reference::new("ts").is_null(), [false, true]),
+            (Reference::new("ts").is_not_null(), [true, false]),
+        ] {
+            let result =
+                apply_predicate_to_batch(predicate, schema.clone(), TS, batch.clone()).unwrap();
+            assert_eq!(result, BooleanArray::from(expected.to_vec()));
+        }
     }
 
     /// Returns the residual of `predicate` for a data file that stores only field 1.
