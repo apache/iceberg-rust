@@ -4843,6 +4843,9 @@ name = "pyiceberg_core_rust"
 version = "0.10.1"
 dependencies = [
  "arrow",
+ "async-trait",
+ "bytes",
+ "futures",
  "iceberg",
  "pyo3",
 ]
