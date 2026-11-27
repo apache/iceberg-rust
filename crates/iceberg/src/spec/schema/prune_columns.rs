@@ -104,7 +104,7 @@ impl SchemaVisitor for PruneColumn {
     type T = Option<Type>;
 
     fn schema(&mut self, _schema: &Schema, value: Option<Type>) -> Result<Option<Type>> {
-        Ok(Some(value.unwrap()))
+        Ok(value)
     }
 
     fn field(&mut self, field: &NestedFieldRef, value: Option<Type>) -> Result<Option<Type>> {
@@ -745,6 +745,9 @@ mod tests {
         let result = prune_columns(&schema, selected, true);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), Type::Struct(schema.as_struct().clone()));
+        // Selecting nothing gives an empty struct.
+        let empty = prune_columns(&schema, [], false).unwrap();
+        assert_eq!(empty, Type::Struct(StructType::default()));
     }
 
     #[test]

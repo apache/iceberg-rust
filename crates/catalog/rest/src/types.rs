@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 
+use iceberg::io::StorageCredential;
 use iceberg::spec::{Schema, SortOrder, TableMetadata, UnboundPartitionSpec};
 use iceberg::{
     Error, ErrorKind, Namespace, NamespaceIdent, TableIdent, TableRequirement, TableUpdate,
@@ -229,19 +230,6 @@ pub struct LoadTableResult {
     /// before falling back to credentials in the `config` field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storage_credentials: Option<Vec<StorageCredential>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-/// Storage credential for a specific location prefix.
-///
-/// Indicates a storage location prefix where the credential is relevant. Clients should
-/// choose the most specific prefix (by selecting the longest prefix) if several credentials
-/// of the same type are available.
-pub struct StorageCredential {
-    /// Storage location prefix where this credential is relevant
-    pub prefix: String,
-    /// Configuration map containing credential information
-    pub config: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
