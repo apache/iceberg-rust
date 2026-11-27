@@ -57,7 +57,7 @@ struct PopulatedDeleteFileIndex {
     global_equality_deletes: Vec<Arc<DeleteFileContext>>,
     eq_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
     pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>>,
-    pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>>,
+    pos_deletes_by_referenced_data_file: HashMap<String, Vec<Arc<DeleteFileContext>>>,
     // V3 deletion vectors, keyed by the data file they apply to (referenced_data_file). At most
     // one exists per data file per snapshot, and when one applies it supersedes any position
     // delete files for that data file, partition-scoped or path-scoped alike.
@@ -197,7 +197,7 @@ impl PopulatedDeleteFileIndex {
             HashMap::default();
         let mut pos_deletes_by_partition: HashMap<Struct, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();
-        let mut pos_deletes_by_path: HashMap<String, Vec<Arc<DeleteFileContext>>> =
+        let mut pos_deletes_by_referenced_data_file: HashMap<String, Vec<Arc<DeleteFileContext>>> =
             HashMap::default();
         let mut dvs_by_referenced_data_file: HashMap<String, Arc<DeleteFileContext>> =
             HashMap::default();
@@ -238,7 +238,10 @@ impl PopulatedDeleteFileIndex {
                     }
 
                     if let Some(path) = referenced_data_file(data_file) {
-                        pos_deletes_by_path.entry(path).or_default().push(arc_ctx);
+                        pos_deletes_by_referenced_data_file
+                            .entry(path)
+                            .or_default()
+                            .push(arc_ctx);
                     } else {
                         pos_deletes_by_partition
                             .entry(partition.clone())
@@ -265,7 +268,7 @@ impl PopulatedDeleteFileIndex {
             global_equality_deletes,
             eq_deletes_by_partition,
             pos_deletes_by_partition,
-            pos_deletes_by_path,
+            pos_deletes_by_referenced_data_file,
             dvs_by_referenced_data_file,
         })
     }
@@ -308,8 +311,9 @@ impl PopulatedDeleteFileIndex {
         // A deletion vector supersedes all position delete files for its data file, per the spec:
         // "readers ignore any position delete files that would otherwise match it, because the DV
         // subsumes them". An exact path match on referenced_data_file is sufficient proof of
-        // applicability, the same as for pos_deletes_by_path below, so this is checked before
-        // (and instead of) pos_deletes_by_partition and pos_deletes_by_path.
+        // applicability, the same as for pos_deletes_by_referenced_data_file below, so this is
+        // checked before (and instead of) pos_deletes_by_partition and
+        // pos_deletes_by_referenced_data_file.
         if let Some(dv) = self.dvs_by_referenced_data_file.get(data_file.file_path()) {
             let dv_data_file = dv.manifest_entry.data_file();
             // A file path belongs to exactly one partition for its lifetime, so an exact path
@@ -360,7 +364,10 @@ impl PopulatedDeleteFileIndex {
         // Position deletes indexed by the exact path of the data file they reference.
         // An exact path match is sufficient proof that the delete applies, so no
         // partition spec id check is performed.
-        if let Some(deletes) = self.pos_deletes_by_path.get(data_file.file_path()) {
+        if let Some(deletes) = self
+            .pos_deletes_by_referenced_data_file
+            .get(data_file.file_path())
+        {
             for delete in deletes
                 .iter()
                 // filter that returns true if the provided delete file's sequence number is **greater than or equal to** `seq_num`
