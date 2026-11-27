@@ -45,6 +45,7 @@
 
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use bytes::{Bytes, BytesMut};
 
@@ -91,6 +92,25 @@ pub(crate) fn stream_block_aad(aad_prefix: &[u8], block_index: u32) -> Vec<u8> {
     }
 }
 
+/// Checks that `header` is an AGS1 header declaring the supported plaintext block size.
+fn check_stream_header(header: &[u8; GCM_STREAM_HEADER_LENGTH as usize]) -> Result<()> {
+    let [magic @ .., b0, b1, b2, b3] = *header;
+    if magic != GCM_STREAM_MAGIC {
+        return Err(invalid_data!(
+            "Invalid AGS1 header: magic \"{}\" does not match \"AGS1\"",
+            magic.escape_ascii()
+        ));
+    }
+
+    let plain_block_size = u32::from_le_bytes([b0, b1, b2, b3]);
+    if plain_block_size != PLAIN_BLOCK_SIZE {
+        return Err(invalid_data!(
+            "Unsupported AGS1 block size: {plain_block_size} (expected {PLAIN_BLOCK_SIZE})"
+        ));
+    }
+    Ok(())
+}
+
 /// Transparent decryption of AGS1 stream-encrypted files.
 ///
 /// Implements the [`FileRead`] trait, providing random-access reads over
@@ -125,14 +145,15 @@ pub struct AesGcmFileRead {
     num_blocks: u64,
     /// Size of the last cipher block (may be smaller than `CIPHER_BLOCK_SIZE`).
     last_cipher_block_size: u32,
+    /// Whether a read has checked the AGS1 header, which no block authenticates.
+    header_checked: AtomicBool,
 }
 
 impl AesGcmFileRead {
     /// Creates a new `AesGcmFileRead` for decrypting an AGS1 stream.
     ///
     /// Computes the plaintext size and block layout from the encrypted file
-    /// length. No I/O is performed; header validation happens implicitly
-    /// when blocks are decrypted (GCM authentication will fail on corrupt data).
+    /// length. No I/O is performed; the first read checks the AGS1 header.
     ///
     /// # Arguments
     ///
@@ -184,6 +205,7 @@ impl AesGcmFileRead {
             plain_stream_size,
             num_blocks,
             last_cipher_block_size,
+            header_checked: AtomicBool::new(false),
         })
     }
 
@@ -257,9 +279,10 @@ impl FileRead for AesGcmFileRead {
     ///    requested data.
     ///
     /// 2. **Single I/O read** — calculates the contiguous byte range in the
-    ///    encrypted file that covers all needed blocks (including the 8-byte AGS1
-    ///    header offset, 12-byte nonces, and 16-byte GCM tags) and fetches them in
-    ///    one call to the inner `FileRead`.
+    ///    encrypted file that covers all needed blocks (including their 12-byte
+    ///    nonces and 16-byte GCM tags) and fetches them in one call to the inner
+    ///    `FileRead`. The first read also checks the 8-byte AGS1 header, fetched
+    ///    in the same call when block 0 is needed and separately otherwise.
     ///
     /// 3. **Decrypt per block** — iterates over each cipher block in the response,
     ///    decrypts it with AES-GCM using the per-block AAD (`aad_prefix || block_index`),
@@ -299,8 +322,25 @@ impl FileRead for AesGcmFileRead {
         let first_block = range.start / PLAIN_BLOCK_SIZE as u64;
         let last_block = range.end.saturating_sub(1) / PLAIN_BLOCK_SIZE as u64;
 
+        let check_header = !self.header_checked.load(Ordering::Relaxed);
+        if check_header && first_block != 0 {
+            let header = self.inner.read(0..GCM_STREAM_HEADER_LENGTH as u64).await?;
+            check_stream_header(header[..].try_into().map_err(|_| {
+                invalid_data!(
+                    "Invalid encrypted read length: expected {GCM_STREAM_HEADER_LENGTH} bytes, got {}",
+                    header.len()
+                )
+            })?)?;
+            self.header_checked.store(true, Ordering::Relaxed);
+        }
+        let header_length = if check_header && first_block == 0 {
+            GCM_STREAM_HEADER_LENGTH as u64
+        } else {
+            0
+        };
+
         // Read all needed encrypted blocks in a single I/O call
-        let encrypted_start = Self::encrypted_block_offset(first_block);
+        let encrypted_start = Self::encrypted_block_offset(first_block) - header_length;
         let encrypted_end =
             Self::encrypted_block_offset(last_block) + self.cipher_block_size(last_block) as u64;
 
@@ -312,6 +352,16 @@ impl FileRead for AesGcmFileRead {
                 all_encrypted.len()
             ));
         }
+        let all_encrypted = if header_length != 0 {
+            let (header, blocks) = all_encrypted
+                .split_first_chunk()
+                .ok_or_else(|| invalid_data!("Encrypted read is shorter than the AGS1 header"))?;
+            check_stream_header(header)?;
+            self.header_checked.store(true, Ordering::Relaxed);
+            blocks
+        } else {
+            &all_encrypted[..]
+        };
 
         // Decrypt each block and extract the requested plaintext range
         let result_len = (range.end - range.start) as usize;
@@ -520,6 +570,8 @@ impl FileWrite for AesGcmFileWrite {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     /// Encrypts plaintext into AGS1 format for testing.
@@ -932,6 +984,47 @@ mod tests {
 
         let result = reader.read(0..plaintext.len() as u64).await;
         assert!(result.is_err(), "Decryption with wrong key should fail");
+    }
+
+    const BAD_MAGIC: ([u8; 8], &str) = (
+        *b"AGS2\x00\x00\x10\x00",
+        "Invalid AGS1 header: magic \"AGS2\" does not match \"AGS1\"",
+    );
+    const UNSUPPORTED_BLOCK_SIZE: ([u8; 8], &str) = (
+        *b"AGS1\x00\x02\x00\x00",
+        "Unsupported AGS1 block size: 512 (expected 1048576)",
+    );
+
+    #[rstest]
+    #[case::empty_stream(0, 0..0)]
+    #[case::first_block(14, 0..14)]
+    #[case::past_first_block(
+        PLAIN_BLOCK_SIZE as usize + 10,
+        PLAIN_BLOCK_SIZE as u64..PLAIN_BLOCK_SIZE as u64 + 10
+    )]
+    #[tokio::test]
+    async fn test_invalid_header_is_rejected(
+        #[case] plaintext_length: usize,
+        #[case] range: Range<u64>,
+        #[values(BAD_MAGIC, UNSUPPORTED_BLOCK_SIZE)] tampered: ([u8; 8], &'static str),
+    ) {
+        let (header, message) = tampered;
+        let key = b"0123456789abcdef";
+        let aad_prefix = b"test-aad-prefix!";
+        let mut encrypted = encrypt_ags1(&vec![7; plaintext_length], &make_cipher(key), aad_prefix);
+        encrypted[..GCM_STREAM_HEADER_LENGTH as usize].copy_from_slice(&header);
+        let encrypted_length = encrypted.len() as u64;
+        let reader = AesGcmFileRead::new(
+            memory_reader(encrypted),
+            Arc::new(make_cipher(key)),
+            aad_prefix.as_slice().into(),
+            encrypted_length,
+        )
+        .unwrap();
+
+        let err = reader.read(range).await.unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::DataInvalid);
+        assert_eq!(err.message(), message);
     }
 
     #[tokio::test]
