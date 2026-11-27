@@ -27,6 +27,18 @@ impl core::fmt::Debug for iceberg_catalog_rest::PayloadHashMode
 pub fn iceberg_catalog_rest::PayloadHashMode::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::Copy for iceberg_catalog_rest::PayloadHashMode
 impl core::marker::StructuralPartialEq for iceberg_catalog_rest::PayloadHashMode
+#[non_exhaustive] pub enum iceberg_catalog_rest::UnauthorizedAction
+pub iceberg_catalog_rest::UnauthorizedAction::Fail
+pub iceberg_catalog_rest::UnauthorizedAction::Retry
+impl core::clone::Clone for iceberg_catalog_rest::UnauthorizedAction
+pub fn iceberg_catalog_rest::UnauthorizedAction::clone(&self) -> iceberg_catalog_rest::UnauthorizedAction
+impl core::cmp::Eq for iceberg_catalog_rest::UnauthorizedAction
+impl core::cmp::PartialEq for iceberg_catalog_rest::UnauthorizedAction
+pub fn iceberg_catalog_rest::UnauthorizedAction::eq(&self, other: &iceberg_catalog_rest::UnauthorizedAction) -> bool
+impl core::fmt::Debug for iceberg_catalog_rest::UnauthorizedAction
+pub fn iceberg_catalog_rest::UnauthorizedAction::fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for iceberg_catalog_rest::UnauthorizedAction
+impl core::marker::StructuralPartialEq for iceberg_catalog_rest::UnauthorizedAction
 pub struct iceberg_catalog_rest::CommitTableRequest
 pub iceberg_catalog_rest::CommitTableRequest::identifier: core::option::Option<iceberg::catalog::TableIdent>
 pub iceberg_catalog_rest::CommitTableRequest::requirements: alloc::vec::Vec<iceberg::catalog::TableRequirement>
@@ -409,3 +421,4 @@ pub fn iceberg_catalog_rest::OAuth2Manager::contextual_session<'life0, 'life1, '
 pub fn iceberg_catalog_rest::OAuth2Manager::init_session<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, client: &'life1 iceberg_catalog_rest::HttpClient, props: &'life2 std::collections::hash::map::HashMap<alloc::string::String, alloc::string::String>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<alloc::boxed::Box<dyn iceberg_catalog_rest::AuthSession>>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
 pub trait iceberg_catalog_rest::AuthSession: core::fmt::Debug + core::marker::Send + core::marker::Sync
 pub fn iceberg_catalog_rest::AuthSession::authenticate<'life0, 'life1, 'async_trait>(&'life0 self, request: &'life1 mut iceberg_catalog_rest::HttpRequest) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<()>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn iceberg_catalog_rest::AuthSession::on_unauthorized<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, request: &'life1 iceberg_catalog_rest::HttpRequest, response: &'life2 iceberg_catalog_rest::HttpResponse) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = iceberg::error::Result<iceberg_catalog_rest::UnauthorizedAction>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait

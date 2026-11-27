@@ -24,7 +24,7 @@ use reqwest::{Client, IntoUrl, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 
 use crate::RestCatalogConfig;
-use crate::auth::AuthSession;
+use crate::auth::{AuthSession, UnauthorizedAction};
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
 
@@ -144,26 +144,76 @@ impl HttpClient {
             .headers(self.extra_headers.clone())
     }
 
-    /// Sends `request` to the Iceberg REST catalog, authenticated by this
-    /// client's session.
+    /// Sends `request` to the Iceberg REST catalog, authenticated by
+    /// `auth_session`.
+    ///
+    /// When the catalog answers `401` or `419`, the session's
+    /// [`AuthSession::on_unauthorized`] decides whether the request is
+    /// authenticated again and sent once more.
     pub(crate) async fn query_catalog(
         &self,
         auth_session: &dyn AuthSession,
-        mut request: HttpRequest,
+        request: HttpRequest,
     ) -> Result<HttpResponse> {
-        // Authenticate first, then apply extra headers, so a configured
-        // `header.authorization` keeps overriding a token (unchanged behavior).
-        auth_session.authenticate(&mut request).await?;
+        // Sending consumes the request, so the copies a rejection needs are
+        // made up front. A copy shares the body's buffer and copies only the
+        // URL and headers. `None` for a streaming body, which cannot be sent
+        // twice.
+        let unauthenticated = request.try_clone();
+        let request = self.authenticate(auth_session, request).await?;
+        // Paired with the request as sent, which the session inspects.
+        let retryable = unauthenticated
+            .and_then(|unauthenticated| Some((unauthenticated, request.try_clone()?)));
+        let response = self.send(request).await?;
 
-        let mut request = request.into_inner();
+        let Some((unauthenticated, sent)) = retryable else {
+            return Ok(response);
+        };
+        if !rejects_authentication(response.status()) {
+            return Ok(response);
+        }
+        let action = auth_session
+            .on_unauthorized(&sent, &response)
+            .await
+            .map_err(|err| err.with_context("status", response.status().to_string()))?;
+        match action {
+            UnauthorizedAction::Fail => Ok(response),
+            UnauthorizedAction::Retry => {
+                let request = self.authenticate(auth_session, unauthenticated).await?;
+                self.send(request).await
+            }
+        }
+    }
+
+    /// Authenticates `request` with `auth_session` and applies the extra
+    /// headers.
+    async fn authenticate(
+        &self,
+        auth_session: &dyn AuthSession,
+        mut request: HttpRequest,
+    ) -> Result<HttpRequest> {
+        // Authenticate first, then apply extra headers, so a configured
+        // `header.authorization` keeps overriding a token.
+        auth_session.authenticate(&mut request).await?;
         request.headers_mut().extend(self.extra_headers.clone());
-        HttpResponse::read(self.client.execute(request).await?).await
+        Ok(request)
+    }
+
+    async fn send(&self, request: HttpRequest) -> Result<HttpResponse> {
+        HttpResponse::read(self.client.execute(request.into_inner()).await?).await
     }
 
     /// Returns whether header redaction is disabled for this client.
     pub(crate) fn disable_header_redaction(&self) -> bool {
         self.disable_header_redaction
     }
+}
+
+/// Whether `status` rejects a request's authentication: `401`, or `419`, which
+/// the Iceberg REST spec allows for an expired token (`http` names no constant
+/// for it).
+fn rejects_authentication(status: http::StatusCode) -> bool {
+    status == http::StatusCode::UNAUTHORIZED || status.as_u16() == 419
 }
 
 /// Deserializes a catalog response into the given [`DeserializeOwned`] type.
@@ -253,7 +303,227 @@ pub(crate) fn deserialize_unexpected_catalog_error(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+
     use super::*;
+
+    /// Appends `x-attempt: <n>` on its n-th authentication and answers each
+    /// rejection with `answer`, recording the `x-attempt` values of the
+    /// requests it is handed.
+    #[derive(Debug)]
+    struct RecordingSession {
+        attempts: AtomicUsize,
+        answer: fn() -> Result<UnauthorizedAction>,
+        rejected: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl RecordingSession {
+        fn answering(answer: fn() -> Result<UnauthorizedAction>) -> Self {
+            Self {
+                attempts: AtomicUsize::new(0),
+                answer,
+                rejected: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl AuthSession for RecordingSession {
+        async fn authenticate(&self, request: &mut HttpRequest) -> Result<()> {
+            let attempt = self.attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            request.headers_mut().append("x-attempt", attempt.into());
+            Ok(())
+        }
+
+        async fn on_unauthorized(
+            &self,
+            request: &HttpRequest,
+            _response: &HttpResponse,
+        ) -> Result<UnauthorizedAction> {
+            self.rejected.lock().unwrap().push(
+                request
+                    .headers()
+                    .get_all("x-attempt")
+                    .iter()
+                    .map(|value| value.to_str().unwrap().to_string())
+                    .collect(),
+            );
+            (self.answer)()
+        }
+    }
+
+    fn test_client(server: &mockito::ServerGuard) -> HttpClient {
+        HttpClient::new(&RestCatalogConfig::builder().uri(server.url()).build()).unwrap()
+    }
+
+    /// `GET /v1/namespaces` answering with `status`, expecting `hits` requests.
+    async fn rejecting_mock(
+        server: &mut mockito::ServerGuard,
+        status: usize,
+        hits: usize,
+    ) -> mockito::Mock {
+        server
+            .mock("GET", "/v1/namespaces")
+            .with_status(status)
+            .expect(hits)
+            .create_async()
+            .await
+    }
+
+    fn list_namespaces(client: &HttpClient, server: &mockito::ServerGuard) -> HttpRequest {
+        HttpRequest::build(client.request(Method::GET, format!("{}/v1/namespaces", server.url())))
+            .unwrap()
+    }
+
+    /// The catalog rejects the first attempt with `status`: the session is
+    /// asked, and the request is authenticated again and sent once more.
+    async fn assert_rejected_request_is_sent_once_more(status: usize) {
+        let mut server = mockito::Server::new_async().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen_by_server = seen.clone();
+        let mock = server
+            .mock("POST", "/v1/namespaces")
+            .match_body(r#"{"namespace": ["ns"]}"#)
+            .with_status_code_from_request(move |request| {
+                let attempts: Vec<String> = request
+                    .header("x-attempt")
+                    .iter()
+                    .map(|value| value.to_str().unwrap().to_string())
+                    .collect();
+                let status = if attempts == ["2"] { 200 } else { status };
+                seen_by_server.lock().unwrap().push(attempts);
+                status
+            })
+            .expect(2)
+            .create_async()
+            .await;
+        let client = test_client(&server);
+        let session = RecordingSession::answering(|| Ok(UnauthorizedAction::Retry));
+
+        let request = HttpRequest::build(
+            client
+                .request(Method::POST, format!("{}/v1/namespaces", server.url()))
+                .body(r#"{"namespace": ["ns"]}"#),
+        )
+        .unwrap();
+        let response = client.query_catalog(&session, request).await.unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::OK);
+        // The second attempt is authenticated from the request as it was
+        // before the first authentication.
+        assert_eq!(*seen.lock().unwrap(), vec![vec!["1"], vec!["2"]]);
+        assert_eq!(*session.rejected.lock().unwrap(), vec![vec!["1"]]);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_unauthorized_request_is_authenticated_again_and_sent_once_more() {
+        assert_rejected_request_is_sent_once_more(401).await;
+    }
+
+    #[tokio::test]
+    async fn test_authentication_timeout_request_is_authenticated_again_and_sent_once_more() {
+        assert_rejected_request_is_sent_once_more(419).await;
+    }
+
+    #[tokio::test]
+    async fn test_second_rejection_is_returned_without_asking_again() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = rejecting_mock(&mut server, 401, 2).await;
+        let client = test_client(&server);
+        let session = RecordingSession::answering(|| Ok(UnauthorizedAction::Retry));
+
+        let response = client
+            .query_catalog(&session, list_namespaces(&client, &server))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+        assert_eq!(*session.rejected.lock().unwrap(), vec![vec!["1"]]);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_rejected_request_is_returned_by_a_session_without_hook() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = rejecting_mock(&mut server, 401, 1).await;
+        let client = test_client(&server);
+
+        let response = client
+            .query_catalog(&crate::auth::NoopSession, list_namespaces(&client, &server))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_forbidden_request_is_returned_without_hook() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = rejecting_mock(&mut server, 403, 1).await;
+        let client = test_client(&server);
+        let session = RecordingSession::answering(|| Ok(UnauthorizedAction::Retry));
+
+        let response = client
+            .query_catalog(&session, list_namespaces(&client, &server))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+        assert_eq!(*session.rejected.lock().unwrap(), Vec::<Vec<String>>::new());
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_hook_error_is_returned_in_place_of_the_response() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = rejecting_mock(&mut server, 401, 1).await;
+        let client = test_client(&server);
+        let session =
+            RecordingSession::answering(|| Err(Error::new(ErrorKind::Unexpected, "hook failed")));
+
+        let err = client
+            .query_catalog(&session, list_namespaces(&client, &server))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Unexpected, context: { status: 401 Unauthorized } => hook failed"
+        );
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_rejected_streaming_request_is_returned_without_hook() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/namespaces")
+            .with_status(401)
+            .expect(1)
+            .create_async()
+            .await;
+        let client = test_client(&server);
+        let session = RecordingSession::answering(|| Ok(UnauthorizedAction::Retry));
+
+        let request = HttpRequest::build(
+            client
+                .request(Method::POST, format!("{}/v1/namespaces", server.url()))
+                .body(reqwest::Body::wrap_stream(futures::stream::once(async {
+                    Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"{}"))
+                }))),
+        )
+        .unwrap();
+        let response = client.query_catalog(&session, request).await.unwrap();
+
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+        assert_eq!(*session.rejected.lock().unwrap(), Vec::<Vec<String>>::new());
+        mock.assert_async().await;
+    }
 
     #[tokio::test]
     async fn test_a_truncated_body_error_names_the_url() {

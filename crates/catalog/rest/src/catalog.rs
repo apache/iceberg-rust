@@ -1904,6 +1904,7 @@ impl RestSessionCatalogBuilder {
 mod tests {
     use std::fs::File;
     use std::io::BufReader;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use chrono::{TimeZone, Utc};
@@ -2923,6 +2924,112 @@ mod tests {
 
         oauth_mock.assert_async().await;
         assert!(bearers.iter().all(|b| b == "Bearer tok-once"));
+    }
+
+    /// Token endpoint issuing `tok-1`, `tok-2`, ... in turn, expecting
+    /// `exchanges` requests.
+    async fn create_numbered_oauth_mock(server: &mut ServerGuard, exchanges: usize) -> Mock {
+        let issued = Arc::new(AtomicUsize::new(0));
+        server
+            .mock("POST", "/v1/oauth/tokens")
+            .with_status(200)
+            .with_body_from_request(move |_| {
+                let n = issued.fetch_add(1, Ordering::SeqCst) + 1;
+                format!(r#"{{"access_token": "tok-{n}", "token_type": "Bearer"}}"#).into_bytes()
+            })
+            .expect(exchanges)
+            .create_async()
+            .await
+    }
+
+    /// `GET /v1/namespaces` answering requests that carry `authorization` with
+    /// `status`, expecting `hits` of them.
+    async fn create_list_namespaces_mock(
+        server: &mut ServerGuard,
+        authorization: &str,
+        status: usize,
+        hits: usize,
+    ) -> Mock {
+        let body = if status == 200 {
+            r#"{"namespaces": []}"#.to_string()
+        } else {
+            format!(
+                r#"{{"error": {{"message": "Rejected", "type": "NotAuthorizedException", "code": {status}}}}}"#
+            )
+        };
+        server
+            .mock("GET", "/v1/namespaces")
+            .match_header("authorization", authorization)
+            .with_status(status)
+            .with_body(body)
+            .expect(hits)
+            .create_async()
+            .await
+    }
+
+    fn credential_catalog(server: &ServerGuard) -> RestSessionCatalog {
+        session_catalog(
+            RestCatalogConfig::builder()
+                .uri(server.url())
+                .props(HashMap::from([(
+                    "credential".to_string(),
+                    "client1:secret1".to_string(),
+                )]))
+                .build(),
+        )
+    }
+
+    #[tokio::test]
+    async fn test_unauthorized_client_credentials_token_is_replaced() {
+        // The catalog rejects the exchanged token: the session exchanges the
+        // credential again and the request succeeds with the new token.
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let token_mock = create_numbered_oauth_mock(&mut server, 2).await;
+        let rejected_mock = create_list_namespaces_mock(&mut server, "Bearer tok-1", 401, 1).await;
+        let accepted_mock = create_list_namespaces_mock(&mut server, "Bearer tok-2", 200, 1).await;
+
+        let namespaces = credential_catalog(&server)
+            .list_namespaces(&SessionContext::empty(), None)
+            .await
+            .unwrap();
+
+        assert_eq!(namespaces, Vec::<NamespaceIdent>::new());
+        config_mock.assert_async().await;
+        token_mock.assert_async().await;
+        rejected_mock.assert_async().await;
+        accepted_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_unauthorized_requests_exchange_one_new_token() {
+        // Each rejected request compares its token with the cached one, so
+        // only the first rejection drops it and one exchange replaces it.
+        const REQUESTS: usize = 8;
+        let mut server = Server::new_async().await;
+        let config_mock = create_config_mock(&mut server).await;
+        let token_mock = create_numbered_oauth_mock(&mut server, 2).await;
+        let rejected_mock =
+            create_list_namespaces_mock(&mut server, "Bearer tok-1", 401, REQUESTS).await;
+        let accepted_mock =
+            create_list_namespaces_mock(&mut server, "Bearer tok-2", 200, REQUESTS).await;
+
+        let catalog = credential_catalog(&server);
+        // The handshake caches `tok-1` before the requests start.
+        catalog.client().await.unwrap();
+        let context = SessionContext::empty();
+        let results = futures::future::join_all(
+            (0..REQUESTS).map(|_| catalog.list_namespaces(&context, None)),
+        )
+        .await;
+
+        let namespaces: Vec<Vec<NamespaceIdent>> =
+            results.into_iter().map(|result| result.unwrap()).collect();
+        assert_eq!(namespaces, vec![Vec::<NamespaceIdent>::new(); REQUESTS]);
+        config_mock.assert_async().await;
+        token_mock.assert_async().await;
+        rejected_mock.assert_async().await;
+        accepted_mock.assert_async().await;
     }
 
     #[tokio::test]
