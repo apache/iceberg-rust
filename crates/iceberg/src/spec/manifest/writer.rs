@@ -75,6 +75,7 @@ pub struct ManifestWriterBuilder {
     snapshot_id: Option<i64>,
     schema: SchemaRef,
     partition_spec: PartitionSpec,
+    header_metadata: Vec<(String, String)>,
 }
 
 impl ManifestWriterBuilder {
@@ -92,6 +93,7 @@ impl ManifestWriterBuilder {
             snapshot_id,
             schema,
             partition_spec,
+            header_metadata: Vec::new(),
         }
     }
 
@@ -111,7 +113,23 @@ impl ManifestWriterBuilder {
             snapshot_id,
             schema,
             partition_spec,
+            header_metadata: Vec::new(),
         })
+    }
+
+    /// Adds `key` and `value` to the manifest file's Avro header metadata, beside the keys
+    /// Iceberg writes.
+    ///
+    /// # Errors
+    ///
+    /// Writing the manifest fails if `key` is one Iceberg writes or starts with `avro.`.
+    pub fn with_header_metadata(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.header_metadata.push((key.into(), value.into()));
+        self
     }
 
     /// Build a [`ManifestWriter`] for format version 1.
@@ -123,7 +141,14 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V1)
             .content(ManifestContentType::Data)
             .build();
-        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
+        ManifestWriter::new(
+            self.output,
+            self.location,
+            self.snapshot_id,
+            metadata,
+            None,
+            self.header_metadata,
+        )
     }
 
     /// Build a [`ManifestWriter`] for format version 2, data content.
@@ -136,7 +161,14 @@ impl ManifestWriterBuilder {
             .content(ManifestContentType::Data)
             .build();
 
-        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
+        ManifestWriter::new(
+            self.output,
+            self.location,
+            self.snapshot_id,
+            metadata,
+            None,
+            self.header_metadata,
+        )
     }
 
     /// Build a [`ManifestWriter`] for format version 2, deletes content.
@@ -148,7 +180,14 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V2)
             .content(ManifestContentType::Deletes)
             .build();
-        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
+        ManifestWriter::new(
+            self.output,
+            self.location,
+            self.snapshot_id,
+            metadata,
+            None,
+            self.header_metadata,
+        )
     }
 
     /// Build a [`ManifestWriter`] for format version 2, data content.
@@ -168,6 +207,7 @@ impl ManifestWriterBuilder {
             // First row id is assigned by the [`ManifestListWriter`] when the manifest
             // is added to the list.
             None,
+            self.header_metadata,
         )
     }
 
@@ -180,7 +220,14 @@ impl ManifestWriterBuilder {
             .format_version(FormatVersion::V3)
             .content(ManifestContentType::Deletes)
             .build();
-        ManifestWriter::new(self.output, self.location, self.snapshot_id, metadata, None)
+        ManifestWriter::new(
+            self.output,
+            self.location,
+            self.snapshot_id,
+            metadata,
+            None,
+            self.header_metadata,
+        )
     }
 }
 
@@ -203,8 +250,20 @@ pub struct ManifestWriter {
 
     manifest_entries: Vec<ManifestEntry>,
 
+    header_metadata: Vec<(String, String)>,
+
     metadata: ManifestMetadata,
 }
+
+/// The header metadata keys Iceberg writes.
+const ICEBERG_HEADER_KEYS: [&str; 6] = [
+    "schema",
+    "schema-id",
+    "partition-spec",
+    "partition-spec-id",
+    "format-version",
+    "content",
+];
 
 impl ManifestWriter {
     /// Create a new manifest writer.
@@ -214,6 +273,7 @@ impl ManifestWriter {
         snapshot_id: Option<i64>,
         metadata: ManifestMetadata,
         first_row_id: Option<u64>,
+        header_metadata: Vec<(String, String)>,
     ) -> Self {
         Self {
             output,
@@ -228,6 +288,7 @@ impl ManifestWriter {
             first_row_id,
             min_seq_num: None,
             manifest_entries: Vec::new(),
+            header_metadata,
             metadata,
         }
     }
@@ -463,6 +524,14 @@ impl ManifestWriter {
                 avro_writer
                     .add_user_metadata("content".to_string(), self.metadata.content.to_string())?;
             }
+        }
+        for (key, value) in std::mem::take(&mut self.header_metadata) {
+            if ICEBERG_HEADER_KEYS.contains(&key.as_str()) {
+                return Err(invalid_data!(
+                    "Manifest header metadata key {key} is written by Iceberg"
+                ));
+            }
+            avro_writer.add_user_metadata(key, value)?;
         }
 
         let partition_summary = self.construct_partition_summaries(&partition_type)?;
@@ -941,6 +1010,61 @@ mod tests {
             )),
         ])
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_write_manifest_with_header_metadata() {
+        let bs = write_manifest_with_header_metadata("writer.order", "partition-v1")
+            .await
+            .unwrap();
+
+        let reader = AvroReader::new(&bs[..]).unwrap();
+        assert_eq!(
+            reader.user_metadata().get("writer.order"),
+            Some(&b"partition-v1".to_vec())
+        );
+        assert_eq!(Manifest::parse_avro(&bs).unwrap().entries().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_write_manifest_refuses_reserved_header_metadata_keys() {
+        for key in ["content", "schema", "avro.codec"] {
+            let result = write_manifest_with_header_metadata(key, "x").await;
+
+            assert!(result.is_err(), "{key} was accepted");
+        }
+    }
+
+    /// Writes a manifest with one added data file and `key`=`value` in its header
+    /// metadata, and returns the file's bytes.
+    async fn write_manifest_with_header_metadata(key: &str, value: &str) -> Result<Vec<u8>> {
+        let schema = Arc::new(Schema::builder().build().unwrap());
+        let partition_spec = PartitionSpec::builder(schema.clone()).build().unwrap();
+        let tmp_dir = TempDir::new().unwrap();
+        let path = tmp_dir.path().join("manifest.avro");
+        let output_file = FileIO::new_with_fs()
+            .new_output(path.to_str().unwrap())
+            .unwrap();
+        let mut writer = ManifestWriterBuilder::new(output_file, Some(1), schema, partition_spec)
+            .with_header_metadata(key, value)
+            .build_v2_data();
+        writer
+            .add_file(
+                DataFileBuilder::default()
+                    .content(DataContentType::Data)
+                    .file_path("s3://bucket/table/data/a.parquet".to_string())
+                    .file_format(DataFileFormat::Parquet)
+                    .partition(Struct::empty())
+                    .record_count(1)
+                    .file_size_in_bytes(1)
+                    .partition_spec_id(0)
+                    .build()
+                    .unwrap(),
+                1,
+            )
+            .unwrap();
+        writer.write_manifest_file().await?;
+        Ok(fs::read(&path).unwrap())
     }
 
     /// Writes a manifest with one added data file and returns the field names
