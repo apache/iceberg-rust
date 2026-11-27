@@ -17,28 +17,120 @@
 
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use http::StatusCode;
 use iceberg::sensitive::SensitiveString;
 use iceberg::{Error, ErrorKind, Result};
+use iceberg_property_macro::Properties;
 use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
 use super::{AuthManager, AuthSession, HttpRequest};
-use crate::catalog::{
-    REST_CATALOG_PROP_URI, RestCatalogConfig, credential_from_props, default_token_endpoint,
-    explicit_headers_from_props,
-};
 use crate::client::HttpClient;
+use crate::properties::{
+    REST_CATALOG_PROP_AUDIENCE, REST_CATALOG_PROP_CREDENTIAL, REST_CATALOG_PROP_OAUTH2_SERVER_URI,
+    REST_CATALOG_PROP_RESOURCE, REST_CATALOG_PROP_SCOPE, REST_CATALOG_PROP_TOKEN,
+    REST_CATALOG_PROP_URI, RestHeaders,
+};
 use crate::types::{ErrorResponse, TokenResponse};
+
+// PartialEq supports whole-configuration assertions in parsing tests.
+#[derive(Debug, Properties, PartialEq)]
+struct OAuth2Properties {
+    #[property(key = REST_CATALOG_PROP_URI, default = "", getter)]
+    uri: String,
+    /// Configured bearer token.
+    #[property(key = REST_CATALOG_PROP_TOKEN, default = None, getter)]
+    token: Option<SensitiveString>,
+    /// Configured OAuth2 client ID and secret.
+    #[property(key = REST_CATALOG_PROP_CREDENTIAL, default = None, getter)]
+    credential: Option<OAuth2Credential>,
+    /// Explicit OAuth2 token endpoint.
+    #[property(key = REST_CATALOG_PROP_OAUTH2_SERVER_URI, default = None, getter)]
+    oauth2_server_uri: Option<String>,
+    /// Explicit OAuth2 scope.
+    #[property(key = REST_CATALOG_PROP_SCOPE, default = None, getter)]
+    scope: Option<String>,
+    /// OAuth2 audience.
+    #[property(key = REST_CATALOG_PROP_AUDIENCE, default = None, getter)]
+    audience: Option<String>,
+    /// OAuth2 resource.
+    #[property(key = REST_CATALOG_PROP_RESOURCE, default = None, getter)]
+    resource: Option<String>,
+}
+
+impl OAuth2Properties {
+    fn default_token_endpoint(&self) -> String {
+        format!("{}/v1/oauth/tokens", self.uri())
+    }
+
+    fn extra_oauth_params(&self) -> HashMap<String, String> {
+        let mut params = self.explicit_oauth_params();
+        params
+            .entry(REST_CATALOG_PROP_SCOPE.to_string())
+            .or_insert_with(|| "catalog".to_string());
+        params
+    }
+
+    fn explicit_oauth_params(&self) -> HashMap<String, String> {
+        [
+            (REST_CATALOG_PROP_SCOPE, self.scope()),
+            (REST_CATALOG_PROP_AUDIENCE, self.audience()),
+            (REST_CATALOG_PROP_RESOURCE, self.resource()),
+        ]
+        .into_iter()
+        .filter_map(|(key, value)| value.as_ref().map(|value| (key.to_string(), value.clone())))
+        .collect()
+    }
+}
+
+/// OAuth2 client credentials.
+// PartialEq supports comparing credentials in property parsing tests.
+#[derive(Clone, Debug, PartialEq)]
+struct OAuth2Credential {
+    client_id: Option<String>,
+    client_secret: SensitiveString,
+}
+
+impl OAuth2Credential {
+    /// Creates a credential from a client ID and secret.
+    fn new(client_id: Option<String>, client_secret: SensitiveString) -> Self {
+        Self {
+            client_id,
+            client_secret,
+        }
+    }
+
+    /// Returns the optional client ID.
+    fn client_id(&self) -> Option<&str> {
+        self.client_id.as_deref()
+    }
+
+    /// Returns the client secret.
+    fn client_secret(&self) -> &SensitiveString {
+        &self.client_secret
+    }
+}
+
+impl FromStr for OAuth2Credential {
+    type Err = std::convert::Infallible;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(match value.split_once(':') {
+            Some((id, secret)) => Self::new(Some(id.to_string()), secret.to_string().into()),
+            None => Self::new(None, value.to_string().into()),
+        })
+    }
+}
 
 /// The manager's own OAuth2 options, which properties are merged onto.
 struct OAuth2Params {
     extra_headers: HeaderMap,
     token_endpoint: String,
-    credential: Option<(Option<String>, SensitiveString)>,
+    credential: Option<OAuth2Credential>,
     extra_oauth_params: HashMap<String, String>,
 }
 
@@ -87,7 +179,7 @@ impl OAuth2Manager {
 
     /// Sets the client credential exchanged for a token at the token endpoint.
     pub fn with_credential(mut self, client_id: Option<String>, client_secret: String) -> Self {
-        self.init_params.credential = Some((client_id, client_secret.into()));
+        self.init_params.credential = Some(OAuth2Credential::new(client_id, client_secret.into()));
         self
     }
 
@@ -105,16 +197,30 @@ impl OAuth2Manager {
         self
     }
 
-    pub(crate) fn from_config(cfg: &RestCatalogConfig) -> Result<Self> {
+    pub(crate) fn is_configured(props: &HashMap<String, String>) -> bool {
+        [
+            REST_CATALOG_PROP_TOKEN,
+            REST_CATALOG_PROP_CREDENTIAL,
+            REST_CATALOG_PROP_OAUTH2_SERVER_URI,
+        ]
+        .iter()
+        .any(|key| props.contains_key(*key))
+    }
+
+    pub(crate) fn from_properties(props: &HashMap<String, String>) -> Result<Self> {
+        let cfg = OAuth2Properties::from_properties(props)?;
         Ok(Self {
-            token: Arc::new(Mutex::new(cfg.token().map(SensitiveString::from))),
+            token: Arc::new(Mutex::new(cfg.token().clone())),
             init_params: OAuth2Params {
-                extra_headers: cfg.extra_headers()?,
-                token_endpoint: cfg.get_token_endpoint(),
-                credential: cfg.credential().map(|(id, secret)| (id, secret.into())),
+                extra_headers: RestHeaders::from_properties(props)?.extra_headers(),
+                token_endpoint: cfg
+                    .oauth2_server_uri()
+                    .clone()
+                    .unwrap_or_else(|| cfg.default_token_endpoint()),
+                credential: cfg.credential().clone(),
                 extra_oauth_params: cfg.extra_oauth_params(),
             },
-            endpoint_is_default: cfg.explicit_oauth2_server_uri().is_none(),
+            endpoint_is_default: cfg.oauth2_server_uri().is_none(),
         })
     }
 }
@@ -156,34 +262,31 @@ impl OAuth2Manager {
         client: &HttpClient,
         props: &HashMap<String, String>,
     ) -> Result<OAuth2Session> {
+        let properties = OAuth2Properties::from_properties(props)?;
         // The properties may carry a new token (or restate the user's).
-        if let Some(token) = props.get("token") {
-            *self.token.lock().await = Some(SensitiveString::from(token.clone()));
+        if let Some(token) = properties.token() {
+            *self.token.lock().await = Some(token.clone());
         }
 
         let mut extra_headers = self.init_params.extra_headers.clone();
-        extra_headers.extend(explicit_headers_from_props(props)?);
+        extra_headers.extend(RestHeaders::from_properties(props)?.0);
 
         let mut extra_oauth_params = self.init_params.extra_oauth_params.clone();
-        for key in ["scope", "audience", "resource"] {
-            if let Some(value) = props.get(key) {
-                extra_oauth_params.insert(key.to_string(), value.to_string());
-            }
-        }
+        extra_oauth_params.extend(properties.explicit_oauth_params());
 
-        let token_endpoint = match props.get("oauth2-server-uri") {
+        let token_endpoint = match properties.oauth2_server_uri() {
             Some(uri) if !uri.is_empty() => uri.clone(),
-            // A default endpoint follows the merged catalog URI (which
-            // `/v1/config` may have overridden); explicit ones are kept.
-            _ if self.endpoint_is_default => props
-                .get(REST_CATALOG_PROP_URI)
-                .map(|uri| default_token_endpoint(uri))
-                .unwrap_or_else(|| self.init_params.token_endpoint.clone()),
+            // A default endpoint follows the merged catalog URI; an injected
+            // manager keeps its explicit endpoint.
+            _ if self.endpoint_is_default && props.contains_key(REST_CATALOG_PROP_URI) => {
+                properties.default_token_endpoint()
+            }
             _ => self.init_params.token_endpoint.clone(),
         };
 
-        let credential = credential_from_props(props)
-            .map(|(id, secret)| (id, secret.into()))
+        let credential = properties
+            .credential()
+            .clone()
             .or_else(|| self.init_params.credential.clone());
 
         Ok(OAuth2Session {
@@ -247,7 +350,7 @@ enum TokenSource {
 
 struct ClientCredentialsConfig {
     client: HttpClient,
-    credential: (Option<String>, SensitiveString),
+    credential: OAuth2Credential,
     token_endpoint: String,
     extra_headers: HeaderMap,
     extra_oauth_params: HashMap<String, String>,
@@ -265,14 +368,12 @@ impl Debug for OAuth2Session {
 
 impl ClientCredentialsConfig {
     async fn exchange_credential_for_token(&self) -> Result<String> {
-        let (client_id, client_secret) = &self.credential;
-
         let mut params = HashMap::with_capacity(4);
         params.insert("grant_type", "client_credentials");
-        if let Some(client_id) = client_id {
+        if let Some(client_id) = self.credential.client_id() {
             params.insert("client_id", client_id);
         }
-        params.insert("client_secret", client_secret.expose());
+        params.insert("client_secret", self.credential.client_secret().expose());
         params.extend(
             self.extra_oauth_params
                 .iter()
@@ -348,15 +449,117 @@ mod tests {
     use reqwest::Client;
 
     use super::*;
-    use crate::RestCatalogConfig;
+    use crate::catalog::RestCatalogTestFixture;
 
     fn test_client() -> HttpClient {
-        HttpClient::new(
-            &RestCatalogConfig::builder()
-                .uri("http://localhost".to_string())
-                .build(),
-        )
-        .unwrap()
+        RestCatalogTestFixture::builder()
+            .uri("http://localhost".to_string())
+            .build()
+            .http_client()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_oauth_properties() {
+        let properties = HashMap::from([
+            (REST_CATALOG_PROP_URI, "http://localhost:8181"),
+            (REST_CATALOG_PROP_TOKEN, "secret"),
+            (REST_CATALOG_PROP_CREDENTIAL, "client:secret"),
+            (
+                REST_CATALOG_PROP_OAUTH2_SERVER_URI,
+                "http://localhost:8181/token",
+            ),
+            (REST_CATALOG_PROP_SCOPE, "custom-scope"),
+            (REST_CATALOG_PROP_AUDIENCE, "custom-audience"),
+            (REST_CATALOG_PROP_RESOURCE, "custom-resource"),
+        ])
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+        let expected = OAuth2Properties {
+            uri: "http://localhost:8181".to_string(),
+            token: Some("secret".to_string().into()),
+            credential: Some(OAuth2Credential::new(
+                Some("client".to_string()),
+                "secret".to_string().into(),
+            )),
+            oauth2_server_uri: Some("http://localhost:8181/token".to_string()),
+            scope: Some("custom-scope".to_string()),
+            audience: Some("custom-audience".to_string()),
+            resource: Some("custom-resource".to_string()),
+        };
+        assert_eq!(
+            OAuth2Properties::from_properties(&properties).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_oauth_properties_defaults() {
+        let expected = OAuth2Properties {
+            uri: String::new(),
+            token: None,
+            credential: None,
+            oauth2_server_uri: None,
+            scope: None,
+            audience: None,
+            resource: None,
+        };
+        assert_eq!(
+            OAuth2Properties::from_properties(&HashMap::new()).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn test_token_endpoint() {
+        for (endpoint, expected) in [
+            (None, "http://localhost:8181/v1/oauth/tokens"),
+            (Some(""), ""),
+            (
+                Some("http://localhost:8181/token"),
+                "http://localhost:8181/token",
+            ),
+        ] {
+            let mut props = HashMap::from([(
+                REST_CATALOG_PROP_URI.to_string(),
+                "http://localhost:8181".to_string(),
+            )]);
+            if let Some(endpoint) = endpoint {
+                props.insert(
+                    REST_CATALOG_PROP_OAUTH2_SERVER_URI.to_string(),
+                    endpoint.to_string(),
+                );
+            }
+            let manager = OAuth2Manager::from_properties(&props).unwrap();
+            assert_eq!(manager.init_params.token_endpoint, expected);
+        }
+    }
+
+    #[test]
+    fn test_credential_parsing() {
+        for (value, client_id, secret) in [
+            ("secret", None, "secret"),
+            (
+                "client:secret:with:colons",
+                Some("client"),
+                "secret:with:colons",
+            ),
+            (":secret", Some(""), "secret"),
+            ("client:", Some("client"), ""),
+            ("", None, ""),
+        ] {
+            let properties = OAuth2Properties::from_properties(&HashMap::from([(
+                REST_CATALOG_PROP_CREDENTIAL.to_string(),
+                value.to_string(),
+            )]))
+            .unwrap();
+            let expected = Some(OAuth2Credential::new(
+                client_id.map(str::to_string),
+                secret.to_string().into(),
+            ));
+            assert_eq!(properties.credential(), &expected);
+        }
     }
 
     #[tokio::test]

@@ -18,6 +18,7 @@
 //! This module contains types to keep sensitive data in memory.
 
 use std::fmt;
+use std::str::FromStr;
 
 use zeroize::Zeroizing;
 
@@ -81,6 +82,14 @@ impl From<String> for SensitiveString {
     }
 }
 
+impl FromStr for SensitiveString {
+    type Err = std::convert::Infallible;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Ok(Self::from(value.to_string()))
+    }
+}
+
 /// Wrapper for sensitive byte data (encryption keys, DEKs, etc.) that:
 /// - Zeroizes memory on drop
 /// - Redacts content in [`Debug`] and [`std::fmt::Display`] output
@@ -136,7 +145,9 @@ mod tests {
     fn test_sensitive_string_redacts_debug_value() {
         let sensitive_value = "my-pw-12346";
 
-        let logged = format!("{:?}", SensitiveString::from(sensitive_value.to_string()));
+        let parsed = sensitive_value.parse::<SensitiveString>().unwrap();
+        assert_eq!(parsed, SensitiveString::from(sensitive_value.to_string()));
+        let logged = format!("{parsed:?}");
         assert!(!logged.contains(sensitive_value));
     }
 
