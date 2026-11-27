@@ -27,8 +27,8 @@ use reqwest::header::HeaderMap;
 use tokio::sync::Mutex;
 
 use super::{AuthManager, AuthSession, HttpRequest};
-use crate::catalog::{OAuth2Credential, REST_CATALOG_PROP_URI, RestCatalogProperties};
 use crate::client::HttpClient;
+use crate::properties::{OAuth2Credential, REST_CATALOG_PROP_URI, RestCatalogProperties};
 use crate::types::{ErrorResponse, TokenResponse};
 
 /// The manager's own OAuth2 options, which properties are merged onto.

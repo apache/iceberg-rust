@@ -23,8 +23,8 @@ use reqwest::header::HeaderMap;
 use reqwest::{Client, IntoUrl, Method, RequestBuilder};
 use serde::de::DeserializeOwned;
 
-use crate::RestCatalogProperties;
 use crate::auth::AuthSession;
+use crate::properties::RestCatalogProperties;
 use crate::request::HttpRequest;
 use crate::response::HttpResponse;
 

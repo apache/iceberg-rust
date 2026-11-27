@@ -99,9 +99,11 @@ pub use request::{HttpRequest, HttpRequestBody};
 mod response;
 pub use response::HttpResponse;
 mod endpoint;
+mod properties;
 mod types;
 
 pub use auth::*;
 pub use catalog::*;
 pub use endpoint::Endpoint;
+pub use properties::*;
 pub use types::*;
