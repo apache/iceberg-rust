@@ -36,6 +36,7 @@ use url::Url;
 use crate::prefixed::{DELETE_BATCH_SIZE, PrefixedStorage};
 #[cfg(feature = "opendal-s3")]
 use crate::s3::CustomAwsCredentialLoader;
+use crate::utils::redact_path;
 use crate::{OpenDalClientConfig, OpenDalStorage};
 
 /// Schemes supported by OpenDalResolvingStorage
@@ -77,7 +78,10 @@ fn extract_scheme(path: &str) -> Result<&'static str> {
     let url = Url::parse(path).map_err(|e| {
         Error::new(
             ErrorKind::DataInvalid,
-            format!("Invalid path: {path}, failed to parse URL: {e}"),
+            format!(
+                "Invalid path: {}, failed to parse URL: {e}",
+                redact_path(path)
+            ),
         )
     })?;
     parse_scheme(url.scheme())
@@ -613,6 +617,16 @@ mod tests {
         assert!(
             Arc::ptr_eq(&abfss, &abfs),
             "abfss and abfs should share one instance"
+        );
+    }
+
+    #[test]
+    fn test_extract_scheme_error_masks_userinfo_and_drops_query() {
+        assert_eq!(
+            extract_scheme("s3://alice:SECRET@bucket:notaport/t?sig=x")
+                .unwrap_err()
+                .to_string(),
+            "DataInvalid => Invalid path: s3://***@bucket:notaport/t, failed to parse URL: invalid port number"
         );
     }
 }

@@ -500,7 +500,7 @@ impl OpenDalStorage {
                 let url = url::Url::parse(path).map_err(|e| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid s3 url: {path}: {e}"),
+                        format!("Invalid s3 url: {}: {e}", utils::redact_path(path)),
                     )
                 })?;
                 let prefix = format!("{}://{}/", url.scheme(), op_info.name());
@@ -509,7 +509,10 @@ impl OpenDalStorage {
                 } else {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid s3 url: {path}, should start with {prefix}"),
+                        format!(
+                            "Invalid s3 url: {}, should start with {prefix}",
+                            utils::redact_path(path)
+                        ),
                     ));
                 }
             }
@@ -522,7 +525,10 @@ impl OpenDalStorage {
                 } else {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid gcs url: {path}, should start with {prefix}"),
+                        format!(
+                            "Invalid gcs url: {}, should start with {prefix}",
+                            utils::redact_path(path)
+                        ),
                     ));
                 }
             }
@@ -539,7 +545,10 @@ impl OpenDalStorage {
                 } else {
                     return Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid oss url: {path}, should start with {prefix}"),
+                        format!(
+                            "Invalid oss url: {}, should start with {prefix}",
+                            utils::redact_path(path)
+                        ),
                     ));
                 }
             }
@@ -669,7 +678,10 @@ impl OpenDalStorage {
                 let bucket = url.host_str().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid s3 url: {path}, missing bucket"),
+                        format!(
+                            "Invalid s3 url: {}, missing bucket",
+                            utils::redact_path(path)
+                        ),
                     )
                 })?;
                 let prefix = format!("{}://{}/", url.scheme(), bucket);
@@ -678,7 +690,10 @@ impl OpenDalStorage {
                 } else {
                     Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid s3 url: {path}, should start with {prefix}"),
+                        format!(
+                            "Invalid s3 url: {}, should start with {prefix}",
+                            utils::redact_path(path)
+                        ),
                     ))
                 }
             }
@@ -688,7 +703,10 @@ impl OpenDalStorage {
                 let bucket = url.host_str().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid gcs url: {path}, missing bucket"),
+                        format!(
+                            "Invalid gcs url: {}, missing bucket",
+                            utils::redact_path(path)
+                        ),
                     )
                 })?;
                 let prefix = format!("gs://{}/", bucket);
@@ -697,7 +715,10 @@ impl OpenDalStorage {
                 } else {
                     Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid gcs url: {path}, should start with {prefix}"),
+                        format!(
+                            "Invalid gcs url: {}, should start with {prefix}",
+                            utils::redact_path(path)
+                        ),
                     ))
                 }
             }
@@ -712,7 +733,10 @@ impl OpenDalStorage {
                 let bucket = url.host_str().ok_or_else(|| {
                     Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid oss url: {path}, missing bucket"),
+                        format!(
+                            "Invalid oss url: {}, missing bucket",
+                            utils::redact_path(path)
+                        ),
                     )
                 })?;
                 let prefix = format!("oss://{}/", bucket);
@@ -721,7 +745,10 @@ impl OpenDalStorage {
                 } else {
                     Err(Error::new(
                         ErrorKind::DataInvalid,
-                        format!("Invalid oss url: {path}, should start with {prefix}"),
+                        format!(
+                            "Invalid oss url: {}, should start with {prefix}",
+                            utils::redact_path(path)
+                        ),
                     ))
                 }
             }
@@ -734,7 +761,10 @@ impl OpenDalStorage {
             #[cfg(feature = "opendal-hf")]
             OpenDalStorage::Hf { .. } => {
                 let parsed = HfUri::parse(path).ok_or_else(|| {
-                    Error::new(ErrorKind::DataInvalid, format!("Invalid hf url: {path}"))
+                    Error::new(
+                        ErrorKind::DataInvalid,
+                        format!("Invalid hf url: {}", utils::redact_path(path)),
+                    )
                 })?;
                 Ok(&path[path.len() - parsed.path.len()..])
             }
@@ -1376,5 +1406,82 @@ mod tests {
                 .unwrap(),
             "path/to/file.parquet"
         );
+    }
+
+    #[cfg(feature = "opendal-s3")]
+    #[test]
+    fn test_create_operator_error_masks_userinfo_and_drops_query() {
+        let mut config = S3Config::default();
+        config.region = Some("us-east-1".to_string());
+        let storage = OpenDalStorage::S3 {
+            config: Arc::new(config),
+            multipart_part_size: default_multipart_part_size(),
+            customized_credential_load: None,
+            client_config: OpenDalClientConfig::default(),
+        };
+
+        let path = "s3://alice:SECRET@bucket/t/f.parquet?X-Amz-Signature=sig";
+        let err = storage.create_operator(&path).map(|_| ()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "DataInvalid => Invalid s3 url: s3://***@bucket/t/f.parquet, should start with s3://bucket/"
+        );
+    }
+
+    #[cfg(any(
+        feature = "opendal-s3",
+        feature = "opendal-gcs",
+        feature = "opendal-oss",
+        feature = "opendal-hf"
+    ))]
+    #[test]
+    fn test_relativize_path_error_masks_userinfo_and_drops_query() {
+        let cases = [
+            #[cfg(feature = "opendal-s3")]
+            (
+                OpenDalStorage::S3 {
+                    config: Arc::new(S3Config::default()),
+                    multipart_part_size: default_multipart_part_size(),
+                    customized_credential_load: None,
+                    client_config: OpenDalClientConfig::default(),
+                },
+                "s3://alice:SECRET@bucket/t/f.parquet?X-Amz-Signature=sig",
+                "DataInvalid => Invalid s3 url: s3://***@bucket/t/f.parquet, should start with s3://bucket/",
+            ),
+            #[cfg(feature = "opendal-gcs")]
+            (
+                OpenDalStorage::Gcs {
+                    config: Arc::new(GcsConfig::default()),
+                    client_config: OpenDalClientConfig::default(),
+                },
+                "gs://alice:SECRET@bucket/t/f.parquet?sig=x",
+                "DataInvalid => Invalid gcs url: gs://***@bucket/t/f.parquet, should start with gs://bucket/",
+            ),
+            #[cfg(feature = "opendal-oss")]
+            (
+                OpenDalStorage::Oss {
+                    config: Arc::new(OssConfig::default()),
+                    client_config: OpenDalClientConfig::default(),
+                },
+                "oss://alice:SECRET@bucket/t/f.parquet?sig=x",
+                "DataInvalid => Invalid oss url: oss://***@bucket/t/f.parquet, should start with oss://bucket/",
+            ),
+            #[cfg(feature = "opendal-hf")]
+            (
+                OpenDalStorage::Hf {
+                    config: Arc::new(HfConfig::default()),
+                    client_config: OpenDalClientConfig::default(),
+                },
+                "hf://alice:SECRET@huggingface.co/x?token=t",
+                "DataInvalid => Invalid hf url: hf://***@huggingface.co/x",
+            ),
+        ];
+
+        let actual: Vec<String> = cases
+            .iter()
+            .map(|(storage, path, _)| storage.relativize_path(path).unwrap_err().to_string())
+            .collect();
+        let expected: Vec<&str> = cases.iter().map(|(_, _, expected)| *expected).collect();
+        assert_eq!(actual, expected);
     }
 }

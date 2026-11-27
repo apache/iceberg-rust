@@ -23,7 +23,7 @@ use iceberg::io::{HF_ENDPOINT, HF_REVISION, HF_TOKEN};
 use iceberg::{Error, ErrorKind, Result};
 use opendal::{Configurator, Operator, OperatorUri};
 
-use crate::utils::from_opendal_error;
+use crate::utils::{from_opendal_error, redact_path};
 
 // ---------------------------------------------------------------------------
 // Minimal URI parser — extracts only what the caller needs.
@@ -176,11 +176,19 @@ pub(crate) fn hf_config_build<'a>(
     path: &'a str,
 ) -> Result<(Operator, &'a str)> {
     let uri = OperatorUri::new(path, Vec::<(String, String)>::new()).map_err(|e| {
-        Error::new(ErrorKind::DataInvalid, format!("Invalid hf url: {path}")).with_source(e)
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid hf url: {}", redact_path(path)),
+        )
+        .with_source(e)
     })?;
 
     let mut hf_cfg = opendal::services::HfConfig::from_uri(&uri).map_err(|e| {
-        Error::new(ErrorKind::DataInvalid, format!("Invalid hf url: {path}")).with_source(e)
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid hf url: {}", redact_path(path)),
+        )
+        .with_source(e)
     })?;
 
     // Token must come from config only, never from the URI.
@@ -193,8 +201,12 @@ pub(crate) fn hf_config_build<'a>(
         hf_cfg.revision = cfg.revision.clone();
     }
 
-    let parsed = HfUri::parse(path)
-        .ok_or_else(|| Error::new(ErrorKind::DataInvalid, format!("Invalid hf url: {path}")))?;
+    let parsed = HfUri::parse(path).ok_or_else(|| {
+        Error::new(
+            ErrorKind::DataInvalid,
+            format!("Invalid hf url: {}", redact_path(path)),
+        )
+    })?;
     let relative_path = &path[path.len() - parsed.path.len()..];
 
     let op = Operator::from_config(hf_cfg).map_err(from_opendal_error)?;

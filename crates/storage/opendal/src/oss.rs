@@ -23,7 +23,7 @@ use opendal::services::OssConfig;
 use opendal::{Configurator, Operator};
 use url::Url;
 
-use crate::utils::from_opendal_error;
+use crate::utils::{from_opendal_error, redact_path};
 
 /// Parse iceberg props to oss config.
 pub(crate) fn oss_config_parse(mut m: HashMap<String, String>) -> Result<OssConfig> {
@@ -47,7 +47,7 @@ pub(crate) fn oss_config_build(cfg: &OssConfig, path: &str) -> Result<Operator> 
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
-            format!("Invalid oss url: {path}, missing bucket"),
+            format!("Invalid oss url: {}, missing bucket", redact_path(path)),
         )
     })?;
 

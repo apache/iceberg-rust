@@ -37,7 +37,7 @@ pub use reqsign_core::ProvideCredential;
 use reqsign_core::{ProvideCredentialChain, ProvideCredentialDyn};
 use url::Url;
 
-use crate::utils::{from_opendal_error, is_truthy};
+use crate::utils::{from_opendal_error, is_truthy, redact_path};
 use crate::{OpenDalClientConfig, parse_positive_ms};
 
 #[derive(Properties)]
@@ -205,7 +205,7 @@ pub(crate) fn s3_config_build(
     let bucket = url.host_str().ok_or_else(|| {
         Error::new(
             ErrorKind::DataInvalid,
-            format!("Invalid s3 url: {path}, missing bucket"),
+            format!("Invalid s3 url: {}, missing bucket", redact_path(path)),
         )
     })?;
 
