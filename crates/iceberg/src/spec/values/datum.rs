@@ -348,6 +348,9 @@ impl Display for Datum {
             }
             // The scale lives on the dropped source type, so only the unscaled value is left.
             (PrimitiveType::Unknown, PrimitiveLiteral::Int128(val)) => write!(f, "{val}"),
+            // `Datum::to` returns these when a value is out of range for the target type.
+            (_, PrimitiveLiteral::AboveMax) => write!(f, "AboveMax"),
+            (_, PrimitiveLiteral::BelowMin) => write!(f, "BelowMin"),
             (_, _) => {
                 unreachable!()
             }

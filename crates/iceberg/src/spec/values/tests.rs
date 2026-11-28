@@ -1876,6 +1876,24 @@ fn test_datum_long_convert_to_int_below_min() {
 }
 
 #[test]
+fn test_datum_display_above_max_and_below_min() {
+    let above_max = Datum::long(INT_MAX as i64 + 1)
+        .to(&Primitive(PrimitiveType::Int))
+        .unwrap();
+    assert_eq!(above_max.to_string(), "AboveMax");
+
+    let below_min = Datum::long(INT_MIN as i64 - 1)
+        .to(&Primitive(PrimitiveType::Int))
+        .unwrap();
+    assert_eq!(below_min.to_string(), "BelowMin");
+
+    let above_max = Datum::double(1e39)
+        .to(&Primitive(PrimitiveType::Float))
+        .unwrap();
+    assert_eq!(above_max.to_string(), "AboveMax");
+}
+
+#[test]
 fn test_datum_double_convert_to_float() {
     let datum = Datum::double(2.5);
 
