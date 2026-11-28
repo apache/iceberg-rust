@@ -424,13 +424,23 @@ impl Datum {
             PrimitiveType::Date => PrimitiveLiteral::Int(i32::from_le_bytes(bytes.try_into()?)),
             PrimitiveType::Time => PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?)),
             PrimitiveType::Timestamp => {
-                PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+                if bytes.len() == 4 {
+                    // Bound written as a date under a later timestamp schema.
+                    date_to_timestamp(i32::from_le_bytes(bytes.try_into()?), &data_type)?
+                } else {
+                    PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+                }
             }
             PrimitiveType::Timestamptz => {
                 PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
             }
             PrimitiveType::TimestampNs => {
-                PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+                if bytes.len() == 4 {
+                    // Bound written as a date under a later timestamp_ns schema.
+                    date_to_timestamp(i32::from_le_bytes(bytes.try_into()?), &data_type)?
+                } else {
+                    PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
+                }
             }
             PrimitiveType::TimestamptzNs => {
                 PrimitiveLiteral::Long(i64::from_le_bytes(bytes.try_into()?))
@@ -1236,14 +1246,36 @@ impl Datum {
     }
 
     /// Returns a copy whose literal is widened to `target` for the value
-    /// promotions `int` -> `long` and `float` -> `double`, so a value written
-    /// under the narrower type compares against a predicate bound to the wider
-    /// one. Returns `None` when `target` does not widen this value (decimals
-    /// already compare across precisions), so callers can avoid a copy.
-    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Option<Datum> {
-        self.literal
-            .promote_to(target)
-            .map(|literal| Datum::new(target.clone(), literal))
+    /// promotions `int` -> `long`, `float` -> `double`, and `date` -> `timestamp` /
+    /// `timestamp_ns`, so a value written under the narrower type compares against
+    /// a predicate bound to the wider one. Returns `Ok(None)` when `target` does not
+    /// widen this value (decimals already compare across precisions), so callers
+    /// can avoid a copy.
+    ///
+    /// Matches on `(self.data_type(), target)` so an `int` literal is not treated as
+    /// a date.
+    ///
+    /// # Errors
+    /// Returns `DataInvalid` if a date is outside the range of the target timestamp
+    /// type.
+    pub(crate) fn promote_to(&self, target: &PrimitiveType) -> Result<Option<Datum>> {
+        match (self.data_type(), target) {
+            (PrimitiveType::Int, PrimitiveType::Long)
+            | (PrimitiveType::Float, PrimitiveType::Double) => Ok(self
+                .literal
+                .widen()
+                .map(|literal| Datum::new(target.clone(), literal))),
+            (PrimitiveType::Date, PrimitiveType::Timestamp | PrimitiveType::TimestampNs) => {
+                let PrimitiveLiteral::Int(days) = self.literal else {
+                    return Ok(None);
+                };
+                Ok(Some(Datum::new(
+                    target.clone(),
+                    date_to_timestamp(days, target)?,
+                )))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Returns true if the Literal represents a primitive type
@@ -1321,4 +1353,21 @@ fn human_float<T: Float + LowerExp + FromStr>(value: T) -> String {
         let fraction = if digits.len() > 1 { &digits[1..] } else { "0" };
         format!("{sign}{}.{fraction}E{exponent}", &digits[..1])
     }
+}
+
+/// Converts `days` since the epoch to a `timestamp` (microseconds) or `timestamp_ns`
+/// (nanoseconds) literal at midnight of that day.
+///
+/// # Errors
+/// Returns `DataInvalid` if the result overflows `target`, or if `target` is not
+/// `timestamp` / `timestamp_ns`.
+fn date_to_timestamp(days: i32, target: &PrimitiveType) -> Result<PrimitiveLiteral> {
+    let value = match target {
+        PrimitiveType::Timestamp => date::days_to_microseconds(days),
+        PrimitiveType::TimestampNs => date::days_to_nanoseconds(days),
+        _ => return Err(invalid_data!("Cannot convert a date to {target}")),
+    };
+    value
+        .map(PrimitiveLiteral::Long)
+        .ok_or_else(|| invalid_data!("Date {days} (days from epoch) is out of range for {target}"))
 }
